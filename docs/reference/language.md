@@ -1043,5 +1043,4 @@ as `'is'`, and the unit atom as `'()'`. Flonums are the one rendering
 exception, each backend using its host language's float format; the
 divergence is recorded in `dev-docs/SCHEME_BACKEND_GAPS.md`.
 Both backends implement `run_chr_session/1` and
-all of `library(search)`. A few golden cases still diverge on the
-Scheme backend; details in `dev-docs/SCHEME_BACKEND_GAPS.md`.
+all of `library(search)`.

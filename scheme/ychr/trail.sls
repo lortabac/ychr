@@ -1,20 +1,20 @@
 ;;;; The search undo trail: recording writes, marking a position, and
 ;;;; unwinding back to one.
 ;;;;
-;;;; Search backtracking on this backend is snapshot plus trail. The
-;;;; snapshot half lives in the driver (`(ychr runtime)`): the store
-;;;; index pointers, the growable counts, the propagation history and
-;;;; the reactivation queue, whose undo is a pointer write. This module
-;;;; is the other half — the individual mutable cells a pointer write
-;;;; cannot reach: logical-variable values and observer lists, the
-;;;; @alive@ / @stored@ flags on suspensions, and the index entries a
-;;;; newly indexed type files. Those are recorded write-by-write and
-;;;; replayed in reverse.
+;;;; Search backtracking on this backend is almost entirely trail. The
+;;;; driver (`(ychr runtime)`) snapshots only the reactivation queue,
+;;;; which is per session. Everything else a branch can write is shared
+;;;; with the caller and recorded here write-by-write, then replayed in
+;;;; reverse: logical-variable values and observer lists, the @alive@ /
+;;;; @stored@ flags on suspensions, the growable counts, the store-index
+;;;; pointer and every index entry filed while a search is active, and
+;;;; the propagation history.
 ;;;;
 ;;;; The recording hooks sit at the choke points that own those cells —
 ;;;; `unify*`, `add-observer!` and `value-key` in @(ychr var)@, the flag
-;;;; writes and the growable in @(ychr store)@, `add-history!` in
-;;;; @(ychr history)@ — so no caller has to remember to trail anything.
+;;;; writes, the growable, `file-backlog!` and `file-entry!` in
+;;;; @(ychr store)@, `add-history!` in @(ychr history)@ — so no caller
+;;;; has to remember to trail anything.
 ;;;; When no search is active (`trail-active?` is @#f@) every hook is
 ;;;; one box read.
 ;;;;
@@ -41,11 +41,14 @@
           trail-box)
   (import (rnrs))
 
-  ;;; The current trail, or @#f@ when no search is active. A one-slot
-  ;;; vector so the hooks can read and write it without a session, and
-  ;;; so `trail-enter!` / `trail-exit!` can save and restore it around a
-  ;;; nested search.
-  (define trail-box (vector #f))
+  ;;; Slot 0: the current trail, or @#f@ when no search is active.
+  ;;; Slot 1: its length, kept alongside so that `trail-mark` and
+  ;;; `trail-unwind!` are O(1) to start. A mark is taken per alternative,
+  ;;; and a search path of depth k has a trail of length O(k), so calling
+  ;;; `length` there made a deep search quadratic. A vector so the hooks
+  ;;; can read and write it without a session, and so `trail-enter!` /
+  ;;; `trail-exit!` can save and restore it around a nested search.
+  (define trail-box (vector #f 0))
 
   (define (trail-active?) (vector-ref trail-box 0))
 
@@ -56,14 +59,14 @@
   (define (trail-push! thunk)
     (let ((entries (vector-ref trail-box 0)))
       (when entries
-        (vector-set! trail-box 0 (cons thunk entries)))))
+        (vector-set! trail-box 0 (cons thunk entries))
+        (vector-set! trail-box 1 (+ (vector-ref trail-box 1) 1)))))
 
   ;;; The current trail position: the number of entries recorded so far,
   ;;; or 0 when no search is active — the honest answer, since there is
   ;;; then nothing recorded to undo.
   (define (trail-mark)
-    (let ((entries (vector-ref trail-box 0)))
-      (if entries (length entries) 0)))
+    (if (vector-ref trail-box 0) (vector-ref trail-box 1) 0))
 
   ;;; Undo every write recorded since @mark@, newest first, and drop
   ;;; those entries.
@@ -76,37 +79,38 @@
   ;;; than an error: marks are taken by nested drivers in increasing
   ;;; order and unwound to in decreasing order, so it cannot arise.
   (define (trail-unwind! mark)
-    (let ((entries (vector-ref trail-box 0)))
-      (when entries
-        ;; Counted once: the length is O(n) and the loop below is one
-        ;; step per replayed entry, so testing the length each time
-        ;; would make the unwind quadratic.
-        (let loop ((n (- (length entries) mark)))
-          (when (> n 0)
-            (let ((head (car (vector-ref trail-box 0))))
-              (vector-set! trail-box 0 (cdr (vector-ref trail-box 0)))
-              (head)
-              (loop (- n 1))))))))
+    (when (vector-ref trail-box 0)
+      (let loop ()
+        (when (> (vector-ref trail-box 1) mark)
+          (let ((head (car (vector-ref trail-box 0))))
+            (vector-set! trail-box 0 (cdr (vector-ref trail-box 0)))
+            (vector-set! trail-box 1 (- (vector-ref trail-box 1) 1))
+            (head)
+            (loop))))))
 
-  ;;; Install a fresh empty trail and return the previous box contents,
-  ;;; or return the current contents unchanged when a trail is already
-  ;;; active. The caller hands the result to `trail-exit!`.
+  ;;; Install a fresh empty trail and return the previous box state, or
+  ;;; return the current state unchanged when a trail is already active.
+  ;;; The state is the entries and the length together, as a pair; the
+  ;;; caller hands it to `trail-exit!` without looking inside.
   ;;;
   ;;; A nested search shares its parent's trail: variable cells are
   ;;; shared across forks even when the store is not, so an outer branch
   ;;; that fails must be able to undo a binding an inner search
   ;;; committed. Marks, not trails, are what delimit an undo.
   (define (trail-enter!)
-    (let ((prev (vector-ref trail-box 0)))
-      (if prev
-          prev
-          ;; A fresh trail is an empty entry list; what is returned is what
-          ;; the caller restores on exit, which is `#f` — no trail. They are
-          ;; different values, and conflating them leaks an active trail.
-          (begin (vector-set! trail-box 0 '()) #f))))
+    (let ((prev (cons (vector-ref trail-box 0) (vector-ref trail-box 1))))
+      (unless (car prev)
+        ;; A fresh trail is an empty entry list; what is returned is what
+        ;; the caller restores on exit, whose entries are `#f` — no trail.
+        ;; They are different values, and conflating them leaks an active
+        ;; trail.
+        (vector-set! trail-box 0 '())
+        (vector-set! trail-box 1 0))
+      prev))
 
   ;;; Restore what `trail-enter!` returned. Called once per driver exit,
   ;;; after the unwind, so the caller sees the trail state it had.
   (define (trail-exit! prev)
-    (vector-set! trail-box 0 prev))
+    (vector-set! trail-box 0 (car prev))
+    (vector-set! trail-box 1 (cdr prev)))
 )

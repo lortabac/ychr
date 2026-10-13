@@ -840,14 +840,19 @@ matter are:
   a type can hold suspensions while unindexed, so the crossing store must
   file them from the growable (`file-backlog!`); a lookup whose type is
   not indexed yet must scan, not read the empty index.
-- **The index is state of *this* session, restored by the same snapshot
-  and trail as the store it describes.** A branch that shrank a type's
-  growable without restoring the index pointer would answer from slots
-  the restored store no longer has, so `trail-store-index!` records the
-  whole per-type index vector before a write and
-  `install-type-index!` puts a fresh copy in place when a bucket crosses
-  the threshold. The history is undone through the trail too (an added
-  entry's deletion).
+- **The index is state of *this* session, restored by the same trail as
+  the store it describes.** Undoing a branch restores each growable's
+  count, which truncates the bucket but reaches no index, so every index
+  write is trailed as well: `trail-store-index!` records the per-type
+  index vector before `install-type-index!` puts a fresh copy in place
+  when a bucket crosses the threshold, and `file-entry!` records the
+  bucket or fallback list it prepends to. The second is not implied by
+  the first: a type indexed *before* the search keeps its index object
+  across the branch, and an entry left there names a slot past the
+  restored count, whose storage cell still holds the abandoned branch's
+  suspension — alive, since creating one is not undone — so a later
+  lookup would match it (`test/golden/search_index_undo`). The history is
+  undone through the trail too (an added entry's deletion).
 
 What is deliberately not trimmed is the same as on the Haskell side: a
 kill leaves the bucket entry in place (the iterator's liveness check

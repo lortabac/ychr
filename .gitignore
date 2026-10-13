@@ -19,6 +19,3 @@ CLAUDE.local.md
 .envrc.local
 *.log
 *.pyc
-.perf-scratch/
-/dist-newstyle1
-/.perf-scratch/

@@ -64,7 +64,8 @@ thunks, mark/unwind, and the outermost-driver install/restore used by
 `dynamic-wind`), plus the search section of `scheme/ychr/runtime.sls`
 and the trailing hooks in `var.sls` (variable cells and observer lists),
 `store.sls` (growable counts, `alive`/`stored` flags, the store-index
-pointer) and `history.sls` (deletions).
+pointer and every index entry filed while a search is active) and
+`history.sls` (deletions).
 
 Two things on top of the trail are what make a fork correct, and both
 are easy to miss:
@@ -325,8 +326,7 @@ record of which fixes have already shipped.
   stubs raising `not implemented`, and eleven `search_*` directories
   plus `state_run` were in `HASKELL_ONLY`. They are now implemented on
   top of `(ychr trail)` and the search section of the runtime; see
-  *`library(search)`* above for the design and the three cases that
-  still diverge.
+  *`library(search)`* above for the design.
 
 - **`print_store` / `write_store_to_list`** — the two meta primitives that
   expose the store were bound stubs raising `not implemented`, and

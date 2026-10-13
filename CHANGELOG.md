@@ -6,11 +6,13 @@ The Scheme backend implements `library(search)`'s `solve/1`, `findall/2`,
 `fold_solutions/4` and `fail/0`, and `library(meta)`'s
 `run_chr_session/1` and `run_chr_session_ep/1` (which are the same driver
 on a fresh store). Eleven `search_*` golden directories plus `state_run`
-leave the Scheme harness's `HASKELL_ONLY` list. The driver forks the
-calling session and undoes a branch through a trail (`scheme/ychr/trail.sls`)
-hooked into every variable-cell, observer-list, growable-count,
-suspension-flag, store-index and history write, so a `solve` commits only
-the goal's own variables and a `findall` or `fold_solutions` leaves the
+and `run_chr_session_test` leave the Scheme harness's `HASKELL_ONLY`
+list, and the new `search_index_undo` pins that a failed branch leaves
+the store index as it found it. The driver forks the calling session
+and undoes a branch through a trail (`scheme/ychr/trail.sls`) hooked
+into every variable-cell, observer-list, growable-count,
+suspension-flag, store-index (pointer and entries) and history write,
+so a `solve` commits only the goal's own variables and a `findall` or `fold_solutions` leaves the
 caller untouched. The generated library now carries what the driver needs:
 one `register-goal!` per declared constraint from the compiler's symbol
 table, one `register-short-export!` per exported `(name, arity)`, and the

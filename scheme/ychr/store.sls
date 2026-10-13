@@ -114,10 +114,9 @@
   ;;; growable vector, which is what makes ascending slot order
   ;;; reproduce the store's iteration order exactly. Slots stay valid
   ;;; because the store is only ever appended to, and its storage vector
-  ;;; only ever grows by copying its prefix. There is no search driver
-  ;;; on this backend, so unlike the Haskell runtime the index needs no
-  ;;; snapshot or undo counterpart; a future one must capture and
-  ;;; restore it together with the store.
+  ;;; only ever grows by copying its prefix. A search branch's writes to
+  ;;; the index are undone with the rest of the store (see "Search undo
+  ;;; hooks" below).
   ;;; -------------------------------------------------------------------
 
   ;;; How many constraints of one type the store must hold before an
@@ -179,24 +178,39 @@
   ;;; ground when it was stored, so the slot goes to the position's
   ;;; fallback set and stays there: binding the variable afterwards does
   ;;; not re-file it.
+  ;;;
+  ;;; Trailed while a search is active. A type indexed before the search
+  ;;; started keeps the same index object across the branch, so an entry
+  ;;; filed there by a branch would otherwise outlive it: restoring the
+  ;;; growable's count does not reach the index, and the stale slot would
+  ;;; hand back the abandoned branch's suspension, which is still alive.
+  ;;; Each write only prepends, so the undo puts the old list back.
   (define (file-entry! ti slot pos key)
     (let* ((pi (cdr (assv pos ti)))
            (buckets (pos-index-buckets pi)))
       (if key
-          (hashtable-set! buckets key (cons slot (hashtable-ref buckets key '())))
-          (pos-index-rest-set! pi (cons slot (pos-index-rest pi))))))
+          (let ((old (hashtable-ref buckets key '())))
+            (when (trail-active?)
+              (trail-push!
+               (lambda ()
+                 (if (null? old)
+                     (hashtable-delete! buckets key)
+                     (hashtable-set! buckets key old)))))
+            (hashtable-set! buckets key (cons slot old)))
+          (let ((old (pos-index-rest pi)))
+            (when (trail-active?)
+              (trail-push! (lambda () (pos-index-rest-set! pi old))))
+            (pos-index-rest-set! pi (cons slot old))))))
 
   ;;; A type that is being indexed from now on must still hold the
   ;;; suspensions stored below the threshold, which were never filed.
   ;;; Their observers were registered when they were stored, so only
   ;;; their keys are wanted here.
   ;;;
-  ;;; The index this installs is new, so a search branch that indexes a
-  ;;; type leaves nothing behind but the pointer: the driver records the
-  ;;; old slot and puts it back, discarding every entry filed into the
-  ;;; new structure. That is also why `file-entry!` needs no undo hook of
-  ;;; its own — the only slot it can be handed came from here or from a
-  ;;; type the branch itself pushed past `index-threshold`.
+  ;;; Under a search, the installed index is a new object behind a new
+  ;;; pointer (`trail-store-index!`), so undoing the branch discards it
+  ;;; whole; the entries filed into it are trailed too (`file-entry!`),
+  ;;; which costs a little and keeps one rule for every index write.
   (define (file-backlog! s ctype g positions)
     (let* ((ti (make-type-index positions))
            (storage (growable-storage g))
@@ -316,9 +330,11 @@
   ;;; The store index needs one more hook. An index is per type and lives
   ;;; in the session's `store-index` vector, which a fork shares; when a
   ;;; branch pushes a type past `index-threshold` it installs a whole new
-  ;;; index there. Restoring the pointer discards that index, and
-  ;;; `file-entry!` writes go only into an index the branch itself
-  ;;; installed (see `file-backlog!`), so no per-entry hook is needed.
+  ;;; index there, and restoring the pointer discards it. That is not
+  ;;; enough on its own: a type indexed *before* the search keeps its
+  ;;; index object across the branch, so every `file-entry!` write is
+  ;;; trailed as well — otherwise a stale slot past the restored count
+  ;;; would hand back an abandoned branch's suspension.
   ;;; -------------------------------------------------------------------
 
   (define (trail-growable! g)

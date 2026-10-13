@@ -16,8 +16,8 @@ total](#run_chr_session1-is-run_chr_session_ep1-made-total)), and a
 finite-domain solver (propagate, label, propagate, backtrack) would be
 another use.
 
-**Availability.** Both backends. A handful of golden cases still
-diverge on the Scheme backend; they are listed, with the reason, in
+**Availability.** Both backends. How the Scheme runtime implements
+the driver is described in
 [`dev-docs/SCHEME_BACKEND_GAPS.md`](../../dev-docs/SCHEME_BACKEND_GAPS.md).
 
 
