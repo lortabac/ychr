@@ -376,10 +376,14 @@
   ;;; (`test/golden/search_fork/inert_watcher_ok`), and what keeps a deep
   ;;; search's choice points off every variable's observer list.
   (define (store-constraint s susp)
+    ;; The trail entry is recorded unconditionally, before the write: a
+    ;; suspension that `kill-constraint` un-stored and that an undo has
+    ;; since revived would otherwise lose its "stored" flag, which is
+    ;; half of what `checkUnwatched` reads.
+    (when (trail-active?)
+      (trail-push!
+       (lambda () (suspension-stored-set! susp #f))))
     (unless (suspension-stored? susp)
-      (when (trail-active?)
-        (trail-push!
-         (lambda () (suspension-stored-set! susp #f))))
       (suspension-stored-set! susp #t)
       (let* ((ctype (suspension-type susp))
              (g (vector-ref (session-store-by-type s) ctype))
@@ -407,9 +411,18 @@
                     (insert-entries! s ctype slot entries))))))))
 
   (define (kill-constraint susp)
+    ;; Killing takes the constraint out of the store, so `stored` goes
+    ;; with `alive`: the pair is what `checkUnwatched` reads to decide
+    ;; whether an observer list still names a live constraint. Both are
+    ;; trail-recorded before the write, so an undo revives the pair
+    ;; together.
     (when (trail-active?)
-      (trail-push! (lambda () (suspension-alive-set! susp #t))))
-    (suspension-alive-set! susp #f))
+      (trail-push! (lambda ()
+                     (suspension-alive-set! susp #t)))
+      (trail-push! (lambda ()
+                     (suspension-stored-set! susp #t))))
+    (suspension-alive-set! susp #f)
+    (suspension-stored-set! susp #f))
 
   (define (alive-constraint? susp)
     (suspension-alive? susp))

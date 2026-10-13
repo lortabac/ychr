@@ -169,11 +169,16 @@
   ;;; driver simply finds no choice points — the honest reading of a goal
   ;;; with no alternatives in it.
   (define (alt-type-of names)
-    (let ((target (string->symbol "search__alt"))
+    (let ((target "search__alt")
           (n (vector-length names)))
       (let loop ((i 0))
         (cond ((>= i n) #f)
-              ((eq? (vector-ref names i) target) i)
+              ;; The table holds the mangled name as a *string* — the
+              ;; compiler emits a `(vector "…")` literal — so the compare
+              ;; is `string=?`, not `eq?`.
+              ((and (string? (vector-ref names i))
+                    (string=? (vector-ref names i) target))
+               i)
               (else (loop (+ i 1)))))))
 
   ;;; A session of the same program, ready to run a search. Both modes
@@ -1390,8 +1395,10 @@
   (define (goal-tells s scope who v)
     (let ((elems (list-elems v)))
       (if elems
-          (apply append (map (lambda (g) (one-goal s scope who g)) elems))
-          (one-goal s scope who v))))
+          (let ((r (apply append (map (lambda (g) (one-goal s scope who g)) elems))))
+            r)
+          (let ((r (one-goal s scope who v)))
+            r))))
 
   ;;; One goal. A `;` compound becomes a tell of `search:alt` over its
   ;;; flattened alternatives, so a disjunction reaches the driver as an
@@ -1403,7 +1410,8 @@
                (= (vector-length (term-args d)) 2))
           (let ((alts (semicolon-alts d)))
             (require-tell-proc s who 'search__alt 1)
-            (list (list 'search__alt 1 (list (%list-from-list alts)))))
+            (let ((built (%list-from-list alts)))
+              (list (list 'search__alt 1 (list built)))))
           (list (goal-constraint s scope who d)))))
 
   ;;; Flatten the right spine of a `;` compound. `;` is xfy, so
@@ -1537,14 +1545,18 @@
                (values seen vars)
                (values (cons id seen) (cons d vars)))))
         ((term? d)
-         (let ((a (term-args d))
-               (n (vector-length a)))
+         ;; `let*`, not `let`: R6RS leaves the order in which a `let`'s
+         ;; inits are evaluated unspecified, and Guile's choice makes
+         ;; `args` invisible to the `n` init.
+         (let* ((args (term-args d))
+                (n (vector-length args)))
            (let loop ((i 0) (seen seen) (vars vars))
              (if (>= i n)
                  (values seen vars)
-                 (let-values
-                     (((seen* vars*) (walk-vars seen vars (vector-ref a i))))
-                   (loop (+ i 1) seen* vars*))))))
+                 (call-with-values
+                     (lambda () (walk-vars seen vars (vector-ref args i)))
+                   (lambda (seen* vars*)
+                     (loop (+ i 1) seen* vars*)))))))
         (else (values seen vars)))))
 
   ;;; The unbound variables reachable from the goal at entry: the only
@@ -1559,8 +1571,10 @@
           (let inner ((vs (car (cddr (car gs)))) (seen seen) (vars vars))
             (if (null? vs)
                 (loop (cdr gs) seen vars)
-                (let-values (((seen* vars*) (walk-vars seen vars (car vs))))
-                  (inner (cdr vs) seen* vars*)))))))
+                (call-with-values
+                    (lambda () (walk-vars seen vars (car vs)))
+                  (lambda (seen* vars*)
+                    (inner (cdr vs) seen* vars*))))))))
   ;;; Run a branch, mapping a failure to an outcome. Only the failure
   ;;; marker is caught: a runtime error is not a failure and must escape
   ;;; the search.
@@ -1649,44 +1663,52 @@
             (number->string arity))))))
 
   ;;; Try each alternative of one choice point in list order, undoing the
-  ;;; branch between attempts. Exhausting them fails the choice point,
-  ;;; which fails whatever branch contains it.
+  ;;; branch between attempts.
+  ;;;
+  ;;; Contract: this answers either the value the solution handler
+  ;;; returned, or the symbol `failed`. `with-failures-caught` already
+  ;;; turns an abandoned branch into `failed`, so the single check below
+  ;;; covers both "the branch failed" and "the handler asked for the next
+  ;;; solution" — which is what makes every enclosing alternative level
+  ;;; undo and try its next one too.
   (define (try-alternatives s susp slot goals on-step)
-    (cond
-      ((null? goals) (cons 'failed 'exhausted))
-      (else
-       (let ((goal (car goals)))
-         (let* ((mark (trail-mark))
-                (queue (begin-queue s))
-                (result
-                 (with-failures-caught
-                  (lambda ()
-                    ;; Taking the choice consumes it: an alternative must
-                    ;; not rediscover its own choice point and recurse
-                    ;; forever. The kill is trailed like any other flag
-                    ;; write, so the constraint is alive again if this
-                    ;; alternative is abandoned.
-                    (kill-constraint susp)
-                    ;; Resolved here, inside the branch, and without the
-                    ;; export check: a lifted disjunct is a
-                    ;; module-internal constraint, so the check that
-                    ;; guards a caller-supplied goal would reject exactly
-                    ;; the goals the compiler generated.
-                    (for-each
-                     (lambda (g)
-                       (tell-goal s (car g) (cadr g) (car (cddr g)) "alt"))
-                     (goal-tells s 'any-declared "alt" goal))
-                    ;; Past this choice, not from the front: this one is
-                    ;; killed just above. Each alternative gets the same
-                    ;; starting point, because the undo below puts the
-                    ;; bucket back exactly as it was.
-                    (search-from s (+ slot 1) on-step)))))
-           (if (eq? (car result) 'ok)
-               (cdr result)
-               (begin
-                 (use-queue! s queue)
-                 (trail-unwind! mark)
-                 (try-alternatives s susp slot (cdr goals) on-step))))))))
+    (if (null? goals)
+        'failed
+        (let* ((goal (car goals))
+               (mark (trail-mark))
+               (queue (begin-queue s))
+               (branch
+                (with-failures-caught
+                 (lambda ()
+                   ;; Taking the choice consumes it: an alternative must
+                   ;; not rediscover its own choice point and recurse
+                   ;; forever. The kill is trailed like any other flag
+                   ;; write, so the constraint is alive again if this
+                   ;; alternative is abandoned.
+                   (kill-constraint susp)
+                   ;; Resolved here, inside the branch, and without the
+                   ;; export check: a lifted disjunct is a
+                   ;; module-internal constraint, so the check that
+                   ;; guards a caller-supplied goal would reject exactly
+                   ;; the goals the compiler generated.
+                   (for-each
+                    (lambda (g)
+                      (tell-goal s (car g) (cadr g) (car (cddr g)) "alt"))
+                    (goal-tells s 'any-declared "alt" goal))
+                   ;; Past this choice, not from the front: this one is
+                   ;; killed just above. Each alternative gets the same
+                   ;; starting point, because the undo below puts the
+                   ;; bucket back exactly as it was.
+                   (search-from s (+ slot 1) on-step))))
+               (value (if (pair? branch)
+                          (if (eq? (car branch) 'ok) (cdr branch) 'failed)
+                          'failed)))
+          (if (eq? value 'failed)
+              (begin
+                (use-queue! s queue)
+                (trail-unwind! mark)
+                (try-alternatives s susp slot (cdr goals) on-step))
+              value))))
 
   ;;; A value with every bound variable replaced by what it is bound to,
   ;;; all the way down. Unbound variables stay themselves. Does not
@@ -1734,6 +1756,9 @@
       (define (on-step step)
         (if (not (eq? step 'solution))
             'failed
+            ;; `on-solution` answers a real value, or the symbol `failed`
+            ;; when the handler asked for the next solution. An ambiguous
+            ;; pair is not used: a handler's value can itself be a pair.
             (let ((decision (on-solution)))
               (cond
                 ((eq? decision 'continue) 'failed)
@@ -1774,13 +1799,12 @@
                     r))
                 unwind))))
         (if (not (eq? (car result) 'ok))
-            (values 'exhausted #f)
+            (cons 'exhausted #f)
             (let ((r (cdr result)))
               (if (eq? r 'committed)
-                  (begin
-                    (values 'committed kept))
-                  (values (if (eq? r 'stopped) 'stopped 'exhausted)
-                          #f)))))))
+                  (cons 'committed kept)
+                  (cons (if (eq? r 'stopped) 'stopped 'exhausted)
+                        #f)))))))
 
   ;;; Reject a commit that would bind a goal variable a live stored
   ;;; constraint of the calling session observes. A commit binds goal
@@ -1842,12 +1866,12 @@
   ;;; failed branch.
   (define (run-search s who mode goal on-solution)
     (let* ((goals (goal-tells s 'exported-only who goal))
-           (vars (prepare-search goals)))
-      (let-values
-          (((outcome kept) (drive-search s mode vars goals on-solution)))
-        (commit-goal-vars s who vars kept)
-        outcome)))
-
+           (vars (prepare-search goals))
+           (result (drive-search s mode vars goals on-solution))
+           (outcome (car result))
+           (kept (cdr result)))
+      (commit-goal-vars s who vars kept)
+      outcome))
   ;;; @solve(Goal)@: run @Goal@ against a fork of the caller's store and
   ;;; stop at its first solution. Commits: the goal's variables are bound
   ;;; to their values in the solution, and nothing else is kept. @#f@ when
@@ -1887,7 +1911,7 @@
                  (set! outcome 'exhausted)))
         (let-values
             (((o k)
-              (drive-search s 'fresh vars goals (lambda () 'commit))))
+              (car (drive-search s 'fresh vars goals (lambda () 'commit)))))
           (set! outcome o)
           (set! kept k)))
       (commit-goal-vars s "run_chr_session" vars kept)
@@ -1913,7 +1937,9 @@
          ;; Never stop: asking for the next solution backtracks out of
          ;; this one.
          'continue))
-      (fold-right %cons (%nil) acc)))
+      ;; `acc` is newest-first, so reversing it (in the accumulator, not in
+      ;; the trail-covered cells) yields search order.
+      (fold-right %cons (%nil) (reverse acc))))
 
   ;;; @fold_solutions(Template, Goal, F, Acc0)@: fold @F@ over the
   ;;; solutions of @Goal@, in search order, with the fold in control of
