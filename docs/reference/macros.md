@@ -1,22 +1,24 @@
 # YCHR Macro Specification
 
-**Status:** single-clause goal macros (`:- macro Head ---> Body.` with
-a head of distinct variables) are implemented. The rest is a
-**draft, not implemented**, and the sections that describe it say
-so:
+**Status:** single-clause goal macros with a head of distinct
+variables are implemented, with a single goal or a conjunction as the
+body. The rest is a **draft, not implemented**, and the sections that
+describe it say so:
 
+- list bodies for goal macros, which replace the implemented body
+  syntax (see [Bodies](#bodies));
 - declaration macros (`:- macro_decls`);
 - multi-clause macros and head patterns, for both kinds;
 - the construction primitives (`'$compound'/2`, `'$atom'/1`).
 
 YCHR has two kinds of macro. Both are pure term rewriting.
 
-- A *goal macro* is a named abbreviation for a conjunction of head
+- A *goal macro* is a named abbreviation for a list of head
   constraints or body goals. A use of it is replaced by its
   definition at compile time, before names are resolved:
 
   ```prolog
-  :- macro in_degree(N, C) ---> count(edge(_, N), C).
+  :- macro in_degree(N, C) ---> [count(edge(_, N), C)].
 
   node(N), in_degree(N, C) ==> indeg(N, C).
   % is compiled as
@@ -67,20 +69,21 @@ function equation, with `--->` in place of `->`:
 Head ---> Body.
 ```
 
-`--->` is the same operator `:- chr_type` uses (priority 1150, `xfx`),
-so a conjunction on the right needs no parentheses. `macro_decls` is a
-prefix operator at priority 1180, `fx`, like `macro`.
+`--->` is the same operator `:- chr_type` uses (priority 1150, `xfx`).
+`macro_decls` is a prefix operator at priority 1180, `fx`, like
+`macro`.
 
 ### Single-clause form
 
 ```prolog
-:- macro Name(V1, ..., Vn) ---> Body.
-:- macro_decls Name(V1, ..., Vn) ---> Body.
+:- macro Name(V1, ..., Vn) ---> [Goal1, ..., Goalk].
+:- macro_decls Name(V1, ..., Vn) ---> [Clause1, ..., Clausek].
 ```
 
 A one-line definition declares the macro and gives its only clause.
-This is the implemented form. In it, the head's arguments are
-**distinct variables**, and `_` is not allowed as a parameter.
+This is the implemented form, apart from the list body. In it, the
+head's arguments are **distinct variables**, and `_` is not allowed as
+a parameter.
 
 *(Draft)* The head of a one-line definition may also use
 [patterns](#patterns). A use that the pattern doesn't match is then an
@@ -111,10 +114,8 @@ top-level clauses.
 - A macro defined by the one-line form can't have further clauses
   (`DuplicateMacro`).
 
-The declaration decides the kind of every clause, and so how its body
-is read. A goal macro's body is a goal or a conjunction. A declaration
-macro's body is a list of clauses (see
-[Declaration macros](#declaration-macros)).
+The declaration decides the kind of every clause, and so how the
+elements of its body are read (see [Bodies](#bodies)).
 
 ### Heads
 
@@ -134,9 +135,33 @@ macro's body is a list of clauses (see
   not in the body, is a warning (`UnusedMacroParameter`): the
   corresponding argument is dropped. Write `_` to drop it silently
   (allowed only in patterns).
-- `Body` is not checked when the macro is defined, beyond the rules
-  under [Names and modules](#names-and-modules); whether its
+### Bodies
+
+**Status: draft, not implemented.** For goal macros, this replaces the
+implemented body syntax, a single goal or a `,`-conjunction. Macros
+are not yet used by any library, only by tests, so the change is made
+without a transition period.
+
+The body of every clause, of either kind, is written as a **list
+literal**: `[` … `]` with no tail variable (`MalformedMacroBody`
+otherwise).
+
+- The elements of a goal macro's body are goals; those of a
+  declaration macro's body are clauses (see
+  [Declaration macros](#declaration-macros)).
+- `[]` is allowed and expands to nothing: no goals, or no clauses. It
+  is the usual base case of a recursive macro.
+- List elements are read at priority 999, so an element that contains
+  an operator above 999 needs parentheses: a conjunction `(a, b)`, a
+  disjunction `(a ; b)`, a directive `(:- …)` or a rule.
+- The body is not checked when the macro is defined, beyond the rules
+  under [Names and modules](#names-and-modules) and, for declaration
+  macros, [Output restrictions](#output-restrictions). Whether its
   expansion is valid depends on where it is used.
+
+A list body gives both kinds one shape and gives a goal macro a way to
+expand to **zero goals**, which a conjunction cannot express: `true`
+is a goal, and it is not allowed in a rule head.
 
 ### Patterns
 
@@ -184,10 +209,11 @@ Example: a goal macro that turns a list of goals into a conjunction.
 
 ```prolog
 :- macro all_of/1.
-all_of([]) ---> true.
-all_of([G|Gs]) ---> (G, all_of(Gs)).
+all_of([]) ---> [].
+all_of([G|Gs]) ---> [G, all_of(Gs)].
 
-r <=> all_of([p(1), q(2), s]).   % r <=> p(1), q(2), s, true.
+r <=> all_of([p(1), q(2), s]).        % r <=> p(1), q(2), s.
+all_of([a(X), b(X)]) ==> c(X).       % a(X), b(X) ==> c(X).
 ```
 
 ### Recursion and termination
@@ -258,8 +284,11 @@ Expanding the use `Name(A1, ..., An)` of a goal macro:
    *(Draft)* Evaluate the
    [construction primitives](#construction-primitives) written in the
    body.
-4. Flatten the resulting conjunction into the enclosing one, at the
-   position of the use: kept head, removed head, or body.
+4. Splice the resulting goals into the enclosing conjunction, in list
+   order, at the position of the use: kept head, removed head, or
+   body. An element that is itself a conjunction is flattened into it.
+   *(Draft)* An empty list splices nothing (see
+   [Zero goals](#zero-goals)).
 5. Expand again any macro uses that the replacement put in goal
    positions.
 
@@ -273,7 +302,7 @@ therefore evaluated once per occurrence, as if the user had written it
 that many times:
 
 ```prolog
-:- macro twice(X) ---> (p(X), p(X)).
+:- macro twice(X) ---> [p(X), p(X)].
 
 r <=> twice(f(1)).   % calls f(1) twice: r <=> p(f(1)), p(f(1)).
 ```
@@ -286,10 +315,6 @@ goals that are not allowed in a body. The diagnostic names the macro
 valid head conjuncts, and `?` guards are valid inside an aggregate
 goal ([aggregates.md](aggregates.md)).
 
-A recursive goal macro used in a rule head must therefore end in a
-constraint, not in `true`. The `all_of` example above is valid in a
-body but not in a head.
-
 **Cycles.** The implemented check rejects a use of `M` reached while
 expanding `M` (`MacroCycle`), with the chain of macros involved. It
 follows actual expansions rather than a static call graph, because
@@ -297,27 +322,36 @@ names in a macro body are resolved at each use site (see below).
 *(Draft)* This check is replaced by the two checks under
 [Recursion and termination](#recursion-and-termination).
 
+### Zero goals
+
+**Status: draft, not implemented.**
+
+A use that expands to no goals disappears from its conjunction:
+
+- In a rule body, a disjunction branch or a query, a conjunction that
+  loses all its goals means `true`. A query that expands to no goals
+  succeeds with no bindings. The single-goal entry points still
+  reject it (see [Pipeline placement](#pipeline-placement)).
+- In a rule head, the kept and removed parts are each checked after
+  expansion. A part that the rule's form requires but that expansion
+  leaves empty is `MacroEmptyHead`. Examples: the head of a
+  simplification or propagation rule, or either side of `\` in a
+  simpagation rule. The rule is never silently turned into another
+  kind of rule. A simpagation rule whose removed part vanished would
+  otherwise become a propagation rule, which keeps a history and
+  behaves differently.
+
 
 ## Declaration macros
 
 **Status: draft, not implemented.**
 
-### Bodies
+### Clause elements
 
-A declaration macro's clause body is written as a **list literal**:
-`[` … `]` with no tail variable (`MalformedMacroDeclsBody` otherwise).
-
-- `[]` is allowed and expands to nothing. It is the usual base case of
-  a recursive declaration macro.
-- Each element is a clause of any kind a module may contain, such as a
-  directive `(:- …)`, a rule, a function equation or a
-  [nested use](#using-a-declaration-macro).
-- List elements are read at priority 999, so each clause except the
-  simplest needs parentheses.
-- Elements are not checked when the macro is defined, beyond the rules
-  under [Names and modules](#names-and-modules) and
-  [Output restrictions](#output-restrictions). Whether an element is a
-  valid clause is decided after expansion.
+Each element of a declaration macro's [body](#bodies) is a clause of
+any kind a module may contain: a directive `(:- …)`, a rule, a
+function equation or a [nested use](#using-a-declaration-macro).
+Whether an element is a valid clause is decided after expansion.
 
 The body is read with the defining module's operator table and the
 arguments with the using module's. Expansion then works on terms, so
@@ -503,7 +537,7 @@ user had written it.
 Example: a goal macro that applies a constraint name to an argument.
 
 ```prolog
-:- macro apply1(C, X) ---> '$compound'(C, [X]).
+:- macro apply1(C, X) ---> ['$compound'(C, [X])].
 
 r(X) <=> apply1(p, X).   % r(X) <=> p(X).
 ```
@@ -552,7 +586,7 @@ Two consequences follow:
 
 ```prolog
 :- module(aggregates, [macro(count/2), count_spec/0]).
-:- macro count(G, N) ---> aggregate(aggregates:count_spec, 1, G, N).
+:- macro count(G, N) ---> [aggregate(aggregates:count_spec, 1, G, N)].
 ```
 
 A user who imports `library(aggregates)` in full can use `count/2`.
@@ -626,7 +660,7 @@ raised by either expansion, so they keep the renamer's range, as
 
 | Name | Code | Condition |
 |---|---|---|
-| `MalformedMacroDeclsBody` | YCHR-15022 | A declaration macro's clause body is not a list literal with no tail variable. |
+| `MalformedMacroBody` | YCHR-15022 | A clause body, of either kind of macro, is not a list literal with no tail variable. |
 | `MacroDeclsForbiddenClause` | YCHR-15023 | An expansion contains a clause listed under [Output restrictions](#output-restrictions). |
 | `UnknownDirective` | YCHR-15024 | A directive matches no built-in directive and no visible macro of either kind. |
 | `UndeclaredMacroClause` | YCHR-15025 | A `Head ---> Body` clause whose `Name/N` is not declared as a macro in its module. |
@@ -636,6 +670,7 @@ raised by either expansion, so they keep the renamer's range, as
 | `MacroPrimitiveOutsideMacro` | YCHR-20031 | A primitive remains after expansion: it was not written in a macro body. |
 | `NoMatchingMacroClause` | YCHR-20032 | No clause of the macro matches the use (see [Patterns](#patterns)). |
 | `MacroExpansionTooDeep` | YCHR-20033 | A chain of nested expansions exceeds the depth limit (see [Recursion and termination](#recursion-and-termination)). |
+| `MacroEmptyHead` | YCHR-20034 | A part of a rule head that the rule's form requires is empty after expansion (see [Zero goals](#zero-goals)). |
 
 Warning: `UnusedMacroParameter` (YCHR-20105), for either kind. *(Draft)*
 It also covers a head variable that occurs only once in its clause.
@@ -709,8 +744,9 @@ macros inside them are expanded by the renamer as above.
   importing modules, and it needs a term representation for
   variables.
 - **Open macros**, extended with clauses from other modules.
-- **A body tail variable** (`[C1 | Rest]`) in a declaration macro,
-  which would splice a user-supplied list of clauses.
+- **A body tail variable** (`[E1 | Rest]`), which would splice a
+  user-supplied list of goals or clauses. A recursive clause covers the
+  same need: `all_of(Gs)` splices a user-supplied list of goals.
 - **Generating imports, exports, operators or macro definitions**
   (see [Output restrictions](#output-restrictions)).
 - **Guard and expression positions.** `:- inline` covers expression

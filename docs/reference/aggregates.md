@@ -56,9 +56,9 @@ User-defined aggregates are ordinary aggregators:
 :- use_module(library(maybe)).
 
 :- macro sum_sq(E, G, R) --->
-       aggregate(aggregates:aggregator(0, fun(W, X) -> W + X * X end,
-                                          fun(W) -> just(W) end),
-                 E, G, R).
+       [ aggregate(aggregates:aggregator(0, fun(W, X) -> W + X * X end,
+                                            fun(W) -> just(W) end),
+                   E, G, R) ].
 ```
 
 ### Typing
