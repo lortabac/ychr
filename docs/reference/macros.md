@@ -133,8 +133,9 @@ elements of its body are read (see [Bodies](#bodies)).
   Other arities of those names are allowed.
 - A head variable that occurs only once in its clause, in the head and
   not in the body, is a warning (`UnusedMacroParameter`): the
-  corresponding argument is dropped. Write `_` to drop it silently
-  (allowed only in patterns).
+  corresponding argument is dropped. *(Draft)* Under the draft, where
+  heads are patterns, write `_` to drop it silently.
+
 ### Bodies
 
 **Status: draft, not implemented.** For goal macros, this replaces the
@@ -153,7 +154,8 @@ otherwise).
   is the usual base case of a recursive macro.
 - List elements are read at priority 999, so an element that contains
   an operator above 999 needs parentheses: a conjunction `(a, b)`, a
-  disjunction `(a ; b)`, a directive `(:- …)` or a rule.
+  disjunction `(a ; b)`, a directive `(:- …)`, a rule (named or not)
+  or a function equation `(f(X) -> …)`.
 - The body is not checked when the macro is defined, beyond the rules
   under [Names and modules](#names-and-modules) and, for declaration
   macros, [Output restrictions](#output-restrictions). Whether its
@@ -185,6 +187,8 @@ site:
 - Any other pattern matches an argument with the same principal
   functor and arity, and with each argument matching recursively.
   An atom, number or string matches only the same constant.
+  Lists are compounds, so they match structurally: the pattern
+  `[A, B]` matches the argument `[a | [b]]`.
 - A use-site variable matches only a variable pattern or `_`. Matching
   never binds a use-site variable.
 
@@ -224,23 +228,29 @@ A clause body may use the macro it belongs to, directly or through
 other macros. Each expansion is a step. Two checks keep expansion
 finite:
 
-- **Repeated use.** If a use is reached again, with the same macro and
-  identical arguments up to renaming of variables, while that use is
-  still being expanded, the expansion can never finish. It is rejected
-  with `MacroCycle` and the chain of macros involved.
+- **Repeated use.** Suppose a use is reached again while it is still
+  being expanded, with the same macro and identical arguments up to
+  renaming of variables. Then the expansion can never finish, and it
+  is rejected with `MacroCycle` and the chain of macros involved.
+  "The same macro" means the same resolved macro, however it is
+  written: `lib:all_of(Gs)` and `all_of(Gs)` are the same if both
+  resolve to `lib:all_of/1`. "Identical" compares terms, not their
+  source locations.
 - **Depth limit.** A chain of nested expansions deeper than 1000 is
   rejected with `MacroExpansionTooDeep`. The diagnostic shows the
-  innermost uses of the chain.
+  innermost uses of the chain. The chain is the nesting of expansions,
+  the same chain [diagnostics](#diagnostics) report. A recursive macro
+  therefore handles a list of at most about 1000 elements: `all_of`
+  over a longer list hits the limit.
 
 The repeat check catches the common mistake, a recursive use with the
 same arguments, with a precise message. The depth limit catches
 everything else, such as an argument that grows at every step.
 
-*(Changed by this draft.)* The implemented `MacroCycle` rejects
-every use of a macro inside its own expansion. Under this draft, a
-single-clause macro that uses itself is accepted at definition time.
-Its expansion doesn't terminate, though: either the repeat check
-catches it, or it stops at the depth limit.
+*(Changed by this draft.)* The implemented `MacroCycle` rejects any
+use of a macro inside its own expansion. Under this draft only the
+repeat check and the depth limit apply. A single-clause macro that
+uses itself still never finishes: one of the two checks stops it.
 
 
 ## Goal macros
@@ -254,14 +264,16 @@ only:
 - a goal of a rule body, at any depth of `,` and `;`;
 - a goal of a top-level query (`ychr run -g`, the REPL, `runProgramWithGoal`).
 
-Elsewhere a macro name is an error (`MacroOutsideGoalPosition`): in a
+Elsewhere a goal macro name is an error (`MacroOutsideGoalPosition`): in a
 guard, inside an argument in an expression position, or as a function
 reference. The exceptions are `quote/1` and rule-head or
 equation-pattern *arguments*: all three are opaque data, so
 `count(a, b)` there is an ordinary compound.
 
 Function equations have no goal positions, so macros do not apply
-inside them.
+inside them. *(Draft)* A declaration macro's name outside a directive
+is an ordinary name: in a guard or an argument it means whatever it
+would mean if no macro existed.
 
 *(Draft)* Only goal macros are looked up in goal positions; a
 declaration macro is invisible there. A goal-position name that matches
@@ -403,9 +415,11 @@ optionally qualified. A nullary macro is used as an atom:
   from another are never ambiguous.
 - A directive that matches no built-in directive and no visible macro
   is an error (`UnknownDirective`). **This changes existing behavior.**
-  Today such directives are silently ignored. Once directives can
-  name macros, ignoring them would make a misspelled or non-imported
-  macro vanish without a diagnostic.
+  Today such directives are silently ignored, so that Prolog sources
+  load unchanged. Once directives can name macros, ignoring them would
+  make a misspelled or non-imported macro vanish without a diagnostic.
+  Prolog sources ported to YCHR must therefore delete foreign
+  directives such as `:- dynamic` or `:- discontiguous`.
 
 
 ### Expanding a declaration macro
@@ -444,7 +458,9 @@ clauses written around the use.
 source text. A use-site argument that contains a variable `X` and lands
 in two clauses becomes two unrelated clause variables named `X`, one in
 each. Freshening (step 2) guarantees that a body variable never
-captures a variable of the arguments.
+captures a variable of the arguments. A freshened variable, such as `N`
+or `M` in the `counter` example, appears in diagnostics under its fresh
+name.
 
 **Generated names.** Generated declarations belong to the using
 module. A generated `:- chr_constraint clicks/1` declares
@@ -504,14 +520,18 @@ An operand that breaks these rules is `MalformedMacroPrimitive`. The
 diagnostic names the primitive, the operand and the term it received.
 
 **Evaluation.** A primitive is evaluated where it is **written in a
-macro body**, during the substitution step of one expansion. Primitives
-are evaluated innermost first, so `'$compound'('$atom'([get_, F]), [X])`
-works. Evaluation goes everywhere in the body, `quote/1` included,
-because the body is a template and not code. Argument terms are never
-searched for primitives: a primitive that arrives through an argument
-is not evaluated.
+macro body**. Substitution and evaluation are one pass over the body
+as written, the template. The pass replaces each head variable with
+its argument term and never descends into that term. It evaluates
+each primitive of the template once the primitive's own operands are
+done, so primitives are evaluated innermost first and
+`'$compound'('$atom'([get_, F]), [X])` works. The pass goes everywhere
+in the template, `quote/1` included, because the template is not code.
+A primitive that arrives through an argument is therefore never
+evaluated.
 
-A primitive is never evaluated in a head pattern. Patterns match the
+A primitive is never evaluated in a macro clause's head, which is a
+pattern. Patterns match the
 arguments as written, so a primitive there is an error like any other
 primitive left outside a body.
 
@@ -519,7 +539,7 @@ Any primitive left after expansion is `MacroPrimitiveOutsideMacro`.
 That covers:
 
 - one written in ordinary code, `quote/1` and patterns included;
-- one written in a macro head;
+- one written in a macro clause's head;
 - one passed in as a macro argument;
 - a declaration of a constraint or function named `'$compound'/2` or
   `'$atom'/1`. The two names are reserved.
@@ -546,12 +566,12 @@ r(X) <=> apply1(p, X).   % r(X) <=> p(X).
 ## Names and modules
 
 A macro of either kind is a module-level name, like a constraint or a
-function. Goal macros and declaration macros share one namespace: a
-module may not define a goal macro and a declaration macro with the
-same `Name/Arity` (`DuplicateMacro`).
+function. *(Draft)* Goal macros and declaration macros share one
+namespace: a module may not define a goal macro and a declaration
+macro with the same `Name/Arity` (`DuplicateMacro`).
 
 **Export and import.** `macro(Name/Arity)` in an export list exports
-the macro of either kind, with all its clauses. A module with no
+the macro, with all its clauses (*(draft)* of either kind). A module with no
 export list exports its macros along with everything else.
 `:- use_module(M, [macro(Name/Arity)])` imports one by name. A macro
 can be called qualified, as `M:Name(...)` or `:- M:Name(...).`, under
@@ -561,8 +581,8 @@ the usual rules: `M` must be imported and must export the macro.
 constraint or function declared in the same module
 (`MacroNameCollision`). An unqualified use that matches a macro in
 one visible module and a constraint or function in another is
-ambiguous (YCHR-20001), as for any other name. A declaration macro is
-used only in a directive, where no constraint or function can appear.
+ambiguous (YCHR-20001), as for any other name. *(Draft)* A declaration
+macro is used only in a directive, where no constraint or function can appear.
 It may therefore share a name and arity with one. It may not share
 them with a built-in directive (see [Heads](#heads)).
 
@@ -644,17 +664,20 @@ Errors:
 
 | Name | Code | Condition |
 |---|---|---|
-| `MalformedMacroHead` | YCHR-15021 | Head is not an atom or a compound of distinct variables, naming neither a reserved symbol (`,`, `;`, `\`, `\|`, `->`, `=`, `is`, `true`, `quote`, `fun`, `$call`, and, draft, `$compound`, `$atom`) nor a qualified name. *(Draft)* Head arguments may be any [patterns](#patterns). A declaration macro's head also may not have the name and arity of a built-in directive. |
+| `MalformedMacroHead` | YCHR-15021 | A head must be an atom or a compound whose arguments are distinct variables, named by an unqualified atom that is not a reserved symbol (`,`, `;`, `\`, `\|`, `->`, `=`, `is`, `true`, `quote`, `fun`, `$call`, and, draft, `$compound`, `$atom`). *(Draft)* Head arguments may be any [patterns](#patterns), and a declaration macro's head may not have the name and arity of a built-in directive. |
 | `DuplicateMacro` | YCHR-20023 | Two definitions of the same `Name/Arity` in one module, of either kind. *(Draft)* Also further clauses for a macro defined by the one-line form. |
 | `MacroNameCollision` | YCHR-20024 | A goal macro shares `Name/Arity` with a constraint or function of the same module. |
 | `MacroOutsideGoalPosition` | YCHR-20025 | A goal macro name used outside a goal position (and outside `quote/1` and head/equation arguments). |
-| `MacroCycle` | YCHR-20026 | A macro's expansion requires expanding itself. *(Draft)* Only a repeated use with identical arguments (see [Recursion and termination](#recursion-and-termination)). |
+| `MacroCycle` | YCHR-20026 | A macro's expansion requires expanding itself. *(Draft)* Only a repeated use of the same macro with identical arguments up to renaming of variables (see [Recursion and termination](#recursion-and-termination)). |
 | `MacroBodyNotExported` | YCHR-20027 | A body names `M:x` in the macro's own module `M`, and `M` does not declare and export `x`. |
 | `MacroInvalidInHead` | YCHR-20028 | A head expansion is not a conjunction of constraints (see [Validity](#expanding-a-goal-macro)). |
 
 Draft errors. The 15xxx codes are raised only before conversion to
 the AST: by parsing, or by declaration-macro expansion (see
-[Pipeline placement](#pipeline-placement)). The 20xxx codes can be
+[Pipeline placement](#pipeline-placement)). Expansion needs
+cross-module visibility, which parse-validation errors don't have, so
+expect a new error type for it alongside `ParseValidationError` in the
+same code range. The 20xxx codes can be
 raised by either expansion, so they keep the renamer's range, as
 `MacroCycle` does when a cycle runs through declaration macros.
 
@@ -717,10 +740,27 @@ converted to the AST. Three facts make this possible:
 
 The standard library is parsed once, ahead of any user program (at
 build time under MicroHs), so its modules reach a program already
-converted. A library module's own declaration-macro uses are expanded
-when the library is parsed. The definitions it exports are kept in its
-parsed module, with their clauses as p-expr terms, for user modules to
-expand.
+converted. Today `parseStdLib` reads every library with one merged
+operator table and converts each library on its own, with no import
+closure. Declaration macros need two changes there:
+
+- Library macro uses must expand when the library is parsed. That
+  needs library-to-library macro visibility at that point, i.e. the
+  closure of the libraries' own imports.
+- A parsed module must carry the macro definitions it exports, with
+  their clauses as p-expr terms, so user modules can expand them. That
+  includes the modules the MicroHs build generates.
+
+For a library, "the defining module's operator table" under
+[Clause elements](#clause-elements) means the merged table its body
+was read with.
+
+Bare macro clauses (`Head ---> Body`) may come before their
+declaration, and the declaration decides how each body element is
+read. Each module is therefore scanned for `:- macro Name/N` and
+`:- macro_decls Name/N` declarations before its clauses are
+converted. Today a top-level `--->` term is rejected as an invalid
+top-level term (YCHR-15014).
 
 Expansion therefore runs once per module, with that module's macro
 visibility, over the terms of every user module. Conversion
