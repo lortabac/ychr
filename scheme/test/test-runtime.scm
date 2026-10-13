@@ -824,7 +824,36 @@
   (test-equal "run_chr_session_ep answers false for a failed branch"
               #f
               (%run-chr-session-ep (search-session)
-                                   (make-term fail-qualified (vector)))))
+                                   (make-term fail-qualified (vector))))
+
+  ;; The commit-time watched-goal check. A commit binds the goal's
+  ;; variables *outside* any rule body, so a live stored constraint of the
+  ;; calling session that observes one would never be reactivated and its
+  ;; rules would silently miss the new value. Both committing entry points
+  ;; must refuse, and the refusal must survive the search's own unwind:
+  ;; the stored suspension re-stores itself at the end of its activation,
+  ;; and a trail entry recorded for that no-op re-store would clear
+  ;; `stored` on exit and hide the watcher
+  ;; (`test/golden/search_fork/watched_goal_var` and `watched_session`,
+  ;; which are `.error` cases the golden harness does not run).
+  (let* ((s (search-session))
+         (x (make-var s))
+         (watcher (create-constraint s 0 (vector x))))
+    (store-constraint s watcher)
+    (test-equal "solve refuses to bind a watched goal variable"
+                (string-append
+                 "solve: goal variable is observed by a stored constraint;"
+                 " pass a fresh variable and unify after the call")
+                (error-message
+                 (lambda () (%solve s (make-term p-qualified (vector x))))))
+    (test-equal "run_chr_session refuses to bind a watched goal variable"
+                (string-append
+                 "run_chr_session: goal variable is observed by a stored"
+                 " constraint; pass a fresh variable and unify after the call")
+                (error-message
+                 (lambda ()
+                   (%run-chr-session s
+                                     (make-term p-qualified (vector x))))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `%write-term-to-string`

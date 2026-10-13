@@ -23,7 +23,7 @@ run_chr_session`), even for a program that only calls `print/1`.
 
 | Primitive               | Status |
 |-------------------------|--------|
-| `run_chr_session`       | Implemented as `%run-chr-session`; it spawns a nested interpreter session via the search driver. `run_chr_session_test` is in `HASKELL_ONLY` for the divergence recorded under `library(search)`. |
+| `run_chr_session`       | Implemented as `%run-chr-session`; it spawns a nested interpreter session via the search driver. |
 | `run_chr_session_ep`    | Implemented as `%run-chr-session-ep`; the same driver as `run_chr_session`, without the error catch. |
 
 The load-time invariant is pinned, without Guile, by
