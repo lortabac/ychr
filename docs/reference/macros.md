@@ -1,15 +1,11 @@
 # YCHR Macro Specification
 
-**Status:** single-clause goal macros with a head of distinct
-variables are implemented, with a single goal or a conjunction as the
-body. The rest is a **draft, not implemented**, and the sections that
-describe it say so:
-
-- list bodies for goal macros, which replace the implemented body
-  syntax (see [Bodies](#bodies));
-- declaration macros (`:- macro_decls`);
-- multi-clause macros and head patterns, for both kinds;
-- the construction primitives (`'$compound'/2`, `'$atom'/1`).
+**Status:** goal macros are implemented: single-clause and
+multi-clause definitions, head patterns, list bodies, recursion,
+expansion to zero goals, and the construction primitives
+(`'$compound'/2`, `'$atom'/1`). **Declaration macros
+(`:- macro_decls`) are a draft, not implemented**, and every part of
+this document that only concerns them says so.
 
 YCHR has two kinds of macro. Both are pure term rewriting.
 
@@ -70,8 +66,8 @@ Head ---> Body.
 ```
 
 `--->` is the same operator `:- chr_type` uses (priority 1150, `xfx`).
-`macro_decls` is a prefix operator at priority 1180, `fx`, like
-`macro`.
+*(Draft)* `macro_decls` is a prefix operator at priority 1180, `fx`,
+like `macro`.
 
 ### Single-clause form
 
@@ -81,17 +77,11 @@ Head ---> Body.
 ```
 
 A one-line definition declares the macro and gives its only clause.
-This is the implemented form, apart from the list body. In it, the
-head's arguments are **distinct variables**, and `_` is not allowed as
-a parameter.
-
-*(Draft)* The head of a one-line definition may also use
-[patterns](#patterns). A use that the pattern doesn't match is then an
-error, because there is no other clause to try.
+Its head may use [patterns](#patterns), like any clause head. A use
+that the pattern doesn't match is then an error, because there is no
+other clause to try.
 
 ### Multi-clause form
-
-**Status: draft, not implemented.**
 
 ```prolog
 :- macro Name/N.              % or :- macro_decls Name/N.
@@ -107,15 +97,23 @@ top-level clauses.
 - Every clause must be in the module that declares the macro, after
   the declaration or before it, like equations. The clauses must form
   one contiguous block, as for a closed function
-  (`DiscontiguousMacroClauses`). There are no open macros: another
-  module can't add clauses.
+  (`DiscontiguousMacroClauses`), so the declaration can't sit between
+  two of them. There are no open macros: another module can't add
+  clauses.
+- One declaration may declare several macros, as other declaration
+  directives do: `:- macro all_of/1, any_of/1.`
 - A clause whose `Name/N` is not declared as a macro in its module is
   `UndeclaredMacroClause`.
 - A macro defined by the one-line form can't have further clauses
   (`DuplicateMacro`).
 
 The declaration decides the kind of every clause, and so how the
-elements of its body are read (see [Bodies](#bodies)).
+elements of its body are read (see [Bodies](#bodies)). *(Draft)*
+`:- macro_decls Name/N` is not implemented yet; today every clause
+belongs to a goal macro.
+
+A declaration with no clauses is allowed; every use of it is
+`NoMatchingMacroClause`.
 
 ### Heads
 
@@ -133,15 +131,10 @@ elements of its body are read (see [Bodies](#bodies)).
   Other arities of those names are allowed.
 - A head variable that occurs only once in its clause, in the head and
   not in the body, is a warning (`UnusedMacroParameter`): the
-  corresponding argument is dropped. *(Draft)* Under the draft, where
-  heads are patterns, write `_` to drop it silently.
+  corresponding argument is dropped. Write `_`, or a variable whose
+  name starts with `_` (such as `_Unused`), to drop it silently.
 
 ### Bodies
-
-**Status: draft, not implemented.** For goal macros, this replaces the
-implemented body syntax, a single goal or a `,`-conjunction. Macros
-are not yet used by any library, only by tests, so the change is made
-without a transition period.
 
 The body of every clause, of either kind, is written as a **list
 literal**: `[` … `]` with no tail variable (`MalformedMacroBody`
@@ -166,8 +159,6 @@ expand to **zero goals**, which a conjunction cannot express: `true`
 is a goal, and it is not allowed in a rule head.
 
 ### Patterns
-
-**Status: draft, not implemented.**
 
 The arguments of a head are patterns, with the same syntax as the
 arguments of a function equation's head: variables, `_`, atoms,
@@ -222,8 +213,6 @@ all_of([a(X), b(X)]) ==> c(X).       % a(X), b(X) ==> c(X).
 
 ### Recursion and termination
 
-**Status: draft, not implemented.**
-
 A clause body may use the macro it belongs to, directly or through
 other macros. Each expansion is a step. Two checks keep expansion
 finite:
@@ -242,15 +231,19 @@ finite:
   the same chain [diagnostics](#diagnostics) report. A recursive macro
   therefore handles a list of at most about 1000 elements: `all_of`
   over a longer list hits the limit.
+- **Size limit.** A use written in a rule or a query may cause at most
+  100000 expansions in total, nested ones included. More is rejected
+  with `MacroExpansionTooLarge`. A clause that uses its macro twice
+  doubles the work at every level, so the depth limit alone would let
+  it run for `2^1000` steps.
 
 The repeat check catches the common mistake, a recursive use with the
-same arguments, with a precise message. The depth limit catches
-everything else, such as an argument that grows at every step.
-
-*(Changed by this draft.)* The implemented `MacroCycle` rejects any
-use of a macro inside its own expansion. Under this draft only the
-repeat check and the depth limit apply. A single-clause macro that
-uses itself still never finishes: one of the two checks stops it.
+same arguments, with a precise message. The depth and size limits
+catch everything else, such as an argument that grows at every step.
+A single-clause macro that uses itself never finishes: one of the
+checks stops it. After a depth or size error, or an expansion error
+(such as `NoMatchingMacroClause`) in a nested use, the rest of that
+use's expansion is abandoned, so the error is reported once.
 
 
 ## Goal macros
@@ -285,22 +278,20 @@ declaration macro, is `MacroKindMismatch`.
 
 Expanding the use `Name(A1, ..., An)` of a goal macro:
 
-1. *(Draft)* Select the first clause whose head matches
-   `Name(A1, ..., An)` (see [Patterns](#patterns)). For an implemented
-   single-clause macro, this binds each parameter `Vi` to `Ai`.
+1. Select the first clause whose head matches `Name(A1, ..., An)`
+   (see [Patterns](#patterns)).
 2. Take a copy of the clause body in which every variable not bound
    by the match is replaced by a fresh variable. Fresh variables
    cannot clash with any variable of the use site. Each `_` stays a
    distinct anonymous variable.
-3. Replace each head variable with the argument term it was bound to.
-   *(Draft)* Evaluate the
+3. Replace each head variable with the argument term it was bound to,
+   and evaluate the
    [construction primitives](#construction-primitives) written in the
    body.
 4. Splice the resulting goals into the enclosing conjunction, in list
    order, at the position of the use: kept head, removed head, or
    body. An element that is itself a conjunction is flattened into it.
-   *(Draft)* An empty list splices nothing (see
-   [Zero goals](#zero-goals)).
+   An empty list splices nothing (see [Zero goals](#zero-goals)).
 5. Expand again any macro uses that the replacement put in goal
    positions.
 
@@ -327,16 +318,12 @@ goals that are not allowed in a body. The diagnostic names the macro
 valid head conjuncts, and `?` guards are valid inside an aggregate
 goal ([aggregates.md](aggregates.md)).
 
-**Cycles.** The implemented check rejects a use of `M` reached while
-expanding `M` (`MacroCycle`), with the chain of macros involved. It
-follows actual expansions rather than a static call graph, because
-names in a macro body are resolved at each use site (see below).
-*(Draft)* This check is replaced by the two checks under
-[Recursion and termination](#recursion-and-termination).
+**Termination.** The two checks under
+[Recursion and termination](#recursion-and-termination) follow actual
+expansions rather than a static call graph, because names in a macro
+body are resolved at each use site (see below).
 
 ### Zero goals
-
-**Status: draft, not implemented.**
 
 A use that expands to no goals disappears from its conjunction:
 
@@ -494,11 +481,9 @@ body as written is also reported when the macro is defined.
 
 ## Construction primitives
 
-**Status: draft, not implemented.**
-
 Two primitives build terms that Prolog syntax cannot write when parts
 of them are parameters. They may be used in the body of either kind
-of macro.
+of macro (*(draft)* only goal macros exist today).
 
 | Primitive | Result |
 |---|---|
@@ -514,7 +499,8 @@ of macro.
   must be an unqualified atom (`''` contributes nothing) or an integer,
   which contributes its decimal text, with a leading `-` if negative.
   The result must be non-empty and must not contain `__`, which is
-  reserved for qualified-name mangling, as it is in source atoms.
+  reserved for qualified-name mangling, or `%%u`, which is reserved
+  for Unicode escapes, as in source atoms.
 
 An operand that breaks these rules is `MalformedMacroPrimitive`. The
 diagnostic names the primitive, the operand and the term it received.
@@ -571,7 +557,8 @@ namespace: a module may not define a goal macro and a declaration
 macro with the same `Name/Arity` (`DuplicateMacro`).
 
 **Export and import.** `macro(Name/Arity)` in an export list exports
-the macro, with all its clauses (*(draft)* of either kind). A module with no
+the macro, with all its clauses (*(draft)* of either kind, once
+declaration macros exist). A module with no
 export list exports its macros along with everything else.
 `:- use_module(M, [macro(Name/Arity)])` imports one by name. A macro
 can be called qualified, as `M:Name(...)` or `:- M:Name(...).`, under
@@ -650,8 +637,15 @@ The chain covers:
 - *(draft)* errors from checking that a clause spliced by a
   declaration macro is well-formed.
 
-*(Draft)* A recursive expansion can make the chain long. Repeated
-entries for the same macro are shown once, with a count.
+A recursive expansion can make the chain long. Consecutive entries for
+the same macro are shown on one line, with a count and the innermost
+use. At most ten such lines are shown, innermost first; one more line
+counts the enclosing expansions left out:
+
+```
+  in 1000 nested expansions of m:grow/1, innermost used at /path/m.chr:5:10
+  ... and 5 more enclosing expansions
+```
 
 Resolve, Desugar and the optional type checker have no per-goal
 provenance to attach a chain to. A diagnostic from one of those phases
@@ -664,39 +658,41 @@ Errors:
 
 | Name | Code | Condition |
 |---|---|---|
-| `MalformedMacroHead` | YCHR-15021 | A head must be an atom or a compound whose arguments are distinct variables, named by an unqualified atom that is not a reserved symbol (`,`, `;`, `\`, `\|`, `->`, `=`, `is`, `true`, `quote`, `fun`, `$call`, and, draft, `$compound`, `$atom`). *(Draft)* Head arguments may be any [patterns](#patterns), and a declaration macro's head may not have the name and arity of a built-in directive. |
-| `DuplicateMacro` | YCHR-20023 | Two definitions of the same `Name/Arity` in one module, of either kind. *(Draft)* Also further clauses for a macro defined by the one-line form. |
+| `MalformedMacroHead` | YCHR-15021 | A head, or the name of a `:- macro Name/N` declaration, must be an atom or a compound named by an unqualified atom that is not a reserved symbol (`,`, `;`, `\`, `\|`, `->`, `=`, `is`, `true`, `quote`, `fun`, `$call`, `tell`, `$compound`, `$atom`). Head arguments may be any [patterns](#patterns). *(Draft)* A declaration macro's head may not have the name and arity of a built-in directive. |
+| `MalformedMacroBody` | YCHR-15022 | A clause body is not a list literal with no tail variable. |
+| `UndeclaredMacroClause` | YCHR-15025 | A `Head ---> Body` clause whose `Name/N` is not declared as a macro in its module. |
+| `DiscontiguousMacroClauses` | YCHR-15026 | A macro's clauses don't form one contiguous block. |
+| `DuplicateMacro` | YCHR-20023 | Two definitions of the same `Name/Arity` in one module, of either kind, including further clauses for a macro defined by the one-line form. |
 | `MacroNameCollision` | YCHR-20024 | A goal macro shares `Name/Arity` with a constraint or function of the same module. |
 | `MacroOutsideGoalPosition` | YCHR-20025 | A goal macro name used outside a goal position (and outside `quote/1` and head/equation arguments). |
-| `MacroCycle` | YCHR-20026 | A macro's expansion requires expanding itself. *(Draft)* Only a repeated use of the same macro with identical arguments up to renaming of variables (see [Recursion and termination](#recursion-and-termination)). |
+| `MacroCycle` | YCHR-20026 | A use is reached again while it is being expanded, with the same macro and identical arguments up to renaming of variables (see [Recursion and termination](#recursion-and-termination)). |
 | `MacroBodyNotExported` | YCHR-20027 | A body names `M:x` in the macro's own module `M`, and `M` does not declare and export `x`. |
 | `MacroInvalidInHead` | YCHR-20028 | A head expansion is not a conjunction of constraints (see [Validity](#expanding-a-goal-macro)). |
+| `NoMatchingMacroClause` | YCHR-20032 | No clause of the macro matches the use (see [Patterns](#patterns)). |
+| `MacroExpansionTooDeep` | YCHR-20033 | A chain of nested expansions exceeds the depth limit (see [Recursion and termination](#recursion-and-termination)). |
+| `MacroEmptyHead` | YCHR-20034 | A part of a rule head that the rule's form requires is empty after expansion (see [Zero goals](#zero-goals)). |
+| `MacroExpansionTooLarge` | YCHR-20038 | A use written in a rule or a query causes more than 100000 expansions (see [Recursion and termination](#recursion-and-termination)). |
+| `MalformedMacroPrimitive` | YCHR-20036 | An operand of `'$compound'` or `'$atom'` breaks the rules under [Construction primitives](#construction-primitives). |
+| `MacroPrimitiveOutsideMacro` | YCHR-20037 | A primitive remains after expansion: it was not written in a macro body. |
 
-Draft errors. The 15xxx codes are raised only before conversion to
-the AST: by parsing, or by declaration-macro expansion (see
-[Pipeline placement](#pipeline-placement)). Expansion needs
-cross-module visibility, which parse-validation errors don't have, so
-expect a new error type for it alongside `ParseValidationError` in the
-same code range. The 20xxx codes can be
+Draft errors, for declaration macros. The 15xxx codes are raised only
+before conversion to the AST: by parsing, or by declaration-macro
+expansion (see [Pipeline placement](#pipeline-placement)). Expansion
+needs cross-module visibility, which parse-validation errors don't
+have, so expect a new error type for it alongside
+`ParseValidationError` in the same code range. The 20xxx codes can be
 raised by either expansion, so they keep the renamer's range, as
 `MacroCycle` does when a cycle runs through declaration macros.
 
 | Name | Code | Condition |
 |---|---|---|
-| `MalformedMacroBody` | YCHR-15022 | A clause body, of either kind of macro, is not a list literal with no tail variable. |
 | `MacroDeclsForbiddenClause` | YCHR-15023 | An expansion contains a clause listed under [Output restrictions](#output-restrictions). |
 | `UnknownDirective` | YCHR-15024 | A directive matches no built-in directive and no visible macro of either kind. |
-| `UndeclaredMacroClause` | YCHR-15025 | A `Head ---> Body` clause whose `Name/N` is not declared as a macro in its module. |
-| `DiscontiguousMacroClauses` | YCHR-15026 | A macro's clauses don't form one contiguous block. |
-| `MacroKindMismatch` | YCHR-20029 | A name matches only a macro of the other kind: a goal macro as a directive, or a declaration macro in a goal position. |
-| `MalformedMacroPrimitive` | YCHR-20030 | An operand of `'$compound'` or `'$atom'` breaks the rules under [Construction primitives](#construction-primitives). |
-| `MacroPrimitiveOutsideMacro` | YCHR-20031 | A primitive remains after expansion: it was not written in a macro body. |
-| `NoMatchingMacroClause` | YCHR-20032 | No clause of the macro matches the use (see [Patterns](#patterns)). |
-| `MacroExpansionTooDeep` | YCHR-20033 | A chain of nested expansions exceeds the depth limit (see [Recursion and termination](#recursion-and-termination)). |
-| `MacroEmptyHead` | YCHR-20034 | A part of a rule head that the rule's form requires is empty after expansion (see [Zero goals](#zero-goals)). |
+| `MacroKindMismatch` | YCHR-20035 | A name matches only a macro of the other kind: a goal macro as a directive, or a declaration macro in a goal position. |
 
-Warning: `UnusedMacroParameter` (YCHR-20105), for either kind. *(Draft)*
-It also covers a head variable that occurs only once in its clause.
+Warning: `UnusedMacroParameter` (YCHR-20105), for either kind: a head
+variable that occurs only once in its clause, whose name does not
+start with `_`.
 
 
 ## Pipeline placement
@@ -714,7 +710,7 @@ them. The rest of the pipeline (resolving, desugaring, type checking,
 compilation) sees only the expanded program. A backend never sees a
 macro.
 
-*(Draft)* Clause selection matches the argument terms before the
+Clause selection matches the argument terms before the
 renamer touches them, so patterns see exactly what the user wrote, as
 [Patterns](#patterns) requires.
 
@@ -759,8 +755,9 @@ Bare macro clauses (`Head ---> Body`) may come before their
 declaration, and the declaration decides how each body element is
 read. Each module is therefore scanned for `:- macro Name/N` and
 `:- macro_decls Name/N` declarations before its clauses are
-converted. Today a top-level `--->` term is rejected as an invalid
-top-level term (YCHR-15014).
+converted. Today the parser converts every top-level `--->` term as
+a goal-macro clause and attaches it to its `:- macro Name/N`
+declaration afterwards (`UndeclaredMacroClause` if there is none).
 
 Expansion therefore runs once per module, with that module's macro
 visibility, over the terms of every user module. Conversion

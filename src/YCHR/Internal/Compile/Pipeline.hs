@@ -174,12 +174,12 @@ data GoalRejection
     -- than a constraint (e.g. @ychr run -g '1 + 1'@ resolves to
     -- @prelude:+/2@, which is a function). Carries the resolved name.
     NotAConstraintItem Types.QualifiedName
-  | -- | The goal names a macro whose expansion is a conjunction of
-    -- several goals (or none at all). The single-goal entry points
+  | -- | The goal names a macro whose expansion is not exactly one goal:
+    -- a conjunction of several goals, or none at all. The single-goal entry points
     -- (@ychr run -g@, @gen-driver@, 'YCHR.Run.runProgramWithGoal') parse
     -- a goal as exactly one constraint and cannot represent more; use
     -- the REPL or a multi-goal query instead.
-    MacroExpandsToConjunction
+    MacroNotSingleGoal
   deriving (Show)
 
 instance Exception Error

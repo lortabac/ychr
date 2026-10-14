@@ -1,0 +1,10 @@
+:- module(macro_malformed_primitive).
+:- chr_constraint r/1.
+:- macro glue(P, Q) ---> ['$atom'([P, Q])].
+:- macro apply(F) ---> ['$compound'(F, [])].
+r(1) <=> glue(a_, '_b').
+r(2) <=> apply(42).
+:- macro args(L) ---> ['$compound'(f, L)].
+r(3) <=> args([a | b]).
+:- macro empty_atom ---> ['$atom'([''])].
+r(4) <=> empty_atom.

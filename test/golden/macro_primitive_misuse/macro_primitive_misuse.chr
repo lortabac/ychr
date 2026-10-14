@@ -1,0 +1,9 @@
+:- module(macro_primitive_misuse).
+:- chr_constraint p/1, r/1, '$atom'/1.
+% A primitive in a head pattern is never evaluated.
+:- macro m('$atom'([a])) ---> [].
+% A primitive that arrives through an argument is never evaluated.
+:- macro pass(G) ---> [G].
+r(1) <=> pass('$compound'(p, [1])).
+% A primitive inside quote/1 in ordinary code is not evaluated either.
+r(2) <=> p(quote('$atom'([a, b]))).

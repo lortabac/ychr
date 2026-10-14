@@ -1,0 +1,4 @@
+:- module(macro_empty_head).
+:- chr_constraint a/1, b/1.
+:- macro nothing(_) ---> [].
+a(X) \ nothing(X) <=> b(X).

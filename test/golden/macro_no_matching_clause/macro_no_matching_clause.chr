@@ -1,0 +1,5 @@
+:- module(macro_no_matching_clause).
+:- chr_constraint a/1, r/1.
+:- macro first/1.
+first([X | _]) ---> [a(X)].
+r(_) <=> first([]).

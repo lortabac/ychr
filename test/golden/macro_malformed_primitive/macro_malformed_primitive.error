@@ -1,0 +1,5 @@
+YCHR-20036
+Invalid result of '$atom'
+Invalid functor of '$compound': 42
+Invalid argument list of '$compound'
+Invalid result of '$atom': ['']

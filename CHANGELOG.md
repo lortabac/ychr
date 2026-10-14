@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+Goal macros follow the revised macro specification
+([docs/reference/macros.md](docs/reference/macros.md)); declaration
+macros (`:- macro_decls`) are still a draft.
+
+- **Breaking:** a macro body is a list literal,
+  `:- macro both(X) ---> [a(X), b(X)].`. A body that is not one is
+  `MalformedMacroBody` (YCHR-15022). `[]` expands to no goals: a rule
+  body, query or disjunction branch left empty means `true`, a single-goal
+  entry point rejects it, and a required head part left empty is
+  `MacroEmptyHead` (YCHR-20034).
+- A macro can have several clauses: `:- macro Name/N.` (or a list,
+  `:- macro a/1, b/2.`) followed by
+  top-level `Head ---> [Goals].` clauses, which must be contiguous
+  (`DiscontiguousMacroClauses`, YCHR-15026) and declared
+  (`UndeclaredMacroClause`, YCHR-15025). Further clauses for a one-line
+  macro are `DuplicateMacro`.
+- Head arguments are patterns, matched syntactically against the
+  arguments as written; the first matching clause is used, and a use no
+  clause matches is `NoMatchingMacroClause` (YCHR-20032).
+- Macros may recurse. `MacroCycle` now fires only when a use is reached
+  again with identical arguments up to variable renaming, chains
+  deeper than 1000 are `MacroExpansionTooDeep` (YCHR-20033), and a use
+  that causes more than 100000 expansions is `MacroExpansionTooLarge`
+  (YCHR-20038). Recursive chains are shown collapsed in diagnostics.
+- The construction primitives `'$compound'(F, Args)` and
+  `'$atom'(Parts)` build terms in a macro body
+  (`MalformedMacroPrimitive`, YCHR-20036); a primitive anywhere else is
+  `MacroPrimitiveOutsideMacro` (YCHR-20037).
+- `UnusedMacroParameter` covers any head variable used once in its
+  clause, except `_` and variables whose name starts with `_`.
+- The spec's codes for `MacroKindMismatch`, `MalformedMacroPrimitive` and
+  `MacroPrimitiveOutsideMacro` moved to YCHR-20035–20037, since
+  20029–20031 belong to the `tell/N` errors.
+- The single-goal rejection `GoalRejection.MacroExpandsToConjunction` is
+  now `MacroNotSingleGoal`, as it also covers macros that expand to no
+  goals.
+
 The Scheme backend implements `library(search)`'s `solve/1`, `findall/2`,
 `fold_solutions/4` and `fail/0`, and `library(meta)`'s
 `run_chr_session/1` and `run_chr_session_ep/1` (which are the same driver

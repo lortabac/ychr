@@ -1,0 +1,5 @@
+YCHR-20037
+Construction primitive '$atom'/1 is not written in a macro body
+Construction primitive '$compound'/2 is not written in a macro body
+in the expansion of macro_primitive_misuse:pass/1
+'$atom' / 1

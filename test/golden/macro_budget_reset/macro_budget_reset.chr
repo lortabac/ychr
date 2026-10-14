@@ -1,0 +1,8 @@
+% Each use written in a rule gets its own expansion budget: after the
+% first use fails with MacroExpansionTooDeep, the second still expands.
+% Its expansion then reports its own error, which shows it was reached.
+:- module(macro_budget_reset).
+:- chr_constraint r/1.
+:- macro grow(X) ---> [grow(s(X))].
+:- macro second(X) ---> [missing(X)].
+r(X) <=> grow(X), second(X).

@@ -347,7 +347,7 @@ prepareGoalTerm cp original@(Constraint cname0 cargs0) = do
     -- 'Constraint'. The single-goal entry points parse exactly one
     -- constraint; reject with a hint toward the multi-goal API. The
     -- un-expanded original name/arity is what the message names.
-    _ -> throwIO (GoalNotAConstraint (Constraint cname0 cargs0) MacroExpandsToConjunction)
+    _ -> throwIO (GoalNotAConstraint (Constraint cname0 cargs0) MacroNotSingleGoal)
 
 -- | Turn a 'MalformedConstraint' goal (bare literal, variable, wildcard)
 -- into a 0-arity goal named after the term, so name resolution rejects it

@@ -227,15 +227,39 @@ macroConjunctionSource =
   ":- module(mac, [macro(both/1)]).\n\
   \:- chr_constraint a/1.\n\
   \:- chr_constraint b/1.\n\
-  \:- macro both(X) ---> (a(X), b(X)).\n"
+  \:- macro both(X) ---> [a(X), b(X)].\n"
 
 macroSingleGoalSource :: Text
 macroSingleGoalSource =
   ":- module(mac1, [result/2, macro(single/2)]).\n\
   \:- chr_constraint result/2.\n\
-  \:- macro single(X, R) ---> result(X, R).\n\
+  \:- macro single(X, R) ---> [result(X, R)].\n\
   \\n\
   \result(X, R) <=> R = X.\n"
+
+macroZeroGoalSource :: Text
+macroZeroGoalSource =
+  ":- module(mac0, [macro(nothing/0)]).\n\
+  \:- macro nothing ---> [].\n"
+
+-- | Head variables that are used, repeated, @_@ or underscore-prefixed
+-- do not warn; @Unused@ does.
+macroUnusedParamSource :: Text
+macroUnusedParamSource =
+  ":- module(macu, [macro(m/5), macro(n/1)]).\n\
+  \:- chr_constraint a/1.\n\
+  \:- macro m(X, Y, Y, _, _Z) ---> [a(X)].\n\
+  \:- macro n(Unused) ---> [].\n"
+
+-- | A macro that uses itself twice per clause and has no base clause:
+-- each of its 2^10 leaves fails to match.
+macroBranchErrorSource :: Text
+macroBranchErrorSource =
+  ":- module(branch).\n\
+  \:- chr_constraint r/1.\n\
+  \:- macro tree/1.\n\
+  \tree(s(X)) ---> [tree(X), tree(X)].\n\
+  \r(_) <=> tree(s(s(s(s(s(s(s(s(s(s(0))))))))))).\n"
 
 ambiguousSourceA :: Text
 ambiguousSourceA =
@@ -471,16 +495,54 @@ queryErrorTests =
             (runProgramWithGoal typeCheckerProgram cp Map.empty "both(5)")
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
-            Just (GoalNotAConstraint _ MacroExpandsToConjunction) -> pure ()
+            Just (GoalNotAConstraint _ MacroNotSingleGoal) -> pure ()
             Just other ->
               assertFailure $
-                "expected GoalNotAConstraint MacroExpandsToConjunction, got Error:\n"
+                "expected GoalNotAConstraint MacroNotSingleGoal, got Error:\n"
                   ++ displayMsg other
             Nothing ->
               assertFailure $
                 "expected Error, got non-Error exception: " ++ show exc
           Right _ ->
             assertFailure "expected an exception for a macro goal expanding to several goals",
+      testCase "runProgramWithGoal: macro expanding to no goals is rejected" $ do
+        cp <- compileOrFail [("mac0.chr", macroZeroGoalSource)]
+        outcome <-
+          try @SomeException
+            (runProgramWithGoal typeCheckerProgram cp Map.empty "nothing")
+        case outcome of
+          Left exc -> case fromException exc :: Maybe Error of
+            Just (GoalNotAConstraint _ MacroNotSingleGoal) -> pure ()
+            Just other ->
+              assertFailure $
+                "expected GoalNotAConstraint MacroNotSingleGoal, got Error:\n"
+                  ++ displayMsg other
+            Nothing ->
+              assertFailure $
+                "expected Error, got non-Error exception: " ++ show exc
+          Right _ ->
+            assertFailure "expected an exception for a macro goal expanding to no goals",
+      testCase "runProgramWithQuery: macro expanding to no goals succeeds" $ do
+        cp <- compileOrFail [("mac0.chr", macroZeroGoalSource)]
+        bindings <- runProgramWithQuery typeCheckerProgram cp Map.empty "nothing."
+        bindings @?= Map.empty,
+      testCase "a branching recursive macro reports a nested error once" $
+        case compileModules stdlib False [("branch.chr", macroBranchErrorSource)] of
+          Left (RenameErrors errs) -> length errs @?= 1
+          Left other -> assertFailure ("expected rename errors, got: " ++ displayMsg other)
+          Right _ -> assertFailure "expected a NoMatchingMacroClause error",
+      testCase "UnusedMacroParameter: only for a used-once, non-underscore variable" $
+        case compileModules stdlib False [("macu.chr", macroUnusedParamSource)] of
+          Left err -> assertFailure (show err)
+          Right (_, ws) -> do
+            let msgs = map displayMsg ws
+                unused = filter ("YCHR-20105" `isInfixOf`) msgs
+            assertBool
+              ("expected exactly one YCHR-20105 warning, got: " ++ show msgs)
+              (length unused == 1)
+            assertBool
+              ("expected the warning to name 'Unused', got: " ++ show unused)
+              (all ("'Unused'" `isInfixOf`) unused),
       testCase "runProgramWithGoal: macro expanding to exactly one goal runs normally" $ do
         cp <- compileOrFail [("mac1.chr", macroSingleGoalSource)]
         bindings <- runProgramWithGoal typeCheckerProgram cp Map.empty "single(11, R)"

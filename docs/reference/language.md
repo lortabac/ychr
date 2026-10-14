@@ -40,8 +40,8 @@ static type checker is specified in [type-system.md](type-system.md).
 | `:- extend_function` / `:- extend_class` / `:- extend_class_type` | [Declaration placement](#declaration-placement) |
 | `:- inline Decls.` | [Inlining](#inlining) |
 | `:- constraint_use Decls.` | [Constraint use](#constraint-use) |
-| `:- macro Name(Vs) ---> Body.` | [macros.md](macros.md) |
-| *(Draft)* `:- macro Name/N.`, `:- macro_decls …`, `Head ---> Body.`, `:- Name(Args).` | [macros.md](macros.md) |
+| `:- macro Head ---> [Goals].` / `:- macro Name/N.` and `Head ---> [Goals].` clauses | [macros.md](macros.md) |
+| *(Draft)* `:- macro_decls …`, `:- Name(Args).` | [macros.md](macros.md) |
 
 Declaration directives take comma-separated lists:
 `:- chr_constraint a/1, b/2.` Unknown directives are dropped silently
