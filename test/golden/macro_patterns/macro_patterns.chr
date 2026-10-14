@@ -1,0 +1,72 @@
+% Multi-clause goal macros with head patterns (docs/reference/macros.md
+% §Patterns, §Recursion and termination).
+:- module(macro_patterns,
+          [test_body/2, test_head/2, test_select/2, test_same/3,
+           test_list/2, test_wild/2, test_qualified/2]).
+
+:- chr_constraint p/1, q/1, s/0, got/1.
+:- chr_constraint a/1, b/1, c/1.
+:- chr_constraint out/2, collect/2, test_body/2, test_head/2.
+:- chr_constraint kind/2, test_select/2, test_same/3, test_list/2, test_wild/2.
+:- chr_constraint test_qualified/2, which/2.
+
+% --- A recursive macro over a list of goals --------------------------------
+
+:- macro all_of/1.
+all_of([]) ---> [].
+all_of([G|Gs]) ---> [G, all_of(Gs)].
+
+% In a body: r <=> p(1), q(2), s.
+test_body(X, R) <=> all_of([p(X), q(X), s]), collect(X, R).
+p(X), q(X), s, collect(X, R) <=> R = 1.
+
+% In a head: a(X), b(X) ==> c(X).
+all_of([a(X), b(X)]) ==> c(X).
+test_head(X, R) <=> a(X), b(X), out(X, R).
+c(X), out(X, R) <=> R = 2.
+
+% --- Clause selection on constants, first match wins -----------------------
+
+:- macro classify/2.
+classify(zero, R) ---> [R = 0].
+classify(one, R) ---> [R = 1].
+classify(_, R) ---> [R = 99].
+
+test_select(X, R) <=> kind(X, R).
+kind(0, R) <=> classify(zero, R).
+kind(1, R) <=> classify(one, R).
+kind(_, R) <=> classify(other, R).
+
+% --- A repeated head variable matches only identical arguments ------------
+
+:- macro same/3.
+same(X, X, R) ---> [R = 1].
+same(_, _, R) ---> [R = 0].
+
+test_same(X, R1, R2) <=> same(X, X, R1), same(X, [X], R2).
+
+% --- Nested list patterns --------------------------------------------------
+
+:- macro first_two/2.
+first_two([A, B | _], R) ---> [R = [A, B]].
+
+test_list(_, R) <=> first_two([10, 20, 30], R).
+
+% --- '_' and underscore-prefixed parameters --------------------------------
+
+:- macro second(_, _First, Y) ---> [got(Y)].
+
+test_wild(X, R) <=> second(1, 2, X), out(X, R).
+got(X), out(X, R) <=> R = X.
+
+% --- Qualified-name patterns ---------------------------------------------
+%
+% A pattern `lib:F` matches an argument written `lib:x` part by part; a
+% name is compared as written, so `other:y` falls to the second clause.
+
+:- macro which_module/2.
+which_module(lib:_, R) ---> [R = 1].
+which_module(_:_, R) ---> [R = 2].
+
+test_qualified(_, R) <=> which_module(lib:x, R1), which_module(other:y, R2), which(R1, R2), R = [R1, R2].
+which(_, _) <=> true.

@@ -1,0 +1,7 @@
+:- module(macro_branch_error).
+:- chr_constraint r/1.
+% No base clause: every leaf of the branching recursion fails to match.
+% The error is reported once, not once per branch.
+:- macro tree/1.
+tree(s(X)) ---> [tree(X), tree(X)].
+r(_) <=> tree(s(s(s(s(s(s(s(s(s(s(0))))))))))).

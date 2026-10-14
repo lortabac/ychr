@@ -50,6 +50,7 @@ module YCHR.Internal.Parsed
     Head (..),
     FunctionEquation (..),
     MacroDef (..),
+    MacroClause (..),
     MacroExportDeclBody (..),
 
     -- * Re-exports from YCHR.Internal.Types
@@ -245,20 +246,33 @@ data ConstraintUseDecl = ConstraintUseDecl
   }
   deriving (Show, Eq)
 
--- | A @:- macro Name(V1, ..., Vn) ---> Body.@ definition.
+-- | A goal macro: a name and arity, and its clauses in source order.
 --
--- 'params' are the parameter variables in left-to-right order; the
--- parser guarantees they are distinct (duplicates are rejected as
--- 'YCHR.Internal.Parser.MalformedMacroHead'). 'body' is an arbitrary
--- term — typically a @,@\/@;@ conjunction — kept exactly as written;
--- it is not checked when the macro is defined beyond the head-shape
--- and reserved-name rules, since whether an expansion is valid
--- depends on where it is used. See
+-- A macro comes either from a one-line definition
+-- (@:- macro Head ---> [Goals].@, exactly one clause) or from a
+-- declaration (@:- macro Name\/N.@) together with the top-level
+-- @Head ---> [Goals].@ clauses of the same @Name\/N@. The parser groups
+-- the clauses; a declaration with no clauses has an empty 'clauses'
+-- list, and every use of it fails to match. See
 -- [the macro reference](../../docs/reference/macros.md).
 data MacroDef = MacroDef
   { name :: Text,
-    params :: [Text],
-    body :: Term
+    arity :: Int,
+    clauses :: [AnnP MacroClause]
+  }
+  deriving (Show, Eq)
+
+-- | One clause of a goal macro: @Name(P1, ..., Pn) ---> [G1, ..., Gk].@
+--
+-- 'params' are the head's argument /patterns/, matched syntactically
+-- against the arguments of a use (see
+-- 'YCHR.Internal.Rename.Macro.matchClause'). 'body' holds the elements
+-- of the body list, kept exactly as written: they are not checked when
+-- the macro is defined, since whether an expansion is valid depends on
+-- where it is used.
+data MacroClause = MacroClause
+  { params :: [Term],
+    body :: [Term]
   }
   deriving (Show, Eq)
 

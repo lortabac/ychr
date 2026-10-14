@@ -1,0 +1,4 @@
+:- module(macro_extra_clauses).
+:- chr_constraint a/1.
+:- macro foo(0) ---> [].
+foo(X) ---> [a(X)].

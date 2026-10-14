@@ -1,0 +1,6 @@
+:- module(macro_variant_cycle).
+:- chr_constraint p/1, r/1.
+% The recursive use differs from the outer one only by the name of its
+% (fresh) variable: a variant, so the expansion can never finish.
+:- macro m(_X) ---> [m(Y), p(Y)].
+r(Z) <=> m(Z).

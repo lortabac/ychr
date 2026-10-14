@@ -20,6 +20,7 @@ import YCHR.PExprRoundtripTest qualified
 import YCHR.PExprTest qualified
 import YCHR.ParserTest qualified
 import YCHR.PrettyTest qualified
+import YCHR.Rename.MacroTest qualified
 import YCHR.RenameTest qualified
 import YCHR.ResourcesTest qualified
 import YCHR.RoundtripTest qualified
@@ -79,6 +80,7 @@ main = do
           YCHR.PExprRoundtripTest.tests,
           YCHR.RoundtripTest.tests,
           YCHR.RenameTest.tests,
+          YCHR.Rename.MacroTest.tests,
           YCHR.ResourcesTest.tests,
           YCHR.TextShimTest.tests,
           YCHR.TypeCheckTest.tests,

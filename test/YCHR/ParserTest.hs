@@ -46,6 +46,18 @@ p src = fst <$> parseModule "" src
 pErrs :: Text -> Either (ParseError) [ParseValidationError]
 pErrs src = map (.node) . snd <$> parseModule "" src
 
+-- | A module's macros as @(name, arity, [(params, body)])@, with the
+-- source annotations dropped.
+macroShapes :: Module -> [(Text, Int, [([Term], [Term])])]
+macroShapes m =
+  [ (d.node.name, d.node.arity, [(c.node.params, c.node.body) | c <- d.node.clauses])
+  | d <- m.macros
+  ]
+
+-- | An atom, as the parser represents it.
+atom :: Text -> Term
+atom n = CompoundTerm (Unqualified n) []
+
 -- | Strip source locations from a Rule for structural comparison.
 stripRuleLoc :: Rule -> Rule
 stripRuleLoc r =
@@ -278,35 +290,102 @@ directiveTests =
                 )
             ],
       testCase "macro nullary head, single goal body" $
-        (map (.node) . (.macros)) <$> p ":- macro foo ---> bar."
-          @?= Right [MacroDef "foo" [] (CompoundTerm (Unqualified "bar") [])],
+        macroShapes <$> p ":- macro foo ---> [bar]."
+          @?= Right [("foo", 0, [([], [atom "bar"])])],
       testCase "macro with parameters, single-compound body" $
-        (map (.node) . (.macros))
-          <$> p ":- macro in_degree(N, C) ---> count(edge(_, N), C)."
+        macroShapes
+          <$> p ":- macro in_degree(N, C) ---> [count(edge(_, N), C)]."
           @?= Right
-            [ MacroDef
-                "in_degree"
-                ["N", "C"]
-                ( CompoundTerm
-                    (Unqualified "count")
-                    [ CompoundTerm (Unqualified "edge") [Wildcard, VarTerm "N"],
-                      VarTerm "C"
+            [ ( "in_degree",
+                2,
+                [ ( [VarTerm "N", VarTerm "C"],
+                    [ CompoundTerm
+                        (Unqualified "count")
+                        [ CompoundTerm (Unqualified "edge") [Wildcard, VarTerm "N"],
+                          VarTerm "C"
+                        ]
                     ]
-                )
+                  )
+                ]
+              )
             ],
-      testCase "macro with a conjunction body" $
-        (map (.node) . (.macros)) <$> p ":- macro both(X) ---> (a(X), b(X))."
+      testCase "macro with a two-goal body" $
+        macroShapes <$> p ":- macro both(X) ---> [a(X), b(X)]."
           @?= Right
-            [ MacroDef
-                "both"
-                ["X"]
-                ( CompoundTerm
-                    (Unqualified ",")
+            [ ( "both",
+                1,
+                [ ( [VarTerm "X"],
                     [ CompoundTerm (Unqualified "a") [VarTerm "X"],
                       CompoundTerm (Unqualified "b") [VarTerm "X"]
                     ]
-                )
+                  )
+                ]
+              )
             ],
+      testCase "macro with an empty body" $
+        macroShapes <$> p ":- macro nothing(_) ---> []."
+          @?= Right [("nothing", 1, [([Wildcard], [])])],
+      testCase "macro body that is not a list is rejected" $
+        pErrs ":- macro foo(X) ---> a(X)." @?= Right [MalformedMacroBody],
+      testCase "macro body with a tail variable is rejected" $
+        pErrs ":- macro foo(X, T) ---> [a(X) | T]." @?= Right [MalformedMacroBody],
+      testCase "macro head patterns: '_', repeated, constant, list" $
+        macroShapes <$> p ":- macro foo(_, X, X, 1, [H|T]) ---> [a(H, T)]."
+          @?= Right
+            [ ( "foo",
+                5,
+                [ ( [ Wildcard,
+                      VarTerm "X",
+                      VarTerm "X",
+                      IntTerm 1,
+                      CompoundTerm (Unqualified ".") [VarTerm "H", VarTerm "T"]
+                    ],
+                    [CompoundTerm (Unqualified "a") [VarTerm "H", VarTerm "T"]]
+                  )
+                ]
+              )
+            ],
+      testCase "multi-clause macro: clauses grouped in order, declaration after them" $
+        macroShapes
+          <$> p
+            "all_of([]) ---> [].\nall_of([G|Gs]) ---> [G, all_of(Gs)].\n:- macro all_of/1.\n"
+          @?= Right
+            [ ( "all_of",
+                1,
+                [ ([atom "[]"], []),
+                  ( [CompoundTerm (Unqualified ".") [VarTerm "G", VarTerm "Gs"]],
+                    [VarTerm "G", CompoundTerm (Unqualified "all_of") [VarTerm "Gs"]]
+                  )
+                ]
+              )
+            ],
+      testCase "multi-clause macro: clauses are well-formed with no errors" $
+        pErrs ":- macro all_of/1.\nall_of([]) ---> [].\nall_of([G|Gs]) ---> [G, all_of(Gs)].\n"
+          @?= Right [],
+      testCase "a declaration inside the clause block splits it" $
+        pErrs "all_of([]) ---> [].\n:- macro all_of/1.\nall_of([G|Gs]) ---> [G, all_of(Gs)].\n"
+          @?= Right [DiscontiguousMacroClauses "all_of" 1],
+      testCase "declaration list declares several macros" $
+        (map (\(n, a, _) -> (n, a)) . macroShapes) <$> p ":- macro foo/1, bar/2."
+          @?= Right [("foo", 1), ("bar", 2)],
+      testCase "declared macro with no clauses" $
+        macroShapes <$> p ":- macro foo/2." @?= Right [("foo", 2, [])],
+      testCase "undeclared macro clause is rejected" $
+        pErrs "foo(X) ---> [a(X)]." @?= Right [UndeclaredMacroClause "foo" 1],
+      testCase "macro clause of another arity is undeclared" $
+        pErrs ":- macro foo/1.\nfoo(X, Y) ---> [a(X, Y)]."
+          @?= Right [UndeclaredMacroClause "foo" 2],
+      testCase "discontiguous macro clauses are rejected" $
+        pErrs ":- macro foo/1.\nfoo(a) ---> [].\n:- chr_constraint c/0.\nfoo(b) ---> []."
+          @?= Right [DiscontiguousMacroClauses "foo" 1],
+      testCase "extra clauses of a one-line macro form a second definition" $
+        (map (\(n, a, cs) -> (n, a, length cs)) . macroShapes)
+          <$> p ":- macro foo(a) ---> [].\nfoo(b) ---> [].\nfoo(c) ---> []."
+          @?= Right [("foo", 1, 1), ("foo", 1, 2)],
+      testCase "extra clauses before a one-line macro come second" $
+        (map (\(_, _, cs) -> map fst cs) . macroShapes)
+          <$> p "foo(b) ---> [].\n:- macro foo(a) ---> []."
+          @?= Right [[[atom "a"]], [[atom "b"]]],
       testCase "macro(n/a) in export list" $
         fmap (.node) . (.exports) <$> p ":- module(m, [macro(foo/2)])."
           @?= Right (Just [MacroExportDecl (MacroExportDeclBody "foo" 2)]),
@@ -317,16 +396,16 @@ directiveTests =
               decls @?= [MacroExportDecl (MacroExportDeclBody "count" 2)]
             other -> assertFailure ("unexpected imports: " ++ show other)
           Left err -> assertFailure ("parse failed: " ++ show err),
-      testCase "macro head '_' parameter is rejected" $
-        pErrs ":- macro foo(_) ---> true." @?= Right [MalformedMacroHead],
-      testCase "macro head duplicate parameter is rejected" $
-        pErrs ":- macro foo(X, X) ---> true." @?= Right [MalformedMacroHead],
-      testCase "macro head non-variable parameter is rejected" $
-        pErrs ":- macro foo(1) ---> true." @?= Right [MalformedMacroHead],
       testCase "macro head qualified name is rejected" $
-        pErrs ":- macro m:foo(X) ---> true." @?= Right [MalformedMacroHead],
+        pErrs ":- macro m:foo(X) ---> []." @?= Right [MalformedMacroHead],
       testCase "macro head reserved name is rejected" $
-        pErrs ":- macro is(X, Y) ---> true." @?= Right [MalformedMacroHead],
+        pErrs ":- macro is(X, Y) ---> []." @?= Right [MalformedMacroHead],
+      testCase "macro head primitive name is rejected" $
+        pErrs ":- macro '$compound'(X, Y) ---> []." @?= Right [MalformedMacroHead],
+      testCase "macro declaration with a reserved name is rejected" $
+        pErrs ":- macro is/2." @?= Right [MalformedMacroHead],
+      testCase "macro directive of another shape is rejected" $
+        pErrs ":- macro foo(X)." @?= Right [MalformedMacroHead],
       testCase "constraint_use with every tag" $
         (map (.node) . (.constraintUses))
           <$> p ":- constraint_use any(a/0), fact(b/1), event(c/2), tell_only(d/3)."

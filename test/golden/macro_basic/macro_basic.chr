@@ -11,7 +11,7 @@
 :- chr_constraint test_head/3.
 
 % A head-position macro, expanding to two kept conjuncts.
-:- macro in_degree(N) ---> edge(_, N), has_edge(N).
+:- macro in_degree(N) ---> [edge(_, N), has_edge(N)].
 
 node(N), in_degree(N), check1(N, R) <=> R = 1.
 
@@ -26,7 +26,7 @@ test_head(N, M, R) <=> node(N), edge(M, N), has_edge(N), check1(N, R).
 :- chr_constraint test_body/2.
 
 % A body-position macro, expanding to two tells.
-:- macro both(X) ---> (a(X), b(X)).
+:- macro both(X) ---> [a(X), b(X)].
 
 trigger(X) <=> both(X).
 a(X), b(X), check2(X, R) <=> R = 1.
@@ -41,7 +41,7 @@ test_body(X, R) <=> trigger(X), check2(X, R).
 :- chr_constraint test_nested/2.
 
 % A macro whose body uses another macro.
-:- macro wrap(X) ---> both(X).
+:- macro wrap(X) ---> [both(X)].
 
 outer(X) <=> wrap(X), c(X).
 a(X), b(X), c(X), check3(X, R) <=> R = 1.
@@ -53,7 +53,7 @@ test_nested(X, R) <=> outer(X), check3(X, R).
 :- chr_constraint result/2.
 :- chr_constraint test_single/2.
 
-:- macro single_macro(X, R) ---> result(X, R).
+:- macro single_macro(X, R) ---> [result(X, R)].
 
 test_single(X, R) <=> single_macro(X, R).
 result(X, R) <=> R = X.
@@ -61,7 +61,7 @@ result(X, R) <=> R = X.
 % A macro usable directly as a single-goal query (the entry point used
 % by `ychr run -g` and `runProgramWithGoal`), expanding to exactly one
 % goal so it can still be represented as a single 'Constraint'.
-:- macro direct_single(X, R) ---> result(X, R).
+:- macro direct_single(X, R) ---> [result(X, R)].
 
 % --- Two uses of the same macro in one body (fresh-variable scoping) -----
 
@@ -74,7 +74,7 @@ result(X, R) <=> R = X.
 % share one enclosing rule body (one 'SourceLoc'), which is exactly
 % the case a use-site-location-keyed freshening scheme would collide
 % on; a per-expansion counter does not.
-:- macro inner(Y, R) ---> (helper(Y, Tmp), use_tmp(Tmp, R)).
+:- macro inner(Y, R) ---> [helper(Y, Tmp), use_tmp(Tmp, R)].
 
 helper(Y, Tmp) <=> Tmp = Y + 100.
 use_tmp(Tmp, R) <=> R = Tmp.

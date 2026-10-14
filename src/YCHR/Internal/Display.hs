@@ -56,7 +56,13 @@ import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Parser (ParseValidationError (..))
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTermSrc)
-import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
+import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..))
+import YCHR.Internal.Rename.Macro
+  ( PrimitiveOperand (..),
+    macroDepthLimit,
+    macroExpansionBudget,
+    primitiveOfOperand,
+  )
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..), TypeCheckWarning (..))
@@ -232,6 +238,9 @@ parseValidationErrorCode InvalidTypeParameter = ErrorCode 15018
 parseValidationErrorCode (DuplicateTypeParameter _) = ErrorCode 15019
 parseValidationErrorCode RefiningOnConstraint = ErrorCode 15020
 parseValidationErrorCode MalformedMacroHead = ErrorCode 15021
+parseValidationErrorCode MalformedMacroBody = ErrorCode 15022
+parseValidationErrorCode (UndeclaredMacroClause _ _) = ErrorCode 15025
+parseValidationErrorCode (DiscontiguousMacroClauses _ _) = ErrorCode 15026
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -298,6 +307,12 @@ renameErrorCode (MacroInvalidInHead _ _) = ErrorCode 20028
 renameErrorCode (TellOutsideGoalPosition _) = ErrorCode 20029
 renameErrorCode (UnsupportedTellArity _) = ErrorCode 20030
 renameErrorCode (TellControlGoal _ _) = ErrorCode 20031
+renameErrorCode (NoMatchingMacroClause _ _) = ErrorCode 20032
+renameErrorCode (MacroExpansionTooDeep _ _) = ErrorCode 20033
+renameErrorCode (MacroEmptyHead _) = ErrorCode 20034
+renameErrorCode (MalformedMacroPrimitive _ _) = ErrorCode 20036
+renameErrorCode (MacroPrimitiveOutsideMacro _ _) = ErrorCode 20037
+renameErrorCode (MacroExpansionTooLarge _ _) = ErrorCode 20038
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -441,12 +456,36 @@ parseValidationErrorMsg RefiningOnConstraint =
 parseValidationErrorMsg MalformedMacroHead =
   withHint
     "Invalid macro head"
-    ( "expected an atom or a compound of distinct variables, e.g."
-        ++ " ':- macro count(G, N) ---> ...'; '_' is not allowed as a"
-        ++ " parameter, and the name may not be a reserved symbol"
-        ++ " (',', ';', '\\\\', '|', '->', '=', 'is', 'true', 'quote',"
-        ++ " 'fun', '$call') or qualified"
+    ( "expected ':- macro Name/N', ':- macro Head ---> [Goals]', or a"
+        ++ " clause 'Head ---> [Goals]', where Head is an atom or a compound"
+        ++ " whose arguments are patterns; the name may not be qualified or"
+        ++ " a reserved symbol (',', ';', '\\\\', '|', '->', '=', 'is',"
+        ++ " 'true', 'quote', 'fun', '$call', 'tell', '$compound', '$atom')"
     )
+parseValidationErrorMsg MalformedMacroBody =
+  withHint
+    "Invalid macro body: expected a list literal"
+    ( "write the body as a list of goals, e.g. ':- macro both(X) ---> [a(X), b(X)].';"
+        ++ " '[]' expands to nothing, and a tail variable ('[G | Gs]') is not allowed"
+    )
+parseValidationErrorMsg (UndeclaredMacroClause name arity) =
+  withHint
+    ( "Macro clause for '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "', which is not declared as a macro in this module"
+    )
+    ("declare it with ':- macro " ++ T.unpack name ++ "/" ++ show arity ++ ".'")
+parseValidationErrorMsg (DiscontiguousMacroClauses name arity) =
+  withHint
+    ( "Clauses for macro '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' must be contiguous"
+    )
+    "move all of the macro's clauses together"
 parseValidationErrorMsg MalformedDeclaration =
   withHint
     "Invalid declaration"
@@ -923,7 +962,10 @@ renameErrorMsg DisjunctionNotInRuleBody =
 renameErrorMsg (DuplicateMacro name arity) =
   withHint
     ("Duplicate macro '" ++ T.unpack name ++ "/" ++ show arity ++ "'")
-    "a macro has exactly one definition; remove or rename one of them"
+    ( "a macro has one definition: a one-line ':- macro Head ---> Body', or"
+        ++ " ':- macro Name/N' followed by its clauses; remove or rename one"
+        ++ " of them"
+    )
 renameErrorMsg (MacroNameCollision qn arity) =
   withHint
     ( "Macro '"
@@ -976,8 +1018,93 @@ renameErrorMsg (MacroCycle qn arity) =
         ++ show arity
         ++ "' expansion has no finite form"
     )
-    ( "expanding this macro requires expanding a use of itself again;"
-        ++ " see the expansion chain above"
+    ( "a use of this macro is reached again, with identical arguments,"
+        ++ " while it is still being expanded; see the expansion chain"
+    )
+renameErrorMsg (NoMatchingMacroClause qn args) =
+  withHint
+    ( "No clause of macro '"
+        ++ macroQn qn
+        ++ "/"
+        ++ show (length args)
+        ++ "' matches the use '"
+        ++ prettyTermSrc (Types.CompoundTerm (Types.Unqualified qn.baseName) args)
+        ++ "'"
+    )
+    ( "macro clause heads are matched against the arguments as written,"
+        ++ " before any evaluation or name resolution"
+    )
+renameErrorMsg (MacroExpansionTooDeep qn arity) =
+  withHint
+    ( "Macro '"
+        ++ macroQn qn
+        ++ "/"
+        ++ show arity
+        ++ "': nested expansions exceed the depth limit of "
+        ++ show macroDepthLimit
+    )
+    ( "check that each recursive use makes progress towards a base case;"
+        ++ " see the expansion chain"
+    )
+renameErrorMsg (MacroEmptyHead part) =
+  withHint
+    ("The " ++ partText ++ " of this rule is empty after macro expansion")
+    ( "a macro expanded to no constraints where the rule's form requires"
+        ++ " at least one"
+    )
+  where
+    partText = case part of
+      WholeHead -> "head"
+      KeptPart -> "kept part"
+      RemovedPart -> "removed part"
+renameErrorMsg (MacroExpansionTooLarge qn arity) =
+  withHint
+    ( "Macro '"
+        ++ macroQn qn
+        ++ "/"
+        ++ show arity
+        ++ "': one use causes more than "
+        ++ show macroExpansionBudget
+        ++ " expansions"
+    )
+    ( "a macro whose clauses use it more than once can grow exponentially;"
+        ++ " see the expansion chain"
+    )
+renameErrorMsg (MalformedMacroPrimitive operand received) =
+  withHint
+    ( "Invalid "
+        ++ operandText
+        ++ " of '"
+        ++ T.unpack (primitiveOfOperand operand)
+        ++ "': "
+        ++ prettyTermSrc received
+    )
+    ( case primitiveOfOperand operand of
+        "$compound" ->
+          "'$compound'(F, [A1, ..., An]) needs an atom or a qualified name"
+            ++ " M:f as F, and a proper list of arguments"
+        _ ->
+          "'$atom'([P1, ..., Pn]) needs a proper, non-empty list of"
+            ++ " unqualified atoms and integers, whose concatenation is"
+            ++ " non-empty and contains neither '__' nor '%%u'"
+    )
+  where
+    operandText = case operand of
+      CompoundFunctor -> "functor"
+      CompoundArgs -> "argument list"
+      AtomParts -> "part list"
+      AtomPart -> "part"
+      AtomResult -> "result"
+renameErrorMsg (MacroPrimitiveOutsideMacro prim arity) =
+  withHint
+    ( "Construction primitive '"
+        ++ T.unpack prim
+        ++ "'/"
+        ++ show arity
+        ++ " is not written in a macro body"
+    )
+    ( "'$compound'/2 and '$atom'/1 are evaluated only where they are"
+        ++ " written in a macro body; the two names are reserved"
     )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint
@@ -1140,9 +1267,11 @@ renameWarningMsg (UnusedMacroParameter qn param) =
         ++ T.unpack param
         ++ "' of '"
         ++ macroQn qn
-        ++ "' is not used in its body"
+        ++ "' is not used"
     )
-    "the corresponding argument is dropped at every use site"
+    ( "the corresponding argument is dropped; write '_' or prefix the"
+        ++ " name with '_' to drop it silently"
+    )
 
 instance Display (Diagnostic ExhaustivenessWarning) where
   displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
@@ -1517,12 +1646,14 @@ instance Display Error where
                   ++ "/"
                   ++ show (length c.args)
                   ++ "' names a function, not a constraint"
-              MacroExpandsToConjunction ->
-                "Goal '" ++ nameArity ++ "' is a macro that expands to several goals"
+              MacroNotSingleGoal ->
+                "Goal '"
+                  ++ nameArity
+                  ++ "' is a macro that does not expand to exactly one goal"
           )
           ( case reason of
-              MacroExpandsToConjunction ->
-                "macro expands to several goals; run it as a query in the"
+              MacroNotSingleGoal ->
+                "macro expands to several goals or none; run it as a query in the"
                   ++ " REPL or the multi-goal query API instead of `ychr run -g`"
               _ ->
                 "`ychr run -g GOAL` accepts only a single declared constraint."

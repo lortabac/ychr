@@ -1,0 +1,4 @@
+:- module(macro_self_cycle).
+:- chr_constraint r/1.
+:- macro loop(X) ---> [loop(X)].
+r(X) <=> loop(X).

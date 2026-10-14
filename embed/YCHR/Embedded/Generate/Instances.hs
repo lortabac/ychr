@@ -42,6 +42,7 @@ import YCHR.Internal.Parsed
     Head (..),
     Import (..),
     InlineDecl (..),
+    MacroClause (..),
     MacroDef (..),
     MacroExportDeclBody (..),
     Module (..),
@@ -207,6 +208,8 @@ deriving instance Generic ConstraintUse
 
 deriving instance Generic MacroDef
 
+deriving instance Generic MacroClause
+
 deriving instance Generic MacroExportDeclBody
 
 deriving instance Generic FunctionDeclKind
@@ -251,6 +254,9 @@ instance ToCode ConstraintUse where
   toCode = genericToCode
 
 instance ToCode MacroDef where
+  toCode = genericToCode
+
+instance ToCode MacroClause where
   toCode = genericToCode
 
 instance ToCode MacroExportDeclBody where

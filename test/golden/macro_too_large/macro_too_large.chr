@@ -1,0 +1,8 @@
+:- module(macro_too_large).
+:- chr_constraint leaf/0, r/1.
+% Two recursive uses per clause: 2^20 expansions, past the budget, but
+% only 20 deep, so the depth limit never fires.
+:- macro tree/1.
+tree(0) ---> [leaf].
+tree(s(X)) ---> [tree(X), tree(X)].
+r(_) <=> tree(s(s(s(s(s(s(s(s(s(s(s(s(s(s(s(s(s(s(s(s(0))))))))))))))))))))).

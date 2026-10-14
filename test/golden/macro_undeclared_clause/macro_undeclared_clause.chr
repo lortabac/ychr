@@ -1,0 +1,3 @@
+:- module(macro_undeclared_clause).
+:- chr_constraint a/1.
+foo(X) ---> [a(X)].

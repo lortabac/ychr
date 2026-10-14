@@ -1,0 +1,5 @@
+:- module(macro_too_deep).
+:- chr_constraint r/1.
+% The argument grows at every step, so the repeat check never fires.
+:- macro grow(X) ---> [grow(s(X))].
+r(X) <=> grow(X).

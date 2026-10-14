@@ -1,0 +1,51 @@
+% The construction primitives '$compound'/2 and '$atom'/1
+% (docs/reference/macros.md §Construction primitives).
+:- module(macro_primitives,
+          [test_apply/2, test_get/2, test_nested/2, test_qualified/2,
+           test_int/2, test_quoted/2, test_list_var/2, p/2]).
+
+:- chr_constraint p/2, get_x/1, get_y/1, item_3/1, val/1.
+:- chr_constraint test_apply/2, test_get/2, test_nested/2, test_qualified/2.
+:- chr_constraint test_int/2, test_quoted/2, test_list_var/2.
+
+% Apply a constraint name to arguments.
+:- macro apply2(C, X, Y) ---> ['$compound'(C, [X, Y])].
+
+test_apply(X, R) <=> apply2(p, X, R).
+p(X, R) <=> R = X.
+
+% Build an atom from parts.
+:- macro get2(F, X) ---> ['$compound'('$atom'([get_, F]), [X])].
+
+test_get(X, R) <=> get2(x, X), val(R).
+get_x(X), val(R) <=> R = [1, X].
+
+% Nested primitives, innermost first (get2 above is one), reached
+% through another macro.
+:- macro getter(F) ---> [get2(F, 7)].
+
+test_nested(_, R) <=> getter(y), val(R).
+get_y(X), val(R) <=> R = [2, X].
+
+% A qualified functor.
+:- macro qapply(M, F, X, R) ---> ['$compound'(M:F, [X, R])].
+
+test_qualified(X, R) <=> qapply(macro_primitives, p, X, R).
+
+% An integer part.
+:- macro numbered(N, X) ---> ['$compound'('$atom'([item_, N]), [X])].
+
+test_int(X, R) <=> numbered(3, X), val(R).
+item_3(X), val(R) <=> R = [3, X].
+
+% Primitives are evaluated inside quote/1 in a macro body, too.
+:- macro quoted(F, R) ---> [R = quote('$atom'([F, '_suffix']))].
+
+test_quoted(_, R) <=> quoted(abc, R).
+
+% A self-qualified functor with an argument list that is a parameter:
+% its arity is only known at the use site, so the definition-time
+% export check does not report `p/0`.
+:- macro apply_list(L) ---> ['$compound'(macro_primitives:p, L)].
+
+test_list_var(X, R) <=> apply_list([X, R]).

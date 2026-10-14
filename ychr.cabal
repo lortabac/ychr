@@ -298,6 +298,7 @@ test-suite ychr-tests
                     , YCHR.PExprTest
                     , YCHR.PrettyTest
                     , YCHR.RenameTest
+                    , YCHR.Rename.MacroTest
                     , YCHR.ResourcesTest
                     , YCHR.RoundtripTest
                     , YCHR.TestHelpers

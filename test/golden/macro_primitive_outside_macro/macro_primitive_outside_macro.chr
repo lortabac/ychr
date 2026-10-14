@@ -1,0 +1,3 @@
+:- module(macro_primitive_outside_macro).
+:- chr_constraint p/1, r/1.
+r(X) <=> '$compound'(p, [X]).

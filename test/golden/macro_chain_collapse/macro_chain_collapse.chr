@@ -1,0 +1,23 @@
+:- module(macro_chain_collapse).
+:- chr_constraint r/1.
+% 15 different macros in a chain, the innermost expanding to a use
+% that matches no clause: the chain shows ten lines and counts the
+% rest.
+:- macro m1(X) ---> [m2(X)].
+:- macro m2(X) ---> [m3(X)].
+:- macro m3(X) ---> [m4(X)].
+:- macro m4(X) ---> [m5(X)].
+:- macro m5(X) ---> [m6(X)].
+:- macro m6(X) ---> [m7(X)].
+:- macro m7(X) ---> [m8(X)].
+:- macro m8(X) ---> [m9(X)].
+:- macro m9(X) ---> [m10(X)].
+:- macro m10(X) ---> [m11(X)].
+:- macro m11(X) ---> [m12(X)].
+:- macro m12(X) ---> [m13(X)].
+:- macro m13(X) ---> [m14(X)].
+:- macro m14(X) ---> [m15(X)].
+:- macro m15(X) ---> [last(X)].
+:- macro last/1.
+last(0) ---> [].
+r(X) <=> m1(f(X)).

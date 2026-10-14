@@ -570,14 +570,28 @@ data Directive
   | DirExtendFunctionEqn (AnnP FunctionEquation)
   | DirExtendClassEqn (AnnP FunctionEquation)
   | DirTypeDecl [Ann TypeDefinition]
-  | DirMacro (AnnP MacroDef)
+  | -- | A one-line @:- macro Head ---> [Goals].@ definition.
+    DirMacro (AnnP MacroDef)
+  | -- | A @:- macro Name\/N, ...@ declaration, whose clauses are
+    -- top-level @Head ---> [Goals].@ items. Each declared key is
+    -- annotated with the directive's location and term.
+    DirMacroDecl [AnnP MacroKey]
   | DirOther
+
+-- | The name and arity a @:- macro Name\/N@ declaration declares.
+data MacroKey = MacroKey
+  { name :: Text,
+    arity :: Int
+  }
 
 -- | Internal module item type.
 data ModuleItem
   = ItemDirective Directive
   | ItemRule Rule
   | ItemEquation (AnnP FunctionEquation)
+  | -- | A top-level @Head ---> [Goals].@ macro clause, with its macro's
+    -- name. The arity is the number of head patterns.
+    ItemMacroClause Text (AnnP MacroClause)
 
 -- | Validation error detected during module conversion.
 data ParseValidationError
@@ -657,13 +671,24 @@ data ParseValidationError
     -- declaration. Only a function can be a refinement predicate. The
     -- declaration is dropped.
     RefiningOnConstraint
-  | -- | A @:- macro Name(...) ---> Body@ directive's head is not an
-    -- atom or a compound of distinct variables: it has a non-variable
-    -- or wildcard parameter, a repeated parameter, a qualified name
-    -- (@m:f(...)@), or a name that is a control symbol or otherwise
-    -- reserved (@,@, @;@, @\\@, @|@, @->@, @=@, @is@, @true@, @quote@,
-    -- @fun@, @'$call'@). The macro definition is dropped.
+  | -- | A macro clause's head, or a @:- macro Name\/N@ declaration, is
+    -- not an atom or compound named by an unqualified atom that is not
+    -- a reserved symbol (@,@, @;@, @\\@, @|@, @->@, @=@, @is@, @true@,
+    -- @quote@, @fun@, @'$call'@, @tell@, @'$compound'@, @'$atom'@), or a
+    -- @:- macro@ directive has neither shape. The clause or declaration
+    -- is dropped.
     MalformedMacroHead
+  | -- | A macro clause's body is not a list literal with no tail
+    -- variable. The clause is dropped.
+    MalformedMacroBody
+  | -- | A top-level @Head ---> Body@ clause whose @Name\/N@ is not
+    -- declared as a macro in its module (neither by @:- macro Name\/N@
+    -- nor by a one-line definition). Carries the name and arity. The
+    -- clause is dropped.
+    UndeclaredMacroClause Text Int
+  | -- | The clauses of one macro do not form one contiguous block of
+    -- module items. Carries the name and arity.
+    DiscontiguousMacroClauses Text Int
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
@@ -698,7 +723,7 @@ convertModule defaultName terms =
       modClassExtensions_ = [e | ItemDirective (DirExtendClassEqn e) <- items]
       modInlines_ = concat [ds | DirInlineDecl ds <- dirs]
       modConstraintUses_ = concat [ds | DirConstraintUseDecl ds <- dirs]
-      modMacros_ = [d | ItemDirective (DirMacro d) <- items]
+      (modMacros_, macroErrors) = groupMacroClauses items
       openNames =
         Set.fromList $
           [fd.name | DirOpenFunctionDecl ds <- dirs, Ann (FunctionDecl fd) _ <- ds]
@@ -725,7 +750,76 @@ convertModule defaultName terms =
             macros = modMacros_,
             exports = modExports_
           }
-   in (mod_, itemErrors ++ contiguityErrors ++ duplicateModuleHeaderErrors)
+   in ( mod_,
+        itemErrors
+          ++ contiguityErrors
+          ++ macroErrors
+          ++ duplicateModuleHeaderErrors
+      )
+
+-- | Group a module's macro definitions and clauses into 'MacroDef's.
+--
+-- * A one-line definition is a macro of its own, with one clause.
+-- * A @:- macro Name\/N@ declaration takes every top-level clause of
+--   the same @Name\/N@, in source order, wherever the clauses are. A
+--   second declaration of the same key gets no clauses: the renamer
+--   reports it as 'YCHR.Internal.Rename.DuplicateMacro'.
+-- * Clauses with no declaration but the key of a one-line definition
+--   form a further 'MacroDef', anchored at the first of them and placed
+--   after every one-line definition, so that the renamer keeps the
+--   one-line definition and reports the clauses as
+--   'YCHR.Internal.Rename.DuplicateMacro': a one-line definition cannot
+--   have further clauses.
+-- * Any other clause is 'UndeclaredMacroClause', and is dropped.
+groupMacroClauses :: [ModuleItem] -> ([AnnP MacroDef], [AnnP ParseValidationError])
+groupMacroClauses items = (defined ++ orphanDefs, undeclared)
+  where
+    clauseKey n c = (n, length c.node.params)
+    declaredKeys = Set.fromList [(k.node.name, k.node.arity) | k <- decls]
+    decls = concat [ks | ItemDirective (DirMacroDecl ks) <- items]
+    oneLineKeys =
+      Set.fromList [(d.node.name, d.node.arity) | ItemDirective (DirMacro d) <- items]
+    clauses = [(clauseKey n c, n, c) | ItemMacroClause n c <- items]
+    clausesOf k = [c | (k', _, c) <- clauses, k' == k]
+
+    -- Definitions and declarations in item order; a repeated
+    -- declaration gets no clauses.
+    defined = goDefs Set.empty items
+    goDefs _ [] = []
+    goDefs seen (ItemDirective (DirMacro d) : rest) = d : goDefs seen rest
+    goDefs seen (ItemDirective (DirMacroDecl ks) : rest) =
+      let step (acc, sn) (AnnP k l p) =
+            let key = (k.name, k.arity)
+                cs = if Set.member key sn then [] else clausesOf key
+             in (acc ++ [AnnP (MacroDef k.name k.arity cs) l p], Set.insert key sn)
+          (ds, seen') = foldl step ([], seen) ks
+       in ds ++ goDefs seen' rest
+    goDefs seen (_ : rest) = goDefs seen rest
+
+    orphanKeys =
+      nubOrd
+        [ k
+        | (k, _, _) <- clauses,
+          Set.notMember k declaredKeys,
+          Set.member k oneLineKeys
+        ]
+    orphanDefs =
+      [ AnnP (MacroDef n a cs) first.sourceLoc first.parsed
+      | k@(n, a) <- orphanKeys,
+        cs@(first : _) <- [clausesOf k]
+      ]
+    undeclared =
+      [ AnnP (uncurry UndeclaredMacroClause k) c.sourceLoc c.parsed
+      | (k, _, c) <- clauses,
+        Set.notMember k declaredKeys,
+        Set.notMember k oneLineKeys
+      ]
+    nubOrd = go Set.empty
+      where
+        go _ [] = []
+        go sn (x : xs)
+          | Set.member x sn = go sn xs
+          | otherwise = x : go (Set.insert x sn) xs
 
 -- | Check that equations for non-open functions are contiguous.
 -- Returns an error for each function whose equations are separated by
@@ -734,6 +828,29 @@ checkContiguity :: Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
 checkContiguity openNames items =
   checkEquationContiguity openNames items
     ++ checkDeclContiguity openNames items
+    ++ checkMacroClauseContiguity items
+
+-- | Macro-clause contiguity: the top-level clauses of one macro
+-- (same name and arity) must form one contiguous block of module
+-- items, as the equations of a closed function do. Reports the clause
+-- that reopens a block that has already ended.
+checkMacroClauseContiguity :: [ModuleItem] -> [AnnP ParseValidationError]
+checkMacroClauseContiguity = go Set.empty Nothing
+  where
+    go _closed _prev [] = []
+    go closed prev (ItemMacroClause n c : rest) =
+      let k = (n, length c.node.params)
+       in case prev of
+            Just p | p == k -> go closed prev rest
+            _ ->
+              let closed' = maybe closed (`Set.insert` closed) prev
+                  errs =
+                    [ AnnP (uncurry DiscontiguousMacroClauses k) c.sourceLoc c.parsed
+                    | k `Set.member` closed'
+                    ]
+               in errs ++ go closed' (Just k) rest
+    go closed prev (_ : rest) =
+      go (maybe closed (`Set.insert` closed) prev) Nothing rest
 
 -- | Equation contiguity: equations for the same non-open function name
 -- must be a contiguous block of module items.
@@ -814,6 +931,11 @@ convertModuleItem expr = case expr.node of
   -- Unnamed rule
   Compound "<=>" _ -> ruleItem
   Compound "==>" _ -> ruleItem
+  -- Macro clause: Head ---> [Goals]. Grouped with its declaration by
+  -- 'groupMacroClauses'.
+  Compound "--->" [_, _] -> case convertMacroClause expr of
+    (Just (n, c), errs) -> (Just (ItemMacroClause n c), errs)
+    (Nothing, errs) -> (Nothing, errs)
   -- Function equation (contains -> at top level)
   Compound "->" _ ->
     let (mEq, errs) = convertFunctionEquation expr
@@ -906,14 +1028,31 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
     case convertOpaqueTypeDefinition typeBody of
       (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
       (Nothing, errs) -> (DirOther, errs)
-  -- :- macro Name(V1, ..., Vn) ---> Body.
+  -- :- macro Name/N, ...  (a declaration; the clauses are top-level items)
+  Compound "macro" [decls@(Ann (Compound "/" [_, _]) _)] -> macroDecls decls
+  Compound "macro" [decls@(Ann (Compound "," [Ann (Compound "/" [_, _]) _, _]) _)] ->
+    macroDecls decls
+  -- :- macro Head ---> [Goals].  (a one-line definition)
   -- Parsed as prefix op: Compound "macro" [Compound "--->" [head, body]]
-  Compound "macro" [macroBody] ->
-    case convertMacroDefinition macroBody of
-      (Just annDef, errs) -> (DirMacro annDef, errs)
+  Compound "macro" [macroBody@(Ann (Compound "--->" [_, _]) _)] ->
+    case convertMacroClause macroBody of
+      (Just (n, c), errs) ->
+        (DirMacro (AnnP (MacroDef n (length c.node.params) [c]) c.sourceLoc c.parsed), errs)
       (Nothing, errs) -> (DirOther, errs)
+  Compound "macro" [other] ->
+    (DirOther, [AnnP MalformedMacroHead other.sourceLoc other.node])
   -- Unknown directives (any other @:- name(...)@ shape).
   _ -> (DirOther, [])
+  where
+    macroDecls decls =
+      let (keys, errs) = collectMaybes (map macroKey (flattenComma decls))
+       in (DirMacroDecl keys, errs)
+    macroKey (Ann d dloc) = case d of
+      Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]
+        | Set.notMember name reservedMacroHeadNames,
+          arity >= 0 ->
+            (Just (AnnP (MacroKey name (fromInteger arity)) loc body.node), [])
+      _ -> (Nothing, [AnnP MalformedMacroHead dloc d])
 convertDirective _ = (DirOther, [])
 
 -- | Run a per-declaration converter over a comma-separated declaration
@@ -1389,66 +1528,63 @@ convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
       Ann (TypeDefinition (Unqualified tname) tvars Opaque loc) loc
 
 -- | Reserved macro-head names: control-flow and expression symbols the
--- rest of the language parses specially. A macro head using one of
--- these would be indistinguishable from the built-in form at every use
--- site, so it is rejected at definition time rather than left to
--- collide silently. Mirrors 'YCHR.Internal.Rename.Types.reservedSymbolSet'
--- plus the conjunction\/disjunction\/guard operators, which that set
--- does not need to cover because the renamer never resolves a bare
--- @,@\/@;@\/@\\@\/@|@ as a callable name.
+-- rest of the language parses specially, and the two construction
+-- primitives. A macro head using one of these would be
+-- indistinguishable from the built-in form at every use site, so it is
+-- rejected at definition time rather than left to collide silently.
+-- Mirrors 'YCHR.Internal.Rename.Types.reservedSymbolSet' plus the
+-- conjunction\/disjunction\/guard operators, which that set does not
+-- need to cover because the renamer never resolves a bare
+-- @,@\/@;@\/@\\@\/@|@ as a callable name. @:@ is included so that a
+-- qualified head @m:f(...)@ is rejected in one error.
 reservedMacroHeadNames :: Set.Set Text
 reservedMacroHeadNames =
   Set.fromList
-    [",", ";", "\\", "|", "->", "=", "is", "true", "quote", "fun", "$call", "tell", ":"]
+    [ ",",
+      ";",
+      "\\",
+      "|",
+      "->",
+      "=",
+      "is",
+      "true",
+      "quote",
+      "fun",
+      "$call",
+      "tell",
+      ":",
+      "$compound",
+      "$atom"
+    ]
 
--- | Convert a @:- macro Name(V1, ..., Vn) ---> Body@ directive's body
--- (the @Compound \"--->\" [head, body]@ term the @macro@ prefix
--- operator wraps) to a 'MacroDef'. The head must be an atom or a
--- compound of distinct variables, naming neither a reserved symbol nor
--- a qualified name ('reservedMacroHeadNames' includes @\":\"@, so
--- @m:f(...)@ — which parses as @Compound \":\" [...]@ — is rejected
--- there in one error, rather than falling through to have its two
--- operands independently rejected as malformed parameters); any other
--- shape is 'MalformedMacroHead'. The macro's own body is kept exactly
--- as written — it is not checked here, beyond parsing it as an
--- ordinary 'Term' — since whether an expansion is valid depends on
--- where it is used (see "YCHR.Internal.Rename.Macro").
-convertMacroDefinition ::
-  Ann PExpr -> (Maybe (AnnP MacroDef), [AnnP ParseValidationError])
-convertMacroDefinition (Ann pexpr loc) = case pexpr of
+-- | Convert a macro clause, @Head ---> Body@ (the @Compound \"--->\"@
+-- term a one-line @:- macro@ directive wraps, or a top-level clause),
+-- to its macro's name and a 'MacroClause'.
+--
+-- The head must be an atom or a compound named by an unqualified atom
+-- outside 'reservedMacroHeadNames' ('MalformedMacroHead' otherwise).
+-- Its arguments are patterns, kept as ordinary 'Term's: any term is a
+-- valid pattern. The body must be a list literal with no tail variable
+-- ('MalformedMacroBody' otherwise); its elements are kept exactly as
+-- written, since whether an expansion is valid depends on where it is
+-- used (see "YCHR.Internal.Rename.Macro").
+convertMacroClause ::
+  Ann PExpr -> (Maybe (Text, AnnP MacroClause), [AnnP ParseValidationError])
+convertMacroClause (Ann pexpr loc) = case pexpr of
   Compound "--->" [macroHead, macroBody] -> case macroHeadShape macroHead.node of
-    Nothing -> (Nothing, [AnnP MalformedMacroHead loc pexpr])
     Just (mname, rawParams)
-      | Set.member mname reservedMacroHeadNames ->
-          (Nothing, [AnnP MalformedMacroHead loc pexpr])
-      | otherwise -> case validateMacroParams rawParams of
-          Left errs -> (Nothing, errs)
-          Right params ->
-            (Just (AnnP (MacroDef mname params (convertTerm macroBody)) loc pexpr), [])
+      | Set.notMember mname reservedMacroHeadNames ->
+          case unfoldListStrict macroBody.node of
+            Nothing -> (Nothing, [AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node])
+            Just elems ->
+              let clause = MacroClause (map convertTerm rawParams) (map convertTerm elems)
+               in (Just (mname, AnnP clause loc pexpr), [])
+    _ -> (Nothing, [AnnP MalformedMacroHead macroHead.sourceLoc macroHead.node])
   _ -> (Nothing, [AnnP MalformedMacroHead loc pexpr])
   where
     macroHeadShape (Atom n) = Just (n, [])
-    macroHeadShape (Compound n vars) = Just (n, vars)
+    macroHeadShape (Compound n args) = Just (n, args)
     macroHeadShape _ = Nothing
-
--- | Validate a macro head's parameter list: every parameter must be a
--- distinct variable. @_@ (the anonymous wildcard) is explicitly
--- disallowed as a parameter, matching the language reference. Any
--- non-variable parameter, or a repeated one, is rejected the same way
--- as a malformed head: dropping just the offending parameter would
--- change the macro's declared arity relative to what the user wrote.
-validateMacroParams ::
-  [Ann PExpr] -> Either [AnnP ParseValidationError] [Text]
-validateMacroParams params = case go Set.empty params of
-  [] -> Right [v | Ann (Var v) _ <- params]
-  errs -> Left errs
-  where
-    go _ [] = []
-    go seen (Ann p ploc : rest) = case p of
-      Var v
-        | Set.member v seen -> AnnP MalformedMacroHead ploc p : go seen rest
-        | otherwise -> go (Set.insert v seen) rest
-      _ -> AnnP MalformedMacroHead ploc p : go seen rest
 
 -- | Convert a PExpr to a 'DataConstructor'. Returns 'Left' if the
 -- constructor or any of its argument types is malformed.

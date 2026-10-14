@@ -1,0 +1,20 @@
+% Macros that expand to no goals (docs/reference/macros.md §Zero goals).
+:- module(macro_zero_goals, [test_body/1, test_branch/2, test_mixed/2, pick/1]).
+:- use_module(library(search)).
+
+:- chr_constraint gone/0, test_body/1, test_branch/2, test_mixed/2, pick/1, a/1.
+
+:- macro nothing ---> [].
+:- macro skip(_) ---> [].
+
+% A rule body that expands to nothing means `true`: `gone` is removed.
+gone <=> nothing.
+test_body(R) <=> gone, skip(x), R = 1.
+
+% A disjunction branch that expands to nothing means `true`.
+test_branch(X, Ss) <=> Ss is findall(X, quote(pick(X))).
+pick(X) <=> (nothing ; X = 2).
+
+% Zero goals next to other goals in a body.
+test_mixed(X, R) <=> nothing, a(X), skip(X), nothing, R = X.
+a(X) <=> X = 1.
