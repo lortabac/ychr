@@ -173,13 +173,17 @@ site:
 - A variable pattern matches any argument term, including a use-site
   variable, and binds to it. A variable repeated in one head matches
   only arguments that are *identical* terms: the same structure, the
-  same atoms, the same variables.
+  same atoms, the same variables. An argument that contains `_` is
+  never identical to anything, since each `_` is a distinct variable.
 - `_` matches any argument and binds nothing.
 - Any other pattern matches an argument with the same principal
   functor and arity, and with each argument matching recursively.
   An atom, number or string matches only the same constant.
   Lists are compounds, so they match structurally: the pattern
-  `[A, B]` matches the argument `[a | [b]]`.
+  `[A, B]` matches the argument `[a | [b]]`. A qualified pattern is
+  matched part by part: `lib:F` matches `lib:x` and `lib:g(1)`,
+  binding `F` to `x` and `g(1)`, and `M:F` matches any qualified
+  argument.
 - A use-site variable matches only a variable pattern or `_`. Matching
   never binds a use-site variable.
 
@@ -318,7 +322,7 @@ goals that are not allowed in a body. The diagnostic names the macro
 valid head conjuncts, and `?` guards are valid inside an aggregate
 goal ([aggregates.md](aggregates.md)).
 
-**Termination.** The two checks under
+**Termination.** The checks under
 [Recursion and termination](#recursion-and-termination) follow actual
 expansions rather than a static call graph, because names in a macro
 body are resolved at each use site (see below).
