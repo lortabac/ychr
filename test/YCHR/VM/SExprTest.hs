@@ -2,6 +2,7 @@
 
 module YCHR.VM.SExprTest (tests) where
 
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -37,7 +38,7 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program [] [] [] [] [] [] []),
+  [ testCase "empty program" $ roundtrip (Program [] [] [] [] [] [] Map.empty []),
     testCase "single empty procedure" $
       roundtrip
         ( Program
@@ -47,6 +48,7 @@ roundtripTests =
             []
             []
             []
+            Map.empty
             []
         ),
     testCase "procedure with params" $
@@ -58,6 +60,7 @@ roundtripTests =
             []
             []
             []
+            Map.empty
             []
         ),
     testCase "let-val statement" $
@@ -235,6 +238,7 @@ roundtripTests =
             []
             []
             []
+            Map.empty
             [ConstraintType 1]
         )
   ]
@@ -265,14 +269,15 @@ formatTests =
   [ testCase "version header serialization" $
       assertContains
         (serializeProg (mkProg []))
-        ( "(vm-program (version 2) (program 0 (type-names) 0 (rule-names) "
-            <> "(evaluables) (callables) (tellables) (inert-types) "
+        ( "(vm-program (version 3) (program 0 (type-names) 0 (rule-names) "
+            <> "(evaluables) (callables) (tellables) (tellables-unqualified) "
+            <> "(inert-types) "
         ),
     testCase "var serialization" $
       assertContains
         (serializeProg (mkProg [ExprStmt (Var "x")]))
         ( "(program 0 (type-names) 0 (rule-names) (evaluables) (callables) "
-            <> "(tellables) (inert-types) "
+            <> "(tellables) (tellables-unqualified) (inert-types) "
             <> "(procedure \"p\" () (reactivate-dispatch) "
             <> "(expr-stmt (var \"x\"))))"
         ),
@@ -293,14 +298,60 @@ formatTests =
                 [mkProcedure "p" [] []]
                 []
                 []
-                [ ( TellableKey {scope = "m", functor = "m__c", arity = 2},
+                [ ( TellableKey {scope = Just "m", functor = "m__c", arity = 2},
                     "tell_m__c2"
                   )
                 ]
+                Map.empty
                 []
             )
         )
         "(tellables (\"m\" \"m__c\" 2 \"tell_m__c2\"))",
+    testCase "tellables-unqualified entry serialization" $
+      assertContains
+        ( serializeProg
+            ( Program
+                []
+                []
+                [mkProcedure "p" [] []]
+                []
+                []
+                []
+                ( Map.fromList
+                    [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                        UniqueTell "tell_m__c2"
+                      )
+                    ]
+                )
+                []
+            )
+        )
+        "(tellables-unqualified (any \"c\" 2 \"tell_m__c2\"))",
+    testCase "an ambiguous tellables-unqualified pair writes one field per candidate" $
+      assertContains
+        ( serializeProg
+            ( Program
+                []
+                []
+                [mkProcedure "p" [] []]
+                []
+                []
+                []
+                ( Map.fromList
+                    [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                        AmbiguousTell
+                          [ Types.QualifiedName "m" "c",
+                            Types.QualifiedName "n" "c"
+                          ]
+                      )
+                    ]
+                )
+                []
+            )
+        )
+        ( "(tellables-unqualified (any \"c\" 2 "
+            <> "\"tell_m__c2\" \"tell_n__c2\"))"
+        ),
     testCase "tellables entry roundtrip" $
       roundtrip
         ( Program
@@ -309,7 +360,28 @@ formatTests =
             [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
             []
             []
-            [(TellableKey {scope = "m", functor = "c", arity = 2}, "tell_m__c2")]
+            [(TellableKey {scope = Just "m", functor = "c", arity = 2}, "tell_m__c2")]
+            Map.empty
+            []
+        ),
+    testCase "tellables-unqualified entry roundtrip" $
+      roundtrip
+        ( Program
+            []
+            []
+            [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
+            []
+            []
+            []
+            ( Map.fromList
+                [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                    AmbiguousTell
+                      [ Types.QualifiedName "m" "c",
+                        Types.QualifiedName "n" "c"
+                      ]
+                  )
+                ]
+            )
             []
         ),
     testCase "tell-term serialization" $
@@ -354,6 +426,7 @@ formatTests =
                     []
                     []
                     []
+                    Map.empty
                     [],
                 exportedSet =
                   Set.fromList
@@ -385,12 +458,12 @@ serializeProg :: Program -> Text
 serializeProg = serialize . mkVMProg
 
 -- | The @(version N)@ header gates deserialization: this binary writes
--- and accepts only version 2, and a unit with no header is version 0 —
+-- and accepts only version 3, and a unit with no header is version 0 —
 -- the pre-versioning format, which only a binary predating VM version
 -- numbers could read.
 versionTests :: [TestTree]
 versionTests =
-  [ testCase "a version-2 program without the callables and inert-types entries loads" $
+  [ testCase "a version-3 program without the optional tables loads" $
       case deserialize versionedProgramText of
         Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
         Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
@@ -410,53 +483,53 @@ versionTests =
         Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
     testCase "a version-less program is rejected as version 0" $
       assertRejected versionlessProgramText "version 0",
-    testCase "a version-1 program is rejected" $
+    testCase "a version-2 program is rejected" $
       assertRejected
-        (T.replace "(version 2)" "(version 1)" versionedProgramText)
-        "version 1",
+        (T.replace "(version 3)" "(version 2)" versionedProgramText)
+        "version 2",
     testCase "an explicit version 0 is rejected" $
       assertRejected
-        (T.replace "(version 2)" "(version 0)" versionedProgramText)
+        (T.replace "(version 3)" "(version 0)" versionedProgramText)
         "version 0",
     testCase "a newer version is rejected" $
       assertRejected
-        (T.replace "(version 2)" "(version 3)" versionedProgramText)
-        "version 3",
+        (T.replace "(version 3)" "(version 4)" versionedProgramText)
+        "version 4",
     testCase "the version is checked before the program body" $
       assertRejected
-        "(vm-program (version 3) (bogus) (exports) (symbol-table))"
-        "version 3",
+        "(vm-program (version 4) (bogus) (exports) (symbol-table))"
+        "version 4",
     testCase "a supported version with a malformed body is a shape error" $
       assertRejected
-        "(vm-program (version 2) (bogus) (exports) (symbol-table))"
+        "(vm-program (version 3) (bogus) (exports) (symbol-table))"
         "expected (program ...)",
     testCase "a negative version is rejected" $
       assertRejected
-        (T.replace "(version 2)" "(version -1)" versionedProgramText)
+        (T.replace "(version 3)" "(version -1)" versionedProgramText)
         "invalid VM version",
     testCase "a malformed version is rejected" $
       assertRejected
-        (T.replace "(version 2)" "(version \"one\")" versionedProgramText)
+        (T.replace "(version 3)" "(version \"one\")" versionedProgramText)
         "expected (version N)",
     testCase "a version header with no argument is rejected" $
       assertRejected
-        (T.replace "(version 2)" "(version)" versionedProgramText)
+        (T.replace "(version 3)" "(version)" versionedProgramText)
         "expected (version N)",
     testCase "a misplaced version header is rejected" $
       assertRejected
         ( "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables))"
-            <> " (version 2) (exports) (symbol-table))"
+            <> " (version 3) (exports) (symbol-table))"
         )
         "must be the first child",
     testCase "a duplicate version header is rejected" $
       assertRejected
-        (T.replace "(version 2)" "(version 2) (version 2)" versionedProgramText)
+        (T.replace "(version 3)" "(version 3) (version 3)" versionedProgramText)
         "duplicate (version N) header"
   ]
 
 versionedProgramText :: Text
 versionedProgramText =
-  "(vm-program (version 2) (program 0 (type-names) 0 (rule-names) (evaluables) "
+  "(vm-program (version 3) (program 0 (type-names) 0 (rule-names) (evaluables) "
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
 
@@ -531,7 +604,7 @@ nonNegativeSlotTests =
 -- procedure @p@'s body.
 programWithStmt :: Text -> Text
 programWithStmt stmt =
-  "(vm-program (version 2) (program 0 (type-names) 0 (rule-names) (evaluables) "
+  "(vm-program (version 3) (program 0 (type-names) 0 (rule-names) (evaluables) "
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> stmt
     <> ")) (exports) (symbol-table))"
@@ -739,12 +812,12 @@ histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] [] []
+mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] [] Map.empty []
 
 -- | 'mkProg' with a non-empty callables table.
 mkProgWithCallables :: [(CallableKey, Name)] -> Program
 mkProgWithCallables callables =
-  Program [] [] [mkProcedure "p" [] []] [] callables [] []
+  Program [] [] [mkProcedure "p" [] []] [] callables [] Map.empty []
 
 -- | A function-reference callables key, the shape
 -- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.

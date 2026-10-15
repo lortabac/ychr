@@ -50,6 +50,7 @@ module YCHR.Internal.VM.Types
     EvaluableKey (..),
     CallableKey (..),
     TellableKey (..),
+    TellableResolution (..),
     funRefFunctor,
     lambdaClosureFunctor,
 
@@ -80,6 +81,7 @@ module YCHR.Internal.VM.Types
 where
 
 import Data.List (sortOn)
+import Data.Map.Strict (Map)
 import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -154,6 +156,21 @@ data Program = Program
     -- modules that contain a 'TellTerm', so a program that never
     -- tells dynamically carries an empty table.
     tellables :: ![(TellableKey, Name)],
+    -- | The second tier of the dynamic @tell\/N@ dispatch: the program's
+    -- constraints keyed by a bare functor, with no module scope and the
+    -- told arity on the key itself. Consulted only when the scoped
+    -- lookup misses, the goal's functor is unqualified, and the tell was
+    -- written in the prelude, so a goal told by a prelude rule whose own
+    -- module cannot name it — @tell_list\/N@ is why the tier exists —
+    -- still resolves against the program's constraints as a whole.
+    -- Derived from the bare keys the scoped table already resolves, so
+    -- it holds exactly what some module could name.
+    --
+    -- The key is the functor *spelling*, of which a non-ASCII name has
+    -- two: 'vmName'-encoded on a compound term, raw on an atom, the same
+    -- pair 'buildTellables' registers. Both are present, so a goal
+    -- resolves whichever shape it has.
+    tellablesUnqualified :: !(Map TellableKey TellableResolution),
     -- | The constraint types that are /inert/: types whose
     -- activation runs no occurrence procedure, because the type has
     -- no occurrences at all or only passive ones. Reactivating such
@@ -213,20 +230,41 @@ data CallableKey = CallableKey
 
 -- | Dispatch key for the dynamic @tell\/N@ construct 'TellTerm'.
 --
--- The scope is the module whose rule body contains the tell: it decides
--- which constraints the term may name, by the same visibility rules as
--- a constraint written in that module's source. The functor is the
--- VM-encoded text found on a @VTerm@ or @VAtom@ — the bare name for an
--- unqualified reference (present only when exactly one visible
--- constraint has that name and arity), the mangled @module__name@ for a
--- qualified one — and the arity is the goal term's own argument count
--- plus the arguments 'TellTerm' appends.
+-- The functor is the VM-encoded text found on a @VTerm@ or @VAtom@ —
+-- the bare name for an unqualified reference (present only when exactly
+-- one visible constraint has that name and arity), the mangled
+-- @module__name@ for a qualified one — and the arity is the goal term's
+-- own argument count plus the arguments 'TellTerm' appends.
+--
+-- The scope decides which constraints the term may name, by the same
+-- visibility rules as a constraint written in that module's source.
+-- That is the first tier, and its keys always carry a module. A key
+-- with no scope is the second tier: a runtime consults it only after
+-- the scoped lookup misses, so a goal a rule cannot name where it is
+-- written — a prelude rule's dynamic tell — still resolves against the
+-- program.
 data TellableKey = TellableKey
-  { scope :: !Text,
+  { -- | The module the rule body containing the tell was written in,
+    -- or 'Nothing' for the origin-less tier.
+    scope :: !(Maybe Text),
     functor :: !Name,
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
+
+-- | What 'Program.tellablesUnqualified' knows about one
+-- @(functor, arity)@ pair.
+--
+-- A pair one constraint provides is 'UniqueTell'. A pair several
+-- provide is ambiguous, and 'AmbiguousTell' keeps the candidates
+-- instead of resolving them by map order; the compiler emits one entry
+-- per constraint, so this is the collision case, not the common one.
+data TellableResolution
+  = -- | Exactly one constraint provides it: its tell procedure.
+    UniqueTell !Name
+  | -- | Several do. Carries their qualified names, for the error.
+    AmbiguousTell ![Types.QualifiedName]
+  deriving (Show, Eq)
 
 -- | The functor of a function-reference closure term, @fun name\/arity@.
 funRefFunctor :: Name
@@ -372,11 +410,14 @@ data Stmt
     -- The goal is dereferenced; an atom names a constraint with no
     -- arguments of its own, a compound one whose arguments are the
     -- compound's. The extra arguments are appended, and the
-    -- 'TellableKey' of @scope@, the functor and the total arity is
-    -- resolved through the program's 'tellables' table to the
+    -- 'TellableKey' of the calling module, the functor and the total
+    -- arity is resolved through the program's 'tellables' table to the
     -- constraint's tell procedure, which is called with the arguments.
-    -- An unbound goal is an instantiation error; any other goal, or one
-    -- whose key is not in the table, is a general runtime error.
+    -- On a miss, an unqualified functor told in the prelude is retried
+    -- through 'tellablesUnqualified', so a goal named by the caller of a
+    -- prelude rule still resolves. An unbound goal is an instantiation
+    -- error; any other goal, or one whose key is in no table, is a
+    -- general runtime error.
     TellTerm Text ValExpr [ValExpr]
   | -- Call stack frames
 

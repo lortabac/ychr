@@ -50,6 +50,16 @@
     fun call/9,
     fun call/10,
     fun call/11,
+    tell_list/1,
+    tell_list/2,
+    tell_list/3,
+    tell_list/4,
+    tell_list/5,
+    tell_list/6,
+    tell_list/7,
+    tell_list/8,
+    tell_list/9,
+    tell_list/10,
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
@@ -68,6 +78,26 @@
 :- chr_type bool ---> true ; false.
 
 :- chr_type list(T) ---> [] ; [T|list(T)].
+
+% Tell a whole list of goals: `tell_list(Gs, A1, ..., An)` tells each
+% goal of `Gs` with `tell/N`, the trailing arguments appended to the
+% goal's own, so it is the list counterpart of `tell` the way
+% `maplist/2` is of `call/2`. A goal is an evaluated argument like any
+% other, so a symbolic one is written `quote(note)` or
+% `quote(note(X))`; a bare `note` is data and the renamer warns
+% (YCHR-20101). `tell_list/1` appends nothing, so its elements must
+% carry all their own arguments: it reaches `p(1)` written
+% `quote(p(1))`, but a bare `quote(p)` reaches only `p/0`.
+:- chr_constraint tell_list(list(any)),
+                  tell_list(list(any), any),
+                  tell_list(list(any), any, any),
+                  tell_list(list(any), any, any, any),
+                  tell_list(list(any), any, any, any, any),
+                  tell_list(list(any), any, any, any, any, any),
+                  tell_list(list(any), any, any, any, any, any, any),
+                  tell_list(list(any), any, any, any, any, any, any, any),
+                  tell_list(list(any), any, any, any, any, any, any, any, any),
+                  tell_list(list(any), any, any, any, any, any, any, any, any, any).
 
 % The overloaded operators are classes with one signature per type;
 % `/`, `div`, `mod`, `rem` and `==` have one signature and are plain
@@ -278,3 +308,45 @@ call(Fn, A, B, C, D, E, F, G) -> '$call'(Fn, A, B, C, D, E, F, G).
 call(Fn, A, B, C, D, E, F, G, H) -> '$call'(Fn, A, B, C, D, E, F, G, H).
 call(Fn, A, B, C, D, E, F, G, H, I) -> '$call'(Fn, A, B, C, D, E, F, G, H, I).
 call(Fn, A, B, C, D, E, F, G, H, I, J) -> '$call'(Fn, A, B, C, D, E, F, G, H, I, J).
+
+% One pair of rules per arity: the empty list is done, and a non-empty
+% one tells its head with the trailing arguments appended, then
+% continues with the tail. `tell_list/1` has no trailing argument to
+% append, which is why it is the `tell/1` case above.
+tell_list([]) <=> true.
+tell_list([G|Gs]) <=> tell(G), tell_list(Gs).
+
+tell_list([], _A1) <=> true.
+tell_list([G|Gs], A1) <=> tell(G, A1), tell_list(Gs, A1).
+
+tell_list([], _A1, _A2) <=> true.
+tell_list([G|Gs], A1, A2) <=> tell(G, A1, A2), tell_list(Gs, A1, A2).
+
+tell_list([], _A1, _A2, _A3) <=> true.
+tell_list([G|Gs], A1, A2, A3) <=> tell(G, A1, A2, A3), tell_list(Gs, A1, A2, A3).
+
+tell_list([], _A1, _A2, _A3, _A4) <=> true.
+tell_list([G|Gs], A1, A2, A3, A4) <=>
+    tell(G, A1, A2, A3, A4), tell_list(Gs, A1, A2, A3, A4).
+
+tell_list([], _A1, _A2, _A3, _A4, _A5) <=> true.
+tell_list([G|Gs], A1, A2, A3, A4, A5) <=>
+    tell(G, A1, A2, A3, A4, A5), tell_list(Gs, A1, A2, A3, A4, A5).
+
+tell_list([], _A1, _A2, _A3, _A4, _A5, _A6) <=> true.
+tell_list([G|Gs], A1, A2, A3, A4, A5, A6) <=>
+    tell(G, A1, A2, A3, A4, A5, A6), tell_list(Gs, A1, A2, A3, A4, A5, A6).
+
+tell_list([], _A1, _A2, _A3, _A4, _A5, _A6, _A7) <=> true.
+tell_list([G|Gs], A1, A2, A3, A4, A5, A6, A7) <=>
+    tell(G, A1, A2, A3, A4, A5, A6, A7), tell_list(Gs, A1, A2, A3, A4, A5, A6, A7).
+
+tell_list([], _A1, _A2, _A3, _A4, _A5, _A6, _A7, _A8) <=> true.
+tell_list([G|Gs], A1, A2, A3, A4, A5, A6, A7, A8) <=>
+    tell(G, A1, A2, A3, A4, A5, A6, A7, A8),
+    tell_list(Gs, A1, A2, A3, A4, A5, A6, A7, A8).
+
+tell_list([], _A1, _A2, _A3, _A4, _A5, _A6, _A7, _A8, _A9) <=> true.
+tell_list([G|Gs], A1, A2, A3, A4, A5, A6, A7, A8, A9) <=>
+    tell(G, A1, A2, A3, A4, A5, A6, A7, A8, A9),
+    tell_list(Gs, A1, A2, A3, A4, A5, A6, A7, A8, A9).

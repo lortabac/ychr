@@ -30,6 +30,7 @@ module YCHR.Internal.Runtime.Monad
     EvaluableRegistry,
     CallableRegistry,
     TellableRegistry,
+    UnqualifiedTellableRegistry,
   )
 where
 
@@ -95,6 +96,17 @@ type CallableRegistry = Map CallableKey VM.Name
 -- 'TellableKey' (calling module, goal functor, total arity) to the
 -- mangled 'ProcMap' key of the constraint's tell procedure.
 type TellableRegistry = Map TellableKey VM.Name
+
+-- | Registry of the origin-less tier of the dynamic @tell\/N@ dispatch:
+-- a goal functor, with no module and the told arity on the key it comes
+-- from. Consulted only when the scoped 'TellableRegistry' misses, and
+-- only for an unqualified functor — the shape a goal has when a rule
+-- names it by its bare name, which is the case for a prelude rule's
+-- dynamic tell. A pair two modules both provide is ambiguous, and
+-- 'VM.TellableResolution' keeps that fact rather than resolving it by
+-- map order. The compiler already stores the program's tier in this
+-- shape.
+type UnqualifiedTellableRegistry = Map TellableKey VM.TellableResolution
 
 -- | The host-side runtime monad.
 type Chr = ReaderT SessionEnv IO
@@ -197,6 +209,11 @@ data SessionEnv = SessionEnv
     -- Populated from the program's tellables table at session init,
     -- which is empty unless the program tells dynamically.
     tellables :: !TellableRegistry,
+    -- | Origin-less tier of the same dispatch, consulted on a scoped
+    -- miss for an unqualified goal functor. Populated from the
+    -- program's @tellables-unqualified@ table at session init; see
+    -- 'VM.TellableResolution'.
+    tellablesUnqualified :: !UnqualifiedTellableRegistry,
     -- | The program's operator table ('CompiledProgram.opTable'): the
     -- built-in operators merged with every operator the program's
     -- modules declare or import. Consulted by the
@@ -255,52 +272,55 @@ initSessionEnv ::
   EvaluableRegistry ->
   CallableRegistry ->
   TellableRegistry ->
+  UnqualifiedTellableRegistry ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl tl expMap expSet = do
-  vc <- newIORef (VarId 0)
-  let typeCount = List.length typeNames
-      emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
-      typeNameMap = IntMap.fromList (zip [0 ..] typeNames)
-      ruleNameMap = IntMap.fromList (zip [0 ..] rNames)
-  bt <- newIORef emptyStore
-  sx <- newIORef emptyStoreIndex
-  bi <- newIORef IntMap.empty
-  ni <- newIORef 0
-  hi <- newIORef Set.empty
-  rq <- newIORef Seq.empty
-  cs <- newIORef []
-  pmRef <- newIORef slotProgram.slotProcedures
-  th <- newIORef Nothing
-  td <- newIORef 0
-  pure
-    SessionEnv
-      { varCounter = vc,
-        storeByType = bt,
-        storeIndex = sx,
-        storeTypeNames = typeNameMap,
-        indexPositions = indexable,
-        inertTypes = IntSet.fromList [i | Types.ConstraintType i <- inert],
-        ruleNames = ruleNameMap,
-        storeById = bi,
-        storeNextId = ni,
-        history = hi,
-        reactQueue = rq,
-        callStack = cs,
-        procMap = pmRef,
-        procEntries = slotProgram.slotProcEntries,
-        hostCalls = hc,
-        evaluables = ev,
-        callables = cl,
-        tellables = tl,
-        opTable = ops,
-        exportMap = expMap,
-        exportedSet = expSet,
-        trail = Nothing,
-        traceHandler = th,
-        traceDepth = td
-      }
+initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl tl tlu expMap expSet =
+  do
+    vc <- newIORef (VarId 0)
+    let typeCount = List.length typeNames
+        emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
+        typeNameMap = IntMap.fromList (zip [0 ..] typeNames)
+        ruleNameMap = IntMap.fromList (zip [0 ..] rNames)
+    bt <- newIORef emptyStore
+    sx <- newIORef emptyStoreIndex
+    bi <- newIORef IntMap.empty
+    ni <- newIORef 0
+    hi <- newIORef Set.empty
+    rq <- newIORef Seq.empty
+    cs <- newIORef []
+    pmRef <- newIORef slotProgram.slotProcedures
+    th <- newIORef Nothing
+    td <- newIORef 0
+    pure
+      SessionEnv
+        { varCounter = vc,
+          storeByType = bt,
+          storeIndex = sx,
+          storeTypeNames = typeNameMap,
+          indexPositions = indexable,
+          inertTypes = IntSet.fromList [i | Types.ConstraintType i <- inert],
+          ruleNames = ruleNameMap,
+          storeById = bi,
+          storeNextId = ni,
+          history = hi,
+          reactQueue = rq,
+          callStack = cs,
+          procMap = pmRef,
+          procEntries = slotProgram.slotProcEntries,
+          hostCalls = hc,
+          evaluables = ev,
+          callables = cl,
+          tellables = tl,
+          tellablesUnqualified = tlu,
+          opTable = ops,
+          exportMap = expMap,
+          exportedSet = expSet,
+          trail = Nothing,
+          traceHandler = th,
+          traceDepth = td
+        }
 
 -- | Where a search fork's store starts.
 data ForkStore

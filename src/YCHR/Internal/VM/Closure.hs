@@ -42,6 +42,7 @@ module YCHR.Internal.VM.Closure
   )
 where
 
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -56,6 +57,7 @@ import YCHR.Internal.VM.Types
     Program (..),
     Stmt (..),
     TellableKey,
+    TellableResolution (..),
     ValExpr (..),
     historyIdsList,
   )
@@ -67,8 +69,8 @@ procedureNames procs = Set.fromList [p.name | p <- procs]
 
 -- | Every call target a compiled program carries that its own procedure
 -- table does not define: the @CallExpr@ sites of every body, then the
--- 'Program.evaluables', 'Program.callables' and 'Program.tellables'
--- targets. In
+-- 'Program.evaluables', 'Program.callables', 'Program.tellables' and
+-- 'Program.tellablesUnqualified' targets. In
 -- first-appearance order, without duplicates. An empty list means the
 -- program is closed; 'closureFailure' turns a non-empty one into the
 -- message a caller reports.
@@ -78,6 +80,7 @@ danglingTargets prog =
     ++ danglingEvaluables known prog.evaluables
     ++ danglingCallables known prog.callables
     ++ danglingTellables known prog.tellables
+    ++ danglingTellableResolutions known (Map.elems prog.tellablesUnqualified)
   where
     known = procedureNames prog.procedures
 
@@ -164,6 +167,19 @@ danglingCallables known entries = missingIn known (map snd entries)
 -- | The 'Program.tellables' targets @known@ does not define.
 danglingTellables :: Set Name -> [(TellableKey, Name)] -> [Name]
 danglingTellables known entries = missingIn known (map snd entries)
+
+-- | The 'Program.tellablesUnqualified' targets @known@ does not define.
+--
+-- An ambiguous pair carries the candidates' qualified names rather than
+-- their procedures, because its resolution is reported instead of
+-- called; the non-ambiguous entries are what a runtime can actually
+-- reach, and every one of them has to exist.
+danglingTellableResolutions :: Set Name -> [TellableResolution] -> [Name]
+danglingTellableResolutions known =
+  missingIn known . concatMap resolutionTargets
+  where
+    resolutionTargets (UniqueTell procName) = [procName]
+    resolutionTargets (AmbiguousTell _) = []
 
 missingIn :: Set Name -> [Name] -> [Name]
 missingIn known = dedup . filter (`Set.notMember` known)

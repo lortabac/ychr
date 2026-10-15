@@ -20,6 +20,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Registry (baseHostCallRegistry)
 import YCHR.Internal.Runtime.Session (mkSessionInput, withCHRExtra)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
   ( ArgIndex (..),
     BoolExpr (..),
@@ -29,11 +30,13 @@ import YCHR.Internal.VM
     EvaluableKey (..),
     IdExpr (..),
     Literal (..),
-    Name,
+    Name (..),
     ProcKind (..),
     Procedure (..),
     Program (..),
     Stmt (..),
+    TellableKey (..),
+    TellableResolution (..),
     ValExpr (..),
   )
 import YCHR.Internal.VM.Closure
@@ -81,6 +84,7 @@ programWith procs evs cls =
       evaluables = evs,
       callables = cls,
       tellables = [],
+      tellablesUnqualified = Map.empty,
       inertTypes = []
     }
 
@@ -225,7 +229,34 @@ dispatchTableTests =
               [(EvaluableKey "f" 1, "ghostEval")]
               [(CallableKey "/" "g/1" 1, "ghostCallable")]
           )
-          @?= ["ghostCall", "ghostEval", "ghostCallable"]
+          @?= ["ghostCall", "ghostEval", "ghostCallable"],
+      testCase "an origin-less tellable target no procedure defines is reported" $
+        danglingTargets
+          ( (programWith [] [] [])
+              { tellablesUnqualified =
+                  Map.fromList
+                    [ ( TellableKey {scope = Nothing, functor = Name "c", arity = 2},
+                        UniqueTell "missing"
+                      )
+                    ]
+              }
+          )
+          @?= ["missing"],
+      testCase "an ambiguous origin-less pair names no procedure and is not reported" $
+        danglingTargets
+          ( (programWith [] [] [])
+              { tellablesUnqualified =
+                  Map.fromList
+                    [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                        AmbiguousTell
+                          [ Types.QualifiedName "m" "c",
+                            Types.QualifiedName "n" "c"
+                          ]
+                      )
+                    ]
+              }
+          )
+          @?= []
     ]
 
 -- ---------------------------------------------------------------------------

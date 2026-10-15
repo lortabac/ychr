@@ -7,6 +7,7 @@ module YCHR.Internal.VM
     EvaluableKey (..),
     CallableKey (..),
     TellableKey (..),
+    TellableResolution (..),
     funRefFunctor,
     lambdaClosureFunctor,
 

@@ -49,6 +49,7 @@ runStoreEnv action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -70,6 +71,7 @@ runInertStoreEnv action = do
       IntMap.empty
       builtinOps
       emptySlotProgram
+      Map.empty
       Map.empty
       Map.empty
       Map.empty

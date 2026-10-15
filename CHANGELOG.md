@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+The prelude tells a list of goals, and the s-expression VM format is now
+version 3.
+
+- `tell_list/1` through `tell_list/10` in the prelude tell
+  `tell/N` for every goal of a list, appending the trailing arguments to
+  each goal exactly as `tell/N` does: `tell_list(Gs, X)` replaces the
+  usual hand-written `run/2`. `tell_list/1` appends nothing, so its
+  elements carry all their own arguments; a symbolic goal is written
+  `quote(...)`. A goal is named by the *caller*, so a dynamic tell in the
+  prelude resolves a bare goal name against the program as a whole — the
+  one scope where a tell may name what its own module cannot see. Both
+  run-time spellings of a non-ASCII name reach the tier, as they always
+  reached the scoped table. Two exported constraints of the same bare
+  name and arity are reported as ambiguous rather than resolved; a name a
+  module keeps to itself is absent from the table and stays private.
+- **Breaking:** the s-expression VM format is version 3. A program's
+  header gains `(tellables-unqualified ...)`, the origin-less tier of the
+  dynamic `tell/N` dispatch the prelude's rules resolve through.
+  `deserialize` accepts only version 3; a version-2 dump is rejected at
+  the version gate, as version 1 already was.
+
 Goal macros follow the revised macro specification
 ([docs/reference/macros.md](docs/reference/macros.md)), and declaration
 macros (`:- macro_decls`) are implemented.

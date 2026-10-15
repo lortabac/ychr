@@ -81,6 +81,7 @@ programWith procs =
       evaluables = [],
       callables = [],
       tellables = [],
+      tellablesUnqualified = Map.empty,
       inertTypes = []
     }
 

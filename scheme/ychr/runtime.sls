@@ -42,8 +42,8 @@
     register-evaluable! deep-eval-value
     ;; Closure-apply dispatch table for @'$call'@
     register-callable! %apply-closure
-    ;; Dynamic tell dispatch table for @tell/N@
-    register-tellable! %tell-term
+    ;; Dynamic tell dispatch tables for @tell/N@
+    register-tellable! register-tellable-anywhere! %tell-term
     ;; Session initialization
     %make-session make-op-table
     ;; Search driver and its program-level tables
@@ -152,6 +152,14 @@
           ;; procedures `%tell-term` calls. Generated libraries
           ;; fill this in via @register-tellable!@.
           (make-hashtable equal-hash equal?)
+          ;; Origin-less tell dispatch: keys are (functor . arity)
+          ;; pairs; values are the tell procedure, or a list of them
+          ;; when several constraints share the pair. Consulted only
+          ;; when the scoped table above misses and the goal's functor
+          ;; is unqualified. Generated libraries fill it in via
+          ;; @register-tellable-anywhere!@, and `%tell-term` reports a
+          ;; list of more than one as ambiguous.
+          (make-hashtable equal-hash equal?)
           ops
           ;; The search tables. `goals`, `exported-goals` and
           ;; `short-exports` are filled by the generated library's
@@ -220,6 +228,8 @@
        (session-evaluables s)
        (session-callables s)
        (session-tellables s)
+       ;; The fork tells the same program, so it shares both tiers.
+       (session-tellables-unqualified s)
        (session-op-table s)
        (session-goals s)
        (session-short-exports s)
@@ -538,13 +548,25 @@
   (define (register-tellable! s scope functor arity proc)
     (hashtable-set! (session-tellables s) (list scope functor arity) proc))
 
+  ;; Register the origin-less tier: the tell procedure a dynamic
+  ;; `tell/N` reaches for a goal of this functor and total arity when the
+  ;; scoped lookup misses. Keys are `(functor . arity)` pairs. More than
+  ;; one procedure for a pair is an ambiguous constraint name, and
+  ;; `%tell-term` reports it rather than choosing.
+  (define (register-tellable-anywhere! s functor arity . procs)
+    (let ((seen (session-tellables-unqualified s)))
+      (hashtable-set! seen (cons functor arity) procs)))
+
   ;; Tell a constraint chosen at run time: the whole of a dynamic
   ;; `tell(G, A1, ..., Ak)` written in module `scope`. Mirrors `tellTerm`
   ;; in the Haskell interpreter, including which failure raises which
   ;; kind of error. An atom goal contributes no arguments of its own and
   ;; a compound its own, ahead of the appended ones; they are passed on
   ;; un-dereferenced, as a direct tell's would be. A list can only be a
-  ;; malformed goal, and is reported as not a constraint term.
+  ;; malformed goal, and is reported as not a constraint term. On a
+  ;; scoped miss, an unqualified functor is retried in the origin-less
+  ;; tier, so a goal told by a rule whose own module cannot name it — a
+  ;; prelude rule's — still resolves.
   (define (%tell-term s scope goal . extras)
     (let ((d (deref goal)))
       (define (dispatch functor args)
@@ -552,17 +574,39 @@
                (n (length all))
                (proc (hashtable-ref (session-tellables s)
                                     (list scope functor n)
-                                    #f)))
-          (if proc
-              (apply proc s all)
-              (%chr-error
-               (string-append
-                "tell: no constraint "
-                (decode-mangled-name (symbol->string functor))
-                "/"
-                (number->string n)
-                " is visible in module "
-                scope)))))
+                                    #f))
+               ;; The tier holds a list of procedures, one per
+               ;; candidate, so the miss default is the empty list.
+               (anywhere (hashtable-ref (session-tellables-unqualified s)
+                                        (cons functor n)
+                                        '())))
+          (cond
+            (proc (apply proc s all))
+            ;; Only the prelude retries origin-less: its rules are handed
+            ;; goals named by their caller, which they cannot name
+            ;; themselves. Every other scope keeps resolving — and
+            ;; rejecting — exactly what it can see. Mirrors `tellTerm` in
+            ;; the Haskell interpreter.
+            ((and (string=? scope "prelude") (= 1 (length anywhere)))
+             (apply (car anywhere) s all))
+            ((and (string=? scope "prelude") (> (length anywhere) 1))
+             (%chr-error
+              (string-append
+               "tell: constraint "
+               (decode-mangled-name (symbol->string functor))
+               "/"
+               (number->string n)
+               " is ambiguous between "
+               (anywhere-candidates anywhere))))
+            (else
+             (%chr-error
+              (string-append
+               "tell: no constraint "
+               (decode-mangled-name (symbol->string functor))
+               "/"
+               (number->string n)
+               " is visible in module "
+               scope))))))
       (cond
         ((and (symbol? d) (not (list-functor? d))) (dispatch d '()))
         ((and (term? d) (not (list-functor? (term-functor d))))
@@ -571,6 +615,40 @@
          (%chr-inst-error
           "tell: goal is not sufficiently instantiated (unbound variable)"))
         (else (%chr-error "tell: goal is not a constraint term")))))
+
+  ;; The candidate names an ambiguous origin-less lookup reports, joined
+  ;; with `, ` in the source spelling the Haskell runtime's ambiguity
+  ;; error uses. Each is the qualified constraint a tell procedure
+  ;; implements: the procedure name is `tell_<vmName><arity>` (see
+  ;; `tellProcName` in `YCHR.Internal.Compile.Names`), so stripping the
+  ;; prefix and the trailing digits leaves the mangled name to decode.
+  (define (anywhere-candidates procs)
+    (define (candidate-name proc)
+      (decode-mangled-name
+       (strip-tell-prefix-and-arity (symbol->string proc))))
+    (define (join-with-comma ps)
+      (if (null? (cdr ps))
+          (car ps)
+          (string-append (car ps)
+                         ", "
+                         (join-with-comma (cdr ps)))))
+    (if (null? procs)
+        ""
+        (join-with-comma (map candidate-name procs))))
+
+  (define (strip-tell-prefix-and-arity name)
+    (let* ((without-prefix
+            (if (and (> (string-length name) 5)
+                     (string=? (substring name 0 5) "tell_"))
+                (substring name 5 (string-length name))
+                name))
+           (n (string-length without-prefix)))
+      (let loop ((i n))
+        (if (and (> i 0)
+                 (let ((c (string-ref without-prefix (- i 1))))
+                   (and (char>=? c #\0) (char<=? c #\9))))
+            (loop (- i 1))
+            (substring without-prefix 0 i)))))
 
   ;; The dispatch key of a closure value applied at `n` arguments,
   ;; paired with the captured values to pass before those arguments —

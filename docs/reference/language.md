@@ -726,6 +726,7 @@ or one with more is `YCHR-20030`.
 :- chr_constraint run/2, step/1, done/1.
 
 % Tell each goal of a list, appending the same argument to every one.
+% The prelude's `tell_list/2` already does this; `run/2` spells it out.
 run([], _) <=> true.
 run([G | Gs], X) <=> tell(G, X), run(Gs, X).
 
@@ -765,7 +766,9 @@ function at *any* arity, which is called to compute the goal.
   same rules as a goal written there: its own constraints and those its
   imports make visible, unqualified when exactly one constraint or
   function matches the name and total arity, `M:name` otherwise. A
-  query resolves against every module's exports.
+  query resolves against every module's exports. The prelude's own rules
+  are the one exception, because they are handed goals named by their
+  caller; see [`tell_list/N`](#telling-a-list-tell_listn).
 - An unbound `G` is an instantiation error. Any other value that does
   not name a visible constraint — a number, a string, a list, an
   unexported or ambiguous name, the wrong arity — is a runtime error
@@ -776,6 +779,42 @@ function at *any* arity, which is called to compute the goal.
   `tell(G, R), S is R * 2` reads `R` back.
 - A macro is expanded at compile time, so only a literal `G` can name
   one.
+
+### Telling a list: `tell_list/N`
+
+The prelude declares `tell_list/1` through `tell_list/10` for the common
+"tell every goal of a list" shape — the CHR counterpart of a `maplist`
+over `call/N`:
+
+```prolog
+run(Gs, X) <=> tell_list(Gs, X).
+```
+
+`tell_list/2` is that whole rule: it tells each goal of `Gs` the way the
+hand-written `run/2` above does. `tell_list(Gs, A1, ..., Ak)` tells
+`tell(G, A1, ..., Ak)` for each `G` of the list, in order:
+`tell_list/1` appends nothing, and each wider arity appends its trailing
+arguments to every goal. The wider arities exist so a list of goals can
+share a fixed tuple of arguments; `tell_list/1` and `tell_list/2` are the
+ones usually wanted.
+
+- The goals are constraints of the *calling* program. A rule compiled
+  into the prelude cannot name them itself, so a dynamic tell written
+  there resolves a goal's bare name against the program's constraints as
+  a whole. That is the one place a tell may name something the module it
+  is written in cannot see.
+- Because that resolution is program-wide, two constraints of the same
+  bare name and arity in *different* modules make the name ambiguous for
+  every `tell_list` call, even from a module that imports only one of
+  them. The error names both candidates; rename one, or tell it
+  qualified. A name a module keeps to itself is not in the table at all,
+  so it stays private.
+- A goal is an evaluated argument, so a symbolic one is written
+  `quote(note)` or `quote(note(X))`. A bare `note` is data, and the
+  renamer warns (`YCHR-20101`).
+- Each element is told in turn, so the ordering rules of `tell/N` apply
+  per element; an element that names no visible constraint is the same
+  `YCHR-60001` a plain `tell` of it would be.
 
 ## The `=` operator
 

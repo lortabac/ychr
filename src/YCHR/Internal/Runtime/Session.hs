@@ -197,6 +197,7 @@ withCHRExtra si hc extraProcs extraCallables action
           evaluableMap
           callableMap
           (Map.fromList si.program.tellables)
+          si.program.tellablesUnqualified
           si.exportMap
           si.exportedSet
       runChr action env
