@@ -1,0 +1,3 @@
+YCHR-15023
+A declaration macro may not generate a ':- use_module' directive
+in the expansion of macro_decls_forbidden:sneaky/1

@@ -38,12 +38,14 @@ import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.Internal.Collect (CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.ConstraintUse (ConstraintUseError (..), OccurrenceRole (..))
+import YCHR.Internal.DeclMacro (DeclMacroError (..))
 import YCHR.Internal.Desugar (DesugarError (..))
 import YCHR.Internal.Display
   ( ErrorCode (..),
     collectErrorCode,
     compileErrorCode,
     constraintUseErrorCode,
+    declMacroErrorCode,
     desugarErrorCode,
     exhaustivenessWarningCode,
     goalNotAConstraintCode,
@@ -59,6 +61,7 @@ import YCHR.Internal.Display
     typeCheckErrorCode,
   )
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
+import YCHR.Internal.Parsed (MacroKind (..))
 import YCHR.Internal.Parser (ParseValidationError (..))
 import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..))
 import YCHR.Internal.Rename.Macro (PrimitiveOperand (..))
@@ -107,7 +110,11 @@ deriving instance Data HeadPart
 
 deriving instance Data PrimitiveOperand
 
+deriving instance Data MacroKind
+
 deriving instance Data RenameError
+
+deriving instance Data DeclMacroError
 
 deriving instance Data RenameWarning
 
@@ -140,6 +147,10 @@ enumCodes f =
     let ErrorCode n = f (fromConstr c)
   ]
 
+-- | 'enumCodes', skipping the named constructors.
+enumCodesExcept :: forall e. (Data e) => [String] -> (e -> ErrorCode) -> [(String, Int)]
+enumCodesExcept skip f = [(c, n) | (c, n) <- enumCodes f, c `notElem` skip]
+
 constructorCodes :: [(String, Int)]
 constructorCodes =
   concat
@@ -152,7 +163,10 @@ constructorCodes =
       enumCodes desugarErrorCode,
       enumCodes compileErrorCode,
       enumCodes constraintUseErrorCode,
-      enumCodes typeCheckErrorCode
+      enumCodes typeCheckErrorCode,
+      -- The two wrappers delegate to the renamer's and the parse
+      -- validator's codes, already enumerated above.
+      enumCodesExcept ["DeclMacroRenameError", "DeclMacroParseError"] declMacroErrorCode
     ]
 
 -- | Codes not attached to an enumerable constructor (see "YCHR.Internal.Display").

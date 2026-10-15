@@ -9,13 +9,15 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Internal.Parsed (MacroClause (..))
+import YCHR.Internal.Parsed (ExpansionStep (..), MacroClause (..), SourceLoc (..))
 import YCHR.Internal.Rename.Macro
   ( PrimitiveError (..),
     PrimitiveOperand (..),
+    instantiateBody,
     instantiateClause,
     isVariant,
     matchClause,
+    renderExpansionChain,
   )
 import YCHR.Internal.Types (Name (..), Term (..))
 
@@ -24,7 +26,7 @@ tests :: TestTree
 tests =
   testGroup
     "Rename.Macro"
-    [matchTests, variantTests, instantiateTests]
+    [matchTests, variantTests, instantiateTests, chainTests]
 
 atom :: Text -> Term
 atom n = CompoundTerm (Unqualified n) []
@@ -134,5 +136,25 @@ instantiateTests =
           @?= Left (PrimitiveError AtomResult (list [atom "a_", atom "_b"])),
       testCase "'$compound' rejects a non-atom functor" $
         instantiateClause 0 Map.empty (MacroClause [] [app "$compound" [IntTerm 1, list []]])
-          @?= Left (PrimitiveError CompoundFunctor (IntTerm 1))
+          @?= Left (PrimitiveError CompoundFunctor (IntTerm 1)),
+      testCase "instantiateBody keeps a conjunction element whole" $
+        instantiateBody "_decl_" 3 Map.empty (MacroClause [] [app "," [atom "a", var "V"]])
+          @?= Right [app "," [atom "a", var "_decl_3_V"]]
     ]
+
+chainTests :: TestTree
+chainTests =
+  testGroup
+    "renderExpansionChain"
+    [ testCase "consecutive uses of one macro are collapsed" $
+        renderExpansionChain [step "r", step "r", step "r", step "outer"]
+          @?= [ "in 3 nested expansions of m:r/1, innermost used at f.chr:2:1",
+                "in the expansion of m:outer/1, used at f.chr:2:1"
+              ],
+      testCase "more than ten groups are summarized" $
+        let chain = concat [[step "a", step "b"] | _ <- [1 :: Int .. 6]]
+         in drop 10 (renderExpansionChain chain)
+              @?= ["... and 2 more enclosing expansions"]
+    ]
+  where
+    step n = ExpansionStep "m" n 1 (SourceLoc "f.chr" 2 1)

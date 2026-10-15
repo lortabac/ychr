@@ -1,0 +1,7 @@
+:- module(macro_decls_kind_mismatch_directive).
+:- chr_constraint a/1.
+
+% A goal macro is invisible in a directive.
+:- macro both(X) ---> [a(X), a(X)].
+
+:- both(1).

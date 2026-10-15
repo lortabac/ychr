@@ -40,6 +40,14 @@ import YCHR.Internal.Collect
   )
 import YCHR.Internal.Collected (CollectedModule)
 import YCHR.Internal.Compile (CompileError, compile)
+import YCHR.Internal.DeclMacro
+  ( DeclMacroError (..),
+    ExpandedModule (..),
+    buildDeclMacroEnv,
+    expandAndConvert,
+    scopeFromModule,
+    scopeName,
+  )
 import YCHR.Internal.Desugar
   ( DesugarError,
     desugarProgram,
@@ -49,7 +57,7 @@ import YCHR.Internal.Desugar
 import YCHR.Internal.Desugar.Disjunction (lowerDisjunctions)
 import YCHR.Internal.Desugar.Inline (inlineFunctions)
 import YCHR.Internal.Desugared qualified as D
-import YCHR.Internal.Diagnostic (Diagnostic (..))
+import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
 import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.PExpr (PExpr (Atom))
@@ -69,9 +77,11 @@ import YCHR.Internal.Parser
     buildModuleOpTable,
     builtinOps,
     collectModuleHeader,
+    defaultModuleNameForSource,
     extractOpDecls,
     mergeOps,
-    parseModuleWith,
+    parseModuleTermsWith,
+    scanModuleTerms,
   )
 import YCHR.Internal.Rename
   ( QueryRenameEnv,
@@ -117,6 +127,10 @@ import YCHR.Internal.VM.Index (indexablePositions)
 data Error
   = ParseError FilePath ParseError
   | ParseValidationErrors [AnnP ParseValidationError]
+  | -- | Errors from expanding declaration macros (@:- macro_decls@),
+    -- including conversion errors in generated clauses. If there are
+    -- also plain 'ParseValidationErrors', they're reported here too.
+    DeclMacroErrors [Diagnostic DeclMacroError]
   | CollectErrors [Diagnostic CollectError]
   | RenameErrors [Diagnostic RenameError]
   | DesugarErrors [Diagnostic DesugarError]
@@ -323,24 +337,44 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
       -- dedup in 'finalizeCompilation'.
       opExports = userOpExports `Map.union` stdlibOpExports
       preludeOps = Map.findWithDefault [] "prelude" opExports
-  -- Build per-module operator tables and full-parse each user file with
-  -- its specific table. A first conflict in any table aborts the whole
-  -- compilation with OperatorConflict.
-  parsedWithErrors <-
+  -- Read each user file with its own operator table. An operator
+  -- conflict aborts with OperatorConflict.
+  userTerms <-
     traverse
       ( \((fp, src), (_, hdr)) -> do
           table <- case buildModuleOpTable builtinOps preludeOps opExports hdr of
             Left conflict ->
               Left (OperatorConflict (AnnP conflict hdr.modLoc hdr.modOrigin))
             Right t -> Right t
-          first (ParseError fp) (parseModuleWith table fp src)
+          first (ParseError fp) (parseModuleTermsWith table fp src)
       )
       (zip inputs userHeaders)
-  let parsed = map fst parsedWithErrors
-      validationErrors = concatMap snd parsedWithErrors
-  case validationErrors of
-    [] -> pure ()
-    errs -> Left (ParseValidationErrors errs)
+  -- Expand declaration macros, then convert. Macros come from user
+  -- modules and the library closure, minus libraries a user module
+  -- shadows ('finalizeCompilation' drops those too).
+  let scanned =
+        [ scanModuleTerms (defaultModuleNameForSource fp) ts
+        | ((fp, _), ts) <- zip inputs userTerms
+        ]
+      userScopes = map scopeFromModule scanned
+      -- Names as conversion gives them (@:- module@ may not be first).
+      userModNames = Set.fromList (map scopeName userScopes)
+      libScopes =
+        [scopeFromModule m | m <- libraryMods, Set.notMember m.name userModNames]
+      macroEnv = buildDeclMacroEnv (userScopes ++ libScopes)
+  checkDuplicateModules (map fst inputs) scanned
+  let expanded =
+        [ expandAndConvert macroEnv scope ts
+        | (scope, ts) <- zip userScopes userTerms
+        ]
+      parsed = map (.converted) expanded
+      validationErrors = concatMap (.parseErrors) expanded
+      declErrors = concatMap (.expansionErrors) expanded
+  case (declErrors, validationErrors) of
+    ([], []) -> pure ()
+    ([], errs) -> Left (ParseValidationErrors errs)
+    (des, errs) ->
+      Left (DeclMacroErrors (des ++ map (noDiag . fmap DeclMacroParseError) errs))
   let trailingLoc =
         Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
   finalizeCompilation libraryMods opExports trailingLoc (map fst inputs) parsed
@@ -348,6 +382,9 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
 -- | Compile already-parsed modules. This is the entry point used by
 -- "YCHR.DSL" callers that build 'Module' values in Haskell rather than
 -- parsing @.chr@ text.
+--
+-- A 'Module' has no directives left, so DSL modules can't use
+-- declaration macros.
 --
 -- The library closure (prelude plus every @use_module(library(_))@ in
 -- the input modules' import lists, plus all stdlib libraries when
@@ -401,47 +438,7 @@ finalizeCompilation ::
   [Module] ->
   Either Error (CompiledProgram, [Warning])
 finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
-  -- A module name is declared in exactly one input. Two user modules that
-  -- carry the same name are rejected here rather than merged: the
-  -- downstream passes key declarations by qualified name, so letting both
-  -- through would silently pool their declarations and equations. This
-  -- includes the same path given twice on the command line — the second
-  -- module is a separate input, not a duplicate to deduplicate.
-  --
-  -- The diagnostic is anchored at the second declaration, so the header
-  -- points at the offending file rather than the first one; the message
-  -- lists every file that declares the name. A header-less module carries
-  -- 'dummyLoc', so its real path comes from the positional 'inputPaths'
-  -- instead — the file is what makes the header useful, and the module
-  -- name of such a module is only its basename.
-  let modulesByName =
-        Map.fromListWith
-          (flip (++))
-          [ (m.name, [(i, m)])
-          | (i, m) <- zip [0 :: Int ..] parsed
-          ]
-      fileOf i m = case drop i inputPaths of
-        (p : _) -> Just p
-        []
-          | m.nameLoc /= dummyLoc -> Just m.nameLoc.file
-          | otherwise -> Nothing
-      duplicateModuleDiags =
-        [ Diagnostic
-            Nothing
-            ( AnnP
-                ( DuplicateModuleName
-                    n
-                    [p | (i, m) <- ms, Just p <- [fileOf i m]]
-                )
-                (maybe second.nameLoc (\p -> SourceLoc p 1 1) (fileOf secondIdx second))
-                (Atom n)
-            )
-            []
-        | (n, ms@((_, _) : (secondIdx, second) : _)) <- Map.toList modulesByName
-        ]
-  case duplicateModuleDiags of
-    [] -> pure ()
-    _ -> Left (CollectErrors duplicateModuleDiags)
+  checkDuplicateModules inputPaths parsed
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
   -- providers for every name the library exports and make each use
@@ -550,6 +547,48 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
   where
     toResolution n [m] = UniqueExport (Types.QualifiedName m n)
     toResolution _ ms = AmbiguousExport ms
+
+-- | Each module name must come from one input only. Two user modules
+-- with the same name are an error, not merged: later phases key things
+-- by qualified name, so they'd silently mix. The same path given twice
+-- counts too.
+--
+-- The error points at the second module's file and lists all files
+-- with that name. Header-less modules have 'dummyLoc', so their path
+-- comes from @inputPaths@.
+--
+-- 'compileModules' also runs it before expanding declaration macros,
+-- since expansion keys modules by name.
+checkDuplicateModules :: [FilePath] -> [Module] -> Either Error ()
+checkDuplicateModules inputPaths parsed = do
+  let modulesByName =
+        Map.fromListWith
+          (flip (++))
+          [ (m.name, [(i, m)])
+          | (i, m) <- zip [0 :: Int ..] parsed
+          ]
+      fileOf i m = case drop i inputPaths of
+        (p : _) -> Just p
+        []
+          | m.nameLoc /= dummyLoc -> Just m.nameLoc.file
+          | otherwise -> Nothing
+      duplicateModuleDiags =
+        [ Diagnostic
+            Nothing
+            ( AnnP
+                ( DuplicateModuleName
+                    n
+                    [p | (i, m) <- ms, Just p <- [fileOf i m]]
+                )
+                (maybe second.nameLoc (\p -> SourceLoc p 1 1) (fileOf secondIdx second))
+                (Atom n)
+            )
+            []
+        | (n, ms@((_, _) : (secondIdx, second) : _)) <- Map.toList modulesByName
+        ]
+  case duplicateModuleDiags of
+    [] -> pure ()
+    _ -> Left (CollectErrors duplicateModuleDiags)
 
 -- | Prepend a synthetic @use_module(library(prelude))@ to a user module so
 -- the renamer treats prelude exports as visible.

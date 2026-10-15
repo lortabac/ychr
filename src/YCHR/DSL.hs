@@ -379,13 +379,14 @@ termToConstraint t =
 
 -- | Attach a name to a rule.
 (@:) :: Text -> Rule -> Rule
-n @: (Rule _ h g b) = Rule (Just (noAnn n)) h g b
+-- Positional: a record update of 'Rule' would be ambiguous.
+n @: (Rule _ h g b e) = Rule (Just (noAnn n)) h g b e
 
 -- | Simplification rule (@head \<=\> body@), or simpagation when the LHS is
 -- a @kept \\\\ removed@ 'Simpa'.
 (<=>) :: (IsRuleHead h) => h -> [Term] -> Rule
 h <=> body =
-  Rule Nothing (noAnnP (toRuleHead h)) (noAnnP []) (noAnnP body)
+  Rule Nothing (noAnnP (toRuleHead h)) (noAnnP []) (noAnnP body) []
 
 -- | Propagation rule (@head ==\> body@).
 (==>) :: [Term] -> [Term] -> Rule
@@ -395,6 +396,7 @@ lhs ==> rhs =
     (noAnnP (Propagation (map termToConstraint lhs)))
     (noAnnP [])
     (noAnnP rhs)
+    []
 
 -- | Simpagation split @kept \\\\ removed@; follow with '<=>'.
 (\\) :: [Term] -> [Term] -> Simpa
@@ -402,7 +404,7 @@ k \\ r = Simpa {kept = k, removed = r}
 
 -- | Attach a guard to a rule (binds looser than '<=>' \/ '==>').
 (|-) :: Rule -> [Term] -> Rule
-r |- g = let Rule n h _ b = r in Rule n h (noAnnP g) b
+r |- g = let Rule n h _ b e = r in Rule n h (noAnnP g) b e
 
 infix 4 .=.
 
@@ -502,7 +504,8 @@ equationSeq n args guard rhs =
     { funName = Unqualified n,
       args = args,
       guard = noAnnP guard,
-      rhs = noAnnP rhs
+      rhs = noAnnP rhs,
+      expansion = []
     }
 
 -- | Lambda @fun(args) -> body end@: the compound @\'->\'(fun(args), body)@,

@@ -38,6 +38,16 @@ module YCHR.Internal.Parser
     parseTermWith,
     parseRule,
 
+    -- * Module conversion with provenance
+    parseModuleTermsWith,
+    defaultModuleNameForSource,
+    SourceItem (..),
+    convertSourceItems,
+    scanModuleTerms,
+    builtinDirectives,
+    isBuiltinDirective,
+    convertTerm,
+
     -- * Operator tables
     OpTable,
     builtinOps,
@@ -123,7 +133,8 @@ builtinOps =
           (P.Fx, "extend_function"),
           (P.Fx, "inline"),
           (P.Fx, "constraint_use"),
-          (P.Fx, "macro")
+          (P.Fx, "macro"),
+          (P.Fx, "macro_decls")
         ]
       ),
       (1190, [(P.Xfx, "@")]),
@@ -167,6 +178,11 @@ parseModuleWith ::
 parseModuleWith table sourceName src = do
   terms <- P.parseTerms table sourceName src
   pure (convertModule (defaultModuleNameForSource sourceName) terms)
+
+-- | Read a module's top-level terms without converting them. Used by
+-- "YCHR.Internal.DeclMacro".
+parseModuleTermsWith :: OpTable -> String -> Text -> Either ParseError [Ann PExpr]
+parseModuleTermsWith = P.parseTerms
 
 -- | Default module name for a header-less source.
 --
@@ -570,17 +586,20 @@ data Directive
   | DirExtendFunctionEqn (AnnP FunctionEquation)
   | DirExtendClassEqn (AnnP FunctionEquation)
   | DirTypeDecl [Ann TypeDefinition]
-  | -- | A one-line @:- macro Head ---> [Goals].@ definition.
+  | -- | A one-line @:- macro Head ---> [Goals].@ or
+    -- @:- macro_decls Head ---> [Clauses].@ definition.
     DirMacro (AnnP MacroDef)
-  | -- | A @:- macro Name\/N, ...@ declaration, whose clauses are
-    -- top-level @Head ---> [Goals].@ items. Each declared key is
-    -- annotated with the directive's location and term.
+  | -- | A @:- macro Name\/N, ...@ or @:- macro_decls Name\/N, ...@
+    -- declaration, whose clauses are top-level @Head ---> [...]@ items.
+    -- Each key carries the directive's location and term.
     DirMacroDecl [AnnP MacroKey]
   | DirOther
 
--- | The name and arity a @:- macro Name\/N@ declaration declares.
+-- | The kind, name and arity a @:- macro Name\/N@ or
+-- @:- macro_decls Name\/N@ declaration declares.
 data MacroKey = MacroKey
-  { name :: Text,
+  { kind :: MacroKind,
+    name :: Text,
     arity :: Int
   }
 
@@ -689,6 +708,13 @@ data ParseValidationError
   | -- | The clauses of one macro do not form one contiguous block of
     -- module items. Carries the name and arity.
     DiscontiguousMacroClauses Text Int
+  | -- | A declaration macro has the name and arity of a built-in
+    -- directive ('builtinDirectives'). Name and arity. The definition
+    -- is dropped.
+    DeclMacroBuiltinDirective Text Int
+  | -- | A built-in directive with arguments of the wrong shape, e.g.
+    -- @:- module(42).@ Carries the directive's name.
+    MalformedDirective Text
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
@@ -699,7 +725,29 @@ data ParseValidationError
 -- module; their errors are still returned in the second component.
 convertModule :: Text -> [Ann PExpr] -> (Module, [AnnP ParseValidationError])
 convertModule defaultName terms =
-  let itemResults = map convertModuleItem terms
+  let (m, errs) = convertSourceItems defaultName [SourceItem t [] | t <- terms]
+   in (m, map fst errs)
+
+-- | A top-level term to convert, with the macro chain that generated
+-- it (empty if the user wrote it).
+data SourceItem = SourceItem
+  { term :: Ann PExpr,
+    expansion :: [ExpansionStep]
+  }
+
+-- | 'convertModule' for terms with a chain. Rules and equations keep
+-- their item's chain, and each error comes with it. Module-wide errors
+-- (contiguity, macro grouping, duplicate headers) get no chain.
+convertSourceItems ::
+  Text ->
+  [SourceItem] ->
+  (Module, [(AnnP ParseValidationError, [ExpansionStep])])
+convertSourceItems defaultName srcItems =
+  let itemResults =
+        [ (withExpansion si.expansion <$> mi, [(e, si.expansion) | e <- errs])
+        | si <- srcItems,
+          let (mi, errs) = convertModuleItem si.term
+        ]
       items = [i | (Just i, _) <- itemResults]
       itemErrors = concatMap snd itemResults
       dirs = [d | ItemDirective d <- items]
@@ -752,10 +800,74 @@ convertModule defaultName terms =
           }
    in ( mod_,
         itemErrors
-          ++ contiguityErrors
-          ++ macroErrors
-          ++ duplicateModuleHeaderErrors
+          ++ map (,[]) (contiguityErrors ++ macroErrors ++ duplicateModuleHeaderErrors)
       )
+
+-- | Put a chain on an item's rules and equations.
+withExpansion :: [ExpansionStep] -> ModuleItem -> ModuleItem
+withExpansion [] item = item
+withExpansion chain item = case item of
+  ItemRule r -> ItemRule (setRule r)
+  ItemEquation e -> ItemEquation (setEq <$> e)
+  ItemDirective (DirExtendFunctionEqn e) -> ItemDirective (DirExtendFunctionEqn (setEq <$> e))
+  ItemDirective (DirExtendClassEqn e) -> ItemDirective (DirExtendClassEqn (setEq <$> e))
+  _ -> item
+  where
+    -- Positional: a record update of 'expansion' would be ambiguous
+    -- (several records have it).
+    setRule (Rule n h g b _) = Rule n h g b chain
+    setEq (FunctionEquation f as g rhs _) = FunctionEquation f as g rhs chain
+
+-- | Read just the name, exports, imports and macros of a module from
+-- its terms. Errors are ignored here; full conversion reports them.
+scanModuleTerms :: Text -> [Ann PExpr] -> Module
+scanModuleTerms defaultName terms = fst (convertModule defaultName (filter relevant terms))
+  where
+    relevant t = case t.node of
+      Compound ":-" [Ann body _] -> case body of
+        Compound n _ -> n `elem` ["module", "use_module", "macro", "macro_decls"]
+        _ -> False
+      Compound "--->" [_, _] -> True
+      _ -> False
+
+-- | Built-in directives (name, arity). Any other directive is a
+-- declaration-macro use. Declaration macros can't use these keys.
+builtinDirectives :: Set.Set (Text, Int)
+builtinDirectives =
+  Set.fromList
+    [ ("module", 1),
+      ("module", 2),
+      ("use_module", 1),
+      ("use_module", 2),
+      ("chr_constraint", 1),
+      ("chr_type", 1),
+      ("opaque_type", 1),
+      ("function", 1),
+      ("open_function", 1),
+      ("class", 1),
+      ("open_class", 1),
+      ("extend_function", 1),
+      ("extend_class", 1),
+      ("extend_class_type", 1),
+      ("inline", 1),
+      ("constraint_use", 1),
+      ("macro", 1),
+      ("macro_decls", 1)
+    ]
+
+-- | Name of a directive's term (empty if it has none).
+directiveName :: PExpr -> Text
+directiveName body = case body of
+  Atom n -> n
+  Compound n _ -> n
+  _ -> ""
+
+-- | Is @T@ in @:- T@ a built-in directive?
+isBuiltinDirective :: PExpr -> Bool
+isBuiltinDirective body = case body of
+  Atom n -> Set.member (n, 0) builtinDirectives
+  Compound n args -> Set.member (n, length args) builtinDirectives
+  _ -> False
 
 -- | Group a module's macro definitions and clauses into 'MacroDef's.
 --
@@ -772,13 +884,14 @@ convertModule defaultName terms =
 --   have further clauses.
 -- * Any other clause is 'UndeclaredMacroClause', and is dropped.
 groupMacroClauses :: [ModuleItem] -> ([AnnP MacroDef], [AnnP ParseValidationError])
-groupMacroClauses items = (defined ++ orphanDefs, undeclared)
+groupMacroClauses items =
+  (filter allowed (defined ++ orphanDefs), undeclared ++ builtinNameErrors)
   where
     clauseKey n c = (n, length c.node.params)
     declaredKeys = Set.fromList [(k.node.name, k.node.arity) | k <- decls]
     decls = concat [ks | ItemDirective (DirMacroDecl ks) <- items]
-    oneLineKeys =
-      Set.fromList [(d.node.name, d.node.arity) | ItemDirective (DirMacro d) <- items]
+    oneLineDefs = [d | ItemDirective (DirMacro d) <- items]
+    oneLineKeys = Set.fromList [(d.node.name, d.node.arity) | d <- oneLineDefs]
     clauses = [(clauseKey n c, n, c) | ItemMacroClause n c <- items]
     clausesOf k = [c | (k', _, c) <- clauses, k' == k]
 
@@ -791,10 +904,21 @@ groupMacroClauses items = (defined ++ orphanDefs, undeclared)
       let step (acc, sn) (AnnP k l p) =
             let key = (k.name, k.arity)
                 cs = if Set.member key sn then [] else clausesOf key
-             in (acc ++ [AnnP (MacroDef k.name k.arity cs) l p], Set.insert key sn)
+             in (acc ++ [AnnP (MacroDef k.kind k.name k.arity cs) l p], Set.insert key sn)
           (ds, seen') = foldl step ([], seen) ks
        in ds ++ goDefs seen' rest
     goDefs seen (_ : rest) = goDefs seen rest
+
+    -- A declaration macro can't take a built-in directive's key. Drop
+    -- it (and any extra clauses); its clauses still count as declared.
+    isBuiltinDeclMacro d =
+      d.kind == DeclMacro && Set.member (d.name, d.arity) builtinDirectives
+    allowed d = not (isBuiltinDeclMacro d.node)
+    builtinNameErrors =
+      [ AnnP (DeclMacroBuiltinDirective d.node.name d.node.arity) d.sourceLoc d.parsed
+      | d <- defined,
+        isBuiltinDeclMacro d.node
+      ]
 
     orphanKeys =
       nubOrd
@@ -803,8 +927,13 @@ groupMacroClauses items = (defined ++ orphanDefs, undeclared)
           Set.notMember k declaredKeys,
           Set.member k oneLineKeys
         ]
+    -- Clauses for a one-line definition take its kind.
+    oneLineKind k =
+      case [d.node.kind | d <- oneLineDefs, (d.node.name, d.node.arity) == k] of
+        (kd : _) -> kd
+        [] -> GoalMacro
     orphanDefs =
-      [ AnnP (MacroDef n a cs) first.sourceLoc first.parsed
+      [ AnnP (MacroDef (oneLineKind k) n a cs) first.sourceLoc first.parsed
       | k@(n, a) <- orphanKeys,
         cs@(first : _) <- [clausesOf k]
       ]
@@ -1028,30 +1157,45 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
     case convertOpaqueTypeDefinition typeBody of
       (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
       (Nothing, errs) -> (DirOther, errs)
-  -- :- macro Name/N, ...  (a declaration; the clauses are top-level items)
-  Compound "macro" [decls@(Ann (Compound "/" [_, _]) _)] -> macroDecls decls
-  Compound "macro" [decls@(Ann (Compound "," [Ann (Compound "/" [_, _]) _, _]) _)] ->
-    macroDecls decls
-  -- :- macro Head ---> [Goals].  (a one-line definition)
-  -- Parsed as prefix op: Compound "macro" [Compound "--->" [head, body]]
-  Compound "macro" [macroBody@(Ann (Compound "--->" [_, _]) _)] ->
-    case convertMacroClause macroBody of
-      (Just (n, c), errs) ->
-        (DirMacro (AnnP (MacroDef n (length c.node.params) [c]) c.sourceLoc c.parsed), errs)
-      (Nothing, errs) -> (DirOther, errs)
-  Compound "macro" [other] ->
-    (DirOther, [AnnP MalformedMacroHead other.sourceLoc other.node])
-  -- Unknown directives (any other @:- name(...)@ shape).
+  -- :- macro Name/N, ...  or  :- macro_decls Name/N, ...
+  -- (a declaration; the clauses are top-level items)
+  Compound kw [decls@(Ann (Compound "/" [_, _]) _)]
+    | Just k <- macroKeyword kw -> macroDecls k decls
+  Compound kw [decls@(Ann (Compound "," [Ann (Compound "/" [_, _]) _, _]) _)]
+    | Just k <- macroKeyword kw -> macroDecls k decls
+  -- :- macro Head ---> [Goals].  or  :- macro_decls Head ---> [Clauses].
+  -- (a one-line definition). Parsed as prefix op:
+  -- Compound "macro" [Compound "--->" [head, body]]
+  Compound kw [macroBody@(Ann (Compound "--->" [_, _]) _)]
+    | Just k <- macroKeyword kw -> case convertMacroClause macroBody of
+        (Just (n, c), errs) ->
+          let def = MacroDef k n (length c.node.params) [c]
+           in (DirMacro (AnnP def c.sourceLoc c.parsed), errs)
+        (Nothing, errs) -> (DirOther, errs)
+  Compound kw [other]
+    | Just _ <- macroKeyword kw ->
+        (DirOther, [AnnP MalformedMacroHead other.sourceLoc other.node])
+  -- A built-in directive in a shape we don't know, e.g. @:- module(42).@
+  -- Report it, or it would vanish.
+  _
+    | isBuiltinDirective body.node ->
+        (DirOther, [AnnP (MalformedDirective (directiveName body.node)) loc body.node])
+  -- Anything else is a macro use or unknown. "YCHR.Internal.DeclMacro"
+  -- handles both before this; here we just skip them.
   _ -> (DirOther, [])
   where
-    macroDecls decls =
-      let (keys, errs) = collectMaybes (map macroKey (flattenComma decls))
+    macroKeyword :: Text -> Maybe MacroKind
+    macroKeyword "macro" = Just GoalMacro
+    macroKeyword "macro_decls" = Just DeclMacro
+    macroKeyword _ = Nothing
+    macroDecls k decls =
+      let (keys, errs) = collectMaybes (map (macroKey k) (flattenComma decls))
        in (DirMacroDecl keys, errs)
-    macroKey (Ann d dloc) = case d of
+    macroKey k (Ann d dloc) = case d of
       Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]
         | Set.notMember name reservedMacroHeadNames,
           arity >= 0 ->
-            (Just (AnnP (MacroKey name (fromInteger arity)) loc body.node), [])
+            (Just (AnnP (MacroKey k name (fromInteger arity)) loc body.node), [])
       _ -> (Nothing, [AnnP MalformedMacroHead dloc d])
 convertDirective _ = (DirOther, [])
 
@@ -1617,11 +1761,11 @@ convertRule expr =
         Compound "<=>" [h, gb] ->
           let (head_, headErrs) = convertHead h
               (guard_, body_) = splitGuardBody gb
-           in (Just (Rule mName head_ guard_ body_), headErrs)
+           in (Just (Rule mName head_ guard_ body_ []), headErrs)
         Compound "==>" [h, gb] ->
           let (head_, headErrs) = convertPropagationHead h
               (guard_, body_) = splitGuardBody gb
-           in (Just (Rule mName head_ guard_ body_), headErrs)
+           in (Just (Rule mName head_ guard_ body_ []), headErrs)
         _ -> (Nothing, [AnnP MalformedTopLevel expr.sourceLoc expr.node])
 
 -- | Convert the head of a simplification or simpagation rule. Malformed
@@ -1681,6 +1825,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
                         guard_.node
                     )
                     (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
+                    []
                 )
                 loc
                 pexpr
@@ -1698,6 +1843,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
                     args
                     (noAnnPAt lhs.sourceLoc [])
                     (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
+                    []
                 )
                 loc
                 pexpr

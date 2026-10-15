@@ -629,6 +629,7 @@ multiModuleTests =
                     )
                     (noAnnP [])
                     (noAnnP [CompoundTerm (Unqualified "true") []])
+                    []
                 ],
                 [ Rule
                     (Just (noAnn "trans"))
@@ -652,6 +653,7 @@ multiModuleTests =
                             ]
                         ]
                     )
+                    []
                 ]
               ),
       testCase "module with no rules" $

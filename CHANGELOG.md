@@ -3,9 +3,30 @@
 ## Unreleased
 
 Goal macros follow the revised macro specification
-([docs/reference/macros.md](docs/reference/macros.md)); declaration
-macros (`:- macro_decls`) are still a draft.
+([docs/reference/macros.md](docs/reference/macros.md)), and declaration
+macros (`:- macro_decls`) are implemented.
 
+- Declaration macros: `:- macro_decls Head ---> [Clauses].` or
+  `:- macro_decls Name/N.` plus clauses. A use is a directive,
+  `:- Name(Args).` or `:- M:Name(Args).`, and expands to top-level
+  clauses. New errors: `MacroDeclsForbiddenClause` (YCHR-15023, no
+  `:- module`, `:- use_module` or macro definitions in the output),
+  `DeclMacroBuiltinDirective` (YCHR-15027, a declaration macro can't
+  take a built-in directive's name and arity) and `MacroKindMismatch`
+  (YCHR-20035, wrong kind of macro). Errors on generated code show the
+  macro chain. Library macros are expanded when the stdlib is parsed.
+- **Breaking:** unknown directives are now an error
+  (`UnknownDirective`, YCHR-15024) instead of being ignored. Delete
+  foreign Prolog directives like `:- dynamic`.
+- **Breaking:** `macro_decls` is a new prefix operator (priority 1180).
+  Parsed `Rule` and `FunctionEquation` have a new `expansion` field and
+  `MacroDef` a new `kind` field. New constructors: `Error.DeclMacroErrors`,
+  `StdLibError.StdLibExpansionError`, `RenameError.MacroKindMismatch`,
+  and `ParseValidationError`'s `DeclMacroBuiltinDirective` and
+  `MalformedDirective`, so exhaustive matches need updating.
+- A built-in directive with arguments of the wrong shape (e.g.
+  `:- module(42).`) is now `MalformedDirective` (YCHR-15028) instead of
+  being dropped.
 - **Breaking:** a macro body is a list literal,
   `:- macro both(X) ---> [a(X), b(X)].`. A body that is not one is
   `MalformedMacroBody` (YCHR-15022). `[]` expands to no goals: a rule

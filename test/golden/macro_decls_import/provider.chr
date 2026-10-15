@@ -1,0 +1,10 @@
+:- module(provider, [macro(flag/1), macro(set_flags/1)]).
+
+% A library of declaration macros. A recursive macro refers to itself
+% by its qualified name, so it expands at any use site.
+:- macro_decls flag(Name) --->
+    [ (:- chr_constraint Name/0) ].
+
+:- macro_decls set_flags/1.
+set_flags([]) ---> [].
+set_flags([F | Fs]) ---> [(:- provider:flag(F)), (:- provider:set_flags(Fs))].

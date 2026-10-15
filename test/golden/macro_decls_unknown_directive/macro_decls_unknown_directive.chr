@@ -1,0 +1,5 @@
+:- module(macro_decls_unknown_directive).
+:- chr_constraint a/1.
+
+% A foreign Prolog directive is no longer ignored.
+:- dynamic(a/1).

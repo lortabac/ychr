@@ -96,7 +96,7 @@ hc (Constraint (Qualified m n) args) =
 hc c = error ("hc: expected Qualified constraint, got " ++ show c)
 
 mod1rule :: Head -> Rule
-mod1rule h = Rule Nothing (noAnnP h) (noAnnP []) (noAnnP [atom "true"])
+mod1rule h = Rule Nothing (noAnnP h) (noAnnP []) (noAnnP [atom "true"]) []
 
 simpleModule :: Head -> Module
 simpleModule h = module' "M" `defining` [mod1rule h]
@@ -224,6 +224,7 @@ hnfTests =
                                )
                                (noAnnP [hostCall "gt" [var "X", IntTerm 0]])
                                (noAnnP [atom "true"])
+                               []
                            ]
         rule <- singleRule [m]
         getNode rule.guard
@@ -275,6 +276,7 @@ guardTests =
                                    ]
                                )
                                (noAnnP [atom "true"])
+                               []
                            ]
         rule <- singleRule [m]
         getNode rule.guard
@@ -298,6 +300,7 @@ guardTests =
                                    ]
                                )
                                (noAnnP [atom "true"])
+                               []
                            ]
         rule <- singleRule [m]
         getNode rule.guard @?= [D.GuardExpr (R.CtorExpr (Unqualified "true") [])]
@@ -365,6 +368,7 @@ bodyTests =
                        ( noAnnP
                            body
                        )
+                       []
                    ]
 
 --------------------------------------------------------------------------------
@@ -384,6 +388,7 @@ errorTests =
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [])
                                (noAnnP [term "foo" [var "X"]])
+                               []
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
@@ -400,6 +405,7 @@ errorTests =
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [])
                                (noAnnP [term "foo" [var "X"], term "bar" [var "Y"]])
+                               []
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
@@ -418,6 +424,7 @@ errorTests =
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [])
                                (noAnnP [atom "foo"])
+                               []
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
@@ -433,6 +440,7 @@ errorTests =
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [goal])
                                (noAnnP [atom "true"])
+                               []
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
@@ -449,6 +457,7 @@ errorTests =
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [int 42])
                                (noAnnP [atom "true"])
+                               []
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
@@ -464,6 +473,7 @@ errorTests =
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [atom "foo"])
                                (noAnnP [atom "true"])
+                               []
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
@@ -478,6 +488,7 @@ errorTests =
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [atom "false"])
                                (noAnnP [atom "true"])
+                               []
                            ]
         rule <- singleRule [m]
         getNode rule.guard @?= [D.GuardExpr (R.CtorExpr (Unqualified "false") [])]
@@ -711,7 +722,8 @@ lambdaLiftTests =
                   { funName = Qualified "M" "f",
                     args = [listPattern],
                     guard = noAnnP [],
-                    rhs = noAnnP (NE.singleton lambdaTerm)
+                    rhs = noAnnP (NE.singleton lambdaTerm),
+                    expansion = []
                   }
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
@@ -762,7 +774,8 @@ lambdaLiftTests =
                   { funName = Qualified "M" "f",
                     args = [var "X"],
                     guard = noAnnP [],
-                    rhs = noAnnP (NE.singleton lambdaTerm)
+                    rhs = noAnnP (NE.singleton lambdaTerm),
+                    expansion = []
                   }
                 dummyLoc
                 (Atom "")

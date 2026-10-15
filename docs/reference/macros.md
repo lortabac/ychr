@@ -1,11 +1,7 @@
 # YCHR Macro Specification
 
-**Status:** goal macros are implemented: single-clause and
-multi-clause definitions, head patterns, list bodies, recursion,
-expansion to zero goals, and the construction primitives
-(`'$compound'/2`, `'$atom'/1`). **Declaration macros
-(`:- macro_decls`) are a draft, not implemented**, and every part of
-this document that only concerns them says so.
+**Status:** implemented. Goal macros (`:- macro`) and declaration
+macros (`:- macro_decls`) both work.
 
 YCHR has two kinds of macro. Both are pure term rewriting.
 
@@ -66,7 +62,7 @@ Head ---> Body.
 ```
 
 `--->` is the same operator `:- chr_type` uses (priority 1150, `xfx`).
-*(Draft)* `macro_decls` is a prefix operator at priority 1180, `fx`,
+`macro_decls` is a prefix operator at priority 1180, `fx`,
 like `macro`.
 
 ### Single-clause form
@@ -108,9 +104,7 @@ top-level clauses.
   (`DuplicateMacro`).
 
 The declaration decides the kind of every clause, and so how the
-elements of its body are read (see [Bodies](#bodies)). *(Draft)*
-`:- macro_decls Name/N` is not implemented yet; today every clause
-belongs to a goal macro.
+elements of its body are read (see [Bodies](#bodies)).
 
 A declaration with no clauses is allowed; every use of it is
 `NoMatchingMacroClause`.
@@ -120,8 +114,9 @@ A declaration with no clauses is allowed; every use of it is
 - The head is an atom or a compound, named by an unqualified atom
   that is not a reserved symbol (`MalformedMacroHead`; the reserved
   symbols are listed under [Diagnostics](#diagnostics)).
-- *(Draft)* A declaration macro also may not have the name and arity
-  of a built-in directive, because its uses are directives (see
+- A declaration macro also may not have the name and arity of a
+  built-in directive (`DeclMacroBuiltinDirective`), because its uses
+  are directives (see
   [Using a declaration macro](#using-a-declaration-macro)). The
   reserved directives are `module/1,2`, `use_module/1,2`,
   `chr_constraint/1`, `chr_type/1`, `opaque_type/1`, `function/1`,
@@ -235,7 +230,8 @@ finite:
   the same chain [diagnostics](#diagnostics) report. A recursive macro
   therefore handles a list of at most about 1000 elements: `all_of`
   over a longer list hits the limit.
-- **Size limit.** A use written in a rule or a query may cause at most
+- **Size limit.** A use written in a rule, a query or a top-level
+  directive may cause at most
   100000 expansions in total, nested ones included. More is rejected
   with `MacroExpansionTooLarge`. A clause that uses its macro twice
   doubles the work at every level, so the depth limit alone would let
@@ -268,11 +264,11 @@ equation-pattern *arguments*: all three are opaque data, so
 `count(a, b)` there is an ordinary compound.
 
 Function equations have no goal positions, so macros do not apply
-inside them. *(Draft)* A declaration macro's name outside a directive
+inside them. A declaration macro's name outside a directive
 is an ordinary name: in a guard or an argument it means whatever it
 would mean if no macro existed.
 
-*(Draft)* Only goal macros are looked up in goal positions; a
+Only goal macros are looked up in goal positions; a
 declaration macro is invisible there. A goal-position name that matches
 no constraint, function or goal macro, but does match a visible
 declaration macro, is `MacroKindMismatch`.
@@ -347,8 +343,6 @@ A use that expands to no goals disappears from its conjunction:
 
 ## Declaration macros
 
-**Status: draft, not implemented.**
-
 ### Clause elements
 
 Each element of a declaration macro's [body](#bodies) is a clause of
@@ -405,12 +399,13 @@ optionally qualified. A nullary macro is used as an atom:
   goal macro `foo/1` from one module and a declaration macro `foo/1`
   from another are never ambiguous.
 - A directive that matches no built-in directive and no visible macro
-  is an error (`UnknownDirective`). **This changes existing behavior.**
-  Today such directives are silently ignored, so that Prolog sources
-  load unchanged. Once directives can name macros, ignoring them would
-  make a misspelled or non-imported macro vanish without a diagnostic.
-  Prolog sources ported to YCHR must therefore delete foreign
-  directives such as `:- dynamic` or `:- discontiguous`.
+  is an error (`UnknownDirective`), so a misspelled macro can't just
+  vanish. Delete foreign Prolog
+  directives like `:- dynamic` or `:- discontiguous`. A directive that
+  isn't an atom or compound (a variable, number, string, or `M:foo`
+  with a non-atom `M`) is `MalformedTopLevel` (YCHR-15014). A built-in
+  directive with arguments of the wrong shape, like `:- module(42).`,
+  is `MalformedDirective` (YCHR-15028).
 
 
 ### Expanding a declaration macro
@@ -487,7 +482,7 @@ body as written is also reported when the macro is defined.
 
 Two primitives build terms that Prolog syntax cannot write when parts
 of them are parameters. They may be used in the body of either kind
-of macro (*(draft)* only goal macros exist today).
+of macro.
 
 | Primitive | Result |
 |---|---|
@@ -556,13 +551,12 @@ r(X) <=> apply1(p, X).   % r(X) <=> p(X).
 ## Names and modules
 
 A macro of either kind is a module-level name, like a constraint or a
-function. *(Draft)* Goal macros and declaration macros share one
+function. Goal macros and declaration macros share one
 namespace: a module may not define a goal macro and a declaration
 macro with the same `Name/Arity` (`DuplicateMacro`).
 
 **Export and import.** `macro(Name/Arity)` in an export list exports
-the macro, with all its clauses (*(draft)* of either kind, once
-declaration macros exist). A module with no
+the macro, with all its clauses, of either kind. A module with no
 export list exports its macros along with everything else.
 `:- use_module(M, [macro(Name/Arity)])` imports one by name. A macro
 can be called qualified, as `M:Name(...)` or `:- M:Name(...).`, under
@@ -572,7 +566,7 @@ the usual rules: `M` must be imported and must export the macro.
 constraint or function declared in the same module
 (`MacroNameCollision`). An unqualified use that matches a macro in
 one visible module and a constraint or function in another is
-ambiguous (YCHR-20001), as for any other name. *(Draft)* A declaration
+ambiguous (YCHR-20001), as for any other name. A declaration
 macro is used only in a directive, where no constraint or function can appear.
 It may therefore share a name and arity with one. It may not share
 them with a built-in directive (see [Heads](#heads)).
@@ -621,7 +615,7 @@ every use site.
 ## Diagnostics
 
 Every diagnostic raised while *expanding* a macro, or while
-*renaming* (and, draft, *converting*) the code an expansion produced,
+*renaming* or *converting* the code an expansion produced,
 carries the chain of macro expansions that produced it. Each entry
 gives the location of the use, innermost first:
 
@@ -637,9 +631,20 @@ The chain covers:
 
 - expansion-time errors (the ones below);
 - renaming errors and warnings (`YCHR-20001`–`YCHR-20022`,
-  `YCHR-20101`, `YCHR-20102`) reached while renaming expanded code;
-- *(draft)* errors from checking that a clause spliced by a
-  declaration macro is well-formed.
+  `YCHR-20101`, `YCHR-20102`) reached while renaming expanded code: a
+  goal-macro expansion, or a rule or equation a declaration macro
+  generated (goal macros first, then declaration macros);
+- errors in clauses a declaration macro generated (15xxx
+  parse-validation errors, with that clause's chain).
+
+Two kinds of error on generated code have no chain: module-wide checks
+(contiguity of equations, declarations, macro clauses) and renaming
+errors on a generated declaration (`:- chr_constraint`, `:- chr_type`,
+…). Both point at the outermost use directive.
+
+Every entry of a declaration-macro chain shows the outermost
+directive's location. A nested use lives in a macro body, so it has no
+location in the using module.
 
 A recursive expansion can make the chain long. Consecutive entries for
 the same macro are shown on one line, with a count and the innermost
@@ -662,7 +667,7 @@ Errors:
 
 | Name | Code | Condition |
 |---|---|---|
-| `MalformedMacroHead` | YCHR-15021 | A head, or the name of a `:- macro Name/N` declaration, must be an atom or a compound named by an unqualified atom that is not a reserved symbol (`,`, `;`, `\`, `\|`, `->`, `=`, `is`, `true`, `quote`, `fun`, `$call`, `tell`, `$compound`, `$atom`). Head arguments may be any [patterns](#patterns). *(Draft)* A declaration macro's head may not have the name and arity of a built-in directive. |
+| `MalformedMacroHead` | YCHR-15021 | A head, or the name of a `:- macro Name/N` or `:- macro_decls Name/N` declaration, must be an atom or a compound named by an unqualified atom that is not a reserved symbol (`,`, `;`, `\`, `\|`, `->`, `=`, `is`, `true`, `quote`, `fun`, `$call`, `tell`, `$compound`, `$atom`). Head arguments may be any [patterns](#patterns). |
 | `MalformedMacroBody` | YCHR-15022 | A clause body is not a list literal with no tail variable. |
 | `UndeclaredMacroClause` | YCHR-15025 | A `Head ---> Body` clause whose `Name/N` is not declared as a macro in its module. |
 | `DiscontiguousMacroClauses` | YCHR-15026 | A macro's clauses don't form one contiguous block. |
@@ -675,23 +680,23 @@ Errors:
 | `NoMatchingMacroClause` | YCHR-20032 | No clause of the macro matches the use (see [Patterns](#patterns)). |
 | `MacroExpansionTooDeep` | YCHR-20033 | A chain of nested expansions exceeds the depth limit (see [Recursion and termination](#recursion-and-termination)). |
 | `MacroEmptyHead` | YCHR-20034 | A part of a rule head that the rule's form requires is empty after expansion (see [Zero goals](#zero-goals)). |
-| `MacroExpansionTooLarge` | YCHR-20038 | A use written in a rule or a query causes more than 100000 expansions (see [Recursion and termination](#recursion-and-termination)). |
+| `MacroExpansionTooLarge` | YCHR-20038 | A use written in a rule, a query or a top-level directive causes more than 100000 expansions (see [Recursion and termination](#recursion-and-termination)). |
 | `MalformedMacroPrimitive` | YCHR-20036 | An operand of `'$compound'` or `'$atom'` breaks the rules under [Construction primitives](#construction-primitives). |
 | `MacroPrimitiveOutsideMacro` | YCHR-20037 | A primitive remains after expansion: it was not written in a macro body. |
 
-Draft errors, for declaration macros. The 15xxx codes are raised only
-before conversion to the AST: by parsing, or by declaration-macro
-expansion (see [Pipeline placement](#pipeline-placement)). Expansion
-needs cross-module visibility, which parse-validation errors don't
-have, so expect a new error type for it alongside
-`ParseValidationError` in the same code range. The 20xxx codes can be
-raised by either expansion, so they keep the renamer's range, as
-`MacroCycle` does when a cycle runs through declaration macros.
+Declaration-macro errors. All 15xxx codes come before conversion:
+`MacroDeclsForbiddenClause` and `UnknownDirective` from expansion (see
+[Pipeline placement](#pipeline-placement)), `DeclMacroBuiltinDirective`
+from parsing. 20xxx codes can come from either kind of expansion, so
+they stay in the renamer's range, like `MacroCycle` and the other
+expansion errors above.
 
 | Name | Code | Condition |
 |---|---|---|
-| `MacroDeclsForbiddenClause` | YCHR-15023 | An expansion contains a clause listed under [Output restrictions](#output-restrictions). |
-| `UnknownDirective` | YCHR-15024 | A directive matches no built-in directive and no visible macro of either kind. |
+| `MacroDeclsForbiddenClause` | YCHR-15023 | An expansion contains a clause listed under [Output restrictions](#output-restrictions); a forbidden clause visible in the body as written is also reported where the macro is defined, so it shows up there and at each use. |
+| `UnknownDirective` | YCHR-15024 | A directive matches no built-in directive and no visible macro of either kind, including `:- M:Name(...)` where `M` is the module itself. |
+| `MalformedDirective` | YCHR-15028 | A built-in directive with arguments of the wrong shape, e.g. `:- module(42).` |
+| `DeclMacroBuiltinDirective` | YCHR-15027 | A declaration macro has the name and arity of a built-in directive (see [Heads](#heads)). The definition is dropped. |
 | `MacroKindMismatch` | YCHR-20035 | A name matches only a macro of the other kind: a goal macro as a directive, or a declaration macro in a goal position. |
 
 Warning: `UnusedMacroParameter` (YCHR-20105), for either kind: a head
@@ -726,9 +731,9 @@ other goal would, and if it expands to more than one goal (or to
 none) the goal is rejected with a hint to use the REPL or the
 multi-goal query API instead.
 
-**Declaration macros** *(draft)* are expanded on the p-expr terms that
-the term reader produces, before any clause of the using module is
-converted to the AST. Three facts make this possible:
+**Declaration macros** are expanded on the p-expr terms that the term
+reader produces, before any clause of the using module is converted to
+the AST (`YCHR.Internal.DeclMacro`). Three facts make this possible:
 
 - Expansion can't add or remove a `use_module`. The import graph,
   library closure included, is therefore known from the module headers
@@ -738,35 +743,28 @@ converted to the AST. Three facts make this possible:
 - A module's set of macros is fixed (see
   [Output restrictions](#output-restrictions)).
 
-The standard library is parsed once, ahead of any user program (at
-build time under MicroHs), so its modules reach a program already
-converted. Today `parseStdLib` reads every library with one merged
-operator table and converts each library on its own, with no import
-closure. Declaration macros need two changes there:
+Each module is first scanned for its name, imports, exports and
+macros (clauses may come before their declaration; the declaration
+sets the kind). Then expansion runs once per module, with that module's
+visibility. Generated clauses get the location of the outermost use
+directive. Fresh variables are named `_decl_<n>_<Name>` (goal macros
+use `_macro_<n>_<Name>`), so a goal macro inside a generated rule
+can't capture them. Generated rules and equations remember the macro
+chain, and renaming errors on them show it after any goal-macro chain.
+Everything after conversion only sees the generated clauses; goal
+macros in them are expanded by the renamer as usual.
 
-- Library macro uses must expand when the library is parsed. That
-  needs library-to-library macro visibility at that point, i.e. the
-  closure of the libraries' own imports.
-- A parsed module must carry the macro definitions it exports, with
-  their clauses as p-expr terms, so user modules can expand them. That
-  includes the modules the MicroHs build generates.
+The standard library is parsed once, before any user program (at build
+time under MicroHs). `parseStdLib` reads all libraries with one merged
+operator table and expands each library's uses with the macros it can
+see through its imports (plus the prelude). Parsed libraries keep their
+macros, so user modules can use the exported ones; that covers the
+MicroHs-generated modules too. For a library, "the defining module's
+operator table" under [Clause elements](#clause-elements) is that
+merged table.
 
-For a library, "the defining module's operator table" under
-[Clause elements](#clause-elements) means the merged table its body
-was read with.
-
-Bare macro clauses (`Head ---> Body`) may come before their
-declaration, and the declaration decides how each body element is
-read. Each module is therefore scanned for `:- macro Name/N` and
-`:- macro_decls Name/N` declarations before its clauses are
-converted. Today the parser converts every top-level `--->` term as
-a goal-macro clause and attaches it to its `:- macro Name/N`
-declaration afterwards (`UndeclaredMacroClause` if there is none).
-
-Expansion therefore runs once per module, with that module's macro
-visibility, over the terms of every user module. Conversion
-to the AST, Collect and Rename then see only spliced clauses. Goal
-macros inside them are expanded by the renamer as above.
+A program built with `YCHR.DSL` has no directives, so it can't use a
+declaration macro.
 
 
 ## Not in this version

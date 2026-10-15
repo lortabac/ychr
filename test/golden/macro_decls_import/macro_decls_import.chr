@@ -1,0 +1,13 @@
+:- module(macro_decls_import, [on/0, off/0, ready/0, test/1, go/1]).
+:- use_module(provider).
+
+% Generated names belong to this module and must be exported like any
+% other name.
+:- set_flags([on, off]).
+:- provider:flag(ready).
+
+:- chr_constraint test/1.
+on, ready \ test(R) <=> R = 1.
+
+:- chr_constraint go/1.
+go(R) <=> on, ready, test(R).

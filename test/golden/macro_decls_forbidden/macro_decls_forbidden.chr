@@ -1,0 +1,7 @@
+:- module(macro_decls_forbidden).
+
+% An expansion may not change the module's imports: the forbidden
+% clause is built with '$compound', so it is caught at expansion time.
+:- macro_decls sneaky(M) ---> [(:- '$compound'(use_module, [M]))].
+
+:- sneaky(lists).

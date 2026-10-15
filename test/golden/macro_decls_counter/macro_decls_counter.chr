@@ -1,0 +1,24 @@
+:- module(macro_decls_counter).
+
+% A declaration macro generating a constraint pair and a rule. The
+% constraint names are built from the argument with the construction
+% primitives.
+:- macro_decls counter(Name) --->
+    [ (:- chr_constraint Name/1, '$atom'([inc_, Name])/0),
+      ('$compound'(Name, [N]), '$atom'([inc_, Name])
+         <=> M is N + 1, '$compound'(Name, [M])) ].
+
+% Two uses: each declares its own pair, owned by this module.
+:- counter(clicks).
+:- counter(views).
+
+:- chr_type which ---> clicks ; views.
+:- chr_constraint get/2.
+clicks(N) \ get(clicks, R) <=> R = N.
+views(N) \ get(views, R) <=> R = N.
+
+:- chr_constraint test/2.
+test(Which, R) <=>
+    clicks(0), views(10),
+    inc_clicks, inc_clicks, inc_views,
+    get(Which, R).

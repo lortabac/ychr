@@ -1,0 +1,7 @@
+:- module(macro_decls_cycle).
+
+% Two declaration macros that use each other with the same argument.
+:- macro_decls ping(X) ---> [(:- pong(X))].
+:- macro_decls pong(X) ---> [(:- ping(X))].
+
+:- ping(a).

@@ -17,6 +17,7 @@ module YCHR.Internal.Display
     parseValidationErrorCode,
     resolveErrorCode,
     renameErrorCode,
+    declMacroErrorCode,
     renameWarningCode,
     exhaustivenessWarningCode,
     desugarErrorCode,
@@ -49,6 +50,7 @@ import YCHR.Internal.Collect (CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.Compile.Pipeline (Error (..), GoalRejection (..), Warning (..))
 import YCHR.Internal.ConstraintUse (ConstraintUseError (..), OccurrenceRole (..))
+import YCHR.Internal.DeclMacro (DeclMacroError (..))
 import YCHR.Internal.Desugar (DesugarError (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
@@ -241,6 +243,8 @@ parseValidationErrorCode MalformedMacroHead = ErrorCode 15021
 parseValidationErrorCode MalformedMacroBody = ErrorCode 15022
 parseValidationErrorCode (UndeclaredMacroClause _ _) = ErrorCode 15025
 parseValidationErrorCode (DiscontiguousMacroClauses _ _) = ErrorCode 15026
+parseValidationErrorCode (DeclMacroBuiltinDirective _ _) = ErrorCode 15027
+parseValidationErrorCode (MalformedDirective _) = ErrorCode 15028
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -310,9 +314,20 @@ renameErrorCode (TellControlGoal _ _) = ErrorCode 20031
 renameErrorCode (NoMatchingMacroClause _ _) = ErrorCode 20032
 renameErrorCode (MacroExpansionTooDeep _ _) = ErrorCode 20033
 renameErrorCode (MacroEmptyHead _) = ErrorCode 20034
+renameErrorCode (MacroKindMismatch _ _ _) = ErrorCode 20035
 renameErrorCode (MalformedMacroPrimitive _ _) = ErrorCode 20036
 renameErrorCode (MacroPrimitiveOutsideMacro _ _) = ErrorCode 20037
 renameErrorCode (MacroExpansionTooLarge _ _) = ErrorCode 20038
+
+-- | Declaration-macro expansion. Its own errors are 15xxx, raised
+-- before conversion to the AST; the renamer's errors it raises keep
+-- their 20xxx codes, and conversion errors in spliced clauses their
+-- 15xxx parse-validation codes.
+declMacroErrorCode :: DeclMacroError -> ErrorCode
+declMacroErrorCode (MacroDeclsForbiddenClause _) = ErrorCode 15023
+declMacroErrorCode (UnknownDirective _ _) = ErrorCode 15024
+declMacroErrorCode (DeclMacroRenameError e) = renameErrorCode e
+declMacroErrorCode (DeclMacroParseError e) = parseValidationErrorCode e
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -456,7 +471,8 @@ parseValidationErrorMsg RefiningOnConstraint =
 parseValidationErrorMsg MalformedMacroHead =
   withHint
     "Invalid macro head"
-    ( "expected ':- macro Name/N', ':- macro Head ---> [Goals]', or a"
+    ( "expected ':- macro Name/N', ':- macro Head ---> [Goals]' (or the same"
+        ++ " with ':- macro_decls'), or a"
         ++ " clause 'Head ---> [Goals]', where Head is an atom or a compound"
         ++ " whose arguments are patterns; the name may not be qualified or"
         ++ " a reserved symbol (',', ';', '\\\\', '|', '->', '=', 'is',"
@@ -476,7 +492,16 @@ parseValidationErrorMsg (UndeclaredMacroClause name arity) =
         ++ show arity
         ++ "', which is not declared as a macro in this module"
     )
-    ("declare it with ':- macro " ++ T.unpack name ++ "/" ++ show arity ++ ".'")
+    ( "declare it with ':- macro "
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ ".' (goal macro) or ':- macro_decls "
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ ".' (declaration macro)"
+    )
 parseValidationErrorMsg (DiscontiguousMacroClauses name arity) =
   withHint
     ( "Clauses for macro '"
@@ -486,6 +511,23 @@ parseValidationErrorMsg (DiscontiguousMacroClauses name arity) =
         ++ "' must be contiguous"
     )
     "move all of the macro's clauses together"
+parseValidationErrorMsg (DeclMacroBuiltinDirective name arity) =
+  withHint
+    ( "Declaration macro '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' has the name and arity of a built-in directive"
+    )
+    ( "a declaration macro is used as a directive, so ':- "
+        ++ T.unpack name
+        ++ "(...)' would always mean the built-in one; rename the macro"
+        ++ " or give it another arity"
+    )
+parseValidationErrorMsg (MalformedDirective name) =
+  withHint
+    ("Invalid ':- " ++ T.unpack name ++ "' directive")
+    "check its arguments; see the language reference for its form"
 parseValidationErrorMsg MalformedDeclaration =
   withHint
     "Invalid declaration"
@@ -847,6 +889,38 @@ collectErrorMsg (DuplicateModuleName name paths) =
     )
     "a module name may be declared in exactly one input; give the modules distinct names"
 
+instance Display (Diagnostic DeclMacroError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
+    displayMsgWithSrcLoc
+      (declMacroErrorCode err)
+      SevError
+      (declMacroErrorMsg err)
+      loc
+      (fmap T.unpack lbl)
+      (Just (prettyPExprSrc origin))
+      (map T.unpack ctx)
+
+declMacroErrorMsg :: DeclMacroError -> String
+declMacroErrorMsg (MacroDeclsForbiddenClause form) =
+  withHint
+    ("A declaration macro may not generate " ++ forbiddenFormText form)
+    ( "an expansion cannot change a module's imports, exports, operators or"
+        ++ " macros; write them in the module itself"
+    )
+  where
+    forbiddenFormText f = case f of
+      "--->" -> "a macro clause ('Head ---> Body')"
+      _ -> "a ':- " ++ T.unpack f ++ "' directive"
+declMacroErrorMsg (UnknownDirective name arity) =
+  withHint
+    ("Unknown directive '" ++ T.unpack name ++ "/" ++ show arity ++ "'")
+    ( "a directive is a built-in one or a use of a visible declaration macro"
+        ++ " (':- macro_decls'); check the spelling and the imports, and delete"
+        ++ " foreign Prolog directives such as ':- dynamic'"
+    )
+declMacroErrorMsg (DeclMacroRenameError e) = renameErrorMsg e
+declMacroErrorMsg (DeclMacroParseError e) = parseValidationErrorMsg e
+
 instance Display (Diagnostic RenameError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
     displayMsgWithSrcLoc
@@ -963,9 +1037,29 @@ renameErrorMsg (DuplicateMacro name arity) =
   withHint
     ("Duplicate macro '" ++ T.unpack name ++ "/" ++ show arity ++ "'")
     ( "a macro has one definition: a one-line ':- macro Head ---> Body', or"
-        ++ " ':- macro Name/N' followed by its clauses; remove or rename one"
-        ++ " of them"
+        ++ " ':- macro Name/N' followed by its clauses (same for ':- macro_decls');"
+        ++ " goal and declaration macros share names; remove or rename one"
     )
+renameErrorMsg (MacroKindMismatch qn arity kind) = case kind of
+  P.GoalMacro ->
+    withHint
+      ("Goal macro '" ++ macroQn qn ++ "/" ++ show arity ++ "' used as a directive")
+      ( "a goal macro (':- macro') is used in a goal position; a directive"
+          ++ " can only use a declaration macro (':- macro_decls')"
+      )
+  P.DeclMacro ->
+    withHint
+      ( "Declaration macro '"
+          ++ macroQn qn
+          ++ "/"
+          ++ show arity
+          ++ "' used in a goal position"
+      )
+      ( "a declaration macro (':- macro_decls') is used as a directive,"
+          ++ " ':- "
+          ++ T.unpack qn.baseName
+          ++ "(...).'; a goal position can only use a goal macro (':- macro')"
+      )
 renameErrorMsg (MacroNameCollision qn arity) =
   withHint
     ( "Macro '"
@@ -1563,6 +1657,7 @@ instance Display Warning where
 instance Display Error where
   displayMsg (ParseError _ err) = displayParseError err
   displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (DeclMacroErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CollectErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (ResolveErrors errs) = displayErrors (map displayMsg errs)
