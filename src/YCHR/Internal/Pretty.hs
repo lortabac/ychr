@@ -113,10 +113,15 @@ constraintToPExpr (Constraint (Qualified m name) args) =
     ]
 
 -- | Convert a parsed 'P.Head' to a 'PE.PExpr'.
+--
+-- The aggregates are not rendered: this is the source-fragment printer
+-- used for diagnostics, and a head reaching it has been through the
+-- renamer only in the tests that exercise it. An aggregate's spelling
+-- there is its expansion, not the macro the user wrote.
 headToPExpr :: P.Head -> PE.PExpr
-headToPExpr (P.Simplification cs) = commaSepPExpr (map constraintToPExpr cs)
-headToPExpr (P.Propagation cs) = commaSepPExpr (map constraintToPExpr cs)
-headToPExpr (P.Simpagation ks rs) =
+headToPExpr (P.Simplification cs _) = commaSepPExpr (map constraintToPExpr cs)
+headToPExpr (P.Propagation cs _) = commaSepPExpr (map constraintToPExpr cs)
+headToPExpr (P.Simpagation ks rs _) =
   PE.Compound
     "\\"
     [ noAnn (commaSepPExpr (map constraintToPExpr ks)),

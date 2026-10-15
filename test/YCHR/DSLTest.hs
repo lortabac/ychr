@@ -312,7 +312,7 @@ ruleTests =
         [term "a" []] <=> [atom "true"]
           @?= Rule
             Nothing
-            (noAnnP (Simplification [a0]))
+            (noAnnP (Simplification [a0] []))
             (noAnnP [])
             (noAnnP [atom "true"])
             [],
@@ -320,7 +320,7 @@ ruleTests =
         [term "a" []] ==> [term "b" []]
           @?= Rule
             Nothing
-            (noAnnP (Propagation [a0]))
+            (noAnnP (Propagation [a0] []))
             (noAnnP [])
             (noAnnP [term "b" []])
             [],
@@ -332,6 +332,7 @@ ruleTests =
                 ( Simpagation
                     [Constraint (Unqualified "k") []]
                     [Constraint (Unqualified "r") []]
+                    []
                 )
             )
             (noAnnP [])
@@ -341,7 +342,7 @@ ruleTests =
         ("my_rule" @: ([term "a" []] <=> [atom "true"]))
           @?= Rule
             (Just (noAnn "my_rule"))
-            (noAnnP (Simplification [a0]))
+            (noAnnP (Simplification [a0] []))
             (noAnnP [])
             (noAnnP [atom "true"])
             []
@@ -357,7 +358,7 @@ guardTests =
         (([term "p" [var "X"]] <=> [bool True]) |- [var "X" .> int 0])
           @?= Rule
             Nothing
-            (noAnnP (Simplification [Constraint (Unqualified "p") [var "X"]]))
+            (noAnnP (Simplification [Constraint (Unqualified "p") [var "X"]] []))
             (noAnnP [var "X" .> int 0])
             (noAnnP [bool True])
             [],
@@ -370,7 +371,7 @@ guardTests =
         )
           @?= Rule
             Nothing
-            (noAnnP (Simplification [Constraint (Unqualified "p") [var "X"]]))
+            (noAnnP (Simplification [Constraint (Unqualified "p") [var "X"]] []))
             ( noAnnP
                 [ var "X" .> int 0,
                   var "X" .< int 100,
@@ -385,7 +386,7 @@ guardTests =
         )
           @?= Rule
             Nothing
-            (noAnnP (Propagation [Constraint (Unqualified "p") [var "X"]]))
+            (noAnnP (Propagation [Constraint (Unqualified "p") [var "X"]] []))
             (noAnnP [var "X" .> int 0])
             (noAnnP [term "q" [var "X"]])
             []
@@ -564,6 +565,7 @@ integrationTests =
                                 (Unqualified "leq")
                                 [VarTerm "X", VarTerm "X"]
                             ]
+                            []
                         )
                     )
                     (noAnnP [])
@@ -595,6 +597,7 @@ integrationTests =
                             [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
                               Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
                             ]
+                            []
                         )
                     )
                     (noAnnP [])

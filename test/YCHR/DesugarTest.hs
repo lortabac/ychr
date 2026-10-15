@@ -110,14 +110,15 @@ headTests =
   testGroup
     "head-normalization"
     [ testCase "Simplification maps to kept=[], removed=constraints" $ do
-        rule <- singleRule [simpleModule (Simplification [leqQual])]
-        getNode rule.head @?= D.Head {kept = [], removed = [hc leqQual]},
+        rule <- singleRule [simpleModule (Simplification [leqQual] [])]
+        getNode rule.head @?= D.Head {kept = [], removed = [hc leqQual], aggregates = []},
       testCase "Propagation maps to kept=constraints, removed=[]" $ do
-        rule <- singleRule [simpleModule (Propagation [leqQual])]
-        getNode rule.head @?= D.Head {kept = [hc leqQual], removed = []},
+        rule <- singleRule [simpleModule (Propagation [leqQual] [])]
+        getNode rule.head @?= D.Head {kept = [hc leqQual], removed = [], aggregates = []},
       testCase "Simpagation maps kept and removed correctly" $ do
-        rule <- singleRule [simpleModule (Simpagation [leqQual] [leqQual2])]
-        getNode rule.head @?= D.Head {kept = [hc leqQual], removed = [hc leqQual2]}
+        rule <- singleRule [simpleModule (Simpagation [leqQual] [leqQual2] [])]
+        getNode rule.head
+          @?= D.Head {kept = [hc leqQual], removed = [hc leqQual2], aggregates = []}
     ]
 
 --------------------------------------------------------------------------------
@@ -129,7 +130,7 @@ hnfTests =
   testGroup
     "hnf"
     [ testCase "distinct variables: no change" $ do
-        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", var "Y"]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", var "Y"]] [])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -140,9 +141,10 @@ hnfTests =
                   D.HeadVar "Y"
                 ]
             ]
+            []
         getNode rule.guard @?= [],
       testCase "duplicate variable generates equality guard" $ do
-        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", var "X"]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", var "X"]] [])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -153,9 +155,10 @@ hnfTests =
                   D.HeadVar "_hnf_0"
                 ]
             ]
+            []
         getNode rule.guard @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "_hnf_0")],
       testCase "non-variable argument (integer) generates equality guard" $ do
-        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", IntTerm 5]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", IntTerm 5]] [])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -166,9 +169,10 @@ hnfTests =
                   D.HeadVar "_hnf_0"
                 ]
             ]
+            []
         getNode rule.guard @?= [D.GuardEqual (R.VarExpr "_hnf_0") (R.IntExpr 5)],
       testCase "non-variable argument (atom) generates equality guard" $ do
-        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", atom "foo"]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", atom "foo"]] [])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -179,6 +183,7 @@ hnfTests =
                   D.HeadVar "_hnf_0"
                 ]
             ]
+            []
         getNode rule.guard @?= [D.GuardMatch (R.VarExpr "_hnf_0") (Unqualified "foo") 0],
       testCase "cross-constraint duplicate variable" $ do
         let m =
@@ -187,6 +192,7 @@ hnfTests =
                     [ qcon "M" "leq" [var "X", var "Y"],
                       qcon "M" "leq" [var "Y", var "Z"]
                     ]
+                    []
                 )
         rule <- singleRule [m]
         getNode rule.head
@@ -197,6 +203,7 @@ hnfTests =
                 (D.QualifiedName "M" "leq")
                 [D.HeadVar "_hnf_0", D.HeadVar "Z"]
             ]
+            []
         getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "_hnf_0")],
       testCase "simpagation: kept processed before removed" $ do
         let m =
@@ -204,6 +211,7 @@ hnfTests =
                 ( Simpagation
                     [qcon "M" "leq" [var "X", var "Y"]]
                     [qcon "M" "leq" [var "Y", var "Z"]]
+                    []
                 )
         rule <- singleRule [m]
         getNode rule.head
@@ -213,6 +221,7 @@ hnfTests =
                 (D.QualifiedName "M" "leq")
                 [D.HeadVar "_hnf_0", D.HeadVar "Z"]
             ]
+            []
         getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "_hnf_0")],
       testCase "hnf guards prepended before user guards" $ do
         let m =
@@ -220,7 +229,7 @@ hnfTests =
                 `defining` [ Rule
                                Nothing
                                ( noAnnP
-                                   (Simplification [qcon "M" "leq" [var "X", var "X"]])
+                                   (Simplification [qcon "M" "leq" [var "X", var "X"]] [])
                                )
                                (noAnnP [hostCall "gt" [var "X", IntTerm 0]])
                                (noAnnP [atom "true"])
@@ -232,7 +241,7 @@ hnfTests =
                 D.GuardExpr (R.HostExpr "gt" [R.VarExpr "X", R.IntExpr 0])
               ],
       testCase "two wildcards stay as wildcards without guards" $ do
-        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, wildcard]])
+        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, wildcard]] [])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -241,9 +250,10 @@ hnfTests =
                 (D.QualifiedName "M" "foo")
                 [D.HeadWildcard, D.HeadWildcard]
             ]
+            []
         getNode rule.guard @?= [],
       testCase "wildcard and non-variable: only non-variable gets guard" $ do
-        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, IntTerm 1]])
+        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, IntTerm 1]] [])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -254,6 +264,7 @@ hnfTests =
                   D.HeadVar "_hnf_0"
                 ]
             ]
+            []
         getNode rule.guard @?= [D.GuardEqual (R.VarExpr "_hnf_0") (R.IntExpr 1)]
     ]
 
@@ -270,7 +281,7 @@ guardTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                ( noAnnP
                                    [ hostCall "gt" [var "X", IntTerm 0]
                                    ]
@@ -293,7 +304,7 @@ guardTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                ( noAnnP
                                    [ atom
                                        "true"
@@ -316,13 +327,13 @@ bodyTests =
     "body-classification"
     [ testCase "= becomes BodyUnify" $ do
         rule <-
-          singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
+          singleRule [simpleModule' (Simplification [leqQual] []) [var "X" .=. var "Y"]]
         getNode rule.body @?= [D.BodyUnify (R.VarExpr "X") (R.VarExpr "Y")],
       testCase "is becomes BodyIs" $ do
         rule <-
           singleRule
             [ simpleModule'
-                (Simplification [leqQual])
+                (Simplification [leqQual] [])
                 [ var "X" `is` term "+" [int 1, int 2]
                 ]
             ]
@@ -338,14 +349,14 @@ bodyTests =
               ],
       testCase "Qualified compound becomes BodyTell" $ do
         let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) body]
+        rule <- singleRule [simpleModule' (Simplification [leqQual] []) body]
         getNode rule.body
           @?= [D.BodyTell (D.QualifiedName "M" "leq") [R.VarExpr "X"]],
       testCase "hostCall becomes BodyHostStmt" $ do
         rule <-
           singleRule
             [ simpleModule'
-                (Simplification [leqQual])
+                (Simplification [leqQual] [])
                 [ hostCall
                     "print"
                     [ var
@@ -355,7 +366,7 @@ bodyTests =
             ]
         getNode rule.body @?= [D.BodyHostStmt "print" [R.VarExpr "X"]],
       testCase "atom true becomes BodyTrue" $ do
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
+        rule <- singleRule [simpleModule' (Simplification [leqQual] []) [atom "true"]]
         getNode rule.body @?= [D.BodyTrue]
     ]
   where
@@ -385,7 +396,7 @@ errorTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                (noAnnP [])
                                (noAnnP [term "foo" [var "X"]])
                                []
@@ -402,7 +413,7 @@ errorTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                (noAnnP [])
                                (noAnnP [term "foo" [var "X"], term "bar" [var "Y"]])
                                []
@@ -421,7 +432,7 @@ errorTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                (noAnnP [])
                                (noAnnP [atom "foo"])
                                []
@@ -437,7 +448,7 @@ errorTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                (noAnnP [goal])
                                (noAnnP [atom "true"])
                                []
@@ -454,7 +465,7 @@ errorTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                (noAnnP [int 42])
                                (noAnnP [atom "true"])
                                []
@@ -470,7 +481,7 @@ errorTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                (noAnnP [atom "foo"])
                                (noAnnP [atom "true"])
                                []
@@ -485,7 +496,7 @@ errorTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP (Simplification [leqQual] []))
                                (noAnnP [atom "false"])
                                (noAnnP [atom "true"])
                                []
@@ -535,7 +546,7 @@ ruleNameTests =
         rule <- singleRule [m]
         rule.name @?= Just "my_rule",
       testCase "anonymous rule has Nothing name" $ do
-        rule <- singleRule [simpleModule (Simplification [leqQual])]
+        rule <- singleRule [simpleModule (Simplification [leqQual] [])]
         rule.name @?= Nothing
     ]
 
@@ -555,7 +566,7 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []]))
+                    (noAnnP (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []] []))
                     (noAnnP [])
                     (noAnnP [])
                 ]
@@ -577,7 +588,7 @@ symbolTableTests =
                 [ D.Rule
                     Nothing
                     ( noAnnP
-                        (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []])
+                        (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []] [])
                     )
                     (noAnnP [])
                     ( noAnnP
@@ -601,7 +612,7 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []]))
+                    (noAnnP (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []] []))
                     (noAnnP [])
                     (noAnnP [D.BodyHostStmt "print" []])
                 ]
@@ -625,6 +636,7 @@ symbolTableTests =
                             [ D.HeadConstraint (D.QualifiedName "A" "z") [],
                               D.HeadConstraint (D.QualifiedName "B" "a") []
                             ]
+                            []
                         )
                     )
                     (noAnnP [])
@@ -653,6 +665,7 @@ symbolTableTests =
                                 (D.QualifiedName "M" "foo")
                                 [D.HeadVar "X"]
                             ]
+                            []
                         )
                     )
                     (noAnnP [])

@@ -257,8 +257,9 @@ extractSymbolTable prog =
    in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
 
 -- | Helper to find every constraint instance in a desugared rule,
--- returning its qualified name and arity. Head and body tells are both
--- included, since both contribute to the constraint-symbol table.
+-- returning its qualified name and arity. Head constraints, body tells
+-- and aggregate goals are all included, since all contribute to the
+-- constraint-symbol table.
 getRuleConstraints :: D.Rule -> [(QualifiedName, Int)]
 getRuleConstraints r =
   let AnnP {node = rHead} = r.head
@@ -266,7 +267,13 @@ getRuleConstraints r =
       headPair hc = (hc.name, length hc.args)
    in map headPair rHead.kept
         ++ map headPair rHead.removed
+        ++ concatMap aggPairs rHead.aggregates
         ++ [(qn, length args) | D.BodyTell qn args <- rBody]
+  where
+    aggPairs a = concatMap conjunctPair a.goal
+    conjunctPair (D.AggConstraint qc) = [(qc.name, length qc.args)]
+    conjunctPair (D.AggNested a) = aggPairs a
+    conjunctPair (D.AggGuard _) = []
 
 -- | Desugar one resolved rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head. HNF-emitted
@@ -274,11 +281,17 @@ getRuleConstraints r =
 desugarRule :: R.Rule -> Writer [Diagnostic DesugarError] D.Rule
 desugarRule r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
+      headLoc = r.head.sourceLoc
+      headOrigin = r.head.parsed
   ruleBody <-
     desugarBodyGoals r.moduleName ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc r.guard.parsed) r.guard.node
-  let (rawKept, rawRemoved) = flattenHeadKind r.head.node
-      (guards, normalizedHead) = normalizeHead rawKept rawRemoved
+  let (rawKept, rawRemoved, rawAggs) = flattenHeadKind r.head.node
+  -- Aggregates are desugared before HNF: their goal constraints are
+  -- matched against the store directly and never become head
+  -- occurrences, so HNF has nothing to narrow there.
+  aggs <- traverse (desugarAggregate headLoc headOrigin) rawAggs
+  let (guards, normalizedHead) = normalizeHead rawKept rawRemoved aggs
   pure
     D.Rule
       { name = fmap (.node) r.name,
@@ -287,17 +300,53 @@ desugarRule r = do
         body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
--- | Map the three resolved head kinds to a uniform @(kept, removed)@
--- pair of raw 'QualifiedConstraint' lists. Propagation rules keep every
--- constraint; simplification rules remove every constraint; simpagation
--- rules carry both lists explicitly. The result is fed to
--- 'normalizeHead', which produces the 'D.Head' with HNF-narrowed
--- 'HeadConstraint' arguments.
-flattenHeadKind :: R.Head -> ([QualifiedConstraint], [QualifiedConstraint])
+-- | Desugar one resolved aggregate. Its expressions are already typed
+-- (resolution did that); the guards are classified here, so a
+-- non-boolean @?@ conjunct fails at compile time like any other guard.
+desugarAggregate ::
+  P.SourceLoc ->
+  PExpr ->
+  R.Aggregate ->
+  Writer [Diagnostic DesugarError] D.Aggregate
+desugarAggregate loc origin a = do
+  -- 'agg' is already 'Maybe', so 'traverse' keeps the 'Nothing' of a
+  -- selection form and does nothing for it.
+  goal' <- concat <$> traverse (desugarConjunct loc origin) a.goal
+  pure
+    D.Aggregate
+      { D.kind = a.kind,
+        D.agg = a.agg,
+        D.element = a.element,
+        D.goal = goal',
+        D.result = a.result
+      }
+
+-- | Desugar one aggregate-goal conjunct.
+desugarConjunct ::
+  P.SourceLoc ->
+  PExpr ->
+  R.AggregateConjunct ->
+  Writer [Diagnostic DesugarError] [D.AggregateConjunct]
+desugarConjunct loc origin c = case c of
+  R.AggConstraint qc -> pure [D.AggConstraint qc]
+  R.AggNested a -> (: []) . D.AggNested <$> desugarAggregate loc origin a
+  R.AggGuard g -> (: []) . D.AggGuard <$> desugarGuard loc origin g
+
+-- | Map the three resolved head kinds to a uniform @(kept, removed,
+-- aggregates)@ triple. Propagation rules keep every constraint;
+-- simplification rules remove every constraint; simpagation rules carry
+-- both lists explicitly. The constraint lists are fed to
+-- 'normalizeHead'.
+flattenHeadKind ::
+  R.Head ->
+  ( [QualifiedConstraint],
+    [QualifiedConstraint],
+    [R.Aggregate]
+  )
 flattenHeadKind h = case h of
-  R.Simplification rs -> ([], rs)
-  R.Propagation ks -> (ks, [])
-  R.Simpagation ks rs -> (ks, rs)
+  R.Simplification rs aggs -> ([], rs, aggs)
+  R.Propagation ks aggs -> (ks, [], aggs)
+  R.Simpagation ks rs aggs -> (ks, rs, aggs)
 
 -- ---------------------------------------------------------------------------
 -- Head Normal Form (HNF)
@@ -326,12 +375,19 @@ data HnfState = HnfState
 -- processed before removed so that variables first appearing in kept
 -- constraints become the canonical binding (see the note at the bottom
 -- of this module).
-normalizeHead :: [QualifiedConstraint] -> [QualifiedConstraint] -> ([D.Guard], D.Head)
-normalizeHead kept removed =
+--
+-- The aggregates are carried through unchanged: they were desugared
+-- before this point and have no head occurrences to narrow.
+normalizeHead ::
+  [QualifiedConstraint] ->
+  [QualifiedConstraint] ->
+  [D.Aggregate] ->
+  ([D.Guard], D.Head)
+normalizeHead kept removed aggs =
   let initState = HnfState 0 Set.empty Seq.empty
       (st1, kept') = mapAccumL normalizeConstraint initState kept
       (st2, removed') = mapAccumL normalizeConstraint st1 removed
-   in (toList st2.guards, D.Head kept' removed')
+   in (toList st2.guards, D.Head kept' removed' aggs)
 
 -- | Normalize the arguments of one head constraint, narrowing them
 -- from raw 'Term's to 'HeadArg's.

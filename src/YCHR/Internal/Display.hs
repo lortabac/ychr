@@ -364,6 +364,10 @@ renameErrorCode (MacroKindMismatch _ _ _) = ErrorCode 20035
 renameErrorCode (MalformedMacroPrimitive _ _) = ErrorCode 20036
 renameErrorCode (MacroPrimitiveOutsideMacro _ _) = ErrorCode 20037
 renameErrorCode (MacroExpansionTooLarge _ _) = ErrorCode 20038
+renameErrorCode AggregateOnlyHead = ErrorCode 20039
+renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
+renameErrorCode (MalformedAggregateGoal _ _ _) = ErrorCode 20041
+renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1245,6 +1249,32 @@ renameErrorMsg (MacroPrimitiveOutsideMacro prim arity) =
     )
     ( "'$compound'/2 and '$atom'/1 are evaluated only where they are"
         ++ " written in a macro body; the two names are reserved"
+    )
+renameErrorMsg AggregateOnlyHead =
+  withHint
+    "A rule head consists of aggregates only"
+    ( "an aggregate reads the store, so the rule needs at least one"
+        ++ " regular head constraint to fire on"
+    )
+renameErrorMsg (AggregateOutsideHead name arity) =
+  withHint
+    ("Aggregate '" ++ T.unpack name ++ "/" ++ show arity ++ "' outside a rule head")
+    ( "an aggregate decides whether a rule applies, so it is a head"
+        ++ " conjunct; it cannot appear in a body, a query or a guard"
+    )
+renameErrorMsg (MalformedAggregateGoal name required actual) =
+  withHint
+    ("Invalid aggregate '" ++ T.unpack name ++ "/" ++ show actual ++ "'")
+    ( "expected "
+        ++ show required
+        ++ " arguments, and each goal conjunct"
+        ++ " to be a constraint, a nested aggregate or a '?' guard"
+    )
+renameErrorMsg GuardOutsideAggregateGoal =
+  withHint
+    "'?' guard outside an aggregate goal"
+    ( "a '? Guard' conjunct is recognized inside an aggregate's goal;"
+        ++ " write a rule guard with '|' and a body goal directly"
     )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint

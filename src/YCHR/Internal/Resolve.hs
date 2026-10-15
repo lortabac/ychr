@@ -22,6 +22,7 @@ where
 
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub)
+import Data.List qualified as List
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -39,7 +40,9 @@ import YCHR.Internal.Parsed (FunctionDeclKind (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
-  ( BoundSig (..),
+  ( Aggregate (..),
+    AggregateConjunct (..),
+    BoundSig (..),
     Constraint (..),
     ConstraintKey (..),
     ConstraintUse (..),
@@ -1224,9 +1227,9 @@ checkReservedModuleNames mods =
   ]
 
 headConstraints :: P.Head -> [P.Constraint]
-headConstraints (P.Simplification cs) = cs
-headConstraints (P.Propagation cs) = cs
-headConstraints (P.Simpagation ks rs) = ks ++ rs
+headConstraints (P.Simplification cs _) = cs
+headConstraints (P.Propagation cs _) = cs
+headConstraints (P.Simpagation ks rs _) = ks ++ rs
 
 toQualId :: Name -> Int -> Maybe QualifiedIdentifier
 toQualId (Qualified m n) a = Just (QualifiedIdentifier m n a)
@@ -1244,7 +1247,7 @@ resolveRules visMap mods =
   let raws = [(r, m) | m <- mods, r <- m.rules]
       go (acc, errs) (r, m) =
         let vis = funVisibilityFor visMap m.name
-         in case resolveHead r.head.sourceLoc r.head.parsed r.head.node of
+         in case resolveHead vis r.head.sourceLoc r.head.parsed r.head.node of
               Right rh ->
                 let (guardExprs, guardErrs) =
                       runWriter
@@ -1271,17 +1274,79 @@ resolveRules visMap mods =
    in foldl go ([], []) raws
 
 resolveHead ::
+  FunVisibility ->
   P.SourceLoc ->
   PExpr.PExpr ->
   P.Head ->
   Either [Diagnostic ResolveError] R.Head
-resolveHead loc origin h = case h of
-  P.Simplification cs -> R.Simplification <$> traverse (qualifyConstraint loc origin) cs
-  P.Propagation cs -> R.Propagation <$> traverse (qualifyConstraint loc origin) cs
-  P.Simpagation ks rs ->
-    R.Simpagation
-      <$> traverse (qualifyConstraint loc origin) ks
-      <*> traverse (qualifyConstraint loc origin) rs
+resolveHead vis loc origin h =
+  let (resolved, errs) = case h of
+        P.Simplification cs aggs ->
+          let (ks, e1) = collect (map (qualifyConstraint loc origin) cs)
+              (as, e2) = collect (map (resolveAggregate vis loc origin) aggs)
+           in (R.Simplification ks as, e1 ++ e2)
+        P.Propagation cs aggs ->
+          let (ks, e1) = collect (map (qualifyConstraint loc origin) cs)
+              (as, e2) = collect (map (resolveAggregate vis loc origin) aggs)
+           in (R.Propagation ks as, e1 ++ e2)
+        P.Simpagation ks rs aggs ->
+          let (ks', e1) = collect (map (qualifyConstraint loc origin) ks)
+              (rs', e2) = collect (map (qualifyConstraint loc origin) rs)
+              (as, e3) = collect (map (resolveAggregate vis loc origin) aggs)
+           in (R.Simpagation ks' rs' as, e1 ++ e2 ++ e3)
+   in if null errs then Right resolved else Left errs
+
+-- | Split a list of results into the successful ones and the
+-- diagnostics, keeping the order of each.
+--
+-- An accumulator rather than 'partitionEithers': each result already
+-- carries a list of diagnostics here, so the two components would be a
+-- value list and a list of lists, which reads worse than this.
+collect :: [Either [a] b] -> ([b], [a])
+collect = List.foldr step ([], [])
+  where
+    step (Right b) (bs, as) = (b : bs, as)
+    step (Left a) (bs, as) = (bs, a ++ as)
+
+-- | Resolve an aggregate: qualify its goal's constraints, and type its
+-- expressions. A malformed aggregate reports its own diagnostics and is
+-- dropped, so one bad aggregate does not hide the others in the head.
+--
+-- The aggregator and the element are evaluated, so they go through
+-- 'termToExpr', which types them against the module's function
+-- visibility. The result stays a 'Term': it is a pattern matched
+-- against the computed value, exactly as a head argument is.
+resolveAggregate ::
+  FunVisibility ->
+  P.SourceLoc ->
+  PExpr.PExpr ->
+  Aggregate ->
+  Either [Diagnostic ResolveError] R.Aggregate
+resolveAggregate vis loc origin agg =
+  let (mAgg, e1) = runWriter (traverse (termToExpr vis loc origin) agg.agg)
+      (element', e2) = runWriter (termToExpr vis loc origin agg.element)
+      (conjuncts, e3) =
+        collect (map resolveConjunct agg.goal)
+      errs = e1 ++ e2 ++ e3
+   in if null errs
+        then
+          Right
+            R.Aggregate
+              { R.kind = agg.kind,
+                R.agg = mAgg,
+                R.element = element',
+                R.goal = concat conjuncts,
+                R.result = agg.result
+              }
+        else Left errs
+  where
+    resolveConjunct (AggConstraint c) =
+      (: []) . R.AggConstraint <$> qualifyConstraint loc origin c
+    resolveConjunct (AggNested a) =
+      (: []) . R.AggNested <$> resolveAggregate vis loc origin a
+    resolveConjunct (AggGuard g) =
+      let (e, errs) = runWriter (termToExpr vis loc origin g)
+       in if null errs then Right [R.AggGuard e] else Left errs
 
 qualifyConstraint ::
   P.SourceLoc ->

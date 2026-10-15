@@ -94,7 +94,8 @@ sameModuleTests =
         rule <- singleRule m
         rule.head.node
           @?= Simplification
-            [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
+            [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "zero-arity constraint" $ do
         let m =
               module' "M"
@@ -102,7 +103,7 @@ sameModuleTests =
                 `defining` [[term "done" []] <=> [atom "true"]]
         rule <- singleRule m
         rule.head.node
-          @?= Simplification [Constraint (Qualified "M" "done") []],
+          @?= Simplification [Constraint (Qualified "M" "done") []] [],
       testCase "body goal in own module" $ do
         let m =
               module' "M"
@@ -361,7 +362,8 @@ alreadyQualifiedTests =
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
           @?= Simplification
-            [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]],
+            [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "pre-qualified reference to non-existent module produces error" $ do
         -- Module 'Order' does not exist anywhere in the program.
         let m =
@@ -387,7 +389,8 @@ alreadyQualifiedTests =
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
           @?= Simplification
-            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "pre-qualified reference to non-imported module is rejected" $ do
         -- A declares leq/2 but B does not import A; the qualification
         -- must not silently bypass the visibility rules.
@@ -443,7 +446,8 @@ goalClassificationTests =
             [ Constraint
                 (Qualified "M" "wrap")
                 [CompoundTerm (Unqualified "inner") [VarTerm "X"]]
-            ],
+            ]
+            [],
       testCase "nested arg of body goal NOT resolved" $ do
         -- Outer functor is resolved (isGoal = True), inner is not
         -- (args use isGoal = False)
@@ -553,6 +557,7 @@ goalClassificationTests =
                 (Qualified "M" "c")
                 [CompoundTerm (Unqualified "done") []]
             ]
+            []
     ]
 
 --------------------------------------------------------------------------------
@@ -570,7 +575,7 @@ headTypeTests =
                 `defining` [[term "leq" [var "X", var "Y"]] ==> [atom "true"]]
         rule <- singleRule m
         rule.head.node
-          @?= Propagation [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
+          @?= Propagation [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]] [],
       testCase "Simpagation kept and removed both renamed" $ do
         let m =
               module' "M"
@@ -584,6 +589,7 @@ headTypeTests =
           @?= Simpagation
             [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
             [Constraint (Qualified "M" "gt") [VarTerm "X", VarTerm "Y"]]
+            []
     ]
 
 --------------------------------------------------------------------------------
@@ -625,6 +631,7 @@ multiModuleTests =
                                   VarTerm "X"
                                 ]
                             ]
+                            []
                         )
                     )
                     (noAnnP [])
@@ -642,6 +649,7 @@ multiModuleTests =
                                 (Qualified "Order" "leq")
                                 [VarTerm "Y", VarTerm "Z"]
                             ]
+                            []
                         )
                     )
                     (noAnnP [])
@@ -718,7 +726,8 @@ exportTests =
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
           @?= Simplification
-            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "non-exported constraint is hidden from importer" $ do
         -- A declares leq/2 and gt/2 but only exports leq/2; B can't see gt/2
         let modA =
@@ -752,7 +761,7 @@ exportTests =
                 `defining` [[term "gt" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule modA
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]],
+          @?= Simplification [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]] [],
       testCase "no module directive exports all constraints" $ do
         -- A has modExports = Nothing (no directive); B can see all of A's constraints
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -770,7 +779,8 @@ exportTests =
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
           @?= Simplification
-            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "exporting undeclared name produces error" $ do
         let m = module' "M" `exporting` ["foo" // 1]
         renameProgram [m]
@@ -1182,6 +1192,7 @@ importListTests =
                         VarTerm "Y"
                       ]
                   ]
+                  []
             rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
           Right (mods, _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)

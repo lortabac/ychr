@@ -1770,6 +1770,10 @@ convertRule expr =
 
 -- | Convert the head of a simplification or simpagation rule. Malformed
 -- constraints are dropped from the resulting head and reported as errors.
+--
+-- No aggregate can appear here: an aggregate is written as a term the
+-- macro preprocessor has to expand first, so the renamer is where heads
+-- gain their aggregates.
 convertHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
 convertHead (Ann pexpr loc) = case pexpr of
   Compound "\\" [kept, removed] ->
@@ -1777,18 +1781,18 @@ convertHead (Ann pexpr loc) = case pexpr of
         ( removedErrs,
           removedOk
           ) = partitionEithers (map convertConstraint (flattenComma removed))
-     in (AnnP (Simpagation keptOk removedOk) loc pexpr, keptErrs ++ removedErrs)
+     in (AnnP (Simpagation keptOk removedOk []) loc pexpr, keptErrs ++ removedErrs)
   _ ->
     let constraints = flattenComma (Ann pexpr loc)
         (errs, ok) = partitionEithers (map convertConstraint constraints)
-     in (AnnP (Simplification ok) loc pexpr, errs)
+     in (AnnP (Simplification ok []) loc pexpr, errs)
 
 -- | Convert the head of a propagation rule. Malformed constraints are
 -- dropped from the resulting head and reported as errors.
 convertPropagationHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
 convertPropagationHead (Ann pexpr loc) =
   let (errs, ok) = partitionEithers (map convertConstraint (flattenComma (Ann pexpr loc)))
-   in (AnnP (Propagation ok) loc pexpr, errs)
+   in (AnnP (Propagation ok []) loc pexpr, errs)
 
 -- | Split a guard|body PExpr into guard and body term lists.
 splitGuardBody :: Ann PExpr -> (AnnP [Term], AnnP [Term])
