@@ -41,13 +41,13 @@ static type checker is specified in [type-system.md](type-system.md).
 | `:- inline Decls.` | [Inlining](#inlining) |
 | `:- constraint_use Decls.` | [Constraint use](#constraint-use) |
 | `:- macro Head ---> [Goals].` / `:- macro Name/N.` and `Head ---> [Goals].` clauses | [macros.md](macros.md) |
-| *(Draft)* `:- macro_decls …`, `:- Name(Args).` | [macros.md](macros.md) |
+| `:- macro_decls Head ---> [Clauses].` / `:- macro_decls Name/N.`, and uses `:- Name(Args).` | [macros.md](macros.md#declaration-macros) |
 
 Declaration directives take comma-separated lists:
-`:- chr_constraint a/1, b/2.` Unknown directives are dropped silently
-(Prolog-source compatibility, not an extension point). *(Draft)* The
-[declaration-macro draft](macros.md#using-a-declaration-macro) makes
-them an error instead.
+`:- chr_constraint a/1, b/2.` Any other directive is a
+[declaration macro](macros.md#using-a-declaration-macro) use. If no
+such macro is visible, it's an error (`UnknownDirective`, YCHR-15024),
+so delete foreign Prolog directives like `:- dynamic`.
 
 ## Rules
 

@@ -191,7 +191,9 @@ directiveTests =
       testCase "multiple bad elements report multiple errors" $
         pErrs ":- module(m, [type(foo/0, [X, Y])])."
           @?= Right [MalformedExportItem, MalformedExportItem],
-      testCase "unknown directive is skipped" $
+      -- The low-level converter has no macro visibility; the compile
+      -- pipeline reports an unknown directive (see "YCHR.DeclMacroTest").
+      testCase "unknown directive is skipped by the converter" $
         (map (.node) . (.decls))
           <$> p ":- mystery_directive(foo).\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing)],
@@ -406,6 +408,31 @@ directiveTests =
         pErrs ":- macro is/2." @?= Right [MalformedMacroHead],
       testCase "macro directive of another shape is rejected" $
         pErrs ":- macro foo(X)." @?= Right [MalformedMacroHead],
+      testCase "macro_decls one-line definition is a declaration macro" $
+        map (\d -> (d.node.kind, d.node.name, d.node.arity))
+          . (.macros)
+          <$> p ":- macro_decls flag(N) ---> [(:- chr_constraint N/0)]."
+          @?= Right [(DeclMacro, "flag", 1)],
+      testCase "macro_decls declaration gives its clauses its kind" $
+        map (\d -> (d.node.kind, length d.node.clauses))
+          . (.macros)
+          <$> p ":- macro_decls f/1.\nf([]) ---> [].\nf([_|T]) ---> [(:- f(T))]."
+          @?= Right [(DeclMacro, 2)],
+      testCase "macro and macro_decls in one module keep their kinds" $
+        map (\d -> (d.node.kind, d.node.name))
+          . (.macros)
+          <$> p ":- macro g/0.\n:- macro_decls d/0.\ng ---> [].\nd ---> []."
+          @?= Right [(GoalMacro, "g"), (DeclMacro, "d")],
+      testCase "macro_decls with a built-in directive's name and arity is rejected" $
+        pErrs ":- macro_decls use_module(X) ---> []."
+          @?= Right [DeclMacroBuiltinDirective "use_module" 1],
+      testCase "macro_decls declaration with a built-in directive's key is rejected" $
+        pErrs ":- macro_decls module/1." @?= Right [DeclMacroBuiltinDirective "module" 1],
+      testCase "macro_decls may use another arity of a built-in directive" $
+        pErrs ":- macro_decls module(A, B, C) ---> [(:- module(A, B)), C]."
+          @?= Right [],
+      testCase "a goal macro may use a built-in directive's name" $
+        pErrs ":- macro inline(X) ---> [X]." @?= Right [],
       testCase "constraint_use with every tag" $
         (map (.node) . (.constraintUses))
           <$> p ":- constraint_use any(a/0), fact(b/1), event(c/2), tell_only(d/3)."
@@ -660,6 +687,7 @@ ruleTests =
                 )
                 (noAnnP [])
                 (noAnnP [CompoundTerm (Unqualified "true") []])
+                []
             ],
       testCase "unnamed simplification" $
         (map stripRuleLoc . (.rules)) <$> p "leq(X, X) <=> true."
@@ -678,6 +706,7 @@ ruleTests =
                 )
                 (noAnnP [])
                 (noAnnP [CompoundTerm (Unqualified "true") []])
+                []
             ],
       testCase "propagation" $
         (map stripRuleLoc . (.rules)) <$> p "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z)."
@@ -693,6 +722,7 @@ ruleTests =
                 )
                 (noAnnP [])
                 (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
+                []
             ],
       testCase "simpagation" $
         (map stripRuleLoc . (.rules)) <$> p "s @ kept \\ removed <=> body."
@@ -707,6 +737,7 @@ ruleTests =
                 )
                 (noAnnP [])
                 (noAnnP [CompoundTerm (Unqualified "body") []])
+                []
             ],
       testCase "rule with guard" $
         (map stripRuleLoc . (.rules)) <$> p "r @ c(X, Y) <=> g(X) | b(Y)."
@@ -725,6 +756,7 @@ ruleTests =
                 )
                 (noAnnP [CompoundTerm (Unqualified "g") [VarTerm "X"]])
                 (noAnnP [CompoundTerm (Unqualified "b") [VarTerm "Y"]])
+                []
             ],
       testCase "multiple body goals" $
         bodyOf "c <=> a, b, c2."
@@ -903,7 +935,8 @@ moduleTests =
                             )
                         )
                         (noAnnP [])
-                        (noAnnP [CompoundTerm (Unqualified "true") []]),
+                        (noAnnP [CompoundTerm (Unqualified "true") []])
+                        [],
                       Rule
                         (Just (noAnn "antisymmetry"))
                         ( noAnnP
@@ -923,7 +956,8 @@ moduleTests =
                                 (Unqualified "leq")
                                 [VarTerm "X", VarTerm "Y"]
                             ]
-                        ),
+                        )
+                        [],
                       Rule
                         (Just (noAnn "trans"))
                         ( noAnnP
@@ -944,6 +978,7 @@ moduleTests =
                                 [VarTerm "X", VarTerm "Z"]
                             ]
                         )
+                        []
                     ],
                   equations = [],
                   extensions = [],
@@ -999,6 +1034,7 @@ commentTests =
                 )
                 (noAnnP [])
                 (noAnnP [CompoundTerm (Unqualified "bar") []])
+                []
             ],
       testCase "inline comment after rule" $
         (map stripRuleLoc . (.rules)) <$> p "foo <=> bar. % comment"
@@ -1015,6 +1051,7 @@ commentTests =
                 )
                 (noAnnP [])
                 (noAnnP [CompoundTerm (Unqualified "bar") []])
+                []
             ],
       testCase "only comments parses to empty module" $
         (.rules) <$> p "% just a comment\n% another"

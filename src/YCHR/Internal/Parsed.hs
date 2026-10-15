@@ -50,8 +50,10 @@ module YCHR.Internal.Parsed
     Head (..),
     FunctionEquation (..),
     MacroDef (..),
+    MacroKind (..),
     MacroClause (..),
     MacroExportDeclBody (..),
+    ExpansionStep (..),
 
     -- * Re-exports from YCHR.Internal.Types
     Name (..),
@@ -246,33 +248,53 @@ data ConstraintUseDecl = ConstraintUseDecl
   }
   deriving (Show, Eq)
 
--- | A goal macro: a name and arity, and its clauses in source order.
+-- | A macro: its kind, name and arity, and its clauses in source order.
 --
 -- A macro comes either from a one-line definition
--- (@:- macro Head ---> [Goals].@, exactly one clause) or from a
--- declaration (@:- macro Name\/N.@) together with the top-level
--- @Head ---> [Goals].@ clauses of the same @Name\/N@. The parser groups
+-- (@:- macro Head ---> [Goals].@ or @:- macro_decls Head ---> [Clauses].@,
+-- exactly one clause) or from a declaration (@:- macro Name\/N.@ or
+-- @:- macro_decls Name\/N.@) together with the top-level
+-- @Head ---> [...].@ clauses of the same @Name\/N@. The parser groups
 -- the clauses; a declaration with no clauses has an empty 'clauses'
 -- list, and every use of it fails to match. See
 -- [the macro reference](../../docs/reference/macros.md).
 data MacroDef = MacroDef
-  { name :: Text,
+  { kind :: MacroKind,
+    name :: Text,
     arity :: Int,
     clauses :: [AnnP MacroClause]
   }
   deriving (Show, Eq)
 
--- | One clause of a goal macro: @Name(P1, ..., Pn) ---> [G1, ..., Gk].@
+-- | Macro kinds. Goal macros (@:- macro@) expand to goals, in the
+-- renamer. Declaration macros (@:- macro_decls@) are directives and
+-- expand to clauses before conversion (see "YCHR.Internal.DeclMacro").
+data MacroKind = GoalMacro | DeclMacro
+  deriving (Show, Eq, Ord)
+
+-- | One clause of a macro: @Name(P1, ..., Pn) ---> [E1, ..., Ek].@
 --
 -- 'params' are the head's argument /patterns/, matched syntactically
 -- against the arguments of a use (see
 -- 'YCHR.Internal.Rename.Macro.matchClause'). 'body' holds the elements
 -- of the body list, kept exactly as written: they are not checked when
 -- the macro is defined, since whether an expansion is valid depends on
--- where it is used.
+-- where it is used. Elements are goals (goal macro) or clauses
+-- (declaration macro), stored as 'Term's either way.
 data MacroClause = MacroClause
   { params :: [Term],
     body :: [Term]
+  }
+  deriving (Show, Eq)
+
+-- | One step of the chain that generated a clause: the macro and the
+-- outermost directive's location. Generated rules and equations keep
+-- the chain (innermost first) so later errors can show it.
+data ExpansionStep = ExpansionStep
+  { macroModule :: Text,
+    macroName :: Text,
+    macroArity :: Int,
+    site :: SourceLoc
   }
   deriving (Show, Eq)
 
@@ -322,7 +344,10 @@ data FunctionEquation = FunctionEquation
   { funName :: Name,
     args :: [Term],
     guard :: AnnP [Term],
-    rhs :: AnnP (NonEmpty Term)
+    rhs :: AnnP (NonEmpty Term),
+    -- | Declaration macros that generated this equation, innermost
+    -- first. Empty if the user wrote it.
+    expansion :: [ExpansionStep]
   }
   deriving (Show, Eq)
 
@@ -331,7 +356,10 @@ data Rule = Rule
   { name :: Maybe (Ann Text),
     head :: AnnP Head,
     guard :: AnnP [Term],
-    body :: AnnP [Term]
+    body :: AnnP [Term],
+    -- | Declaration macros that generated this rule, innermost first.
+    -- Empty if the user wrote it.
+    expansion :: [ExpansionStep]
   }
   deriving (Show, Eq)
 

@@ -1,0 +1,20 @@
+:- module(macro_decls_function).
+
+% A declaration macro may generate a whole closed function: its
+% declaration and its equations, in one contiguous block.
+:- macro_decls lookup_table(F, Pairs) --->
+    [ (:- function '$compound'(F, [any]) -> any),
+      (:- table_equations(F, Pairs)) ].
+
+:- macro_decls table_equations/2.
+table_equations(F, []) ---> [('$compound'(F, [_]) -> 0)].
+table_equations(F, [K - V | Rest]) --->
+    [ ('$compound'(F, [K]) -> V),
+      (:- table_equations(F, Rest)) ].
+
+:- chr_type colour ---> red ; green ; blue ; pink.
+
+:- lookup_table(colour_code, [red - 1, green - 2, blue - 3]).
+
+:- chr_constraint test/2.
+test(C, R) <=> R is colour_code(C).

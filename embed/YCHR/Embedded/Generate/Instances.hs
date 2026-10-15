@@ -35,6 +35,7 @@ import YCHR.Internal.Parsed
     ConstraintDeclBody (..),
     ConstraintUseDecl (..),
     Declaration (..),
+    ExpansionStep (..),
     ExtendClassTypeDeclBody (..),
     FunctionDeclBody (..),
     FunctionDeclKind (..),
@@ -45,6 +46,7 @@ import YCHR.Internal.Parsed
     MacroClause (..),
     MacroDef (..),
     MacroExportDeclBody (..),
+    MacroKind (..),
     Module (..),
     OpDecl (..),
     Rule (..),
@@ -210,6 +212,10 @@ deriving instance Generic MacroDef
 
 deriving instance Generic MacroClause
 
+deriving instance Generic MacroKind
+
+deriving instance Generic ExpansionStep
+
 deriving instance Generic MacroExportDeclBody
 
 deriving instance Generic FunctionDeclKind
@@ -254,6 +260,12 @@ instance ToCode ConstraintUse where
   toCode = genericToCode
 
 instance ToCode MacroDef where
+  toCode = genericToCode
+
+instance ToCode MacroKind where
+  toCode = genericToCode
+
+instance ToCode ExpansionStep where
   toCode = genericToCode
 
 instance ToCode MacroClause where

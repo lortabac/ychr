@@ -1,0 +1,7 @@
+:- module(macro_decls_kind_mismatch_goal).
+:- chr_constraint r/0.
+
+% A declaration macro is invisible in a goal position.
+:- macro_decls flag(N) ---> [(:- chr_constraint N/0)].
+
+r <=> flag(x).

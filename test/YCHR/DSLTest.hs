@@ -314,14 +314,16 @@ ruleTests =
             Nothing
             (noAnnP (Simplification [a0]))
             (noAnnP [])
-            (noAnnP [atom "true"]),
+            (noAnnP [atom "true"])
+            [],
       testCase "(==>): propagation rule" $
         [term "a" []] ==> [term "b" []]
           @?= Rule
             Nothing
             (noAnnP (Propagation [a0]))
             (noAnnP [])
-            (noAnnP [term "b" []]),
+            (noAnnP [term "b" []])
+            [],
       testCase "(\\): simpagation rule" $
         [term "k" []] \\ [term "r" []] <=> [atom "true"]
           @?= Rule
@@ -333,7 +335,8 @@ ruleTests =
                 )
             )
             (noAnnP [])
-            (noAnnP [atom "true"]),
+            (noAnnP [atom "true"])
+            [],
       testCase "(@:): sets rule name" $
         ("my_rule" @: ([term "a" []] <=> [atom "true"]))
           @?= Rule
@@ -341,6 +344,7 @@ ruleTests =
             (noAnnP (Simplification [a0]))
             (noAnnP [])
             (noAnnP [atom "true"])
+            []
     ]
   where
     a0 = Constraint (Unqualified "a") []
@@ -355,7 +359,8 @@ guardTests =
             Nothing
             (noAnnP (Simplification [Constraint (Unqualified "p") [var "X"]]))
             (noAnnP [var "X" .> int 0])
-            (noAnnP [bool True]),
+            (noAnnP [bool True])
+            [],
       testCase "(|-) attaches a multi-conjunct guard" $
         -- The guard slot in 'Rule' is a list, so a list with multiple
         -- conjuncts is the surface form for @g1, g2, g3@. Pin that
@@ -372,7 +377,8 @@ guardTests =
                   var "X" .=. var "Y"
                 ]
             )
-            (noAnnP [bool True]),
+            (noAnnP [bool True])
+            [],
       testCase "(|-) attaches a guard to a propagation rule" $
         ( ([term "p" [var "X"]] ==> [term "q" [var "X"]])
             |- [var "X" .> int 0]
@@ -382,6 +388,7 @@ guardTests =
             (noAnnP (Propagation [Constraint (Unqualified "p") [var "X"]]))
             (noAnnP [var "X" .> int 0])
             (noAnnP [term "q" [var "X"]])
+            []
     ]
 
 termTests :: TestTree
@@ -561,6 +568,7 @@ integrationTests =
                     )
                     (noAnnP [])
                     (noAnnP [CompoundTerm (Unqualified "true") []])
+                    []
                 ],
               equations = [],
               extensions = [],
@@ -593,6 +601,7 @@ integrationTests =
                     ( noAnnP
                         [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]]
                     )
+                    []
                 ],
               equations = [],
               extensions = [],

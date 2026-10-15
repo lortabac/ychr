@@ -29,6 +29,7 @@ module YCHR.Internal.Rename.Macro
 
     -- * Instantiation
     instantiateClause,
+    instantiateBody,
     PrimitiveError (..),
     PrimitiveOperand (..),
     primitiveOfOperand,
@@ -52,6 +53,9 @@ module YCHR.Internal.Rename.Macro
     -- * Definition-time checks
     qualifiedRefsIn,
     varCounts,
+
+    -- * Diagnostics
+    renderExpansionChain,
   )
 where
 
@@ -65,8 +69,10 @@ import Data.Text qualified as Text
 import YCHR.Internal.Parsed
   ( AnnP (..),
     Declaration (..),
+    ExpansionStep (..),
     MacroClause (..),
     MacroExportDeclBody (..),
+    SourceLoc (..),
   )
 import YCHR.Internal.Types (Constraint (..), Name (..), Term (..))
 
@@ -223,10 +229,18 @@ primitivesIn _ = []
 -- construction (see 'YCHR.Internal.Parsed.Rule'), and would then alias
 -- their fresh variables.
 instantiateClause :: Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
-instantiateClause seed binds clause = concatMap flattenConj <$> traverse go clause.body
+instantiateClause seed binds clause =
+  concatMap flattenConj <$> instantiateBody "_macro_" seed binds clause
+
+-- | 'instantiateClause' without splitting on @,@ (a clause with a
+-- conjunction is still one clause). Fresh variables are
+-- @\<prefix\>\<seed\>_\<name\>@. Each macro kind has its own prefix
+-- and seed counter, so they can't clash.
+instantiateBody :: Text -> Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
+instantiateBody prefix seed binds clause = traverse go clause.body
   where
     seedKey = Text.pack (show seed)
-    freshen v = "_macro_" <> seedKey <> "_" <> v
+    freshen v = prefix <> seedKey <> "_" <> v
     go t = case t of
       VarTerm v -> Right (fromMaybe (VarTerm (freshen v)) (Map.lookup v binds))
       CompoundTerm f as -> do
@@ -419,3 +433,45 @@ varCounts :: Term -> Map Text Int
 varCounts (VarTerm v) = Map.singleton v 1
 varCounts (CompoundTerm _ args) = Map.unionsWith (+) (map varCounts args)
 varCounts _ = Map.empty
+
+-- ---------------------------------------------------------------------------
+-- Diagnostics
+-- ---------------------------------------------------------------------------
+
+-- | Show a macro chain, innermost first, e.g. @"in the expansion of
+-- aggregates:count\/2, used at graph.chr:4:3"@. Repeats of the same
+-- macro become one line with a count. At most 'maxChainLines' lines,
+-- plus one line counting the rest. Used by both macro kinds.
+renderExpansionChain :: [ExpansionStep] -> [Text]
+renderExpansionChain chain =
+  let groups = runs chain
+      shown = map renderGroup (take maxChainLines groups)
+      hidden = sum (map snd (drop maxChainLines groups))
+   in shown
+        ++ [ "... and " <> tshow hidden <> " more enclosing expansions"
+           | hidden > 0
+           ]
+  where
+    key u = (u.macroModule, u.macroName, u.macroArity)
+    runs [] = []
+    runs (u : us) =
+      let (same, rest) = span (\v -> key v == key u) us
+       in (u, 1 + length same) : runs rest
+    renderGroup (u, 1 :: Int) =
+      "in the expansion of " <> qn u <> ", used at " <> locText u.site
+    renderGroup (u, n) =
+      "in "
+        <> tshow n
+        <> " nested expansions of "
+        <> qn u
+        <> ", innermost used at "
+        <> locText u.site
+    qn u = u.macroModule <> ":" <> u.macroName <> "/" <> tshow u.macroArity
+    locText loc =
+      Text.pack loc.file <> ":" <> tshow loc.line <> ":" <> tshow loc.col
+    tshow :: (Show a) => a -> Text
+    tshow = Text.pack . show
+
+-- | Max lines 'renderExpansionChain' shows.
+maxChainLines :: Int
+maxChainLines = 10

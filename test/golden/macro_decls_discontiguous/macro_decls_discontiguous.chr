@@ -1,0 +1,12 @@
+:- module(macro_decls_discontiguous).
+
+% A macro that generates a whole closed function. Equations written
+% after the use can't extend it: the equations must be contiguous in
+% the module as spliced.
+:- macro_decls const_fun(F, V) --->
+    [ (:- function '$compound'(F, [any]) -> int),
+      ('$compound'(F, [a]) -> V) ].
+
+:- const_fun(f, 1).
+:- chr_constraint c/0.
+f(b) -> 2.

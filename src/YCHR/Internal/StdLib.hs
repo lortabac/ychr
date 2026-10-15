@@ -28,14 +28,20 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import System.FilePath (dropExtension, takeFileName)
+import YCHR.Internal.DeclMacro
+  ( ExpandedModule (..),
+    buildDeclMacroEnv,
+    expandAndConvert,
+    scopeFromTerms,
+  )
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Parser
   ( ModuleHeader (..),
-    OpTable,
     builtinOps,
     collectModuleHeader,
+    defaultModuleNameForSource,
     mergeOps,
-    parseModuleWith,
+    parseModuleTermsWith,
   )
 
 -- | The parsed standard library: every bundled library, keyed by its
@@ -56,10 +62,17 @@ data StdLibError
     StdLibOpConflict Text
   | -- | A library produced post-parse validation errors.
     StdLibValidationError FilePath String
+  | -- | Expanding a library's declaration-macro uses failed.
+    StdLibExpansionError FilePath String
   deriving (Show)
 
 -- | Parse a list of @(path, source)@ pairs as the standard library.
 -- Pure: any IO required to get the sources is the caller's problem.
+--
+-- All libraries share one merged operator table. Declaration macros
+-- are expanded here, using what each library imports (plus the
+-- prelude). Macro definitions stay on the 'Module' so user code can use
+-- the exported ones.
 parseStdLib :: [(FilePath, Text)] -> Either StdLibError StdLib
 parseStdLib sources = do
   hdrs <-
@@ -73,14 +86,23 @@ parseStdLib sources = do
   table <- case mergeOps builtinOps allOps of
     Left conflict -> Left (StdLibOpConflict conflict)
     Right t -> Right t
-  entries <- mapM (parseLib table) sources
+  termsOf <-
+    traverse
+      ( \(path, src) -> case parseModuleTermsWith table path src of
+          Left e -> Left (StdLibParseError path (show e))
+          Right ts -> Right (path, ts)
+      )
+      sources
+  let scopes =
+        [scopeFromTerms (defaultModuleNameForSource path) ts | (path, ts) <- termsOf]
+      env = buildDeclMacroEnv scopes
+  entries <- traverse (convertLib env) (zip scopes termsOf)
   pure (StdLib (Map.fromList entries))
-
-parseLib :: OpTable -> (FilePath, Text) -> Either StdLibError (Text, Module)
-parseLib table (path, src) =
-  let name = T.pack (dropExtension (takeFileName path))
-   in case parseModuleWith table path src of
-        Left e -> Left (StdLibParseError path (show e))
-        Right (m, errs)
-          | not (null errs) -> Left (StdLibValidationError path (show errs))
-          | otherwise -> Right (name, m)
+  where
+    libName path = T.pack (dropExtension (takeFileName path))
+    convertLib env (scope, (path, ts)) =
+      let em = expandAndConvert env scope ts
+       in case (em.expansionErrors, em.parseErrors) of
+            (errs@(_ : _), _) -> Left (StdLibExpansionError path (show errs))
+            ([], errs@(_ : _)) -> Left (StdLibValidationError path (show errs))
+            ([], []) -> Right (libName path, em.converted)

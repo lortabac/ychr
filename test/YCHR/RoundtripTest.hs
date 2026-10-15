@@ -149,7 +149,8 @@ genRule = do
       { name = name,
         head = P.noAnnP hd,
         guard = P.noAnnP guard_,
-        body = P.noAnnP body_
+        body = P.noAnnP body_,
+        expansion = []
       }
 
 -- | Strip source locations from a parsed 'P.Rule' so we can compare
@@ -160,7 +161,8 @@ stripRuleAnn r =
     { name = P.noAnn . (.node) <$> r.name,
       head = P.noAnnP r.head.node,
       guard = P.noAnnP r.guard.node,
-      body = P.noAnnP r.body.node
+      body = P.noAnnP r.body.node,
+      expansion = []
     }
 
 -- ---------------------------------------------------------------------------
