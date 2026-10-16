@@ -1,0 +1,18 @@
+% The constraints `tell_list/N` reaches from the prelude. Each binds the
+% goal's result variable, so what the prelude told is visible in the
+% golden output. `mine/2` is deliberately not exported: only its own
+% module may name it.
+:- module(provider, [zero/1, note/2, triple/4, tenth/10, 'café'/2]).
+
+:- chr_constraint zero/1, note/2, triple/4, tenth/10, 'café'/2, mine/2.
+
+zero(V) <=> V = 0.
+note(X, R) <=> R = X.
+triple(X, Y, Z, R) <=> R is X + Y + Z.
+tenth(A, B, C, D, E, F, G, H, I, J) <=> J is A.
+mine(X, R) <=> R = X.
+
+% A non-ASCII name: its functor has two run-time spellings, the encoded
+% one on a compound term and the raw one on an atom, and the tier holds
+% both.
+'café'(X, R) <=> R is X + 10.

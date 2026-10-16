@@ -84,6 +84,7 @@ import YCHR.Internal.VM.Types
     StackFrame (..),
     Stmt (..),
     TellableKey (..),
+    TellableResolution (..),
     ValExpr (..),
     historyIdsList,
   )
@@ -380,6 +381,11 @@ instance ToCode CallableKey where
   toCode = genericToCode
 
 instance ToCode TellableKey where
+  toCode = genericToCode
+
+deriving instance Generic TellableResolution
+
+instance ToCode TellableResolution where
   toCode = genericToCode
 
 instance ToCode Procedure where

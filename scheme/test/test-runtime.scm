@@ -1385,4 +1385,51 @@
                              (make-term (string->symbol "prelude__.")
                                         (vector 'c (string->symbol "prelude__[]"))))))))
 
+;;; --------------------------------------------------------------------------
+;;; `%tell-term`'s origin-less tier
+;;;
+;;; The tier a prelude rule needs: it is handed goals named by its caller,
+;;; which its own module cannot name. `register-tellable-anywhere!` fills
+;;; it, `%tell-term` consults it only from the prelude and only after the
+;;; scoped lookup misses, and more than one procedure for a pair is
+;;; reported as ambiguous. Mirrors `tellTerm` in the Haskell interpreter.
+;;; --------------------------------------------------------------------------
+
+;; A session where `c/2` is tellable origin-less under two short
+;; spells — the shape a non-ASCII name registers — and `d/2` scoped to
+;; module `m` only.
+(define (anywhere-session)
+  (let ((s (fresh-session))
+        (proc (lambda (s a b) (list a b))))
+    (register-tellable-anywhere! s 'c 2 proc)
+    (register-tellable-anywhere! s (string->symbol "m__c") 2 proc)
+    (register-tellable! s "m" 'd 2 proc)
+    s))
+
+(test-group "%tell-term origin-less tier"
+  (test-equal "the prelude reaches a bare goal through it"
+              '(1 2)
+              (%tell-term (anywhere-session) "prelude" 'c 1 2))
+  (test-equal "a scoped miss in another module does not"
+              "tell: no constraint c/2 is visible in module other"
+              (error-message
+               (lambda () (%tell-term (anywhere-session) "other" 'c 1 2))))
+  (test-equal "a qualified goal keeps the scoped spelling"
+              '(1 2)
+              (%tell-term (anywhere-session) "m" 'd 1 2))
+  (test-equal "the scoped entry wins over the tier"
+              '(1 2)
+              (%tell-term (anywhere-session) "m" 'd 1 2))
+  (test-equal "two providers for a pair are ambiguous"
+              "tell: constraint c/2 is ambiguous between m:c, n:c"
+              (let ((s (fresh-session)))
+                ;; The table holds the candidates' tell procedures; the
+                ;; error names the constraints those procedure *names*
+                ;; implement, so the pair is built as symbols, the shape
+                ;; the compiler registers.
+                (hashtable-set! (session-tellables-unqualified s)
+                                (cons 'c 2)
+                                (list 'tell_m__c2 'tell_n__c2))
+                (error-message (lambda () (%tell-term s "prelude" 'c 1 2))))))
+
 (test-end "runtime")

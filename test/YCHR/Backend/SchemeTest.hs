@@ -60,12 +60,14 @@ tests =
       -- either, and `print_store` / `write_store_to_list` need them to
       -- label a stored constraint: they travel as `%make-session`'s
       -- fourth argument, the mangled `vmName` of each type in index
-      -- order. For `order`'s single constraint the table is one entry;
-      -- assert the literal, which no registration can produce (those
-      -- emit symbols, not strings).
+      -- order. The generated vector is not single-element: every program
+      -- also declares the prelude's `tell_list/N`, so `order__leq` is
+      -- the first entry and more follow. Assert the literal opening,
+      -- which pins both the spelling and that it leads, and which no
+      -- registration can produce (those emit symbols, not strings).
       testCase "the generated library threads the constraint type names" $ do
         code <- schemeFor leqSource
-        assertInfix "(vector \"order__leq\")" code
+        assertInfix "(vector \"order__leq\" " code
     ]
 
 -- ---------------------------------------------------------------------------

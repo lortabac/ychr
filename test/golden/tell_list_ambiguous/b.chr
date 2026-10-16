@@ -1,0 +1,3 @@
+:- module(b, [note/2]).
+:- chr_constraint note/2.
+note(X, R) <=> R = X + 2.

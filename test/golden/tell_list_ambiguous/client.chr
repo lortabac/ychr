@@ -1,0 +1,4 @@
+:- module(client, [run/1]).
+:- use_module(a).
+:- chr_constraint run/1.
+run(R) <=> tell_list([quote(note(1, R))]).

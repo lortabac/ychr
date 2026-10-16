@@ -69,6 +69,7 @@ import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub, partition, sortOn)
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, mapMaybe)
 import Data.Set (Set)
@@ -146,6 +147,7 @@ compile prog symTab =
                 evaluables = buildEvaluables prog.functions,
                 callables = buildCallables prog.functions,
                 tellables = buildTellables prog,
+                tellablesUnqualified = buildTellablesUnqualified prog,
                 inertTypes = sortOn ctIndex (mapMaybe (.inertType) constraintProcs)
               }
         else Left allErrs
@@ -238,12 +240,15 @@ buildCallables functions =
 -- compound's functor is 'vmName'-encoded, while an atom keeps the raw
 -- name ('compileTerm'). Both are registered, so @tell(G)@ finds the
 -- constraint whichever shape @G@ has.
+--
+-- The tier this builds is the scoped one. 'buildTellablesUnqualified'
+-- adds the origin-less one a prelude rule's dynamic tell needs.
 buildTellables :: D.Program -> [(TellableKey, Name)]
 buildTellables prog =
-  [ ( TellableKey {scope = sc, functor = functor, arity = arity},
+  [ ( TellableKey {scope = Just sc, functor = functor, arity = arity},
       tellProcName (Types.qualifiedToName qn) arity
     )
-  | sc <- Set.toList scopes,
+  | sc <- Set.toList (tellScopes prog),
     ((n, arity), providers) <-
       Map.toList (Map.findWithDefault Map.empty sc prog.nameVisibility),
     qn <- providers,
@@ -252,8 +257,88 @@ buildTellables prog =
       vmName (Types.qualifiedToName qn)
         : concat [nub [vmName (Types.Unqualified n), Name n] | [_] <- [providers]]
   ]
+
+-- | Build the origin-less tier of the dynamic @tell\/N@ dispatch: one
+-- entry per constraint the program declares, keyed by its bare functor
+-- and arity.
+--
+-- This is the tier a rule cannot reach through its own module's
+-- visibility, because the goal it is handed was named by its caller. A
+-- prelude rule such as @tell_list\/N@ is the motivating case: it is
+-- compiled once, in a module that declares none of the constraints its
+-- callers tell.
+--
+-- A constraint is included only when some scoped tier carries its bare
+-- spelling, so the table holds exactly the pairs the renamer would
+-- resolve as a bare name somewhere in the program — an unexported
+-- constraint a module keeps to itself has no bare entry and stays
+-- unreachable, as it must. A qualified goal never has an entry here:
+-- it named its module, so the scoped lookup is the only tier that can
+-- be right about whether that module is visible.
+--
+-- Two exported constraints of the same bare name and arity in
+-- different modules are genuinely ambiguous here, and the runtime
+-- reports that rather than resolving to whichever entry the map
+-- happened to keep. One constraint registered under both its run-time
+-- spellings — see 'buildTellables' — shares one procedure, so it stays
+-- unambiguous.
+buildTellablesUnqualified :: D.Program -> Map TellableKey TellableResolution
+buildTellablesUnqualified prog =
+  Map.map resolve (groupByPair candidates)
   where
-    scopes = Set.fromList [sc | r <- prog.rules, sc <- concatMap goalScopes r.body.node]
+    candidates :: [(TellableKey, (Name, Types.QualifiedName))]
+    candidates =
+      [ ( TellableKey {scope = Just (bareText qn), functor = name, arity = arity},
+          (tellProcName (Types.qualifiedToName qn) arity, qn)
+        )
+      | (ConstraintKey qn arity, _) <- Map.toList prog.constraintTypes,
+        Set.member (Name (bareText qn), arity) bareKeys,
+        -- A non-ASCII name has two spellings, the same pair
+        -- 'buildTellables' registers: the compound's encoded functor
+        -- and the atom's raw one. Both are present, so a goal resolves
+        -- whichever shape it has.
+        name <-
+          nub [vmName (Types.Unqualified (bareText qn)), Name (bareText qn)]
+      ]
+
+    bareKeys =
+      Set.fromList
+        [ (Name n, arity)
+        | qns <- Map.elems prog.nameVisibility,
+          ((n, arity), providers) <- Map.toList qns,
+          [qn] <- [nub providers],
+          Map.member (ConstraintKey qn arity) prog.constraintTypes
+        ]
+
+    -- Group by the goal a runtime looks up: the functor text and the
+    -- arity. The first key of a group represents it; every other groups
+    -- under the same (functor, arity) but may differ in the scope text
+    -- only.
+    groupByPair =
+      Map.fromListWith
+        (\new old -> old <> new)
+        . map (\(key, entry) -> (key {scope = Nothing}, [(key, entry)]))
+
+    resolve entries = case nub [procName | (_, (procName, _)) <- entries] of
+      [procName] -> UniqueTell procName
+      _ ->
+        -- Sorted, not in the map's order, so the message does not depend
+        -- on the grouping fold. The Scheme backend's registration
+        -- renderer sorts the same spellings, so both runtimes print one
+        -- order.
+        AmbiguousTell
+          (sortOn (Types.flattenName . Types.qualifiedToName) [qn | (_, (_, qn)) <- entries])
+
+-- | The bare source name of a qualified constraint name, the text a
+-- goal's functor carries for an unqualified reference.
+bareText :: Types.QualifiedName -> Text
+bareText (Types.QualifiedName _ n) = n
+
+-- | The modules in which some rule body contains a dynamic tell: the
+-- scopes the scoped 'tellables' tier carries entries for.
+tellScopes :: D.Program -> Set Text
+tellScopes prog = Set.fromList [sc | r <- prog.rules, sc <- concatMap goalScopes r.body.node]
+  where
     goalScopes (D.BodyTellDynamic sc _ _) = [sc]
     goalScopes (D.BodyOr branches) = concatMap (concatMap goalScopes) (NE.toList branches)
     goalScopes _ = []

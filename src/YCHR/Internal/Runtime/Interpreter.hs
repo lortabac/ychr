@@ -112,6 +112,7 @@ import YCHR.Internal.Runtime.Error
     isControlException,
     runtimeError',
     runtimeErrorS,
+    tellAmbiguousError,
     tellNotAGoalError,
     tellNotVisibleError,
     tellUnboundError,
@@ -298,6 +299,7 @@ interpret prog hostCalls entryName args = do
       evaluableMap
       callableMap
       (Map.fromList prog.tellables)
+      prog.tellablesUnqualified
       Map.empty
       mempty
   runChr (callProc entryName (map CVal args)) env
@@ -1418,6 +1420,12 @@ evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 -- direct tell's would be. An unbound goal is an instantiation error;
 -- anything else that misses is a general error, and a list, which can
 -- only be a malformed goal, is reported as not a constraint term.
+--
+-- A miss in the prelude's own scope retries in the origin-less tier
+-- ('Program.tellablesUnqualified'), which is what a prelude rule needs:
+-- it is handed goals named by its caller, which it cannot name itself.
+-- No other scope takes that tier, so a user module keeps resolving — and
+-- rejecting — exactly the names it can see.
 tellTerm :: Text -> Value -> [Value] -> Chr ()
 tellTerm scope goal extras = do
   goal' <- deref goal
@@ -1429,14 +1437,29 @@ tellTerm scope goal extras = do
   where
     dispatch f args = do
       let allArgs = args <> extras
-          key = TellableKey {scope = scope, functor = Name f, arity = length allArgs}
-      SessionEnv {tellables} <- ask
-      case Map.lookup key tellables of
+          arity = length allArgs
+          scopedKey = TellableKey {scope = Just scope, functor = Name f, arity = arity}
+          anywhereKey = scopedKey {scope = Nothing}
+          notVisible =
+            tellNotVisibleError
+              (T.unpack (displayFunctor f) <> "/" <> show arity)
+              (T.unpack scope)
+      SessionEnv {tellables, tellablesUnqualified} <- ask
+      case Map.lookup scopedKey tellables of
         Just procName -> void (callProc procName (map CVal allArgs))
-        Nothing ->
-          tellNotVisibleError
-            (T.unpack (displayFunctor f) <> "/" <> show (length allArgs))
-            (T.unpack scope)
+        Nothing
+          | scope == preludeModule ->
+              case Map.lookup anywhereKey tellablesUnqualified of
+                Just (UniqueTell procName) -> void (callProc procName (map CVal allArgs))
+                Just (AmbiguousTell candidates) ->
+                  tellAmbiguousError
+                    (T.unpack (displayFunctor f) <> "/" <> show arity)
+                    (map (T.unpack . Types.flattenName . Types.qualifiedToName) candidates)
+                Nothing -> notVisible
+          | otherwise -> notVisible
+    -- The module whose rules may be handed a goal they cannot name. See
+    -- the note above 'tellTerm'.
+    preludeModule = "prelude"
     -- The functor as the user would write it: @m:foo@ for a mangled
     -- qualified name, the bare name otherwise.
     displayFunctor f = case decodeName f [] of

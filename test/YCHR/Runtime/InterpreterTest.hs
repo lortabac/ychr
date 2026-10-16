@@ -70,6 +70,7 @@ runChrEmpty action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -89,6 +90,7 @@ runChrBase action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -103,6 +105,7 @@ runChrLeq action = do
       IntMap.empty
       builtinOps
       leqSlotProgram
+      Map.empty
       Map.empty
       Map.empty
       Map.empty
@@ -145,6 +148,7 @@ singleProc procName params body =
       evaluables = [],
       callables = [],
       tellables = [],
+      tellablesUnqualified = Map.empty,
       inertTypes = []
     }
 
@@ -537,6 +541,7 @@ softGuardTests =
                   evaluables = [],
                   callables = [],
                   tellables = [],
+                  tellablesUnqualified = Map.empty,
                   inertTypes = []
                 }
         outcome <-
@@ -597,6 +602,7 @@ leqProgram =
       evaluables = [],
       callables = [],
       tellables = [],
+      tellablesUnqualified = Map.empty,
       inertTypes = [],
       procedures =
         [ tellLeq,
@@ -1001,6 +1007,7 @@ makeCalcProc body =
       evaluables = [],
       callables = [],
       tellables = [],
+      tellablesUnqualified = Map.empty,
       inertTypes = [],
       procedures =
         [ mkProc
@@ -1263,6 +1270,7 @@ closureProg callables =
       evaluables = [],
       callables = callables,
       tellables = [],
+      tellablesUnqualified = Map.empty,
       inertTypes = []
     }
 

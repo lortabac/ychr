@@ -112,7 +112,11 @@ table:
   header at all, anything written before VM version numbers existed;
   an explicit `(version 0)` is rejected as well. Such a unit is
   rejected by any version-aware binary, because only a binary predating
-  VM version numbers knows that format. The current version is 2.
+  VM version numbers knows that format. Version 1 is likewise not read:
+  its `push-frame` fields were bare atoms, so a rule or user function did
+  not round-trip. Version 2 is not read either: version 3 adds the
+  `tellables-unqualified` entry, and a reader accepts only its own
+  version. The current version is 3.
 - **`<program>`** — the VM program (see below).
 - **`exports`** — the CHR identifiers (name + arity) visible to
   external callers; backends should generate a public entry point
@@ -193,6 +197,17 @@ compilation.
   it can name under its qualified functor (`"m__c"`), plus one under
   the bare functor (`"c"`) when no other visible constraint shares the
   name and arity. Present, possibly empty, in everything the compiler
+  emits; optional on read, like `callables`.
+- `tellables-unqualified` — the second tier of the same dispatch, the
+  one a dynamic `tell` written in a *prelude* rule needs. Its entries
+  have the same shape except that the scope is the bare atom `any`, and
+  the trailing fields are one proc name per candidate: the usual one,
+  but two when the program exports two constraints of the same bare name
+  and arity, which the runtime reports as ambiguous rather than
+  resolving. `<functor>` is a bare name only — a qualified goal names
+  its module, so only the scoped tier can judge whether that module is
+  visible. Consulted only when the scoped lookup misses and the scope is
+  the prelude. Present, possibly empty, in everything the compiler
   emits; optional on read, like `callables`.
 - `inert-types` — constraint types whose activation runs no
   occurrence procedure (no occurrences, or only passive ones).
@@ -927,13 +942,16 @@ reflexivity @ leq(X, X) <=> true.
 The output of `ychr compile -t vm mymodule.chr`, reindented. The
 prelude is always compiled in, so the real dump also has one
 `evaluables` entry, one `callables` entry, one `func_*` procedure and
-one export per prelude function — elided here (`; ...`). The constraint
-is `mymodule:leq/2`, so procedure names follow
+one export per prelude function — elided here (`; ...`). It also
+declares the prelude's `tell_list/N`, so the real type-name vector,
+`tellables` and `tellables-unqualified` tables carry entries beyond the
+ones shown; only the user's constraint and procedure are spelled out
+below. The constraint is `mymodule:leq/2`, so procedure names follow
 `<prefix>_mymodule__leq2`:
 
 ```scheme
 (vm-program
-  (version 2)
+  (version 3)
   (program 1
     (type-names (qualified "mymodule" "leq"))
     1
@@ -947,6 +965,8 @@ is `mymodule:leq/2`, so procedure names follow
       ; ... one entry per prelude function and lifted lambda elided
       )
     (tellables)
+    ; ... the prelude's tell_list/N entries appear here too
+    (tellables-unqualified)
     (inert-types)
 
     ; tell_mymodule__leq2(X_0, X_1): create, store, activate

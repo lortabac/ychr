@@ -27,6 +27,7 @@ where
 import Data.Char (isAlpha, isAlphaNum, ord)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
+import Data.List (nub, sort)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (maybeToList)
 import Data.Set qualified as Set
@@ -284,6 +285,9 @@ programInfoSExpr infoName symTab vmp ops =
         map evaluableRegistration vmp.program.evaluables
           ++ map callableRegistration vmp.program.callables
           ++ map tellableRegistration vmp.program.tellables
+          ++ map
+            unqualifiedTellableRegistration
+            (Map.toList vmp.program.tellablesUnqualified)
           ++ goalRegistrations symTab vmp
           ++ shortExportRegistrations vmp.exportedSet
       -- The let body is the session itself, returned to the caller.
@@ -502,19 +506,41 @@ callableRegistration (key, procName) =
     ]
 
 -- | Emit @(register-tellable! %s "scope" 'functor arity procedure)@ for
--- a single entry of the program's tellables table. The functor is the
--- symbol a goal term carries at run time, as for 'callableRegistration';
--- the scope is a module name, compared as a string.
+-- one entry of the program's scoped tellables table. The functor is the
+-- symbol a goal term carries at run time, as for
+-- 'callableRegistration'; the scope is a module name, compared as a
+-- string.
 tellableRegistration :: (TellableKey, Name) -> SExpr
-tellableRegistration (key, procName) =
+tellableRegistration (key, procName) = case key.scope of
+  Just m ->
+    SList
+      [ SAtom "register-tellable!",
+        SAtom "%s",
+        SString m,
+        compileSymbol key.functor.unName,
+        SInt (fromIntegral key.arity),
+        SAtom procName.unName
+      ]
+  Nothing -> unqualifiedTellableRegistration (key, UniqueTell procName)
+
+-- | Emit @(register-tellable-anywhere! %s 'functor arity procedure
+-- ...)@ for one entry of the program's origin-less tellables table.
+-- One procedure name per candidate: the Scheme runtime treats more than
+-- one as the ambiguous pair, which is what the Haskell interpreter
+-- does with 'AmbiguousTell'.
+unqualifiedTellableRegistration :: (TellableKey, TellableResolution) -> SExpr
+unqualifiedTellableRegistration (key, resolution) =
   SList
-    [ SAtom "register-tellable!",
-      SAtom "%s",
-      SString key.scope,
-      compileSymbol key.functor.unName,
-      SInt (fromIntegral key.arity),
-      SAtom procName.unName
-    ]
+    ( SAtom "register-tellable-anywhere!"
+        : SAtom "%s"
+        : compileSymbol key.functor.unName
+        : SInt (fromIntegral key.arity)
+        : map (SAtom . (.unName)) (unqualifiedProcNames key.arity resolution)
+    )
+  where
+    unqualifiedProcNames _ (UniqueTell procName) = [procName]
+    unqualifiedProcNames arity (AmbiguousTell candidates) =
+      nub (sort (map (\qn -> tellProcName (Types.qualifiedToName qn) arity) candidates))
 
 -- ---------------------------------------------------------------------------
 -- Rendering

@@ -22,6 +22,9 @@
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)
                 builtin-op-table
+                ;; Origin-less tell tier, then the three search tables.
+                ;; The tier is empty: this session tells nothing.
+                (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)

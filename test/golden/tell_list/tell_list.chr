@@ -1,0 +1,48 @@
+% `tell_list/N` is the prelude's list counterpart of `tell/N`: N tells
+% `tell/N` for each element, so the trailing arguments are appended to a
+% goal's own. A goal is an evaluated argument, so a symbolic one is
+% written `quote(...)`.
+:- module(tell_list, [zero0/1, one_own/1, one_local/1, one_extras/1,
+                      one_bare/1, one_unbound/2, three/1, ten/1, ordered/1,
+                      non_ascii/1]).
+
+:- use_module(provider).
+
+:- chr_constraint zero0/1, one_own/1, one_local/1, one_extras/1,
+                  one_bare/1, one_unbound/2, three/1, ten/1, ordered/1,
+                  non_ascii/1, local/2.
+
+% A name only this module can see: the prelude's rule reaches it through
+% the origin-less tier even though `prelude` cannot name it itself.
+local(X, R) <=> R is X * 10.
+
+% `tell_list/1`: the goal carries all its own arguments.
+zero0(V) <=> tell_list([quote(zero(V))]).
+
+one_own(V) <=> tell_list([quote(note(4, V))]).
+
+one_local(V) <=> tell_list([quote(local(3, V))]).
+
+% `tell_list/1` with two entries: the second wins `V`, which is how the
+% list order shows up in the output.
+one_extras(V) <=> tell_list([quote(note(1, _)), quote(note(2, V))]).
+
+% `tell_list/2`: the extra is appended to the goal the element names.
+one_bare(V) <=> tell_list([quote(note)], 5, V).
+
+% A variable element is a goal that is not a goal yet.
+one_unbound(G, V) <=> tell_list([G], V).
+
+% `tell_list/4`: three appended arguments.
+three(V) <=> tell_list([quote(triple)], 1, 2, 3, V).
+
+% `tell_list/10`: nine appended arguments to a goal of one argument.
+ten(V) <=> tell_list([quote(tenth(1, 2, 3, 4, 5, 6, 7, 8, 9, V))]).
+
+% Two one-argument goals in one list, told in order.
+ordered(V) <=> tell_list([quote(note(1, _)), quote(note(2, V))]).
+
+% A non-ASCII goal: the term's functor is the encoded spelling, so the
+% tier has to hold both that and the raw atom spelling.
+non_ascii(V) <=> tell_list([quote('café'(2, V))]).
+

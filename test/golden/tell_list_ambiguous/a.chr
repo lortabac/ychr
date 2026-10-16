@@ -1,0 +1,6 @@
+% Two modules declare the same bare name and arity. The prelude's
+% `tell_list` resolves a bare goal program-wide, so the pair is
+% ambiguous even though `client` imports only `a`.
+:- module(a, [note/2]).
+:- chr_constraint note/2.
+note(X, R) <=> R = X + 1.

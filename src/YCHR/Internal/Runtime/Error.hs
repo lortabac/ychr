@@ -28,6 +28,7 @@ module YCHR.Internal.Runtime.Error
     tellUnboundError,
     tellNotAGoalError,
     tellNotVisibleError,
+    tellAmbiguousError,
 
     -- * Control-flow exceptions
     SearchFailure (..),
@@ -45,6 +46,7 @@ import Control.Exception
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef (readIORef)
+import Data.List (intercalate)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import YCHR.Internal.Runtime.Monad (CallStack, Chr, SessionEnv (..))
@@ -168,6 +170,21 @@ tellNotVisibleError nameArity modName =
       <> nameArity
       <> " is visible in module "
       <> modName
+
+-- | Dynamic @tell\/N@, fourth failure mode: the goal is not visible in
+-- the module the tell was written in, and the origin-less tier finds
+-- more than one constraint of that name and arity. Takes the rendered
+-- @name\/arity@ and the candidates' qualified names. This can only
+-- arise through the origin-less tier, since an unqualified name with
+-- several providers is a renamer error at a statically written goal.
+tellAmbiguousError :: String -> [String] -> Chr a
+tellAmbiguousError nameArity candidates =
+  runtimeErrorS $
+    chrRuntimeErrorPrefix
+      <> "tell: constraint "
+      <> nameArity
+      <> " is ambiguous between "
+      <> intercalate ", " candidates
 
 throwWithStack :: RuntimeErrorKind -> String -> Chr a
 throwWithStack kind msg = do

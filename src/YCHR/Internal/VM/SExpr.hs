@@ -36,10 +36,13 @@ module YCHR.Internal.VM.SExpr
   )
 where
 
+import Data.List (nub, sort)
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Internal.Compile.Names (tellProcName)
 import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.SExpr (SExpr (..), parseSExpr, printSExpr)
 import YCHR.Internal.Types qualified as Types
@@ -75,9 +78,11 @@ data VMProgram = VMProgram
 -- version numbers could have known it.  Version 1 is likewise no
 -- longer read: its @push-frame@ fields were bare atoms, so dumps
 -- containing a rule or a user function did not round-trip, and version
--- 2 quotes those fields instead.
+-- 2 quotes those fields instead.  Version 3 adds the
+-- @(tellables-unqualified ...)@ header entry, the origin-less tier of
+-- the dynamic @tell\/N@ dispatch.
 vmVersion :: Int
-vmVersion = 2
+vmVersion = 3
 
 -- ---------------------------------------------------------------------------
 -- High-level API
@@ -158,6 +163,10 @@ programToSExpr prog =
         : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
         : SList (SAtom "callables" : map callableEntryToSExpr prog.callables)
         : SList (SAtom "tellables" : map tellableEntryToSExpr prog.tellables)
+        : SList
+          ( SAtom "tellables-unqualified"
+              : map tellableResolutionToSExpr (Map.toList prog.tellablesUnqualified)
+          )
         : SList (SAtom "inert-types" : map constraintTypeToSExpr prog.inertTypes)
         : map procedureToSExpr prog.procedures
     )
@@ -178,11 +187,45 @@ callableEntryToSExpr (key, procName) =
 tellableEntryToSExpr :: (TellableKey, Name) -> SExpr
 tellableEntryToSExpr (key, procName) =
   SList
-    [ SString key.scope,
+    [ tellableScopeToSExpr key.scope,
       nameToSExpr key.functor,
       SInt (fromIntegral key.arity),
       nameToSExpr procName
     ]
+
+-- | The scope field of a 'tellableEntryToSExpr'. A module scope is a
+-- quoted string; the origin-less tier writes the bare atom @any@, which
+-- no module scope can be (those are strings), so the two never collide.
+tellableScopeToSExpr :: Maybe Text -> SExpr
+tellableScopeToSExpr (Just m) = SString m
+tellableScopeToSExpr Nothing = SAtom "any"
+
+-- | The atom 'tellableScopeToSExpr' writes for the origin-less tier.
+tellableScopeAnyAtom :: Text
+tellableScopeAnyAtom = "any"
+
+-- | One entry of the origin-less tier. The shape matches
+-- 'tellableEntryToSExpr' with an @any@ scope, except that the trailing
+-- proc-name fields are one per candidate. The common case is one; two
+-- mean the pair is ambiguous and the runtime must report it rather than
+-- choose.
+tellableResolutionToSExpr :: (TellableKey, TellableResolution) -> SExpr
+tellableResolutionToSExpr (key, resolution) =
+  SList
+    ( tellableScopeToSExpr Nothing
+        : nameToSExpr key.functor
+        : SInt (fromIntegral key.arity)
+        : map nameToSExpr (resolutionProcNames key.arity resolution)
+    )
+
+-- | The tell procedures a resolution names, without repetition, in a
+-- stable order. A candidate name that does not round-trip through
+-- 'qualifiedNameOfTellProc' only costs a worse ambiguity message: the
+-- entry itself is kept, because the resolution is stored, not re-derived.
+resolutionProcNames :: Int -> TellableResolution -> [Name]
+resolutionProcNames _ (UniqueTell procName) = [procName]
+resolutionProcNames arity (AmbiguousTell candidates) =
+  nub (sort (map (\qn -> tellProcName (Types.qualifiedToName qn) arity) candidates))
 
 procedureToSExpr :: Procedure -> SExpr
 procedureToSExpr proc =
@@ -534,9 +577,10 @@ programFromSExpr
     checkDeclaredCount "type" n (length tns)
     checkDeclaredCount "rule" nr (length rns)
     evs <- traverse evaluableEntryFromSExpr evSexprs
-    -- @callables@, @tellables@ and @inert-types@ are all optional on
-    -- read, so a program that simply lacks one of these header entries
-    -- still loads: an absent @callables@ or @tellables@ is an empty
+    -- @callables@, @tellables@, @tellables-unqualified@ and
+    -- @inert-types@ are all optional on read, so a program that simply
+    -- lacks one of these header entries still loads: an absent
+    -- @callables@, @tellables@ or @tellables-unqualified@ is an empty
     -- dispatch table, and an absent @inert-types@ is a hint no result
     -- depends on.
     --
@@ -554,7 +598,11 @@ programFromSExpr
           SList (SAtom "tellables" : tls) : rs -> (tls, rs)
           rs -> ([], rs)
     tls <- traverse tellableEntryFromSExpr tlSexprs
-    let (itSexprs, procs) = case rest'' of
+    let (tuSexprs, rest''') = case rest'' of
+          SList (SAtom "tellables-unqualified" : tus) : rs -> (tus, rs)
+          rs -> ([], rs)
+    tus <- Map.fromList <$> traverse tellableUnqualifiedEntryFromSExpr tuSexprs
+    let (itSexprs, procs) = case rest''' of
           SList (SAtom "inert-types" : its) : ps -> (its, ps)
           ps -> ([], ps)
     its <- traverse constraintTypeFromSExpr itSexprs
@@ -566,6 +614,7 @@ programFromSExpr
           evaluables = evs,
           callables = cls,
           tellables = tls,
+          tellablesUnqualified = tus,
           inertTypes = its,
           procedures = ps
         }
@@ -593,15 +642,87 @@ callableEntryFromSExpr (SList [fSexpr, iSexpr, SInt arity, pSexpr]) = do
     )
 callableEntryFromSExpr s = err ("expected callable entry, got: " <> printSExpr s)
 
-tellableEntryFromSExpr :: SExpr -> Err (TellableKey, Name)
-tellableEntryFromSExpr (SList [SString sc, fSexpr, SInt arity, pSexpr]) = do
+-- | Parse a 'tellableEntryToSExpr' under @fromScope@, which turns the
+-- entry's scope field into a module name or 'Nothing'. The two tiers
+-- share one shape, so one parser serves both.
+tellableEntryFromSExprWith :: (SExpr -> Err (Maybe Text)) -> SExpr -> Err (TellableKey, Name)
+tellableEntryFromSExprWith fromScope (SList [scSexpr, fSexpr, SInt arity, pSexpr]) = do
+  scope <- fromScope scSexpr
   functor <- nameFromSExpr fSexpr
   procName <- nameFromSExpr pSexpr
   pure
-    ( TellableKey {scope = sc, functor = functor, arity = fromInteger arity},
+    ( TellableKey {scope = scope, functor = functor, arity = fromInteger arity},
       procName
     )
-tellableEntryFromSExpr s = err ("expected tellable entry, got: " <> printSExpr s)
+tellableEntryFromSExprWith _ s = err ("expected tellable entry, got: " <> printSExpr s)
+
+tellableEntryFromSExpr :: SExpr -> Err (TellableKey, Name)
+tellableEntryFromSExpr = tellableEntryFromSExprWith (fmap Just . textFromSExpr)
+
+-- | Parse one @(tellables-unqualified ...)@ child: the same shape as a
+-- scoped entry with the 'tellableScopeAnyAtom' scope and one or more
+-- proc-name fields. A pair the compiler could not resolve has two, and
+-- reads back as 'AmbiguousTell'.
+--
+-- The candidates' qualified names are recovered from their procedure
+-- names rather than written out: a constraint's @tell@ procedure is
+-- named after it ('YCHR.Internal.Compile.Names.tellProcName'), so the
+-- entry stays a flat tuple and still round-trips.
+tellableUnqualifiedEntryFromSExpr :: SExpr -> Err (TellableKey, TellableResolution)
+tellableUnqualifiedEntryFromSExpr (SList (scSexpr : fSexpr : SInt arity : pSexprs)) = do
+  case scSexpr of
+    SAtom a | a == tellableScopeAnyAtom -> pure ()
+    s -> err ("expected any (origin-less tellable scope), got: " <> printSExpr s)
+  functor <- nameFromSExpr fSexpr
+  procNames <- traverse nameFromSExpr pSexprs
+  let arity' = fromInteger arity
+  resolution <- case nub procNames of
+    [] -> err ("expected at least one tellable proc name, got: " <> printSExpr scSexpr)
+    [procName] -> pure (UniqueTell procName)
+    procNames' -> pure (AmbiguousTell (map (qualifiedNameOfTellProc arity') procNames'))
+  let key = TellableKey {scope = Nothing, functor = functor, arity = arity'}
+  pure (key, resolution)
+tellableUnqualifiedEntryFromSExpr s =
+  err ("expected origin-less tellable entry, got: " <> printSExpr s)
+
+-- | The qualified constraint name a @tell@ procedure implements, from
+-- the procedure name @YCHR.Internal.Compile.Names.tellProcName@ builds,
+-- @tell_<encodeIdentifier vmName><arity>@.
+--
+-- Only the ambiguity message reads this, so an imperfect answer costs
+-- message quality and nothing else. The arity is removed from the right
+-- before the split, not searched for: for a non-ASCII source name the
+-- digits sit right after an @__u<hex>__@ escape, and a right-hand scan
+-- cannot tell them from the name, while the entry's key holds the arity
+-- exactly.
+--
+-- The separator is @__@ — the same bracketing 'encodeIdentifier' gives
+-- every non-ASCII character in either component, and the lexer rejects
+-- @__@ in a source name, so the first one is the module separator. The
+-- spelling is left encoded: decoding it back would need the @%u@
+-- escapes of the *term* encoding, which @tellProcName@ does not use.
+--
+-- The split itself is 'Data.List'-based (hence the packed round trip):
+-- the reader has to build under both compilers, and splitting a text is
+-- one of the places MicroHs's @Data.Text@ is thinnest
+-- (@dev-docs\/MICROHS_GAPS.md@, gap 4).
+qualifiedNameOfTellProc :: Int -> Name -> Types.QualifiedName
+qualifiedNameOfTellProc arity (Name t) =
+  case T.stripPrefix "tell_" t of
+    Nothing -> Types.QualifiedName "" t
+    Just mangle ->
+      let body = T.take (T.length mangle - length (show arity)) mangle
+       in case breakOnSeparator [] (T.unpack body) of
+            (modName, rest)
+              | null modName -> Types.QualifiedName "" (T.pack rest)
+              | otherwise -> Types.QualifiedName (T.pack modName) (T.pack rest)
+  where
+    -- The characters before the first @__@, and those after it. Recursive
+    -- rather than 'Data.List.break' so the element type is pinned by the
+    -- pattern, with no predicate to infer.
+    breakOnSeparator acc ('_' : '_' : rest) = (reverse acc, rest)
+    breakOnSeparator acc (c : rest) = breakOnSeparator (c : acc) rest
+    breakOnSeparator acc [] = (reverse acc, [])
 
 textFromSExpr :: SExpr -> Err Text
 textFromSExpr (SString t) = pure t

@@ -21,6 +21,7 @@
           session-evaluables
           session-callables
           session-tellables
+          session-tellables-unqualified
           session-op-table
           session-goals
           session-short-exports
@@ -62,6 +63,7 @@
                         evaluables
                         callables
                         tellables
+                        tellables-unqualified
                         op-table
                         goals
                         short-exports
@@ -80,6 +82,7 @@
                           evaluables
                           callables
                           tellables
+                          tellables-unqualified
                           op-table
                           goals
                           short-exports
@@ -93,10 +96,13 @@
   ;; closure-apply dispatch table for `$call` (closure functor +
   ;; identity + arity → procedure). `tellables` holds the dynamic
   ;; `tell/N` dispatch table (calling module + goal functor + arity →
-  ;; tell procedure). All three are populated once at library load
-  ;; time, via `register-evaluable!`, `register-callable!` and
-  ;; `register-tellable!` respectively, and never mutated after; hence
-  ;; immutable in the record.
+  ;; tell procedure), and `tellables-unqualified` its origin-less tier
+  ;; (goal functor + arity → tell procedure, or a list of them when the
+  ;; pair is ambiguous). All four are populated once at library load
+  ;; time, via `register-evaluable!`, `register-callable!`,
+  ;; `register-tellable!` and `register-tellable-anywhere!`
+  ;; respectively, and never mutated after; hence immutable in the
+  ;; record.
   ;;
   ;; `index-positions` is the per-type set of argument positions the
   ;; program looks up through a `Foreach` index condition — a vector of
@@ -169,6 +175,7 @@
             (immutable evaluables session-evaluables)
             (immutable callables session-callables)
             (immutable tellables session-tellables)
+            (immutable tellables-unqualified session-tellables-unqualified)
             (immutable op-table session-op-table)
             (immutable goals session-goals)
             (immutable short-exports session-short-exports)
