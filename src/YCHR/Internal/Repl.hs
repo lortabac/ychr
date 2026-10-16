@@ -49,7 +49,7 @@ import YCHR.Internal.Collected (CollectedModule (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
 import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Desugared qualified as D
-import YCHR.Internal.Display (Display (..), displayMsg)
+import YCHR.Internal.Display (Display (..), displayMsg, renderSplices)
 import YCHR.Internal.LineInput (LineInput (..), LineInputSettings (..), mkLineInput)
 import YCHR.Internal.PExpr qualified as P
 import YCHR.Internal.Parsed qualified as Parsed
@@ -120,15 +120,17 @@ runRepl ::
   HostCallRegistry ->
   Bool ->
   Bool ->
+  Bool ->
   [FilePath] ->
   IO ()
-runRepl stdlib mtypeChecker hostCalls quietMode werror files = do
+runRepl stdlib mtypeChecker hostCalls quietMode werror dumpSplices files = do
   result <- compileFiles stdlib True files
   case result of
     Left err -> do
       putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
+      when dumpSplices (hPutStr stderr (renderSplices prog.splices))
       let warnsFatal = werror && not (null warnings)
       when (warnsFatal || not quietMode) (printWarnings warnings)
       when warnsFatal exitFailure
@@ -141,6 +143,7 @@ runRepl stdlib mtypeChecker hostCalls quietMode werror files = do
         hostCalls
         quietMode
         werror
+        dumpSplices
         files
         outerInput
         liveInput
@@ -230,12 +233,13 @@ outerLoop ::
   HostCallRegistry ->
   Bool ->
   Bool ->
+  Bool ->
   [FilePath] ->
   LineInput ->
   LineInput ->
   CompiledProgram ->
   IO ()
-outerLoop stdlib mtypeChecker hostCalls quietMode werror files outerInput liveInput = go
+outerLoop stdlib mtypeChecker hostCalls quietMode werror dump files outerInput liveInput = go
   where
     prompt = if quietMode then "" else "ychr> "
     go prog = do
@@ -274,15 +278,17 @@ outerLoop stdlib mtypeChecker hostCalls quietMode werror files outerInput liveIn
       result <- compileFiles stdlib True files
       case result of
         Left err -> putStr (displayMsg err) *> go prog
-        Right (prog', warnings)
-          | werror && not (null warnings) -> do
+        Right (prog', warnings) -> do
+          when dump (hPutStr stderr (renderSplices prog'.splices))
+          if werror && not (null warnings)
+            then do
               printWarnings warnings
               -- Surface type errors of the rejected program too, so the
               -- user sees the full diagnostic picture before deciding
               -- what to fix; the previous program stays loaded.
               printTypeDiagnosticsWhen mtypeChecker prog'
               go prog
-          | otherwise -> do
+            else do
               printWarnings warnings
               printTypeDiagnosticsWhen mtypeChecker prog'
               go prog'

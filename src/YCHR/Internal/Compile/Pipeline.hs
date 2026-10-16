@@ -12,6 +12,7 @@ module YCHR.Internal.Compile.Pipeline
     Warning (..),
     ExhaustivenessWarning,
     CompiledProgram (..),
+    ModuleSplices (..),
     ExportResolution (..),
     compileModules,
     compileFiles,
@@ -74,6 +75,7 @@ import YCHR.Internal.Parser
   ( ModuleHeader (..),
     OpTable,
     ParseValidationError (..),
+    SourceItem (..),
     buildModuleOpTable,
     builtinOps,
     collectModuleHeader,
@@ -266,7 +268,25 @@ data CompiledProgram = CompiledProgram
     -- ('ychr check') never build it.
     queryRenameEnv :: QueryRenameEnv,
     -- | The desugared program (before lambda lifting), for type checking.
-    desugaredProgram :: D.Program
+    desugaredProgram :: D.Program,
+    -- | The clauses declaration macros spliced into the input modules, in
+    -- input order. Empty for DSL input, which has no directives (see
+    -- 'compileParsedModules'). Only @--dump-splices@ reads it. It stays a
+    -- thunk over each module's expanded terms until something forces it,
+    -- so a long-lived 'CompiledProgram' (a REPL session, an embedder)
+    -- keeps those terms alive; the CLI's is short-lived.
+    splices :: [ModuleSplices]
+  }
+
+-- | The clauses declaration macros spliced into one module, with the
+-- input file the module came from. For @--dump-splices@; see
+-- 'YCHR.Internal.Display.renderSplices'. 'spliceItems' holds only the
+-- generated items (a non-empty 'expansion'); user-written clauses are
+-- not in it.
+data ModuleSplices = ModuleSplices
+  { spliceModule :: Text,
+    spliceFile :: FilePath,
+    spliceItems :: [SourceItem]
   }
 
 -- | What an unqualified name in a goal resolves to, given everything the
@@ -370,6 +390,16 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
       parsed = map (.converted) expanded
       validationErrors = concatMap (.parseErrors) expanded
       declErrors = concatMap (.expansionErrors) expanded
+      -- Only modules that actually spliced something get a dump block.
+      spliceDump =
+        [ ModuleSplices
+            { spliceModule = scopeName scope,
+              spliceFile = fp,
+              spliceItems = em.splices
+            }
+        | (fp, scope, em) <- zip3 (map fst inputs) userScopes expanded,
+          not (null em.splices)
+        ]
   case (declErrors, validationErrors) of
     ([], []) -> pure ()
     ([], errs) -> Left (ParseValidationErrors errs)
@@ -377,7 +407,13 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
       Left (DeclMacroErrors (des ++ map (noDiag . fmap DeclMacroParseError) errs))
   let trailingLoc =
         Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
-  finalizeCompilation libraryMods opExports trailingLoc (map fst inputs) parsed
+  finalizeCompilation
+    libraryMods
+    opExports
+    trailingLoc
+    (map fst inputs)
+    spliceDump
+    parsed
 
 -- | Compile already-parsed modules. This is the entry point used by
 -- "YCHR.DSL" callers that build 'Module' values in Haskell rather than
@@ -416,7 +452,7 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
-  finalizeCompilation libraryMods opExports Map.empty [] parsed
+  finalizeCompilation libraryMods opExports Map.empty [] [] parsed
 
 -- | Shared post-parse, post-library-resolution pipeline: rename, resolve,
 -- desugar, lambda-lift, compile, and assemble the resulting
@@ -434,10 +470,13 @@ finalizeCompilation ::
   -- with the user modules. Empty for DSL-built input, which has no
   -- files of its own.
   [FilePath] ->
+  -- | The clauses declaration macros spliced into the input modules.
+  -- Empty for DSL-built input, which has no directives.
+  [ModuleSplices] ->
   -- | User modules (parsed).
   [Module] ->
   Either Error (CompiledProgram, [Warning])
-finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
+finalizeCompilation libraryMods opExports trailingLocMap inputPaths splicesToDump parsed = do
   checkDuplicateModules inputPaths parsed
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
@@ -540,7 +579,8 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
           nextLambdaIndex = lambdaCount,
           queryFunctionVisibility = buildQueryFunctionVisibility allMods,
           queryRenameEnv = buildQueryRenameEnv allMods,
-          desugaredProgram = desugared
+          desugaredProgram = desugared,
+          splices = splicesToDump
         },
       warnings
     )

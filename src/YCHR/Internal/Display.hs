@@ -10,6 +10,7 @@ module YCHR.Internal.Display
     -- * Displaying
     displaySrcLoc,
     displayMsgWithSrcLoc,
+    renderSplices,
 
     -- * Error codes
     displayErrorCode,
@@ -48,15 +49,20 @@ import Text.Parsec.Error qualified as PE
 import Text.Parsec.Pos (SourcePos, sourceColumn, sourceLine, sourceName)
 import YCHR.Internal.Collect (CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
-import YCHR.Internal.Compile.Pipeline (Error (..), GoalRejection (..), Warning (..))
+import YCHR.Internal.Compile.Pipeline
+  ( Error (..),
+    GoalRejection (..),
+    ModuleSplices (..),
+    Warning (..),
+  )
 import YCHR.Internal.ConstraintUse (ConstraintUseError (..), OccurrenceRole (..))
 import YCHR.Internal.DeclMacro (DeclMacroError (..))
 import YCHR.Internal.Desugar (DesugarError (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
-import YCHR.Internal.Parsed (AnnP (..))
+import YCHR.Internal.Parsed (AnnP (..), ExpansionStep (..))
 import YCHR.Internal.Parsed qualified as P
-import YCHR.Internal.Parser (ParseValidationError (..))
+import YCHR.Internal.Parser (ParseValidationError (..), SourceItem (..))
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..))
 import YCHR.Internal.Rename.Macro
@@ -99,6 +105,46 @@ displayErrorCode (ErrorCode n) = "YCHR-" ++ show n
 -- | Display a source location as @file:line:col@.
 displaySrcLoc :: P.SourceLoc -> String
 displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
+
+-- | Render the @--dump-splices@ report: for each module, a header comment
+-- and the clauses its declaration-macro uses spliced, grouped by the
+-- outermost use that generated them. Goal macros never appear here (they
+-- expand later, in the renamer). See
+-- [the macro reference](../../docs/reference/macros.md).
+renderSplices :: [ModuleSplices] -> String
+renderSplices = intercalate "\n" . map renderModule
+  where
+    renderModule :: ModuleSplices -> String
+    renderModule ms =
+      unlines
+        ( ( "% splices for "
+              ++ ms.spliceFile
+              ++ " (module "
+              ++ T.unpack ms.spliceModule
+              ++ ")"
+          )
+            : renderItems Nothing ms.spliceItems
+        )
+    -- A nested use's clauses stay under the outermost use's comment, so
+    -- the key is the chain's last step (chains are innermost first).
+    -- An item with no chain is user-written and is not dumped.
+    renderItems :: Maybe ExpansionStep -> [SourceItem] -> [String]
+    renderItems _ [] = []
+    renderItems prev (si : rest) = case si.expansion of
+      [] -> renderItems prev rest
+      chain ->
+        let step = last chain
+            originLine = ["% " ++ renderStep step | prev /= Just step]
+         in originLine ++ (prettyPExprSrc si.term.node ++ ".") : renderItems (Just step) rest
+    renderStep :: ExpansionStep -> String
+    renderStep step =
+      T.unpack step.macroModule
+        ++ ":"
+        ++ T.unpack step.macroName
+        ++ "/"
+        ++ show step.macroArity
+        ++ " at "
+        ++ displaySrcLoc step.site
 
 severityLabel :: Severity -> String
 severityLabel SevError = "error"
