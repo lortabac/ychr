@@ -1,1 +1,1 @@
-state_run:bad_kvs([k], R)
+state_run:bad_kvs(L, R)

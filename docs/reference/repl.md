@@ -28,10 +28,11 @@ constraints `alt/1`, `choose/2`, `between/3`, `try_unify/2`; the
 functions `fail/0`, `solve/1`, `findall/2`, `fold_solutions/4`,
 `forall/3`, `find_n/3`; and the type `step/1` with constructors
 `continue/1`, `stop/1`, `commit/1` — so a bare `continue(1)` is
-`search:continue(1)`. `library(state)` puts in query scope the
-constraints `new_state/2`, `get/2`, `put/2`, `modify/2`,
-`close_state/1`, `new_states/1` and `close_states/1`, and the
-functions `run_state/3` and `run_states/2`.
+`search:continue(1)`. `library(state)` declares no constraints: it puts
+the functions `run_state/3` and `run_states/2` in query scope, while
+`:- state(Key, Type).` is a declaration macro that can only be used in a
+file, so a state key must come from a loaded module
+([state.md](state.md)).
 
 `--quiet` drops the prompt, the warnings and the type-check report,
 except under `--Werror`,
