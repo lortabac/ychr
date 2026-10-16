@@ -478,6 +478,42 @@ built with `'$compound'`. A forbidden clause that is visible in the
 body as written is also reported when the macro is defined.
 
 
+### Dumping the splices
+
+Every command that compiles files (`run`, `compile`, `check`,
+`gen-driver`, `repl`) takes `--dump-splices`: it prints the clauses the
+declaration macros spliced, to stderr, and leaves stdout untouched. It
+is a debugging aid for working out what a macro actually produced.
+
+Each module that spliced something gets a `%` header, and a further
+comment names the use a run of clauses came from — the outermost use,
+so a nested use's clauses stay under it:
+
+```prolog
+% splices for counter.chr (module counter)
+% counter:counter/1 at counter.chr:7:1
+:- chr_constraint clicks / 1.
+:- chr_constraint inc_clicks / 0.
+clicks(N), inc_clicks <=> M is N + 1, clicks(M).
+```
+
+Clauses go through the same pretty-printer the diagnostics use, so an
+operator like `/` comes out spaced (`clicks / 1`) even though the
+source writes `clicks/1`.
+
+Clauses the user wrote are not dumped, and neither is anything a goal
+macro produced: goal macros expand later, in the renamer, and are out
+of scope for the flag. A clause that a declaration macro spliced is
+shown as spliced, so a goal macro it *uses* still reads as a name
+(`a ==> g.`), not as its expansion. Only the files named on the command
+line are dumped — a library's macros are expanded when the standard
+library is parsed, before the CLI sees a program. A compile that fails
+before it produces a program (parse, expansion, rename, resolve,
+desugar) prints no dump, just the error; a later failure, like a type
+error or a `--Werror` exit, happens after the dump. The flag is
+explicit, so `--quiet` does not suppress it.
+
+
 ## Construction primitives
 
 Two primitives build terms that Prolog syntax cannot write when parts

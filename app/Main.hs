@@ -14,7 +14,7 @@ import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.ConstraintUse (checkConstraintUse)
-import YCHR.Internal.Display (displayMsg)
+import YCHR.Internal.Display (displayMsg, renderSplices)
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..))
@@ -40,7 +40,8 @@ data RunOpts = RunOpts
   { goal :: T.Text,
     showBindings :: Bool,
     werror :: Bool,
-    noCheck :: Bool
+    noCheck :: Bool,
+    dumpSplices :: Bool
   }
 
 data Target = TargetVM | TargetScheme
@@ -50,23 +51,27 @@ data CompileOpts = CompileOpts
     baseName :: Maybe String,
     target :: Target,
     werror :: Bool,
-    noCheck :: Bool
+    noCheck :: Bool,
+    dumpSplices :: Bool
   }
 
 data GenDriverOpts = GenDriverOpts
   { gdGoal :: T.Text,
     werror :: Bool,
-    noCheck :: Bool
+    noCheck :: Bool,
+    dumpSplices :: Bool
   }
 
 data ReplOpts = ReplOpts
   { quiet :: Bool,
     werror :: Bool,
-    noCheck :: Bool
+    noCheck :: Bool,
+    dumpSplices :: Bool
   }
 
 data CheckOpts = CheckOpts
-  { werror :: Bool
+  { werror :: Bool,
+    dumpSplices :: Bool
   }
 
 data Command
@@ -90,6 +95,16 @@ noCheckFlag :: Parser Bool
 noCheckFlag =
   switch (long "no-check" <> help "Skip type checking (program and goal checks)")
 
+-- | @--dump-splices@: print the clauses spliced into the input modules by
+-- @:- macro_decls@ uses to stderr. Goal macros are not dumped; they expand
+-- later, in the renamer. See docs/reference/macros.md.
+dumpSplicesFlag :: Parser Bool
+dumpSplicesFlag =
+  switch
+    ( long "dump-splices"
+        <> help "Print clauses spliced in by :- macro_decls to stderr"
+    )
+
 replParser :: Parser Command
 replParser =
   Repl
@@ -97,6 +112,7 @@ replParser =
             <$> switch (long "quiet" <> help "Suppress prompt and warnings")
             <*> werrorFlag
             <*> noCheckFlag
+            <*> dumpSplicesFlag
         )
     <*> filesArg
 
@@ -110,6 +126,7 @@ runParser =
             <*> switch (long "show-bindings" <> help "Print variable bindings")
             <*> werrorFlag
             <*> noCheckFlag
+            <*> dumpSplicesFlag
         )
     <*> filesArg
 
@@ -147,6 +164,7 @@ compileParser =
               )
             <*> werrorFlag
             <*> noCheckFlag
+            <*> dumpSplicesFlag
         )
     <*> filesArg
 
@@ -159,11 +177,15 @@ genDriverParser =
               (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
             <*> werrorFlag
             <*> noCheckFlag
+            <*> dumpSplicesFlag
         )
     <*> filesArg
 
 checkParser :: Parser Command
-checkParser = Check <$> (CheckOpts <$> werrorFlag) <*> filesArg
+checkParser =
+  Check
+    <$> (CheckOpts <$> werrorFlag <*> dumpSplicesFlag)
+    <*> filesArg
 
 commandParser :: Parser Command
 commandParser =
@@ -221,6 +243,7 @@ main = do
         hostCalls
         opts.quiet
         opts.werror
+        opts.dumpSplices
         files
     Run opts files -> runGoal resources opts files
     Compile opts files -> runCompile resources opts files
@@ -249,6 +272,7 @@ loadResourcesOrExit = do
 
 runGoal :: Resources -> RunOpts -> [FilePath] -> IO ()
 runGoal resources opts files = withCompiled resources False files $ \prog warnings -> do
+  dumpSplicesIf opts.dumpSplices prog
   printWarnings warnings
   typeWarnings <- typeCheckUnless opts.noCheck resources prog
   prepResult <- try @SomeException (prepareGoal prog opts.goal)
@@ -279,6 +303,7 @@ runGoal resources opts files = withCompiled resources False files $ \prog warnin
 runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
 runCompile resources opts files =
   withCompiled resources False files $ \prog warnings -> do
+    dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckUnless opts.noCheck resources prog
     exitOnWerror opts.werror (warnings ++ typeWarnings)
@@ -317,6 +342,7 @@ runCompile resources opts files =
 runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver resources opts files =
   withCompiled resources False files $ \prog warnings -> do
+    dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckUnless opts.noCheck resources prog
     -- 'prepareGoal' parses the goal and canonicalizes bare
@@ -351,10 +377,12 @@ runGenDriver resources opts files =
       exitFailure
 
 runCheck :: Resources -> CheckOpts -> [FilePath] -> IO ()
-runCheck resources opts files = withCompiled resources False files $ \prog warnings -> do
-  printWarnings warnings
-  typeWarnings <- typeCheckOrExit resources prog
-  exitOnWerror opts.werror (warnings ++ typeWarnings)
+runCheck resources opts files =
+  withCompiled resources False files $ \prog warnings -> do
+    dumpSplicesIf opts.dumpSplices prog
+    printWarnings warnings
+    typeWarnings <- typeCheckOrExit resources prog
+    exitOnWerror opts.werror (warnings ++ typeWarnings)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -396,6 +424,15 @@ withCompiled resources includeStdlib files k = do
       putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> k prog warnings
+
+-- | Print the declaration-macro splices of @prog@ to stderr when
+-- @--dump-splices@ was given. The dump comes before any warnings, so a
+-- `--dump-splices` run reads top-down as: what was spliced, then what
+-- the compiler thought of it. See
+-- [macros.md](../docs/reference/macros.md#dumping-the-splices).
+dumpSplicesIf :: Bool -> CompiledProgram -> IO ()
+dumpSplicesIf dump prog =
+  when dump (hPutStr stderr (renderSplices prog.splices))
 
 -- | Type-check @prog@ and return the warnings to fold into the caller's
 -- @--Werror@ decision, unless @--no-check@ was given — in which case the

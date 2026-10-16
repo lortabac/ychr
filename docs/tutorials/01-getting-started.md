@@ -113,7 +113,9 @@ warning before the goal runs or the file is written. `run`, `compile`,
 `gen-driver` and `repl` also take `--no-check`, which skips the optional
 type checker entirely — the program check and the goal/query check —
 so a program with type errors still runs or compiles; `check`, which
-exists to type-check, never skips.
+exists to type-check, never skips. All five commands also take
+`--dump-splices`, which prints the clauses declaration macros spliced
+to stderr — see [macros.md](../reference/macros.md#dumping-the-splices).
 
 ## 6. Where to go next
 

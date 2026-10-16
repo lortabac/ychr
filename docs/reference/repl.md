@@ -3,7 +3,7 @@
 ## Starting the REPL
 
 ```sh
-ychr repl [--quiet] [--no-check] [--Werror] [FILES...]
+ychr repl [--quiet] [--no-check] [--Werror] [--dump-splices] [FILES...]
 ```
 
 Loads the files (or none), prints warnings and type-check messages,
@@ -47,6 +47,11 @@ parse, collect, rename, resolve, desugar — still fail, and `--Werror`
 still treats the remaining compile and rename warnings as fatal.
 `ychr check` — whose whole purpose is type checking — does not accept
 the flag.
+
+`--dump-splices` prints the clauses the loaded files' declaration
+macros spliced, to stderr, on startup and on `:recompile`. It is an
+explicit debugging request, so `--quiet` does not suppress it. See
+[macros.md](macros.md#dumping-the-splices).
 
 ## Prompts
 

@@ -40,6 +40,10 @@ macros (`:- macro_decls`) are implemented.
   take a built-in directive's name and arity) and `MacroKindMismatch`
   (YCHR-20035, wrong kind of macro). Errors on generated code show the
   macro chain. Library macros are expanded when the stdlib is parsed.
+- `--dump-splices` on `run`, `compile`, `check`, `gen-driver` and `repl`
+  prints the clauses declaration macros spliced, to stderr. Goal macros
+  are not dumped. `CompiledProgram` and `ExpandedModule` gain a
+  `splices` field, and `runRepl` a `dumpSplices` argument.
 - **Breaking:** unknown directives are now an error
   (`UnknownDirective`, YCHR-15024) instead of being ignored. Delete
   foreign Prolog directives like `:- dynamic`.

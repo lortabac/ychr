@@ -15,10 +15,15 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (Assertion, assertBool, assertFailure, testCase, (@?=))
 import YCHR.Embedded (stdlib)
 import YCHR.Internal.Collected (CollectedModule (..))
-import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), Error (..), Warning (..))
+import YCHR.Internal.Compile.Pipeline
+  ( CompiledProgram (..),
+    Error (..),
+    ModuleSplices (..),
+    Warning (..),
+  )
 import YCHR.Internal.DeclMacro (DeclMacroError (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
-import YCHR.Internal.Display (Display (..))
+import YCHR.Internal.Display (Display (..), renderSplices)
 import YCHR.Internal.Parsed
   ( Ann (..),
     AnnP (..),
@@ -100,6 +105,7 @@ tests =
     "DeclMacro"
     [ expansionTests,
       diagnosticTests,
+      spliceTests,
       stdlibTests
     ]
 
@@ -647,6 +653,140 @@ compileErr :: [(FilePath, Text)] -> IO Error
 compileErr inputs = case compileModules stdlib False inputs of
   Left e -> pure e
   Right _ -> assertFailure "expected an error"
+
+-- | @--dump-splices@: the spliced clauses collected and rendered.
+spliceTests :: TestTree
+spliceTests =
+  testGroup
+    "splices"
+    [ testCase "generated clauses are collected per module" $ do
+        cp <-
+          compileOk
+            ( src
+                [ ":- module(m).",
+                  ":- macro_decls flag(N) ---> [(:- chr_constraint N/0)].",
+                  ":- flag(on)."
+                ]
+            )
+        case cp.splices of
+          [ ModuleSplices
+              { spliceModule = modName,
+                spliceFile = file,
+                spliceItems = items
+              }
+            ] -> do
+              modName @?= "m"
+              file @?= "m.chr"
+              length items @?= 1
+          ms -> assertFailure ("expected one module, got " ++ show (length ms)),
+      testCase "renderSplices pins the dump format" $ do
+        cp <-
+          compileOk
+            ( src
+                [ ":- module(m).",
+                  ":- macro_decls flag(N) ---> [(:- chr_constraint N/0)].",
+                  ":- flag(on)."
+                ]
+            )
+        renderSplices cp.splices
+          @?= unlines
+            [ "% splices for m.chr (module m)",
+              "% m:flag/1 at m.chr:3:1",
+              ":- chr_constraint on / 0."
+            ],
+      testCase "user clauses and goal macros are not dumped" $ do
+        cp <-
+          compileOk
+            ( src
+                [ ":- module(m).",
+                  ":- chr_constraint a/0, b/0.",
+                  ":- macro g ---> [b].",
+                  "a ==> g.",
+                  ":- macro_decls flag(N) ---> [(:- chr_constraint N/0)].",
+                  ":- flag(on)."
+                ]
+            )
+        renderSplices cp.splices
+          @?= unlines
+            [ "% splices for m.chr (module m)",
+              "% m:flag/1 at m.chr:6:1",
+              ":- chr_constraint on / 0."
+            ],
+      testCase "a nested use is grouped under the outermost use" $ do
+        cp <-
+          compileOk
+            ( src
+                [ ":- module(m).",
+                  ":- macro_decls inner(C) ---> [(:- chr_constraint C/0)].",
+                  ":- macro_decls outer ---> [(:- inner(a)), (:- inner(b))].",
+                  ":- outer."
+                ]
+            )
+        renderSplices cp.splices
+          @?= unlines
+            [ "% splices for m.chr (module m)",
+              "% m:outer/0 at m.chr:4:1",
+              ":- chr_constraint a / 0.",
+              ":- chr_constraint b / 0."
+            ],
+      testCase "one block per module, separated by a blank line" $ do
+        (prog, _) <-
+          compileAllOk
+            [ ( "p.chr",
+                src
+                  [ ":- module(p).",
+                    ":- macro_decls d ---> [(:- chr_constraint a/0)].",
+                    ":- d."
+                  ]
+              ),
+              ( "q.chr",
+                src
+                  [ ":- module(q).",
+                    ":- macro_decls e ---> [(:- chr_constraint b/0)].",
+                    ":- e."
+                  ]
+              )
+            ]
+        renderSplices prog.splices
+          @?= unlines
+            [ "% splices for p.chr (module p)",
+              "% p:d/0 at p.chr:3:1",
+              ":- chr_constraint a / 0.",
+              "",
+              "% splices for q.chr (module q)",
+              "% q:e/0 at q.chr:3:1",
+              ":- chr_constraint b / 0."
+            ],
+      testCase "a generated goal-macro use is dumped as spliced" $ do
+        -- The goal macro expands later, in the renamer; the dump shows
+        -- the clause as it was spliced, before that.
+        cp <-
+          compileOk
+            ( src
+                [ ":- module(m).",
+                  ":- chr_constraint a/0, b/0.",
+                  ":- macro g ---> [b].",
+                  ":- macro_decls gen ---> [(a ==> g)].",
+                  ":- gen."
+                ]
+            )
+        renderSplices cp.splices
+          @?= unlines
+            [ "% splices for m.chr (module m)",
+              "% m:gen/0 at m.chr:5:1",
+              "a ==> g."
+            ],
+      testCase "a use that splices nothing has no block" $ do
+        cp <-
+          compileOk
+            ( src
+                [ ":- module(m).",
+                  ":- macro_decls empty ---> [].",
+                  ":- empty."
+                ]
+            )
+        renderSplices cp.splices @?= ""
+    ]
 
 stdlibTests :: TestTree
 stdlibTests =

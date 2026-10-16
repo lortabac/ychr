@@ -229,7 +229,11 @@ data ExpandedModule = ExpandedModule
     parseErrors :: [AnnP ParseValidationError],
     -- | Expansion errors, definition checks, and conversion errors in
     -- generated clauses (with their chain).
-    expansionErrors :: [Diagnostic DeclMacroError]
+    expansionErrors :: [Diagnostic DeclMacroError],
+    -- | The clauses the module's uses spliced, in program order. Only
+    -- generated items (a non-empty 'expansion'); user-written clauses
+    -- are not here. For @--dump-splices@.
+    splices :: [SourceItem]
   }
 
 -- | Expand all uses in a module, then convert it.
@@ -247,7 +251,8 @@ expandAndConvert env scope terms =
               ++ expErrs
               ++ [ Diagnostic Nothing (DeclMacroParseError <$> e) (renderExpansionChain chain)
                  | (e, chain@(_ : _)) <- convErrs
-                 ]
+                 ],
+          splices = [si | si <- items, not (null si.expansion)]
         }
   where
     initialState = ExpState {nextSeed = 0, remaining = macroExpansionBudget, abandoned = False}
