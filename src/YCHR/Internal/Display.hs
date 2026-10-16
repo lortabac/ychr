@@ -368,6 +368,7 @@ renameErrorCode AggregateOnlyHead = ErrorCode 20039
 renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
 renameErrorCode (MalformedAggregateGoal _ _ _) = ErrorCode 20041
 renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
+renameErrorCode (MacroInAggregateGoal _ _) = ErrorCode 20043
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1278,6 +1279,18 @@ renameErrorMsg GuardOutsideAggregateGoal =
     "'?' guard outside an aggregate goal"
     ( "a '? Guard' conjunct is recognized inside an aggregate's goal;"
         ++ " write a rule guard with '|' and a body goal directly"
+    )
+renameErrorMsg (MacroInAggregateGoal macroName macroArity) =
+  withHint
+    ( "Macro '"
+        ++ macroQn macroName
+        ++ "/"
+        ++ show macroArity
+        ++ "' in an aggregate goal is not implemented yet"
+    )
+    ( "the goal of an aggregate is a goal position, but macro expansion"
+        ++ " inside it is still to come; write the core form"
+        ++ " 'aggregate(Agg, Element, Goal, Result)' instead"
     )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint

@@ -686,7 +686,15 @@ observable divergence Late Storage introduces.
 **Scope, precisely.** The guarantee covers the runtime's own
 bookkeeping — constraint store, propagation history, reactivation
 queue, call stack, trace depth — and it is what the catch depends on.
-It does *not* extend to a `HostCall` in the guard. A host function
+It does *not* extend to local variables. An aggregate fold called from a
+guard is the narrow case: it binds the fresh out-cells its caller
+created (`genGuardedFire` / `genAggregateProcedure`), and those
+bindings are real. They are harmless because each cell is created per
+candidate, is unreachable from the store, and is the *left* operand of
+the `bunify`, so binding it enqueues no reactivation and leaves nothing
+observable behind when the guard fails.
+
+It does *not* extend to a `HostCall` in the guard either. A host function
 receives the session and can bind shared logical-variable cells; the
 search entry points (`src/YCHR/Internal/Runtime/Search.hs`) document
 doing exactly that, with the goal's variables, as their result

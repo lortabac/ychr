@@ -50,6 +50,7 @@ module YCHR.Internal.Compile.Names
     pendingName,
     suspParamName,
     dropResultName,
+    removalParamName,
     inconclusiveName,
     blockedArgName,
 
@@ -295,6 +296,18 @@ suspParamName = "susp"
 -- short-circuit (Early Drop, paper §5.3).
 dropResultName :: Name
 dropResultName = "dropped"
+
+-- | Trailing 'Bool' parameter of a goal-occurrence procedure: @false@
+-- when @activate_c@ calls it with a live constraint, @true@ when the
+-- removal step calls it with a constraint the firing just removed. With
+-- @true@ the procedure skips its early-drop liveness test, because the
+-- active constraint is dead from the start and the test would abandon
+-- every combination of regular heads after the first.
+--
+-- The @$@ keeps the name out of reach of source code, exactly as
+-- 'inconclusiveName' does; both backends accept it in an identifier.
+removalParamName :: Name
+removalParamName = "$removal"
 
 -- | Per-procedure flag recording that equation dispatch was
 -- /inconclusive/: some structural pattern test failed because the value

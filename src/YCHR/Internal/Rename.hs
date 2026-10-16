@@ -319,6 +319,12 @@ data RenameError
   | -- | A @?\/1@ guard outside an aggregate goal. It is recognized
     -- structurally inside one, and has no meaning anywhere else.
     GuardOutsideAggregateGoal
+  | -- | A macro use inside an aggregate goal. The goal is a goal
+    -- position, but 'renameConjunct' does not expand macros, so the
+    -- compiler reports the form it does not implement rather than
+    -- resolving the name as an unknown constraint. Carries the macro's
+    -- qualified name and the arity used.
+    MacroInAggregateGoal QualifiedName Int
   deriving (Eq, Show)
 
 -- | A part of a rule head, for 'MacroEmptyHead'.
@@ -1452,10 +1458,34 @@ renameConjunct ctx loc origin outerName outerArity t = case t of
   CompoundTerm n args
     | Just k <- aggregateKindOf n (length args) ->
         (: []) . AggNested <$> renameAggregate ctx loc origin k args
-    | otherwise -> do
-        renamedName <- resolveName ResolveTop ctx loc origin n (length args)
-        renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) args
-        pure [AggConstraint (Constraint renamedName renamedArgs)]
+    -- A macro use inside an aggregate goal is a goal position like any
+    -- other, but 'renameConjunct' does not expand it. Report that instead
+    -- of resolving the name as a constraint, which would fail as an
+    -- unknown name and hide what the user wrote.
+    | otherwise -> case classifyGoalName ctx n (length args) of
+        IsMacro providerMod -> do
+          emitErrorIn
+            ctx
+            ( AnnP
+                ( MacroInAggregateGoal
+                    (QualifiedName providerMod (unqualifiedText n))
+                    (length args)
+                )
+                loc
+                origin
+            )
+          pure []
+        IsDeclMacro providerMod -> do
+          kindMismatch ctx loc origin providerMod n (length args)
+          pure []
+        AmbiguousGoalName ms -> do
+          let err = AmbiguousName (unqualifiedText n) (length args) ms
+          emitErrorIn ctx (AnnP err loc origin)
+          pure []
+        NotAMacro -> do
+          renamedName <- resolveName ResolveTop ctx loc origin n (length args)
+          renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) args
+          pure [AggConstraint (Constraint renamedName renamedArgs)]
   _ -> do
     -- The offending conjunct is not a constraint, an aggregate or a
     -- guard. Report it against the enclosing aggregate at the arity it

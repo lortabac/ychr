@@ -1,0 +1,13 @@
+% Two conjuncts of the same type in one goal match only distinct
+% suspensions: with d(1) and d(2) in the store the fold finds the two
+% ordered pairs, not the four self-pairings.
+:- module(aggregates_goal_distinct, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, n/2, ask/1, setup/1.
+
+c(X), count((d(_), d(_)), N) ==> N > 0 | n(X, N).
+
+n(_, N) \ ask(A) <=> A = N.
+
+setup(A) <=> c(1), d(1), d(2), ask(A).

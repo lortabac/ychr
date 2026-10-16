@@ -123,9 +123,11 @@ symmetryPassive occ =
 -- | Among the two occurrences of a symmetric two-head rule, the passive
 -- one is the ωr-later of the two. Occurrence positions in the combined
 -- (removed-first, right-to-left) head list run @0@ (tried first) and @1@
--- (tried later); the later one is passive.
+-- (tried later); the later one is passive. A goal occurrence has no
+-- active regular head and is never reached here (a rule with an
+-- aggregate is exempt), but 'activeHeadPosition' says so in the types.
 isLaterOccurrence :: Occurrence -> Bool
-isLaterOccurrence occ = occ.activeIdx == HeadPosition 1
+isLaterOccurrence occ = activeHeadPosition occ == Just (HeadPosition 1)
 
 -- | Whether the two heads describe the same unordered match: there is a
 -- bijection on argument class-tokens mapping @h0@ to @h1@ and @h1@ to

@@ -11,6 +11,8 @@ module YCHR.Internal.Compile.Types
     -- * Data types
     Occurrence (..),
     occurrenceArity,
+    GoalOccurrence (..),
+    activeHeadPosition,
     Partner (..),
     AggregatePlan (..),
     ResultMatch (..),
@@ -135,8 +137,45 @@ data Occurrence = Occurrence
     -- contributes no @occurrence_c_j@ procedure and no call from
     -- @activate_c@. See "YCHR.Internal.Compile.Passive" and
     -- @dev-docs/passive-occurrences.md@.
-    passive :: Bool
+    passive :: Bool,
+    -- | 'Just' for a goal occurrence: one CHR constraint conjunct of an
+    -- aggregate goal, tried when a constraint of its type is activated.
+    -- 'Nothing' for an ordinary head occurrence.
+    --
+    -- A goal occurrence's active constraint is not one of the rule's
+    -- heads, so 'activeIdx' is meaningless for it: use
+    -- 'activeHeadPosition'. 'isKept' is always 'True' (firing never
+    -- removes the active goal constraint), and 'partners' is still only
+    -- the regular heads, so every consumer that must see heads alone
+    -- keeps working unchanged.
+    goalOcc :: Maybe GoalOccurrence
   }
+
+-- | What a goal occurrence matches: the conjunct of an aggregate goal
+-- whose type this occurrence belongs to.
+--
+-- The active conjunct's arguments are carried by the occurrence
+-- ('activeArgs'); its own HNF guards are the entry at 'goalActiveIndex'
+-- of 'goalAll'. The location phase loops the other conjuncts of the goal
+-- around the active conjunct's guards, so a guard that compares a
+-- variable of an earlier conjunct with a fresh name sees the earlier
+-- binding, and a later conjunct sees whatever the active guards bound.
+data GoalOccurrence = GoalOccurrence
+  { -- | Source index of the enclosing aggregate within the rule head.
+    -- Used as the label prefix of the goal's loops.
+    goalIndex :: Int,
+    -- | Position of the active conjunct in 'goalAll'.
+    goalActiveIndex :: Int,
+    -- | Every conjunct of the goal, in goal order, including the active
+    -- one. The location phase skips the active conjunct's loop (the
+    -- active constraint already is it) but evaluates its guards in
+    -- place.
+    goalAll :: [D.AggregateConjunct],
+    -- | The conjuncts of each enclosing goal, outermost first. Always
+    -- empty until nested aggregates land.
+    goalEnclosing :: [[D.AggregateConjunct]]
+  }
+  deriving (Show, Eq)
 
 -- | Arity of an occurrence's active constraint, derived from
 -- 'activeArgs'. This is a function rather than a stored field so the
@@ -145,6 +184,17 @@ data Occurrence = Occurrence
 -- always equals the length of 'activeArgs'.
 occurrenceArity :: Occurrence -> Int
 occurrenceArity occ = length occ.activeArgs
+
+-- | The position of the occurrence's active /regular/ head, or
+-- 'Nothing' for a goal occurrence, whose active constraint is not a
+-- head. This is what every head-only consumer of 'activeIdx' —
+-- 'YCHR.Internal.Compile.buildHistoryIds' and
+-- 'YCHR.Internal.Compile.Passive.isLaterOccurrence' — has to go
+-- through.
+activeHeadPosition :: Occurrence -> Maybe HeadPosition
+activeHeadPosition occ = case occ.goalOcc of
+  Just _ -> Nothing
+  Nothing -> Just occ.activeIdx
 
 -- | One partner constraint of an 'Occurrence' — i.e. a head constraint
 -- of the same rule that is /not/ the active one.

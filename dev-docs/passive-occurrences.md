@@ -51,6 +51,16 @@ firings and change program behavior. The guiding principle is therefore
 *correctness over completeness* — every predicate below is a sufficient,
 not a necessary, condition for passivity.
 
+A rule whose head carries an **aggregate**
+([aggregates.md](../docs/reference/aggregates.md)) is exempt from the
+analysis: none of its occurrences is marked passive. Both v1 sources
+below rest on the ωr-earlier occurrence always firing first when the
+same constraints match, and an aggregate's applicability also depends on
+what its fold finds in the store, which can falsify that. The exemption
+is conservative — a rule with an aggregate may keep an occurrence that
+is in fact redundant — and it does not apply to a program without
+aggregates, so the optimization is unchanged there.
+
 
 ## v1 sources of passivity
 

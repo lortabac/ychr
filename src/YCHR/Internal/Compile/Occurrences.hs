@@ -122,11 +122,21 @@ ruleDisplayName ruleIdx rule = case rule.name of
   Nothing -> "__rule_" <> T.pack (show ruleIdx)
 
 -- | Produce one 'Occurrence' record for every head constraint of a
--- single rule. The active head varies; the other heads become the
--- partner list of that occurrence.
+-- single rule, plus one for every CHR constraint conjunct of one of its
+-- aggregate goals.
+--
+-- The ordinary occurrences come first, so within a rule a goal
+-- occurrence follows that rule's ordinary occurrences of the same type
+-- in the numbered occurrence list (spec §2 "Order"). The other heads
+-- become the partner list of each occurrence; a goal occurrence's
+-- partners are /all/ the regular heads, since its active constraint is
+-- not a head.
 --
 -- The rule's aggregates are planned by the caller and shared by all of its
--- occurrences, so an occurrence can compute them without re-planning.
+-- occurrences, so an occurrence can compute them without re-planning. An
+-- aggregate the planner dropped (selection and nested forms, until their
+-- phase) contributes no goal occurrence: there is no plan to compute it
+-- with.
 ruleOccurrences ::
   SymbolTable ->
   [[AggregatePlan]] ->
@@ -154,9 +164,37 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
           ++ [ (i, c, True)
              | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)
              ]
-  fmap catMaybes $
-    for orderedOccurrences $ \(idx, con, isKept) ->
-      mkOccurrence symTab rule ruleId' display aggregates orderedOccurrences idx con isKept
+  ordinary <-
+    fmap catMaybes $
+      for orderedOccurrences $ \(idx, con, isKept) ->
+        mkOccurrence symTab rule ruleId' display aggregates orderedOccurrences idx con isKept
+  -- One goal occurrence per CHR constraint conjunct of a planned
+  -- aggregate's goal. The plan is matched by its source index, since
+  -- the planner drops unsupported forms and leaves gaps in the list.
+  goalOccurrences <-
+    fmap catMaybes $
+      for goalConjuncts $ \(plan, goal, j, hc) ->
+        mkGoalOccurrence
+          symTab
+          rule
+          ruleId'
+          display
+          aggregates
+          orderedOccurrences
+          plan.planIndex
+          j
+          hc
+          goal
+  pure (ordinary ++ goalOccurrences)
+  where
+    planByIndex i = List.find (\p -> p.planIndex == i) (aggregatePlans !! ruleIdx)
+    goalConjuncts =
+      [ (plan, goal, j, hc)
+      | (i, agg) <- zip [0 :: Int ..] rule.head.node.aggregates,
+        Just plan <- [planByIndex i],
+        let goal = agg.goal,
+        (j, D.AggConstraint hc _) <- zip [0 :: Int ..] goal
+      ]
 
 -- | Build a single 'Occurrence' record for the active head constraint
 -- at @activeIdx@. The other entries in @combined@ become the partner
@@ -187,31 +225,7 @@ mkOccurrence
   activeCon
   activeIsKept = do
     let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
-        headLoc = rule.head.sourceLoc
-        headPretty = rule.head.parsed
-    let ruleLabel = Just ("rule " <> display)
-    partners <- for partners' $ \(idx, con, isKept) -> do
-      ct <-
-        lookupCType
-          symTab
-          headLoc
-          headPretty
-          ruleLabel
-          ( Identifier
-              (qualifiedToName con.name)
-              ( length
-                  con.args
-              )
-          )
-      pure $ do
-        cType <- ct
-        pure
-          Partner
-            { idx = idx,
-              constraint = con,
-              isKept = isKept,
-              cType = cType
-            }
+    partners <- resolvePartners symTab rule display partners'
     pure $ do
       resolvedPartners <- sequence partners
       pure
@@ -226,7 +240,92 @@ mkOccurrence
             activeArgs = activeCon.args,
             partners = resolvedPartners,
             aggregates = aggregates,
-            passive = False
+            passive = False,
+            goalOcc = Nothing
+          }
+
+-- | Build the 'Occurrence' for one CHR constraint conjunct of an
+-- aggregate goal. Every regular head is a partner, since the active
+-- constraint is not a head; @j@ is the conjunct's position in the goal,
+-- which the location phase needs to evaluate the conjunct's own guards
+-- in their goal-order place.
+mkGoalOccurrence ::
+  SymbolTable ->
+  D.Rule ->
+  RuleId ->
+  Text ->
+  [AggregatePlan] ->
+  [(HeadPosition, HeadConstraint, Bool)] ->
+  Int ->
+  Int ->
+  HeadConstraint ->
+  [D.AggregateConjunct] ->
+  Writer [Diagnostic CompileError] (Maybe Occurrence)
+mkGoalOccurrence symTab rule ruleId' display aggregates heads aggIndex j activeCon goal = do
+  partners <- resolvePartners symTab rule display heads
+  pure $ do
+    resolvedPartners <- sequence partners
+    pure
+      Occurrence
+        { conName = qualifiedToName activeCon.name,
+          number = OccurrenceNumber 0,
+          rule = rule,
+          ruleId = ruleId',
+          ruleDisplay = display,
+          -- Meaningless for a goal occurrence: the active constraint
+          -- is not a head. See 'YCHR.Internal.Compile.Types.activeHeadPosition'.
+          activeIdx = HeadPosition 0,
+          -- Firing never removes the active goal constraint; a
+          -- selection form's removal lands with its own phase.
+          isKept = True,
+          activeArgs = activeCon.args,
+          partners = resolvedPartners,
+          aggregates = aggregates,
+          passive = False,
+          goalOcc =
+            Just
+              GoalOccurrence
+                { goalIndex = aggIndex,
+                  goalActiveIndex = j,
+                  goalAll = goal,
+                  goalEnclosing = []
+                }
+        }
+
+-- | Resolve every partner entry's constraint type, reporting a miss and
+-- returning 'Nothing' for that entry so the caller can drop the whole
+-- occurrence.
+resolvePartners ::
+  SymbolTable ->
+  D.Rule ->
+  Text ->
+  [(HeadPosition, HeadConstraint, Bool)] ->
+  Writer [Diagnostic CompileError] [Maybe Partner]
+resolvePartners symTab rule display entries = do
+  let headLoc = rule.head.sourceLoc
+      headPretty = rule.head.parsed
+      ruleLabel = Just ("rule " <> display)
+  for entries $ \(idx, con, isKept) -> do
+    ct <-
+      lookupCType
+        symTab
+        headLoc
+        headPretty
+        ruleLabel
+        ( Identifier
+            (qualifiedToName con.name)
+            ( length
+                con.args
+            )
+        )
+    pure $ do
+      cType <- ct
+      pure
+        Partner
+          { idx = idx,
+            constraint = con,
+            isKept = isKept,
+            cType = cType
           }
 
 -- | Look up a constraint type in the symbol table, reporting an error

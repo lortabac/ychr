@@ -15,8 +15,9 @@
 --     written in a rule head.
 --
 -- The check is deliberately narrow and purely structural: it walks rule
--- heads only (never guards, bodies or goals), over every rule of the
--- flattened program, and does not ask whether an occurrence can fire.
+-- heads only (never guards or bodies; an aggregate goal is part of the
+-- head), over every rule of the flattened program, and does not ask
+-- whether an occurrence can fire.
 --
 -- Like "YCHR.Internal.Exhaustiveness", this is an independent pass with
 -- its own error type and no dependency on the CHR-encoded type checker.
@@ -68,6 +69,15 @@ checkConstraintUse prog
           occurrences =
             [(hc, KeptOccurrence) | hc <- h.kept]
               ++ [(hc, RemovedOccurrence) | hc <- h.removed]
+              -- A constraint in an aggregate goal is a kept occurrence: an
+              -- aggregate keeps its goal's constraints (spec
+              -- §Interaction with other features). The removal a
+              -- takemin/takemax performs is not reachable yet, since
+              -- selection aggregates are still rejected by the compiler.
+              ++ [ (hc, KeptOccurrence)
+                 | agg <- h.aggregates,
+                   hc <- goalConstraints agg
+                 ]
        in [ Diagnostic label (AnnP err loc origin) []
           | (hc, role) <- occurrences,
             let arity = length hc.args,
@@ -75,6 +85,13 @@ checkConstraintUse prog
             not (allows use role),
             let err = ConstraintUseViolation hc.name arity use role
           ]
+
+    -- The CHR constraint conjuncts of an aggregate goal, including those
+    -- of a nested aggregate.
+    goalConstraints agg = concatMap conjunctConstraints agg.goal
+    conjunctConstraints (D.AggConstraint hc _) = [hc]
+    conjunctConstraints (D.AggNested nested) = goalConstraints nested
+    conjunctConstraints (D.AggGuard _) = []
 
 -- | Whether a declared policy allows an occurrence in the given position.
 allows :: ConstraintUse -> OccurrenceRole -> Bool

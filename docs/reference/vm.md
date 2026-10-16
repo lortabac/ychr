@@ -769,10 +769,20 @@ Whether the value is a compound term with the given functor and arity.
 - **`bequal`** (ask semantics, Prolog `==`): structural equality, no
   mutation; two distinct unbound variables give `false`. Used in
   guards, which must not leave half-done bindings on failure. Guard
-  residuals are mutation-free as a whole — no `bunify`, `store`,
-  `kill` or `add-history` is reachable from one — which is also what
-  makes `bsoft-guard` sound: a guard abandoned part-way leaves
-  nothing to undo.
+  residuals are mutation-free as a whole — no `store`, `kill` or
+  `add-history` is reachable from one, and no `bunify` acts on a value
+  the store can reach — which is also what makes `bsoft-guard` sound: a
+  guard abandoned part-way leaves nothing to undo.
+
+A guard *can* reach a `bunify` through a called procedure: an aggregate
+fold ([aggregates.md](aggregates.md#implementation-notes)) binds the
+out-cells its caller created. Those cells are fresh per candidate,
+created inside the guard and unreachable from the store, and the cell
+is the *left* operand of the `bunify`, so unification returns an
+operand with no observers. The binding therefore enqueues no
+reactivation and leaves nothing behind when the guard fails. "Mutation
+free" in this section means the store, the propagation history, the
+reactivation queue and the call stack — not local variables.
 - **`bid-equal`** compares two constraint identifiers for equality.
 
 ### Constraint observation
@@ -856,10 +866,12 @@ occurrence once the missing variable is bound.
 Catching is sound under two conditions, both maintained by the
 compiler rather than checked by the instruction:
 
-- guard residuals do not tell (see `bequal`): no `bunify`, `store`,
-  `kill` or `add-history` is reachable from one, so there is no
-  partial store, history or reactivation-queue state to roll back. A
-  `host-call` in the guard is outside this guarantee, but its effects
+- guard residuals do not tell (see `bequal`): no `store`, `kill` or
+  `add-history` is reachable from one, and no `bunify` acts on a value
+  the store can reach, so there is no partial store, history or
+  reactivation-queue state to roll back. An aggregate fold called from
+  a guard binds only its own fresh out-cells, which nothing observes.
+  A `host-call` in the guard is outside this guarantee, but its effects
   survive a guard that evaluates to `false` just as they survive an
   abandoned one, so the catch changes nothing there;
 - the runtime call stack is restored at the `bsoft-guard` boundary, so

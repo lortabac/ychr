@@ -895,6 +895,14 @@ The operator table is a built-in core (the directive keywords, `=`,
 `is`, the rule operators, `requiring`, `refining`, …) plus the
 prelude's `op/3` exports. `:list_operators` in the REPL prints it.
 
+A REPL *query* is parsed with a wider table than a module: the union of
+the built-in core and every loaded module's operator exports, not only
+the modules a particular import list allows. An operator a library
+declares is therefore usable in a query even when the query's module
+imports the library without listing that operator — for example
+`library(aggregates)`'s `?` and `\+`. Inside a module's source the
+import list still decides.
+
 An RHS that is a variable evaluates the term it is bound to, the same
 way the equivalent expression written inline evaluates:
 

@@ -407,6 +407,66 @@ def test_trace_nested_foreach(ychr_bin, tmp_path):
     assert result.stdout == expected
 
 
+def test_trace_aggregate_goal_occurrence(ychr_bin, tmp_path):
+    """`:trace` on a rule whose head carries an aggregate shows the goal
+    occurrence path: the later-told constraint activates as a goal
+    occurrence of the aggregate's goal constraint, the partner pick finds
+    the rule's regular head, the active constraint is stored before the
+    fold, the fold's own loop runs over its type, and the firing records
+    only the regular head in the history."""
+    (tmp_path / "aggt2.chr").write_text(
+        ":- module(aggt2, [c/1, d/1, n/2]).\n"
+        ":- use_module(library(aggregates)).\n"
+        ":- chr_constraint c/1, d/1, n/2.\n"
+        "step @ c(X), count(d(X), N) ==> N > 0 | n(X, N).\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(tmp_path / "aggt2.chr")],
+        input=":trace aggt2:c(1), aggt2:d(1).\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    expected = (
+        "tell aggt2:c(1)\n"
+        "  activate c#0: aggt2:c(1)\n"
+        "    try occurrence aggt2:c #1 (rule step)\n"
+        "      store c#0: aggt2:c(1)\n"
+        "      call $aggregate:aggregate_23_0(_, 1)\n"
+        "        call aggregates:count_spec\n"
+        "        return aggregates:aggregator(0, 'aggregates:count_inc' / 2,"
+        " 'aggregates:just_final' / 1)\n"
+        "        call aggregates:just_final(0)\n"
+        "        return maybe:just(0)\n"
+        "        unify _ = 0\n"
+        "      return true\n"
+        "      host call >(0, 0) = false\n"
+        "tell aggt2:d(1)\n"
+        "  activate c#1: aggt2:d(1)\n"
+        "    try occurrence aggt2:d #1 (rule step)\n"
+        "      partner c#0: aggt2:c(1)\n"
+        "        store c#1: aggt2:d(1)\n"
+        "        call $aggregate:aggregate_23_0(_, 1)\n"
+        "          call aggregates:count_spec\n"
+        "          return aggregates:aggregator(0, 'aggregates:count_inc' / 2,"
+        " 'aggregates:just_final' / 1)\n"
+        "          partner c#1: aggt2:d(1)\n"
+        "            call aggregates:count_inc(0, 1)\n"
+        "              host call +(0, 1) = 1\n"
+        "            return 1\n"
+        "          call aggregates:just_final(1)\n"
+        "          return maybe:just(1)\n"
+        "          unify _ = 1\n"
+        "        return true\n"
+        "        host call >(1, 0) = true\n"
+        "        fire step [c#0]\n"
+        "        tell aggt2:n(1, 1)\n"
+        "          activate c#2: aggt2:n(1, 1)\n"
+        "            store c#2: aggt2:n(1, 1)\n"
+    )
+    assert result.stdout == expected
+
+
 def test_repl_dynamic_tell(ychr_bin, tmp_path):
     """`tell/N` in a query: a literal goal, a goal held in a variable
     with appended arguments, and the query-side failures. A query sees

@@ -30,7 +30,8 @@ tests =
       boolPatternTests,
       softGuardWrapTests,
       callablesDispatchTests,
-      aggregateFoldTests
+      aggregateFoldTests,
+      aggregateGoalTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -733,4 +734,211 @@ aggregateFoldTests =
                 "aggregate_" `T.isPrefixOf` p.name.unName
               ]
         folded @?= []
+    ]
+
+--------------------------------------------------------------------------------
+-- Aggregate goal occurrences
+--------------------------------------------------------------------------------
+
+-- | A rule whose aggregate goal constraint is told after its head: the
+-- ordinary occurrence cannot fire (its guard fails while the store is
+-- empty), so only a goal occurrence of @d\/1@ can reach the rule.
+lateGoalSource :: Text
+lateGoalSource =
+  ":- module(aggl, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count(d(X), N) ==> N > 0 | n(X, N).\n"
+
+-- | A goal with two conjuncts of the same type: the fold needs a
+-- distinctness test between their suspensions.
+distinctGoalSource :: Text
+distinctGoalSource =
+  ":- module(aggd, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count((d(_), d(_)), N) ==> N > 0 | n(X, N).\n"
+
+-- | A goal whose second conjunct must be looped outside the regular-head
+-- loops: @e\/1@ is not a head, so a goal occurrence of @d\/1@ nests the
+-- @e\/1@ loop outside the @c\/1@ partner loop.
+nestGoalSource :: Text
+nestGoalSource =
+  ":- module(aggn, [c/1, d/1, e/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, e/1, n/2.\n\
+  \\n\
+  \c(X), count((d(X), e(X)), N) ==> N > 0 | n(X, N).\n"
+
+-- | A rule with no aggregate of its own that removes a constraint which
+-- another rule's aggregate goal observes: its firing has to run the
+-- removal step.
+removalStepSource :: Text
+removalStepSource =
+  ":- module(aggr, [task/1, depends/2, done/1, ready/1]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint task/1, depends/2, done/1, ready/1.\n\
+  \\n\
+  \task(T), \\+ depends(T, _) ==> ready(T).\n\
+  \done(D) \\ depends(_, D) <=> true.\n"
+
+-- | The argument lists of every call to the named procedure, in
+-- traversal order.
+callsTo :: Text -> [VM.Stmt] -> [[VM.CallArg]]
+callsTo name = concatMap stmt
+  where
+    want = VM.Name name
+    stmt s = case s of
+      VM.LetVal _ e -> val e
+      VM.AssignVal _ e -> val e
+      VM.ExprStmt e -> val e
+      VM.Return e -> val e
+      VM.If _ t f -> callsTo name t ++ callsTo name f
+      VM.Foreach _ _ _ _ b -> callsTo name b
+      VM.DrainReactivationQueue _ b -> callsTo name b
+      _ -> []
+    val e = case e of
+      VM.CallExpr n args -> [args | n == want] ++ concatMap arg args
+      VM.HostCall _ es -> concatMap val es
+      VM.EvalDeep x -> val x
+      VM.EvalIs x -> val x
+      VM.ApplyClosure f es -> val f ++ concatMap val es
+      VM.MakeTerm _ es -> concatMap val es
+      VM.GetArg x _ -> val x
+      VM.FieldArg i _ -> idVal i
+      VM.FieldType i -> idVal i
+      _ -> []
+    arg a = case a of
+      VM.AVal v -> val v
+      VM.AId i -> idVal i
+    idVal i = case i of
+      VM.IdVar _ -> []
+      VM.CreateConstraint _ es -> concatMap val es
+
+-- | The labels of every 'Foreach' reachable from a statement list, in
+-- pre-order: outer loops before inner ones.
+foreachLabels :: [VM.Stmt] -> [VM.Label]
+foreachLabels = concatMap go
+  where
+    go (VM.Foreach l _ _ _ b) = l : foreachLabels b
+    go (VM.If _ t f) = foreachLabels t ++ foreachLabels f
+    go (VM.DrainReactivationQueue _ b) = foreachLabels b
+    go _ = []
+
+isSuspDistinct :: VM.BoolExpr -> Bool
+isSuspDistinct (VM.BIdEqual (VM.IdVar a) (VM.IdVar b)) =
+  any ("$aggregate_susp_" `T.isPrefixOf`) [a.unName, b.unName]
+isSuspDistinct _ = False
+
+isStoreStmt :: VM.Stmt -> Bool
+isStoreStmt (VM.Store _) = True
+isStoreStmt _ = False
+
+-- | Whether every 'Store' reachable from a statement list sits under an
+-- @If@ whose condition tests liveness. A goal occurrence is called by the
+-- removal step with a dead constraint, so none of its stores may run
+-- unguarded.
+storesAliveGuarded :: [VM.Stmt] -> Bool
+storesAliveGuarded = go False
+  where
+    go alive = all (one alive)
+    one alive s = case s of
+      VM.Store _ -> alive
+      VM.If e t f ->
+        let guarded = alive || any isAlive (flatten e)
+         in go guarded t && go guarded f
+      VM.Foreach _ _ _ _ b -> go alive b
+      VM.DrainReactivationQueue _ b -> go alive b
+      _ -> True
+    flatten e =
+      e : case e of
+        VM.BNot a -> flatten a
+        VM.BAnd a b -> flatten a ++ flatten b
+        VM.BOr a b -> flatten a ++ flatten b
+        VM.BEvalDeep a -> flatten a
+        VM.BSoftGuard a -> flatten a
+        _ -> []
+    isAlive (VM.BAlive _) = True
+    isAlive _ = False
+
+aggregateGoalTests :: TestTree
+aggregateGoalTests =
+  testGroup
+    "aggregate goal occurrences"
+    [ testCase "a goal occurrence takes the removal-step flag, an ordinary one does not" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "occurrence_aggl__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p -> length p.params @?= 3
+        case findProcedure prog "occurrence_aggl__c1_1" of
+          Nothing -> assertFailure "no c/1 ordinary occurrence procedure"
+          Just p -> length p.params @?= 2,
+      testCase "activate calls the goal occurrence with the flag false" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "activate_aggl__d1" of
+          Nothing -> assertFailure "no d/1 activate procedure"
+          Just p ->
+            callsTo "occurrence_aggl__d1_1" p.body
+              @?= [ [ VM.AId (VM.IdVar "active"),
+                      VM.AVal (VM.Var (VM.Name "X_0")),
+                      VM.AVal (VM.Lit (VM.BoolLit False))
+                    ]
+                  ],
+      testCase "a goal occurrence's loops sit outside the head loops" $ do
+        prog <- compileOrFail [("m.chr", nestGoalSource)]
+        case findProcedure prog "occurrence_aggn__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p ->
+            -- The active conjunct is d/1 at goal position 0, so the only
+            -- loop is e/1 at goal position 1, outside the c/1 head loop.
+            foreachLabels p.body
+              @?= [VM.Label "aggregate_loop_0_1", VM.Label "L1"]
+        -- The e/1 occurrence's active conjunct is at goal position 1 and
+        -- its HNF guard compares a variable of the earlier d/1 conjunct
+        -- with a fresh name, so the d/1 loop has to run first.
+        case findProcedure prog "occurrence_aggn__e1_1" of
+          Nothing -> assertFailure "no e/1 goal occurrence procedure"
+          Just p ->
+            foreachLabels p.body
+              @?= [VM.Label "aggregate_loop_0_0", VM.Label "L1"],
+      testCase "two same-type conjuncts in one goal must match distinct suspensions" $ do
+        prog <- compileOrFail [("m.chr", distinctGoalSource)]
+        case findProcedure prog "aggregate_0_0" of
+          Nothing -> assertFailure "no fold procedure"
+          Just p -> do
+            foreachLabels p.body
+              @?= [VM.Label "aggregate_loop_0_0", VM.Label "aggregate_loop_0_1"]
+            assertBool
+              "expected a suspension distinctness test"
+              (any isSuspDistinct (ifConditions p.body)),
+      testCase "a goal occurrence stores its active constraint only while alive" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "occurrence_aggl__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p -> do
+            assertBool
+              "expected a store in the goal occurrence"
+              (any isStoreStmt (nestedStmts p.body))
+            assertBool
+              "expected every store under a liveness test"
+              (storesAliveGuarded p.body),
+      testCase "a rule removing a goal-observed constraint runs the removal step" $ do
+        prog <- compileOrFail [("m.chr", removalStepSource)]
+        case findProcedure prog "occurrence_aggr__done1_1" of
+          Nothing -> assertFailure "no done/1 occurrence procedure"
+          Just p ->
+            callsTo "occurrence_aggr__depends2_1" p.body
+              @?= [ [ VM.AId (VM.IdVar "pId_0"),
+                      VM.AVal (VM.Var (VM.Name "pArg_0_0")),
+                      VM.AVal (VM.Var (VM.Name "pArg_0_1")),
+                      VM.AVal (VM.Lit (VM.BoolLit True))
+                    ]
+                  ],
+      testCase "a rule that removes nothing has no removal step" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "occurrence_aggl__c1_1" of
+          Nothing -> assertFailure "no c/1 ordinary occurrence procedure"
+          Just p -> callsTo "occurrence_aggl__d1_1" p.body @?= []
     ]

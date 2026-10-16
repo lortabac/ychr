@@ -1289,6 +1289,12 @@ The check is deliberately narrow:
   body, a goal, or the host — is unrestricted regardless of declared
   mode; `tell_only` restricts where a constraint may be *matched*, not
   where it may be *told*.
+- It counts a CHR constraint conjunct of an **aggregate goal** as a
+  kept occurrence, since an aggregate is a head position
+  ([aggregates.md](aggregates.md#interaction-with-other-features)). So
+  a `tell_only` constraint cannot occur in an aggregate goal either,
+  and an `event` constraint only inside `takemin`/`takemax` — once the
+  selection forms are implemented.
 - It does not look inside guards or bodies: a guard expression or a
   body goal mentioning a constraint's name as a function or data
   constructor is not an occurrence.
@@ -1302,6 +1308,45 @@ The check is deliberately narrow:
 - There is no per-occurrence override: a declared mode applies to
   every occurrence of a constraint everywhere in the program, not to
   one rule.
+
+
+## Aggregates
+
+Aggregates ([aggregates.md](aggregates.md)) are **not type-checked
+yet**. The encoded rule head drops the aggregate list
+(`YCHR.Internal.TypeCheck.Encode.ruleHead` sends only `kept` and
+`removed`), so the checker never sees an aggregate's positions: `Agg`,
+`Element`, `Goal` and `Result` impose no type on anything. A variable
+that an aggregate's goal binds and that also reaches the checker
+through the rule's guard or body — a shared variable, or a goal local,
+which the compiler reports as `AggregateLocalEscapes` unless it is
+merely compared — is collected from there by `collect_vars_rule` in
+`typechecker/skel.chr` and gets an ordinary flexible slot, narrowed by
+whatever its later uses say. It is not explicitly forced to `ty_any`.
+
+The intended typing rules, for when this is implemented:
+
+```
+Agg    : aggregator(W, E, R)
+Element: E
+Result : R
+```
+
+- `Element` and `Result` are checked against the aggregator's `E` and
+  `R`, and `Agg` against `aggregator(W, E, R)`.
+- A **shared** variable of `Goal` and `Element` keeps the type its
+  occurrence outside the aggregate gives it: it is an input already in
+  scope, and matching the goal must agree with its value.
+- A **local** variable of `Goal` gets its type from the constraint
+  argument position it lands in, or from `Element` when the goal only
+  mentions it there. It is not visible to the rule's guard or body
+  (`AggregateLocalEscapes`, YCHR-40003).
+- `Final` returns `maybe(R)`, and `nothing` makes the rule
+  inapplicable, so `Result : R` is checked against the payload and the
+  undefined case is not a type error.
+
+Until then, a program with aggregates checks as if the aggregates were
+not written, and the folds themselves are trusted.
 
 
 ## Host Calls
