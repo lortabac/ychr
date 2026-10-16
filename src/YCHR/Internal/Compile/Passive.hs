@@ -58,8 +58,20 @@ markPassive = occMapMap (map mark)
     mark occ = occ {passive = occ.passive || isPassive occ}
 
 -- | Is this occurrence passive under any v1 source?
+--
+-- A rule with a head aggregate is exempt: its applicability also depends on
+-- what the fold finds in the store, so the argument both sources rest on —
+-- the ωr-earlier occurrence always fires before the later one is tried —
+-- does not hold. Dropping the optimization for those rules is conservative,
+-- and passivity is only ever an optimization.
 isPassive :: Occurrence -> Bool
-isPassive occ = idempotencePassive occ || symmetryPassive occ
+isPassive occ
+  | aggregateRule occ = False
+  | otherwise = idempotencePassive occ || symmetryPassive occ
+
+-- | Whether this occurrence belongs to a rule whose head has an aggregate.
+aggregateRule :: Occurrence -> Bool
+aggregateRule occ = not (null (ruleHead occ.rule).aggregates)
 
 -- ---------------------------------------------------------------------------
 -- Subsumption / symmetry analysis

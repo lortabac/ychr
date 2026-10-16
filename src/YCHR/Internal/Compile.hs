@@ -584,13 +584,39 @@ genGuardedFire symTab varMap occ = do
   compiled <- compileGuards (Just occ) Nothing varMapWithCells guardSi guards
   aggTests <-
     traverse (aggregateTest headSi compiled.extendedVarMap) occ.aggregates
-  fireStmts <- genFireStmts symTab compiled.extendedVarMap occ
+  fire <- genFireStmts symTab compiled.extendedVarMap occ
   let residual = fromMaybe (BLit True) compiled.residualCheck
       -- Aggregates are computed left to right, before the rule's own guard,
       -- and 'BAnd' short-circuits in the same order.
       condition = List.foldr BAnd residual aggTests
-      guarded = [If (softenGuard condition) fireStmts []]
-  pure (compiled.matchWrapper (cellStmts ++ guarded), compiled.indexConditions)
+      guarded stmts = [If (softenGuard condition) stmts []]
+      -- Late Storage, moved: a rule with aggregates stores its active
+      -- constraint before computing them, so a fold sees the constraint
+      -- being activated in its true store position and counts it once.
+      -- The store is idempotent, and the partner loops have already taken
+      -- their snapshot, so this cannot make the active constraint match
+      -- itself as a partner.
+      aggregateStoreStmts =
+        [Store (IdVar activeName) | not (null occ.aggregates)]
+      -- Both checks are pure, so their order is unobservable; putting the
+      -- history in front keeps a combination that already fired from
+      -- refolding. A rule without aggregates keeps the shape it had.
+      body = case (null occ.aggregates, fire.history) of
+        (True, Nothing) -> guarded fire.stmts
+        (True, Just (rid, ids)) ->
+          guarded [If (BNotInHistory rid ids) (AddHistory rid ids : fire.stmts) []]
+        (False, Nothing) ->
+          aggregateStoreStmts ++ cellStmts ++ guarded fire.stmts
+        (False, Just (rid, ids)) ->
+          [ If
+              (BNotInHistory rid ids)
+              ( aggregateStoreStmts
+                  ++ cellStmts
+                  ++ guarded (AddHistory rid ids : fire.stmts)
+              )
+              []
+          ]
+  pure (compiled.matchWrapper body, compiled.indexConditions)
 
 -- ---------------------------------------------------------------------------
 -- Aggregates
@@ -990,14 +1016,10 @@ genFireStmts ::
   SymbolTable ->
   VarMap ->
   Occurrence ->
-  Writer [Diagnostic CompileError] [Stmt]
+  Writer [Diagnostic CompileError] CompiledFire
 genFireStmts symTab varMap occ = do
   let rule = occ.rule
-      AnnP {node = ruleHead} = rule.head
-      isPropagation = null ruleHead.removed
       activeIsRemoved = not occ.isKept
-      ruleId' = occ.ruleId
-      historyIds = buildHistoryIds occ
       killStmts = genKillStmts occ
   let AnnP {node = ruleBody, sourceLoc = bodyLoc, parsed = bodyP} = rule.body
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
@@ -1047,15 +1069,31 @@ genFireStmts symTab varMap occ = do
           ++ bodyStmts
           ++ earlyDropStmts
           ++ backjumpStmts
-  pure $
-    if isPropagation
-      then
-        [ If
-            (BNotInHistory ruleId' historyIds)
-            (AddHistory ruleId' historyIds : coreFireStmts)
-            []
-        ]
-      else coreFireStmts
+  pure CompiledFire {history = ruleHistory occ, stmts = coreFireStmts}
+
+-- | What compiling one firing contributes: the propagation-history key the
+-- rule fires under, if it keeps one, and the statements of the firing
+-- itself. 'genGuardedFire' places the history guard, because a rule with an
+-- aggregate has to run it before the folds.
+data CompiledFire = CompiledFire
+  { -- | 'Nothing' when the rule keeps no history: it removes a regular head,
+    -- so the same combination of heads cannot match again anyway.
+    history :: Maybe (RuleId, HistoryIds),
+    stmts :: [Stmt]
+  }
+
+-- | The key a rule's firings are recorded under, or 'Nothing' when it keeps
+-- none.
+--
+-- A rule keeps a history when it removes no regular head (a propagation
+-- rule, as in ωr) /or/ when it has an aggregate: the spec fires an aggregate
+-- rule at most once per combination of its regular heads whatever its kind,
+-- so a later change in an aggregate's value must not fire it again.
+ruleHistory :: Occurrence -> Maybe (RuleId, HistoryIds)
+ruleHistory occ
+  | null occ.rule.head.node.removed || not (null occ.aggregates) =
+      Just (occ.ruleId, buildHistoryIds occ)
+  | otherwise = Nothing
 
 -- | Collect constraint identifiers for the propagation history tuple.
 -- Each id is tagged with its head position and handed to

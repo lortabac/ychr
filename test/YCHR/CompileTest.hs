@@ -579,6 +579,27 @@ aggregateSource =
   \\n\
   \c(X), count(d(X), N) ==> n(X, N).\n"
 
+-- | A simplification rule with an aggregate: it removes its only regular
+-- head, and still has to fire at most once per combination of regular heads.
+aggregateHistorySource :: Text
+aggregateHistorySource =
+  ":- module(aggh, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count(d(X), N) <=> n(X, N).\n"
+
+-- | A rule shaped like a symmetric simplification, plus an aggregate. Both
+-- of its occurrences have to be tried: the later one would be marked passive
+-- without the aggregate exemption.
+aggregatePassiveSource :: Text
+aggregatePassiveSource =
+  ":- module(aggp, [c/2, d/1]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/2, d/1.\n\
+  \\n\
+  \passive @ c(X, Y) \\ c(Y, X), count(d(X), N) <=> true.\n"
+
 -- | Every statement of a body, flattened through nested bodies.
 nestedStmts :: [VM.Stmt] -> [VM.Stmt]
 nestedStmts = concatMap go
@@ -621,6 +642,16 @@ mutatingStmt s = case s of
   VM.TellTerm {} -> True
   VM.DrainReactivationQueue {} -> True
   _ -> False
+
+-- | Whether a boolean expression is a history guard.
+isNotInHistory :: VM.BoolExpr -> Bool
+isNotInHistory (VM.BNotInHistory _ _) = True
+isNotInHistory _ = False
+
+-- | Whether a statement writes the firing history.
+isAddHistory :: VM.Stmt -> Bool
+isAddHistory (VM.AddHistory _ _) = True
+isAddHistory _ = False
 
 aggregateFoldTests :: TestTree
 aggregateFoldTests =
@@ -675,6 +706,25 @@ aggregateFoldTests =
             where
               isSoftGuard (VM.BSoftGuard _) = True
               isSoftGuard _ = False,
+      testCase "a rule that removes a regular head keeps a firing history" $ do
+        prog <- compileOrFail [("m.chr", aggregateHistorySource)]
+        case findProcedure prog "occurrence_aggh__c1_1" of
+          Nothing -> assertFailure "no c/1 occurrence procedure"
+          Just p -> do
+            assertBool
+              "expected a history guard"
+              (any isNotInHistory (ifConditions p.body))
+            assertBool
+              "expected a history write"
+              (any isAddHistory (nestedStmts p.body)),
+      testCase "an aggregate rule's occurrences are never passive" $ do
+        prog <- compileOrFail [("m.chr", aggregatePassiveSource)]
+        mapM_
+          ( \name -> case findProcedure prog (T.pack name) of
+              Just _ -> pure ()
+              Nothing -> assertFailure ("missing occurrence procedure " ++ name)
+          )
+          ["occurrence_aggp__c2_1", "occurrence_aggp__c2_2"],
       testCase "a program without aggregates emits no fold procedure" $ do
         prog <- compileOrFail [("m.chr", leqSource)]
         let folded =

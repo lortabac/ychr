@@ -64,7 +64,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Names
 import YCHR.Internal.Compile.Types
-import YCHR.Internal.Desugar (guardVars)
+import YCHR.Internal.Desugar (bodyGoalVars, guardVars)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Parsed (AnnP (..))
@@ -97,7 +97,10 @@ collectAggregatePlans ::
   Int ->
   D.Rule ->
   Writer [Diagnostic CompileError] [AggregatePlan]
-collectAggregatePlans ruleIdx rule = go 0 headVars [] (rule.head.node.aggregates)
+collectAggregatePlans ruleIdx rule = do
+  plans <- go 0 headVars [] (rule.head.node.aggregates)
+  checkLocalEscapes rule plans
+  pure plans
   where
     headVars =
       Set.unions
@@ -139,6 +142,45 @@ collectAggregatePlans ruleIdx rule = go 0 headVars [] (rule.head.node.aggregates
               -- to its right, whether the pattern bound it or checked it.
               bound' = bound `Set.union` termVars a.result
           go (k + 1) bound' (plan : acc) rest
+
+-- | Report every variable only an aggregate's goal binds that the rule's
+-- guard or body reads anyway.
+--
+-- Such a variable is not a distinct rule variable: it is renamed apart per
+-- match, so a use in the guard or body would silently read whatever the last
+-- match left in it. Reporting the escape turns a typo into a diagnostic
+-- instead of a rule that quietly reads the wrong value.
+checkLocalEscapes ::
+  D.Rule ->
+  [AggregatePlan] ->
+  Writer [Diagnostic CompileError] ()
+checkLocalEscapes rule plans = case Set.toAscList escaped of
+  [] -> pure ()
+  variables ->
+    tell
+      [ Diagnostic
+          label
+          (AnnP (AggregateLocalEscapes v) loc origin)
+          []
+      | v <- variables
+      ]
+  where
+    -- A shared variable is a head variable, so it is not an escape; a result
+    -- variable the pattern binds is in scope in the guard and body by
+    -- design, and is not a goal local either.
+    locals =
+      Set.unions
+        [ aggregateGoalLocals p.planGoal `Set.difference` Set.fromList p.planShared
+        | p <- plans
+        ]
+    escaped =
+      locals
+        `Set.intersection` ( guardVars rule.guard.node
+                               `Set.union` bodyGoalVars rule.body.node
+                           )
+    label = fmap ("rule " <>) rule.name
+    loc = rule.head.sourceLoc
+    origin = rule.head.parsed
 
 -- | The variables a rule head constraint binds.
 argVars :: HeadArg -> Set Text

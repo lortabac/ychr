@@ -1,0 +1,13 @@
+% A rule that counts its own head constraint's type. The constraint being
+% activated is stored before the fold, so the store the fold reads holds it
+% and counts it once.
+:- module(aggregates_view_stored, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, seen/2, ask/1, setup/1.
+
+c(X), count(c(_), N) ==> seen(X, N).
+
+seen(_, N) \ ask(A) <=> A = N.
+
+setup(A) <=> c(1), ask(A).
