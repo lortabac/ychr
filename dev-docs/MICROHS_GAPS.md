@@ -453,6 +453,14 @@ locations (line numbers current as of this revision):
 | `breakOnEnd` | `test/YCHR/TypeSoundness/Observe.hs:180,183` |
 | `last`       | `src/YCHR/Internal/Parser.hs:258` |
 
+`splitAt`, `span` and `break` are missing too. Nothing in YCHR calls
+them today, so they cost nothing until a new call site appears — which
+is exactly how a new one lands as an `undefined value: T.splitAt` in
+`mcabal build` after a GHC-only test run. The safe surface for a new
+text-splitting helper is `stripPrefix` / `take` / `drop` / `length`
+plus `unpack`, with the split itself done over `Data.List`; that is what
+`YCHR.Internal.VM.SExpr.qualifiedNameOfTellProc` does.
+
 The first failure such a build used to hit was `Text.last`
 (`Parser.hs:258`, `Text.last trimmed`), reported as
 `undefined value: Text.last`. `last` and `breakOnEnd` were not in the

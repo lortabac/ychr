@@ -36,7 +36,6 @@ module YCHR.Internal.VM.SExpr
   )
 where
 
-import Data.Char (isDigit)
 import Data.List (nub, sort)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -676,29 +675,54 @@ tellableUnqualifiedEntryFromSExpr (SList (scSexpr : fSexpr : SInt arity : pSexpr
     s -> err ("expected any (origin-less tellable scope), got: " <> printSExpr s)
   functor <- nameFromSExpr fSexpr
   procNames <- traverse nameFromSExpr pSexprs
+  let arity' = fromInteger arity
   resolution <- case nub procNames of
     [] -> err ("expected at least one tellable proc name, got: " <> printSExpr scSexpr)
     [procName] -> pure (UniqueTell procName)
-    procNames' -> pure (AmbiguousTell (map qualifiedNameOfTellProc procNames'))
-  let key = TellableKey {scope = Nothing, functor = functor, arity = fromInteger arity}
+    procNames' -> pure (AmbiguousTell (map (qualifiedNameOfTellProc arity') procNames'))
+  let key = TellableKey {scope = Nothing, functor = functor, arity = arity'}
   pure (key, resolution)
 tellableUnqualifiedEntryFromSExpr s =
   err ("expected origin-less tellable entry, got: " <> printSExpr s)
 
 -- | The qualified constraint name a @tell@ procedure implements, from
 -- the procedure name @YCHR.Internal.Compile.Names.tellProcName@ builds,
--- @tell_<vmName>@. A name that does not carry the prefix, or one with
--- no @__@, is treated as its own module-less name: the error message
--- the ambiguity produces is then imperfect, but nothing else depends on
--- it.
-qualifiedNameOfTellProc :: Name -> Types.QualifiedName
-qualifiedNameOfTellProc (Name t) = case T.stripPrefix "tell_" t of
-  Nothing -> Types.QualifiedName "" t
-  Just mangle -> case T.breakOn "__" (T.dropWhileEnd isDigit mangle) of
-    (modName, rest)
-      | T.null modName -> Types.QualifiedName "" (T.drop 2 rest)
-      | T.null rest -> Types.QualifiedName modName ""
-      | otherwise -> Types.QualifiedName modName (T.drop 2 rest)
+-- @tell_<encodeIdentifier vmName><arity>@.
+--
+-- Only the ambiguity message reads this, so an imperfect answer costs
+-- message quality and nothing else. The arity is removed from the right
+-- before the split, not searched for: for a non-ASCII source name the
+-- digits sit right after an @__u<hex>__@ escape, and a right-hand scan
+-- cannot tell them from the name, while the entry's key holds the arity
+-- exactly.
+--
+-- The separator is @__@ — the same bracketing 'encodeIdentifier' gives
+-- every non-ASCII character in either component, and the lexer rejects
+-- @__@ in a source name, so the first one is the module separator. The
+-- spelling is left encoded: decoding it back would need the @%u@
+-- escapes of the *term* encoding, which @tellProcName@ does not use.
+--
+-- The split itself is 'Data.List'-based (hence the packed round trip):
+-- the reader has to build under both compilers, and splitting a text is
+-- one of the places MicroHs's @Data.Text@ is thinnest
+-- (@dev-docs\/MICROHS_GAPS.md@, gap 4).
+qualifiedNameOfTellProc :: Int -> Name -> Types.QualifiedName
+qualifiedNameOfTellProc arity (Name t) =
+  case T.stripPrefix "tell_" t of
+    Nothing -> Types.QualifiedName "" t
+    Just mangle ->
+      let body = T.take (T.length mangle - length (show arity)) mangle
+       in case breakOnSeparator [] (T.unpack body) of
+            (modName, rest)
+              | null modName -> Types.QualifiedName "" (T.pack rest)
+              | otherwise -> Types.QualifiedName (T.pack modName) (T.pack rest)
+  where
+    -- The characters before the first @__@, and those after it. Recursive
+    -- rather than 'Data.List.break' so the element type is pinned by the
+    -- pattern, with no predicate to infer.
+    breakOnSeparator acc ('_' : '_' : rest) = (reverse acc, rest)
+    breakOnSeparator acc (c : rest) = breakOnSeparator (c : acc) rest
+    breakOnSeparator acc [] = (reverse acc, [])
 
 textFromSExpr :: SExpr -> Err Text
 textFromSExpr (SString t) = pure t

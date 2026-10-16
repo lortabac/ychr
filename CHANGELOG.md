@@ -17,6 +17,10 @@ version 3.
   reached the scoped table. Two exported constraints of the same bare
   name and arity are reported as ambiguous rather than resolved; a name a
   module keeps to itself is absent from the table and stays private.
+- The `tellables-unqualified` reader splits a tell procedure's name
+  without `Data.Text.breakOn` or `splitAt`, neither of which MicroHs's
+  `Data.Text` exports, so the MicroHs build stays green; the ambiguity
+  message it builds is unchanged.
 - **Breaking:** the s-expression VM format is version 3. A program's
   header gains `(tellables-unqualified ...)`, the origin-less tier of the
   dynamic `tell/N` dispatch the prelude's rules resolve through.
