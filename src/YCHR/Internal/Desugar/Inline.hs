@@ -430,9 +430,36 @@ substExpr subst = go
 rewriteRule :: Candidates -> D.Rule -> D.Rule
 rewriteRule cands r =
   r
-    { D.guard = map (rewriteGuard cands) <$> r.guard,
+    { D.head = fmap (rewriteRuleHead cands) r.head,
+      D.guard = map (rewriteGuard cands) <$> r.guard,
       D.body = map (rewriteBodyGoal cands) <$> r.body
     }
+
+-- | Rewrite the expressions an aggregate carries. The head's own
+-- constraints hold no expressions — their arguments are 'HeadArg's — so
+-- only the aggregator, the element, the goal's guards and a nested
+-- aggregate need walking.
+rewriteRuleHead :: Candidates -> D.Head -> D.Head
+rewriteRuleHead cands h =
+  h {D.aggregates = map (rewriteAggregate cands) h.aggregates}
+
+rewriteAggregate :: Candidates -> D.Aggregate -> D.Aggregate
+rewriteAggregate cands a =
+  a
+    { D.agg = fmap (rewriteExpr cands) a.agg,
+      D.element = rewriteExpr cands a.element,
+      D.goal = map (rewriteAggregateConjunct cands) a.goal
+    }
+
+rewriteAggregateConjunct ::
+  Candidates ->
+  D.AggregateConjunct ->
+  D.AggregateConjunct
+rewriteAggregateConjunct cands c = case c of
+  D.AggConstraint hc guards ->
+    D.AggConstraint hc (map (rewriteGuard cands) guards)
+  D.AggNested a -> D.AggNested (rewriteAggregate cands a)
+  D.AggGuard g -> D.AggGuard (rewriteGuard cands g)
 
 rewriteFunction :: Candidates -> D.Function -> D.Function
 rewriteFunction cands f = f {D.equations = map (rewriteEquation cands) f.equations}

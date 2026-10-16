@@ -129,8 +129,14 @@ data Aggregate = Aggregate
 
 -- | A desugared aggregate-goal conjunct.
 data AggregateConjunct
-  = -- | A CHR constraint, a /goal occurrence/ of its type.
-    AggConstraint QualifiedConstraint
+  = -- | A CHR constraint, a /goal occurrence/ of its type, in head normal
+    -- form: its arguments are variables or wildcards, and the guards HNF
+    -- emitted for it — one per compound or duplicated argument it had —
+    -- are carried alongside. Those guards are evaluated in place, inside
+    -- the loop that matches this conjunct, so they filter matches before
+    -- the conjuncts after it are searched and never join the rule's
+    -- guard.
+    AggConstraint HeadConstraint [Guard]
   | -- | A nested aggregate.
     AggNested Aggregate
   | -- | A @? Guard@, checked in place left to right.

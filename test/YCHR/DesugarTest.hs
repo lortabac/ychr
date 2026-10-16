@@ -45,7 +45,8 @@ tests =
       flatteningTests,
       ruleNameTests,
       symbolTableTests,
-      lambdaLiftTests
+      lambdaLiftTests,
+      aggregateTests
     ]
 
 resolve :: [Module] -> IO R.Program
@@ -804,4 +805,139 @@ lambdaLiftTests =
                       )
                   ]
           Right _ -> assertFailure "expected LambdaParamError"
+    ]
+
+--------------------------------------------------------------------------------
+-- Aggregates
+--------------------------------------------------------------------------------
+
+-- | @aggregate(Agg, Element, Goal, Result)@ with one goal conjunct
+-- @M:c(Args)@, as the renamer hands it to the resolver.
+plainAgg :: Maybe Term -> Term -> [Term] -> Term -> Aggregate
+plainAgg aggTerm elementTerm goalArgs resultTerm =
+  Aggregate
+    { kind = AggPlain,
+      agg = aggTerm,
+      element = elementTerm,
+      goal = [AggConstraint (qcon "M" "c" goalArgs)],
+      result = resultTerm
+    }
+
+-- | @fun(P1, ..., Pn) -> Body end@ — the term the resolver reads as a
+-- lambda.
+aggLambda :: [Term] -> Term -> Term
+aggLambda params body =
+  CompoundTerm
+    (Unqualified "->")
+    [CompoundTerm (Unqualified "fun") params, body]
+
+-- | The single aggregate of a one-rule program's head.
+onlyAggregate :: D.Rule -> D.Aggregate
+onlyAggregate rule = case getNode rule.head of
+  D.Head {aggregates = [a]} -> a
+  h -> error ("onlyAggregate: expected one aggregate, got " ++ show h)
+
+-- | The parameter names of every lifted lambda in a program, in function
+-- order. A lifted lambda's equation parameters are its captures followed by
+-- its own parameters.
+liftedLambdaParams :: D.Program -> [[Text]]
+liftedLambdaParams prog =
+  [ [v | D.HeadVar v <- eq.node.params]
+  | f <- prog.functions,
+    Just _ <- [f.lambdaArity],
+    eq <- f.equations
+  ]
+
+aggregateTests :: TestTree
+aggregateTests =
+  testGroup
+    "aggregates"
+    [ testCase "compound goal argument: fresh variable plus that conjunct's guards" $ do
+        let hd =
+              Propagation
+                [leqQual]
+                [ plainAgg
+                    (Just (int 0))
+                    (int 1)
+                    [CompoundTerm (Unqualified "pair") [var "X", var "Y"]]
+                    Wildcard
+                ]
+        rule <- singleRule [simpleModule hd]
+        case onlyAggregate rule of
+          D.Aggregate {goal = [D.AggConstraint hcon guards]} -> do
+            hcon.args @?= [D.HeadVar "_hnf_0"]
+            guards
+              @?= [ D.GuardMatch (R.VarExpr "_hnf_0") (Unqualified "pair") 2,
+                    D.GuardGetArg "X" (R.VarExpr "_hnf_0") 0,
+                    D.GuardGetArg "Y" (R.VarExpr "_hnf_0") 1
+                  ]
+            -- The guards belong to the conjunct, so they are evaluated
+            -- inside its loop and never join the rule's guard.
+            getNode rule.guard @?= []
+          a -> assertFailure ("unexpected aggregate: " ++ show a),
+      testCase "repeated goal variable: equality guard" $ do
+        let hd =
+              Propagation
+                [leqQual]
+                [plainAgg (Just (int 0)) (int 1) [var "X", var "X"] Wildcard]
+        rule <- singleRule [simpleModule hd]
+        case onlyAggregate rule of
+          D.Aggregate {goal = [D.AggConstraint hcon guards]} -> do
+            -- The goal starts from an empty seen set: X's first occurrence
+            -- binds, the second is matched against it.
+            hcon.args @?= [D.HeadVar "X", D.HeadVar "_hnf_0"]
+            guards @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "_hnf_0")]
+          a -> assertFailure ("unexpected aggregate: " ++ show a),
+      testCase "head and goal share one fresh-name counter" $ do
+        let hd =
+              Propagation
+                [qcon "M" "leq" [CompoundTerm (Unqualified "pair") [var "X", var "Y"]]]
+                [ plainAgg
+                    (Just (int 0))
+                    (int 1)
+                    [CompoundTerm (Unqualified "pair") [var "Z"]]
+                    Wildcard
+                ]
+        rule <- singleRule [simpleModule hd]
+        -- The head's compound argument consumed _hnf_0, so the goal's is
+        -- _hnf_1: the counter is shared, the seen set is not.
+        case onlyAggregate rule of
+          D.Aggregate {goal = [D.AggConstraint hcon _]} ->
+            hcon.args @?= [D.HeadVar "_hnf_1"]
+          a -> assertFailure ("unexpected aggregate: " ++ show a)
+        length (getNode rule.guard) @?= 3,
+      testCase "lambda in element captures a goal variable" $ do
+        let hd =
+              Propagation
+                [leqQual]
+                [ plainAgg
+                    (Just (int 0))
+                    (aggLambda [var "Y"] (var "W"))
+                    [var "W"]
+                    (var "W")
+                ]
+        prog <- desugar [simpleModule hd]
+        let (prog', errs) = liftAllLambdas prog
+        errs @?= []
+        -- The element is evaluated inside the goal's loop, so the goal
+        -- variable is in scope and becomes a leading capture parameter.
+        liftedLambdaParams prog' @?= [["W", "Y"]],
+      testCase "lambda in agg does not capture a goal variable" $ do
+        let hd =
+              Propagation
+                [leqQual]
+                [ plainAgg
+                    (Just (aggLambda [var "Y"] (var "W")))
+                    (int 1)
+                    [var "W"]
+                    (var "W")
+                ]
+        prog <- desugar [simpleModule hd]
+        let (prog', errs) = liftAllLambdas prog
+        errs @?= []
+        -- agg is evaluated before the fold's loops: the goal variable is
+        -- outside its scope, so it is not captured. Compiling the lifted
+        -- body reports it as an unbound variable, which is the right
+        -- diagnostic for a value the closure cannot have.
+        liftedLambdaParams prog' @?= [["Y"]]
     ]
