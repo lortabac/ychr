@@ -53,6 +53,23 @@ module YCHR.Internal.Compile.Names
     inconclusiveName,
     blockedArgName,
 
+    -- * Aggregate names
+    aggregateProcName,
+    aggregateSharedParam,
+    aggregateOutParam,
+    aggregateOutCell,
+    aggregateSuspName,
+    aggregatePayloadName,
+    aggregateMaybeName,
+    aggregateAccName,
+    aggregateAggName,
+    aggregateIncName,
+    aggregateFinalName,
+    aggregateLabel,
+    aggregateAggFunctor,
+    aggregateJustFunctor,
+    aggregateNothingAtom,
+
     -- * Runtime entry-point names
     reactivateDispatchName,
     chrErrorName,
@@ -69,7 +86,7 @@ import Data.Text.Shim qualified as T
 import Numeric (showHex)
 import YCHR.Internal.Compile.Types (OccurrenceNumber (..), PartnerIndex (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Label (..), Name (..))
+import YCHR.Internal.VM (Label (..), Literal (..), Name (..))
 
 -- ---------------------------------------------------------------------------
 -- Source-name encoding
@@ -306,6 +323,108 @@ inconclusiveName = "$chr_inconclusive"
 -- top-level argument. Named on the same principle.
 blockedArgName :: Name
 blockedArgName = "$chr_blocked_arg"
+
+-- ---------------------------------------------------------------------------
+-- Aggregate names
+-- ---------------------------------------------------------------------------
+
+-- | Name of the procedure that computes one head aggregate:
+-- @aggregate_\<rule\>_\<index\>@. Deliberately not prefixed @func_@: the
+-- Scheme backend's export clause keys on that prefix, and this is not a
+-- user function.
+aggregateProcName :: Int -> Int -> Name
+aggregateProcName ruleIdx aggIdx =
+  Name
+    ( "aggregate_"
+        <> T.pack (show ruleIdx)
+        <> "_"
+        <> T.pack (show aggIdx)
+    )
+
+-- | Parameter name of the @i@-th shared input of an aggregate procedure.
+-- A procedure takes one out-cell per variable it binds, then one of these
+-- per variable it reads.
+aggregateSharedParam :: Int -> Name
+aggregateSharedParam i = Name ("aggregate_shared_" <> T.pack (show i))
+
+-- | Parameter name of the @i@-th out-cell of an aggregate procedure: a
+-- fresh unbound variable the caller owns and the procedure binds to part
+-- of the computed result. See
+-- 'YCHR.Internal.Compile.Aggregate' for why the binding is a @bunify@.
+aggregateOutParam :: Int -> Name
+aggregateOutParam i = Name ("aggregate_out_" <> T.pack (show i))
+
+-- | Caller-side local holding the out-cell for one bindable result
+-- variable: @$aggregate_cell_\<aggregate\>_\<variable\>@.
+--
+-- The @$@ keeps it out of reach of source code, exactly as
+-- 'inconclusiveName' does: a source variable is
+-- @[A-Z_][A-Za-z0-9_]*@, so it can never contain @$@, while both the
+-- Scheme and JavaScript encodings accept it in an identifier.
+aggregateOutCell :: Int -> Text -> Name
+aggregateOutCell aggIdx v =
+  Name ("$aggregate_cell_" <> T.pack (show aggIdx) <> "_" <> v)
+
+-- | Name of the local a fold binds one candidate suspension to.
+aggregateSuspName :: Int -> Name
+aggregateSuspName j = Name ("$aggregate_susp_" <> T.pack (show j))
+
+-- | Name of the local holding the computed result inside an aggregate
+-- procedure, as the value an aggregator's @Final@ closure returned. The
+-- result pattern is matched against its payload, read with @get-arg@.
+aggregatePayloadName :: Name
+aggregatePayloadName = "$aggregate_payload"
+
+-- | The @maybe@ an aggregate's @Final@ closure returned: either
+-- @just(Payload)@ or @nothing@.
+aggregateMaybeName :: Name
+aggregateMaybeName = "$aggregate_maybe"
+
+-- | The fold's accumulator local.
+aggregateAccName :: Name
+aggregateAccName = "$aggregate_acc"
+
+-- | The local holding the working-value constructor @Agg@ evaluated to.
+aggregateAggName :: Name
+aggregateAggName = "$aggregate_agg"
+
+-- | The aggregator's increment and final closures, read out of @Agg@ by
+-- @get-arg@.
+aggregateIncName :: Name
+aggregateIncName = "$aggregate_inc"
+
+aggregateFinalName :: Name
+aggregateFinalName = "$aggregate_final"
+
+-- | Label of the loop that matches the @j@-th goal conjunct of aggregate
+-- @k@. A label has to be unique within the procedure it is emitted in,
+-- which is why both indices are in it.
+aggregateLabel :: Int -> Int -> Label
+aggregateLabel k j =
+  Label
+    ( "aggregate_loop_"
+        <> T.pack (show k)
+        <> "_"
+        <> T.pack (show j)
+    )
+
+-- | Runtime functor of @aggregates:aggregator/3@, the working-value
+-- constructor an aggregate's @Agg@ expression has to evaluate to. See
+-- Note [Aggregator representation] in "YCHR.Internal.Compile.Aggregate".
+aggregateAggFunctor :: Name
+aggregateAggFunctor = vmName (Types.Qualified "aggregates" "aggregator")
+
+-- | Runtime functor of @maybe:just/1@: what an aggregator's @Final@
+-- closure returns when the aggregate is defined.
+aggregateJustFunctor :: Name
+aggregateJustFunctor = vmName (Types.Qualified "maybe" "just")
+
+-- | Runtime value of @maybe:nothing@: what @Final@ returns when the
+-- aggregate is undefined, so the rule does not apply. A zero-arity
+-- constructor is an atom at run time.
+aggregateNothingAtom :: Literal
+aggregateNothingAtom =
+  AtomLit (vmName (Types.Qualified "maybe" "nothing")).unName
 
 -- ---------------------------------------------------------------------------
 -- Runtime entry-point names

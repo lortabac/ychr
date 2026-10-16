@@ -12,6 +12,8 @@ module YCHR.Internal.Compile.Types
     Occurrence (..),
     occurrenceArity,
     Partner (..),
+    AggregatePlan (..),
+    ResultMatch (..),
     IndexCondition (..),
     CompiledGuards (..),
     CheckGuards (..),
@@ -40,9 +42,18 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Internal.Desugared qualified as D
-import YCHR.Internal.Types (HeadArg, HeadConstraint, Identifier, Name, RuleId)
+import YCHR.Internal.Types
+  ( AggregateKind,
+    HeadArg,
+    HeadConstraint,
+    Identifier,
+    Name,
+    RuleId,
+    Term,
+  )
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (ArgIndex, BoolExpr, ConstraintType, Stmt, ValExpr)
+import YCHR.Internal.VM qualified as VM
 
 -- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
 -- 'YCHR.Internal.Parsed.AnnP' at the use site to carry the source location and
@@ -55,6 +66,17 @@ data CompileError
     -- by the rule head. Raised by 'YCHR.Internal.Compile' while compiling
     -- terms.
     UnboundVariable Text
+  | -- | A local variable of an aggregate is used in the rule's guard or
+    -- body. Raised by 'YCHR.Internal.Compile.Aggregate'.
+    AggregateLocalEscapes Text
+  | -- | A recognized aggregate form the compiler does not implement yet,
+    -- with the form's name and arity. Raised by
+    -- 'YCHR.Internal.Compile.Aggregate'.
+    AggregateNotImplemented Text Int
+  | -- | A rule has an aggregate but the program does not declare
+    -- @maybe:just/1@, the constructor an aggregator's @Final@ closure has
+    -- to return. Raised by 'YCHR.Internal.Compile.Aggregate'.
+    AggregateResultNotMaybe
   deriving (Show)
 
 -- | 1-based occurrence number within a constraint type's occurrence list.
@@ -102,6 +124,9 @@ data Occurrence = Occurrence
     -- | The other head constraints, in the order they will be iterated
     -- by nested 'YCHR.Internal.VM.Foreach' loops.
     partners :: [Partner],
+    -- | The rule head's aggregates, planned once for the rule and carried
+    -- by each of its occurrences. Empty for a rule without any.
+    aggregates :: [AggregatePlan],
     -- | Whether ωr guarantees this occurrence can never fire with the
     -- active constraint in this role. Every occurrence is born active
     -- ('False') in 'YCHR.Internal.Compile.Occurrences.mkOccurrence'; the passivity
@@ -137,6 +162,65 @@ data Partner = Partner
     -- partner up in the constraint store.
     cType :: ConstraintType
   }
+
+-- | One head aggregate of a rule, as the compiler needs it: which
+-- variables are inputs, which the procedure has to bind, and the goal its
+-- fold runs over.
+--
+-- A plan is a function of the rule alone. Which of an aggregate's
+-- variables are shared follows the spec's definition — the variables that
+-- also occur in the rule's regular heads or in an earlier aggregate's
+-- result — so it does not depend on which occurrence is active. One plan
+-- therefore serves every occurrence of the rule and one procedure serves
+-- them all.
+data AggregatePlan = AggregatePlan
+  { -- | Source order of this aggregate within the rule head.
+    planIndex :: Int,
+    planKind :: AggregateKind,
+    -- | The procedure that computes it.
+    planProcName :: VM.Name,
+    planAgg :: Maybe D.Expr,
+    planElement :: D.Expr,
+    planGoal :: [D.AggregateConjunct],
+    planResult :: Term,
+    -- | Source variables the aggregate reads as inputs, in the canonical
+    -- order the procedure's @aggregate_shared_N@ parameters and every call
+    -- site use.
+    planShared :: [Text],
+    -- | Result variables the procedure binds, in the canonical order its
+    -- @aggregate_out_N@ parameters use. Every other variable of the
+    -- result pattern is either an input or a goal-local, so it is matched
+    -- with an equality instead of bound.
+    planBind :: [Text],
+    -- | What the procedure does with the computed result: the tests the
+    -- pattern has to pass and the out-cell bindings that follow them.
+    planResultMatch :: ResultMatch
+  }
+  deriving (Show, Eq)
+
+-- | A result pattern compiled against the computed payload: the tests it
+-- has to pass, and the bindings of the variables it introduces.
+--
+-- The two lists are kept apart because every test runs before any
+-- binding. A pattern that fails part way through therefore binds nothing:
+-- the rule does not apply, and nothing is left half-done for the guard's
+-- soft failure to abandon.
+data ResultMatch = ResultMatch
+  { -- | Structural tests, in pattern order.
+    resultTests :: [BoolExpr],
+    -- | One entry per variable the pattern binds, in traversal order: the
+    -- source variable and the value subterm it has to agree with. The
+    -- procedure binds it with @bunify\<out-cell\> \<subterm\>@, in the
+    -- same order as 'planBind'.
+    resultBinds :: [(Text, ValExpr)]
+  }
+  deriving (Show, Eq)
+
+instance Semigroup ResultMatch where
+  a <> b = ResultMatch (a.resultTests ++ b.resultTests) (a.resultBinds ++ b.resultBinds)
+
+instance Monoid ResultMatch where
+  mempty = ResultMatch [] []
 
 -- | A single index condition lifted out of an equality check guard onto
 -- a partner 'YCHR.Internal.VM.Foreach' loop: argument @argIndex@ of the partner
@@ -216,7 +300,11 @@ data CollectedOccurrences = CollectedOccurrences
   { -- | Occurrences grouped by constraint type and numbered in ωr order.
     occurrenceMap :: OccurrenceMap,
     -- | Display name of each rule, indexed by its 'RuleId'.
-    ruleDisplayNames :: [Text]
+    ruleDisplayNames :: [Text],
+    -- | Each rule's aggregates, planned once and indexed by its 'RuleId'.
+    -- A rule without aggregates contributes an empty list, so a program
+    -- that uses none carries no plan and generates no aggregate procedure.
+    aggregatePlans :: [[AggregatePlan]]
   }
 
 -- | Map from source-level variable names to the 'ValExpr' that holds

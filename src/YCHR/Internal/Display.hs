@@ -412,6 +412,9 @@ desugarErrorCode (InlineCycle _) = ErrorCode 30010
 compileErrorCode :: CompileError -> ErrorCode
 compileErrorCode (UnknownConstraintType _) = ErrorCode 40001
 compileErrorCode (UnboundVariable _) = ErrorCode 40002
+compileErrorCode (AggregateLocalEscapes _) = ErrorCode 40003
+compileErrorCode (AggregateNotImplemented _ _) = ErrorCode 40004
+compileErrorCode AggregateResultNotMaybe = ErrorCode 40005
 
 -- | 45xxx — constraint-use check. Its own bucket rather than the type
 -- checker's 6xxxx band: the pass is independent of the CHR checker,
@@ -1606,6 +1609,29 @@ compileErrorMsg (UnboundVariable var) =
     ("Unbound variable '" ++ T.unpack var ++ "'")
     ( "variables used in a guard or body must also appear in the rule"
         ++ " head or the equation's parameters"
+    )
+compileErrorMsg (AggregateLocalEscapes var) =
+  withHint
+    ("Aggregate-local variable '" ++ T.unpack var ++ "' escapes its aggregate")
+    ( "a variable only an aggregate's goal binds is not visible to the"
+        ++ " rule's guard or body; bind it with '=' in the body instead"
+    )
+compileErrorMsg (AggregateNotImplemented name arity) =
+  withHint
+    ( "Aggregate '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' is not implemented yet"
+    )
+    ( "this compiler recognizes the form but does not evaluate it:"
+        ++ " selection aggregates and nested aggregates are still to come"
+    )
+compileErrorMsg AggregateResultNotMaybe =
+  withHint
+    "No 'maybe:just/1' constructor is visible"
+    ( "an aggregator's Final closure must return library(maybe)'s maybe;"
+        ++ " import it with :- use_module(library(maybe))"
     )
 
 instance Display (Diagnostic TypeCheckError) where

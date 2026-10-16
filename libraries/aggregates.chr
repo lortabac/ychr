@@ -1,0 +1,161 @@
+% Aggregates: summarizing an unbounded part of the constraint store from a
+% rule head. See docs/reference/aggregates.md.
+%
+% The core form is `aggregate(Agg, Element, Goal, Result)`, where `Agg` is
+% an expression evaluating to `aggregator(Init, Inc, Final)`. The macros
+% below are the predefined aggregates; a user can write their own the same
+% way (the spec's `sum_sq` example).
+%
+% `Init` is the initial working value, `Inc` is a closure from a working
+% value and one element to the next working value, and `Final` turns the
+% last working value into a `maybe` (library(maybe)): `nothing` makes the
+% aggregate undefined, so the rule does not apply, and `just(Result)` is
+% the value `Result` is matched against.
+%
+% The helper functions are exported so a user-written aggregator can name
+% them: `fun min_inc/2` and friends.
+:- module(aggregates, [
+    type(aggregator/3),
+    op(900, fy, '\\+'),
+    op(900, fy, '?'),
+    macro(count/2),
+    macro(sum/3),
+    macro(prod/3),
+    macro(min/3),
+    macro(max/3),
+    macro(avg/3),
+    macro(collect/3),
+    macro(exists/1),
+    macro('\\+'/1),
+    fun count_spec/0,
+    fun sum_spec/0,
+    fun prod_spec/0,
+    fun min_spec/0,
+    fun max_spec/0,
+    fun avg_spec/0,
+    fun collect_spec/0,
+    fun exists_spec/0,
+    fun not_spec/0,
+    fun count_inc/2,
+    fun add_inc/2,
+    fun mul_inc/2,
+    fun min_inc/2,
+    fun max_inc/2,
+    fun avg_inc/2,
+    fun collect_inc/2,
+    fun just_final/1,
+    fun identity_final/1,
+    fun avg_final/1,
+    fun collect_final/1,
+    fun exists_final/1,
+    fun not_final/1
+]).
+
+:- use_module(library(lists)).
+:- use_module(library(maybe)).
+:- use_module(library(pairs)).
+
+% The working-value constructor. `aggregator(Init, Inc, Final)` is what an
+% `Agg` expression evaluates to; the compiler reads the three fields with
+% `get-arg`.
+:- chr_type aggregator(W, E, R) --->
+       aggregator(W, fun(W, E) -> W end, fun(W) -> maybe(R) end).
+
+:- function
+    (count_spec() -> aggregator(int, any, int)),
+    (sum_spec() -> aggregator(int, int, int)),
+    (prod_spec() -> aggregator(int, int, int)),
+    (min_spec() -> aggregator(maybe(int), int, int)),
+    (max_spec() -> aggregator(maybe(int), int, int)),
+    (avg_spec() -> aggregator(pair(int, int), int, float)),
+    (collect_spec() -> aggregator(list(any), any, list(any))),
+    (exists_spec() -> aggregator(int, any, bool)),
+    (not_spec() -> aggregator(int, any, bool)),
+    (count_inc(int, any) -> int),
+    (add_inc(int, int) -> int),
+    (mul_inc(int, int) -> int),
+    (min_inc(maybe(int), int) -> maybe(int)),
+    (max_inc(maybe(int), int) -> maybe(int)),
+    (avg_inc(pair(int, int), int) -> pair(int, int)),
+    (collect_inc(list(any), any) -> list(any)),
+    (just_final(A) -> maybe(A)),
+    (identity_final(A) -> A),
+    (avg_final(pair(int, int)) -> maybe(float)),
+    (collect_final(list(any)) -> maybe(list(any))),
+    (exists_final(int) -> maybe(bool)),
+    (not_final(int) -> maybe(bool)).
+
+% The predefined aggregates. Each macro expands to the core form, naming
+% its aggregator by qualified name, as a library macro must.
+:- macro count(G, N) ---> [aggregate(aggregates:count_spec, 1, G, N)].
+:- macro sum(X, G, S) ---> [aggregate(aggregates:sum_spec, X, G, S)].
+:- macro prod(X, G, P) ---> [aggregate(aggregates:prod_spec, X, G, P)].
+:- macro min(X, G, M) ---> [aggregate(aggregates:min_spec, X, G, M)].
+:- macro max(X, G, M) ---> [aggregate(aggregates:max_spec, X, G, M)].
+:- macro avg(X, G, A) ---> [aggregate(aggregates:avg_spec, X, G, A)].
+:- macro collect(X, G, L) ---> [aggregate(aggregates:collect_spec, X, G, L)].
+:- macro exists(G) ---> [aggregate(aggregates:exists_spec, 1, G, _)].
+:- macro '\\+'(G) ---> [aggregate(aggregates:not_spec, 1, G, _)].
+
+% Counting: the number of matches. The element is irrelevant, and every
+% predefined aggregate that only counts passes 1 for it.
+count_spec -> aggregator(0, fun count_inc/2, fun just_final/1).
+
+count_inc(W, _) -> W + 1.
+
+% Arithmetic folds. Their result is always defined: an empty sum is 0.
+sum_spec -> aggregator(0, fun add_inc/2, fun just_final/1).
+
+add_inc(W, X) -> W + X.
+
+prod_spec -> aggregator(1, fun mul_inc/2, fun just_final/1).
+
+mul_inc(W, X) -> W * X.
+
+% Minimum and maximum carry a `maybe` as the working value, so that "no
+% matches" is undefined without a second sentinel, and their `Final` is the
+% identity.
+min_spec -> aggregator(nothing, fun min_inc/2, fun identity_final/1).
+
+min_inc(nothing, X) -> just(X).
+min_inc(just(W), X) | X < W -> just(X).
+min_inc(W, _) -> W.
+
+max_spec -> aggregator(nothing, fun max_inc/2, fun identity_final/1).
+
+max_inc(nothing, X) -> just(X).
+max_inc(just(W), X) | X > W -> just(X).
+max_inc(W, _) -> W.
+
+% The mean of integer elements, as a float. `/` has no integer signature,
+% so the division is done in floats.
+avg_spec -> aggregator(kv(0, 0), fun avg_inc/2, fun avg_final/1).
+
+avg_inc(kv(S, N), X) -> kv(S + X, N + 1).
+
+avg_final(kv(_, 0)) -> nothing.
+avg_final(kv(S, N)) -> just(int_to_float(S) / int_to_float(N)).
+
+% The list of elements, in goal order: the fold prepends, so `Final`
+% reverses.
+collect_spec -> aggregator([], fun collect_inc/2, fun collect_final/1).
+
+collect_inc(W, X) -> [X | W].
+
+collect_final(W) -> just(reverse(W)).
+
+% `exists(G)` and `\+ G` observe only whether the count is zero, so each
+% returns `nothing` when the condition fails and needs no guard.
+exists_spec -> aggregator(0, fun count_inc/2, fun exists_final/1).
+
+exists_final(0) -> nothing.
+exists_final(_) -> just(true).
+
+not_spec -> aggregator(0, fun count_inc/2, fun not_final/1).
+
+not_final(0) -> just(true).
+not_final(_) -> nothing.
+
+just_final(W) -> just(W).
+
+identity_final(W) -> W.

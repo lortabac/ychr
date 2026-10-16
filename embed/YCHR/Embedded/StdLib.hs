@@ -53,7 +53,8 @@ import System.FilePath (takeExtension, (</>))
 -- components that embed it.
 librarySources :: [FilePath]
 librarySources =
-  [ "chr.chr",
+  [ "aggregates.chr",
+    "chr.chr",
     "lists.chr",
     "maybe.chr",
     "meta.chr",

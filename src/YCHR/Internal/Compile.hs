@@ -71,7 +71,7 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -90,6 +90,7 @@ import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( ConstraintKey (..),
     HeadArg (..),
+    HeadConstraint (..),
     Identifier (..),
     SymbolTable,
     Term (..),
@@ -135,15 +136,28 @@ compile prog symTab =
       procs = concatMap (.constraintProcedures) constraintProcs
       (funProcs, funErrs) = runWriter $ do
         traverse compileFunctionDef prog.functions
+      -- One procedure per head aggregate, in rule order. A rule without
+      -- aggregates contributes nothing, so a program that uses none emits
+      -- exactly the procedures it emitted before.
+      aggregateWork =
+        [ (display, rule, plan)
+        | (display, rule, plans) <-
+            zip3 ruleDisplayNames prog.rules collected.aggregatePlans,
+          plan <- plans
+        ]
+      (aggProcs, aggErrs) = runWriter $ do
+        traverse
+          (\(display, rule, plan) -> genAggregateProcedure symTab display (rule, plan))
+          aggregateWork
       dispatch = genReactivateDispatch symTab
-      allErrs = occErrs ++ procErrs ++ funErrs
+      allErrs = occErrs ++ procErrs ++ funErrs ++ aggErrs
    in if null allErrs
         then
           Right
             Program
               { typeNames = buildTypeNames symTab,
                 ruleNames = ruleDisplayNames,
-                procedures = procs ++ funProcs ++ [dispatch],
+                procedures = procs ++ funProcs ++ aggProcs ++ [dispatch],
                 evaluables = buildEvaluables prog.functions,
                 callables = buildCallables prog.functions,
                 tellables = buildTellables prog,
@@ -544,6 +558,13 @@ genOccurrenceBody symTab cType varMap occ = do
 -- 'D.GuardMatch' / 'D.GuardGetArg') wrapped around the conditional
 -- 'genFireStmts' result — together with the per-partner index
 -- conditions lifted out of equality check guards by 'compileCheckGuards'.
+--
+-- A rule with aggregates extends the guard: one out-cell local per result
+-- variable the aggregate binds is created here, the aggregate's procedure
+-- is called from the guard condition, and the rule's own guard follows it.
+-- Everything sits inside the match-guard wrapper, so a shared variable that
+-- only the head's HNF guards bind is already in scope when the aggregate
+-- reads it.
 genGuardedFire ::
   SymbolTable ->
   VarMap ->
@@ -553,12 +574,301 @@ genGuardedFire symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       guardSi = SrcInfo guardLoc guardP ruleLabel
-  compiled <- compileGuards (Just occ) Nothing varMap guardSi guards
+      AnnP {sourceLoc = headLoc, parsed = headP} = occ.rule.head
+      headSi = SrcInfo headLoc headP ruleLabel
+      cellStmts = concatMap aggregateOutCellStmts occ.aggregates
+      -- The cells are in scope for the rule's guard as well as for the body:
+      -- an aggregate's result is readable from both.
+      varMapWithCells =
+        List.foldl' aggregateOutCellVars varMap occ.aggregates
+  compiled <- compileGuards (Just occ) Nothing varMapWithCells guardSi guards
+  aggTests <-
+    traverse (aggregateTest headSi compiled.extendedVarMap) occ.aggregates
   fireStmts <- genFireStmts symTab compiled.extendedVarMap occ
-  let guarded = case compiled.residualCheck of
-        Nothing -> fireStmts
-        Just gExpr -> [If (softenGuard gExpr) fireStmts []]
-  pure (compiled.matchWrapper guarded, compiled.indexConditions)
+  let residual = fromMaybe (BLit True) compiled.residualCheck
+      -- Aggregates are computed left to right, before the rule's own guard,
+      -- and 'BAnd' short-circuits in the same order.
+      condition = List.foldr BAnd residual aggTests
+      guarded = [If (softenGuard condition) fireStmts []]
+  pure (compiled.matchWrapper (cellStmts ++ guarded), compiled.indexConditions)
+
+-- ---------------------------------------------------------------------------
+-- Aggregates
+-- ---------------------------------------------------------------------------
+
+-- | The out-cell locals one aggregate's call needs: one fresh unbound
+-- variable per result variable its pattern binds. The aggregate's procedure
+-- binds them, so the rule's guard and body can read the results.
+aggregateOutCellStmts :: AggregatePlan -> [Stmt]
+aggregateOutCellStmts plan =
+  [LetVal (aggregateOutCell plan.planIndex v) NewVar | v <- plan.planBind]
+
+-- | Extend a variable map with the cells one aggregate binds, so a later
+-- aggregate and the rule's guard read its result.
+aggregateOutCellVars :: VarMap -> AggregatePlan -> VarMap
+aggregateOutCellVars vm plan =
+  List.foldl'
+    (\m v -> insertVar v (Var (aggregateOutCell plan.planIndex v)) m)
+    vm
+    plan.planBind
+
+-- | The guard conjunct that computes one aggregate: a call to its procedure
+-- inside 'BFromVal', so 'softenGuard' puts the whole fold under a soft
+-- boundary and an instantiation error anywhere in it makes the aggregate
+-- undefined instead of aborting the query.
+--
+-- The call's arguments are the out-cells the caller created, in the order
+-- the procedure's parameters expect them, followed by the values of the
+-- aggregate's shared variables.
+aggregateTest ::
+  SrcInfo ->
+  VarMap ->
+  AggregatePlan ->
+  Writer [Diagnostic CompileError] BoolExpr
+aggregateTest si varMap plan = do
+  shared <- traverse sharedArg plan.planShared
+  let cells =
+        [AVal (Var (aggregateOutCell plan.planIndex v)) | v <- plan.planBind]
+  pure (BFromVal (CallExpr plan.planProcName (cells ++ map AVal shared)))
+  where
+    -- A shared variable is a head variable by construction. A missing one
+    -- is a compiler invariant violation, reported as an unbound variable
+    -- rather than crashing.
+    sharedArg v = case lookupVar v varMap of
+      Just expr -> pure expr
+      Nothing -> do
+        tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
+        pure unreachableValue
+
+-- | Generate the procedure that computes one head aggregate.
+--
+-- Parameters: the out-cells the caller created (one per result variable the
+-- pattern binds), then the values of the aggregate's shared variables. It
+-- returns a boolean — @true@ when the aggregate is defined and its result
+-- pattern matched, @false@ when it is undefined or did not.
+--
+-- The body evaluates the aggregator, folds the goal's matches into a local
+-- working value, applies the aggregator's @Final@ closure, decodes the
+-- @maybe@ it returns, and matches the result pattern. Apart from binding
+-- its out-cells it is read-only: no store, kill, history, tell or
+-- reactivation statement is reachable from it, which is what lets an
+-- occurrence call it from inside a guard. See Note [Guard-window bindings].
+genAggregateProcedure ::
+  SymbolTable ->
+  Text ->
+  (D.Rule, AggregatePlan) ->
+  Writer [Diagnostic CompileError] Procedure
+genAggregateProcedure symTab display (rule, plan) = do
+  let outParams = [aggregateOutParam i | i <- [0 .. length plan.planBind - 1]]
+      sharedParams =
+        [aggregateSharedParam i | i <- [0 .. length plan.planShared - 1]]
+      params = outParams ++ sharedParams
+      sharedMap = varMapFromList (zip plan.planShared (map Var sharedParams))
+      ruleLabel = Just ("rule " <> display)
+      si = SrcInfo rule.head.sourceLoc rule.head.parsed ruleLabel
+      resultMatch = plan.planResultMatch
+  aggExpr <- traverse (compileExpr sharedMap si) plan.planAgg
+  body <- case aggExpr of
+    -- A selection form has no aggregator, and is reported and dropped by
+    -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
+    -- compiles never gets here. Answering "undefined" keeps the procedure
+    -- well formed if one ever does.
+    Nothing -> pure [Return (Lit (BoolLit False))]
+    Just expr -> do
+      foldStmts <-
+        withGoalNest symTab si plan sharedMap $ \innermost -> do
+          elementExpr <- compileExpr innermost si plan.planElement
+          pure
+            [ AssignVal
+                aggregateAccName
+                ( ApplyClosure
+                    (Var aggregateIncName)
+                    [Var aggregateAccName, elementExpr]
+                )
+            ]
+      pure
+        ( [ LetVal aggregateAggName expr,
+            If
+              (BNot (BMatchTerm (Var aggregateAggName) aggregateAggFunctor 3))
+              [ ExprStmt
+                  ( HostCall
+                      chrErrorName
+                      [ Lit
+                          ( AtomLit
+                              ( "aggregate: the Agg expression is not an"
+                                  <> " aggregator(Init, Inc, Final)"
+                              )
+                          )
+                      ]
+                  )
+              ]
+              [],
+            LetVal aggregateAccName (GetArg (Var aggregateAggName) 0),
+            LetVal aggregateIncName (GetArg (Var aggregateAggName) 1),
+            LetVal aggregateFinalName (GetArg (Var aggregateAggName) 2)
+          ]
+            ++ foldStmts
+        )
+  pure
+    Procedure
+      { name = plan.planProcName,
+        params = params,
+        body = body ++ maybeValueStmts resultMatch,
+        procKind =
+          PKFunction
+            (Types.QualifiedName "$aggregate" plan.planProcName.unName)
+            (length params)
+      }
+
+-- | The tail of an aggregate procedure: apply @Final@, decode the @maybe@
+-- it returned, and match the result pattern against the payload.
+--
+-- A value that is neither @just\/1@ nor @nothing@ is a runtime error naming
+-- the protocol: silently treating it as undefined would turn a missing
+-- @library(maybe)@ import into a rule that never fires.
+maybeValueStmts :: ResultMatch -> [Stmt]
+maybeValueStmts resultMatch =
+  [ LetVal
+      aggregateMaybeName
+      (ApplyClosure (Var aggregateFinalName) [Var aggregateAccName]),
+    If
+      (BMatchTerm (Var aggregateMaybeName) aggregateJustFunctor 1)
+      ( LetVal aggregatePayloadName (GetArg (Var aggregateMaybeName) 0)
+          : matchedStmts
+      )
+      [ If
+          (BEqual (Var aggregateMaybeName) (Lit aggregateNothingAtom))
+          [Return (Lit (BoolLit False))]
+          [ ExprStmt
+              ( HostCall
+                  chrErrorName
+                  [ Lit
+                      ( AtomLit
+                          ( "aggregate: Final returned neither just(Result) nor"
+                              <> " nothing, so it is not library(maybe)'s maybe"
+                          )
+                      )
+                  ]
+              )
+          ]
+      ]
+  ]
+  where
+    matchedStmts =
+      bindsStmts resultMatch.resultBinds ++ [Return (Lit (BoolLit True))]
+
+-- | The out-cell bindings a result match asks for, in the order the
+-- procedure's out parameters were declared.
+bindsStmts :: [(Text, ValExpr)] -> [Stmt]
+bindsStmts binds =
+  [ BoolExprStmt (BUnify (Var (aggregateOutParam i)) rhs)
+  | (i, (_, rhs)) <- zip [0 ..] binds
+  ]
+
+-- | Wrap a block in the loops and the in-place guards that match an
+-- aggregate goal's conjuncts, left to right, and hand the innermost block
+-- the variable map in scope there.
+--
+-- A conjunct's own HNF guards are evaluated inside its loop, right after
+-- its arguments are bound, so they filter candidates before the conjuncts
+-- that follow are searched. Source order is the loop order: the first
+-- conjunct's loop is the outermost.
+--
+-- A shared variable is an index condition on the conjunct's argument
+-- position — evaluated before the loop body, so the iterator can skip
+-- candidates without entering it — while a variable the goal binds is read
+-- out of the candidate with @field-arg@. A variable bound by an earlier
+-- conjunct is an index condition too, since it is in scope at this loop's
+-- evaluation point.
+withGoalNest ::
+  SymbolTable ->
+  SrcInfo ->
+  AggregatePlan ->
+  VarMap ->
+  (VarMap -> Writer [Diagnostic CompileError] [Stmt]) ->
+  Writer [Diagnostic CompileError] [Stmt]
+withGoalNest symTab si plan varMap0 inner = go 0 varMap0 plan.planGoal
+  where
+    go _ vm [] = inner vm
+    go j vm (conjunct : rest) = case conjunct of
+      D.AggConstraint hcon guards -> do
+        mCType <- lookupGoalCType symTab si hcon
+        case mCType of
+          -- The miss is already reported: keep going so the rest of the
+          -- program still produces diagnostics.
+          Nothing -> go (j + 1) vm rest
+          Just cType -> do
+            let suspName = aggregateSuspName j
+                (conds, lettStmts, vm') = bindGoalArgs suspName vm hcon
+            compiled <- compileGuards Nothing Nothing vm' si guards
+            restStmts <- go (j + 1) vm' rest
+            pure
+              [ Foreach
+                  (aggregateLabel plan.planIndex j)
+                  cType
+                  suspName
+                  conds
+                  (lettStmts ++ compiled.matchWrapper (withResidual compiled restStmts))
+              ]
+      -- A @? Guard@ is checked in place: it sees the variables the conjuncts
+      -- before it bound, and filters before the ones after it are searched.
+      D.AggGuard g -> do
+        compiled <- compileGuards Nothing Nothing vm si [g]
+        restStmts <- go (j + 1) vm rest
+        pure (compiled.matchWrapper (withResidual compiled restStmts))
+      -- A nested aggregate is rejected by
+      -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
+      -- compiles never reaches this arm.
+      D.AggNested _ -> go (j + 1) vm rest
+
+    withResidual compiled stmts = case compiled.residualCheck of
+      Nothing -> stmts
+      Just cond -> [If cond stmts []]
+
+-- | Bind one goal conjunct's arguments against the candidate suspension:
+-- index conditions for the values already in scope, @field-arg@ reads for
+-- the variables the goal binds, nothing for a wildcard.
+bindGoalArgs ::
+  Name ->
+  VarMap ->
+  HeadConstraint ->
+  ([(ArgIndex, ValExpr)], [Stmt], VarMap)
+bindGoalArgs suspName vm0 hcon =
+  List.foldl' step ([], [], vm0) (zip [0 ..] hcon.args)
+  where
+    step (conds, lets, vm) (i, arg) = case arg of
+      HeadWildcard -> (conds, lets, vm)
+      HeadVar v -> case lookupVar v vm of
+        Just expr -> (conds ++ [(ArgIndex i, expr)], lets, vm)
+        Nothing ->
+          ( conds,
+            lets ++ [LetVal (Name v) (FieldArg (IdVar suspName) (ArgIndex i))],
+            insertVar v (Var (Name v)) vm
+          )
+
+-- | The constraint type of an aggregate-goal conjunct, reported like a head
+-- constraint's when the type is unknown.
+lookupGoalCType ::
+  SymbolTable ->
+  SrcInfo ->
+  HeadConstraint ->
+  Writer [Diagnostic CompileError] (Maybe ConstraintType)
+lookupGoalCType symTab si hcon =
+  case Types.lookupSymbol ident symTab of
+    Just cType -> pure (Just cType)
+    Nothing -> do
+      tell
+        [ Diagnostic
+            si.srcLabel
+            (AnnP (UnknownConstraintType ident.name) si.srcLoc si.srcParsed)
+            []
+        ]
+      pure Nothing
+  where
+    ident =
+      Identifier
+        (Types.qualifiedToName hcon.name)
+        (length hcon.args)
 
 -- | Wrap a rule-occurrence guard residual in 'BSoftGuard', so that an
 -- instantiation failure inside it (an unbound variable reached a

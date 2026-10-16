@@ -1,0 +1,26 @@
+% The banking example: an aggregate over a goal whose constraints are told
+% before the rule's own head constraint.
+:- module(aggregates_sum, [setup/2]).
+:- use_module(library(aggregates)).
+
+:- chr_type kind ---> saving ; checking.
+
+:- chr_constraint client/1, account/4, platinum/1, spent/2,
+                  ask_total/1, ask_platinum/1, setup/2.
+
+% A client is platinum as soon as the balances of its accounts reach 25000.
+client(C), sum(B, account(_, C, _, B), S) ==> S >= 25000 | platinum(C).
+
+% The total, whatever it is.
+client(C), sum(B, account(_, C, _, B), S) ==> spent(C, S).
+
+spent(_, S) \ ask_total(A) <=> A = S.
+platinum(C) \ ask_platinum(B) <=> B = C.
+
+% Two accounts of client 7; the threshold is crossed.
+setup(A, B) <=>
+    account(1, 7, saving, 10000),
+    account(2, 7, checking, 20000),
+    client(7),
+    ask_total(A),
+    ask_platinum(B).

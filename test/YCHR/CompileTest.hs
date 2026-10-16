@@ -29,7 +29,8 @@ tests =
       distinctnessElisionTests,
       boolPatternTests,
       softGuardWrapTests,
-      callablesDispatchTests
+      callablesDispatchTests,
+      aggregateFoldTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -564,3 +565,122 @@ lambdaSource =
   \:- function mk/2.\n\
   \mk(X, Y) -> fun(A, B, C) -> X + Y + A + B + C end.\n\
   \r @ go(X, Y, R) <=> F is mk(X, Y), R is '$call'(F, 1, 2, 3).\n"
+
+--------------------------------------------------------------------------------
+-- Aggregate folds
+--------------------------------------------------------------------------------
+
+-- | A rule whose head carries one aggregate over a goal.
+aggregateSource :: Text
+aggregateSource =
+  ":- module(aggm, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count(d(X), N) ==> n(X, N).\n"
+
+-- | Every statement of a body, flattened through nested bodies.
+nestedStmts :: [VM.Stmt] -> [VM.Stmt]
+nestedStmts = concatMap go
+  where
+    go s =
+      s : case s of
+        VM.If _ t e -> nestedStmts t ++ nestedStmts e
+        VM.Foreach _ _ _ _ b -> nestedStmts b
+        VM.DrainReactivationQueue _ b -> nestedStmts b
+        _ -> []
+
+-- | Every @BUnify@ reachable from the boolean positions of a body, with
+-- the boolean connectives flattened.
+bunifyExprs :: [VM.Stmt] -> [VM.BoolExpr]
+bunifyExprs = concatMap go
+  where
+    go s = case s of
+      VM.If b t e -> flatten b ++ bunifyExprs t ++ bunifyExprs e
+      VM.BoolExprStmt b -> flatten b
+      VM.Foreach _ _ _ _ b -> bunifyExprs b
+      VM.DrainReactivationQueue _ b -> bunifyExprs b
+      _ -> []
+    flatten b = case b of
+      VM.BUnify {} -> [b]
+      VM.BAnd a c -> flatten a ++ flatten c
+      VM.BOr a c -> flatten a ++ flatten c
+      VM.BNot a -> flatten a
+      VM.BSoftGuard a -> flatten a
+      VM.BEvalDeep a -> flatten a
+      _ -> []
+
+-- | Whether a statement mutates the runtime's bookkeeping. An aggregate
+-- procedure is called from a guard, so none of these may be reachable
+-- from one.
+mutatingStmt :: VM.Stmt -> Bool
+mutatingStmt s = case s of
+  VM.Store _ -> True
+  VM.Kill _ -> True
+  VM.AddHistory {} -> True
+  VM.TellTerm {} -> True
+  VM.DrainReactivationQueue {} -> True
+  _ -> False
+
+aggregateFoldTests :: TestTree
+aggregateFoldTests =
+  testGroup
+    "aggregate folds"
+    [ testCase "a rule with an aggregate gets one fold procedure" $ do
+        prog <- compileOrFail [("m.chr", aggregateSource)]
+        case findProcedure prog "aggregate_0_0" of
+          Nothing -> assertFailure "no procedure named aggregate_0_0"
+          Just p -> do
+            assertBool "expected parameters" (not (null p.params))
+            -- The procedure is tagged as a function with a reserved name,
+            -- so the tracer renders it without pretending it is a user
+            -- function and no export clause picks it up.
+            case p.procKind of
+              VM.PKFunction qn _ -> qn.moduleName @?= "$aggregate"
+              other -> assertFailure ("unexpected proc kind: " ++ show other),
+      testCase "the fold procedure only reads, apart from binding its out-cells" $ do
+        prog <- compileOrFail [("m.chr", aggregateSource)]
+        case findProcedure prog "aggregate_0_0" of
+          Nothing -> assertFailure "no procedure named aggregate_0_0"
+          Just p -> do
+            assertBool
+              ( "a fold procedure reachable from a guard must not"
+                  ++ " store, kill, add history or tell"
+              )
+              (not (any mutatingStmt (nestedStmts p.body)))
+            -- Every binding it does make targets an out-cell, and the
+            -- out-cell is the left operand: unification binds its left
+            -- operand and returns that operand's observers, so this is
+            -- what keeps the binding from enqueuing reactivation.
+            assertBool
+              "expected at least one out-cell binding"
+              (not (null (bunifyExprs p.body)))
+            mapM_
+              ( \b -> case b of
+                  VM.BUnify (VM.Var n) _ ->
+                    assertBool
+                      ("bunify binds something that is not an out-cell: " ++ show n.unName)
+                      ("aggregate_out_" `T.isPrefixOf` n.unName)
+                  other -> assertFailure ("unexpected bunify shape: " ++ show other)
+              )
+              (bunifyExprs p.body),
+      testCase "the guard calls the fold inside a soft guard" $ do
+        prog <- compileOrFail [("m.chr", aggregateSource)]
+        case findProcedure prog "occurrence_aggm__c1_1" of
+          Nothing -> assertFailure "no c/1 occurrence procedure"
+          Just p ->
+            assertBool
+              "expected the aggregate call to be soft-guarded"
+              (any isSoftGuard (ifConditions p.body))
+            where
+              isSoftGuard (VM.BSoftGuard _) = True
+              isSoftGuard _ = False,
+      testCase "a program without aggregates emits no fold procedure" $ do
+        prog <- compileOrFail [("m.chr", leqSource)]
+        let folded =
+              [ p.name.unName
+              | p <- prog.program.procedures,
+                "aggregate_" `T.isPrefixOf` p.name.unName
+              ]
+        folded @?= []
+    ]

@@ -1,0 +1,16 @@
+% The fold, end to end: `count` over a goal whose constraint type is told
+% before the rule's own head constraint, so the occurrence fires once with
+% every match in the store.
+:- module(aggregates_count, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, count_of/2, ask/1, setup/1.
+
+c(X), count(d(X), N) ==> count_of(X, N).
+
+% Read the derived count out: the ask is removed and its argument unified
+% with the count the aggregate computed.
+count_of(_, N) \ ask(A) <=> A = N.
+
+% The goal is one constraint, as `-g` requires.
+setup(A) <=> d(1), d(1), c(1), ask(A).

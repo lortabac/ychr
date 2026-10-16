@@ -1,0 +1,22 @@
+% Two aggregates in one head, computed left to right: the second reads the
+% first's result, both as its element and as a shared variable of its goal.
+:- module(aggregates_multi, [setup/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, e/1, both/3, ask_n/1, ask_s/1, setup/2.
+
+% N is the number of d(1)s; S adds N for every e(1), so S = N * count(e).
+c(X), count(d(X), N), sum(N, e(X), S) ==> both(X, N, S).
+
+both(_, N, _) \ ask_n(A) <=> A = N.
+both(_, _, S) \ ask_s(B) <=> B = S.
+
+setup(A, B) <=>
+    d(1),
+    d(1),
+    d(1),
+    e(1),
+    e(1),
+    c(1),
+    ask_n(A),
+    ask_s(B).

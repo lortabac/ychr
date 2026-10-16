@@ -1,0 +1,22 @@
+% exists(G) and \+ G: both are aggregates whose Final returns nothing when
+% the condition fails, so neither needs a guard.
+:- module(aggregates_exists_not, [setup/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint known/1, item/1, has/1, lacks/1, ask_has/1, ask_lacks/1,
+                  setup/2.
+
+known(X), exists(item(X)) ==> has(X).
+
+known(X), \+ item(X) ==> lacks(X).
+
+has(X) \ ask_has(A) <=> A = X.
+lacks(X) \ ask_lacks(B) <=> B = X.
+
+% 1 has an item, 2 does not.
+setup(A, B) <=>
+    item(1),
+    known(1),
+    known(2),
+    ask_has(A),
+    ask_lacks(B).
