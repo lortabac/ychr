@@ -250,11 +250,20 @@ The roles of the generated procedures:
 
 | Procedure | Purpose | Parameter kinds |
 |-----------|---------|-----------------|
-| `tell_c(X_0, ..., X_n)` | Creates a constraint suspension and calls `activate_c`. Storage happens later (Late Storage): inside a fired occurrence that keeps the constraint, or at the end of `activate_c`. | all values |
+| `tell_c($X_0, ..., $X_n)` | Creates a constraint suspension and calls `activate_c`. Storage happens later (Late Storage): inside a fired occurrence that keeps the constraint, or at the end of `activate_c`. | all values |
 | `activate_c(susp)` | Extracts arguments from the suspension, tries each occurrence in order. If the constraint survives all occurrences, stores it and returns `false`. | id |
-| `occurrence_c_j(id, X_0, ..., X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. | id, then values |
+| `occurrence_c_j(id, $X_0, ..., $X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. | id, then values |
 | `reactivate_dispatch(susp)` | Checks the suspension's constraint type and calls the appropriate `activate_c`. | id |
 | `func_f(arg_0, ..., arg_n)` | Evaluates a user-defined function. | all values |
+
+The active constraint's argument slots are `$X_0, …, $X_n`. The leading
+`$` matters: the runtime environment is flat per invocation, so a slot
+named `X_0` would be shadowed by a source variable of that name, and a
+guard or a later loop would read the wrong value. `$` cannot appear in a
+source variable, so the slot is unspellable. The partner loop variables
+(`pArg_k_j`, `pId_k`), the active id (`active`) and the other generated
+locals are lowercase-initial for the same reason, and a source variable
+must start with an uppercase letter or `_`.
 
 There is no dispatcher procedure for a dynamic call: `'$call'` lowers to
 `apply-closure`, which resolves the callee through the `callables` table
@@ -983,30 +992,33 @@ below. The constraint is `mymodule:leq/2`, so procedure names follow
     (tellables-unqualified)
     (inert-types)
 
-    ; tell_mymodule__leq2(X_0, X_1): create, store, activate
-    (procedure "tell_mymodule__leq2" ("X_0" "X_1") (tell 0)
-      (let-id "active" (create-constraint 0 (var "X_0") (var "X_1")))
-      (store (id-var "active"))
+    ; tell_mymodule__leq2($X_0, $X_1): create, then activate.
+    ; Storage is Late Storage: activate stores the constraint at the end,
+    ; and a fired occurrence that keeps it stores it before its body.
+    (procedure "tell_mymodule__leq2" ("$X_0" "$X_1") (tell 0)
+      (let-id "active" (create-constraint 0 (var "$X_0") (var "$X_1")))
       (expr-stmt (call-expr "activate_mymodule__leq2"
                    (arg-id (id-var "active")))))
 
-    ; activate_mymodule__leq2(active): extract args, try each occurrence
+    ; activate_mymodule__leq2(active): extract args, try each occurrence,
+    ; store what survives them.
     (procedure "activate_mymodule__leq2" ("active") (activate 0)
-      (let-val "X_0" (field-arg (id-var "active") 0))
-      (let-val "X_1" (field-arg (id-var "active") 1))
+      (let-val "$X_0" (field-arg (id-var "active") 0))
+      (let-val "$X_1" (field-arg (id-var "active") 1))
       (let-val "dropped" (call-expr "occurrence_mymodule__leq2_1"
                            (arg-id (id-var "active"))
-                           (arg-val (var "X_0"))
-                           (arg-val (var "X_1"))))
+                           (arg-val (var "$X_0"))
+                           (arg-val (var "$X_1"))))
       (if (bfrom-val (var "dropped")) ((return true)) ())
+      (store (id-var "active"))
       (return false))
 
     ; occurrence_mymodule__leq2_1: after HNF,
     ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
-    (procedure "occurrence_mymodule__leq2_1" ("active" "X_0" "X_1")
+    (procedure "occurrence_mymodule__leq2_1" ("active" "$X_0" "$X_1")
                (occurrence 0 1 0 "reflexivity")
       (push-frame "rule reflexivity" 4 15 "mymodule.chr" "leq(X, X)")
-      (if (bequal (var "X_0") (var "X_1"))
+      (if (bequal (var "$X_0") (var "$X_1"))
         ((kill (id-var "active"))
          (return true))
         ())

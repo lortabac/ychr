@@ -526,7 +526,7 @@ genOccurrence symTab occMap name cType arity occ = do
       }
 
 -- | Map every user-written head variable in an 'Occurrence' to the
--- generated VM variable that holds its value (an @X_i@ for the active
+-- generated VM variable that holds its value (a @$X_i@ for the active
 -- constraint, a @pArg_k_j@ for partner @k@). 'HeadWildcard' arguments
 -- contribute no binding: wildcards are never referenced from guards
 -- or bodies. See Note [Head variable extraction].
