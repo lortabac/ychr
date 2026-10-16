@@ -179,6 +179,14 @@ rules. The two hook points are:
 - **Local variables are not trailed**; `Foreach` has no per-iteration
   undo and iterates an immutable store snapshot, so a later tell is
   invisible to a running fold.
+- **Generated locals must be unspellable in source.** The runtime
+  environment is flat per invocation, so a source variable named
+  `X_0` shadows a local of the same name. `argName` therefore emits
+  `$X_i`, not `X_i`; every other generated local is either
+  `$`-prefixed (`$aggregate_susp_`, `$removal`, the out-cells) or
+  starts lowercase (`pArg_k_j`, `active`, `dropped`), and a source
+  variable is `[A-Z_][A-Za-z0-9_]*`, so none of them collides. A future
+  pass that introduces a local must keep that property.
 - **An inert type registers no observers**, which is why a type with
   goal occurrences must not be inert.
 - **`storeConstraint` on a dead suspension inserts it.** Every store a

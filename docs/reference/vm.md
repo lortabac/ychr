@@ -776,11 +776,13 @@ Whether the value is a compound term with the given functor and arity.
 
 A guard *can* reach a `bunify` through a called procedure: an aggregate
 fold ([aggregates.md](aggregates.md#implementation-notes)) binds the
-out-cells its caller created. Those cells are fresh per candidate,
-created inside the guard and unreachable from the store, and the cell
-is the *left* operand of the `bunify`, so unification returns an
-operand with no observers. The binding therefore enqueues no
-reactivation and leaves nothing behind when the guard fails. "Mutation
+out-cells its caller created, and binds each goal variable it reads as
+a plain local under that variable's source name. Those bindings are
+real, but they are untrailed locals unreachable from the store: the
+out-cell is fresh per candidate and is the *left* operand of the
+`bunify`, so unification returns an operand with no observers, and a
+goal local is just a slot. The bindings therefore enqueue no
+reactivation and leave nothing behind when the guard fails. "Mutation
 free" in this section means the store, the propagation history, the
 reactivation queue and the call stack — not local variables.
 - **`bid-equal`** compares two constraint identifiers for equality.

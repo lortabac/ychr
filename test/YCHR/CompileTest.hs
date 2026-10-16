@@ -155,7 +155,7 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_2"
-          [(VM.ArgIndex 1, VM.Var "X_0"), (VM.ArgIndex 0, VM.Var "X_1")],
+          [(VM.ArgIndex 1, VM.Var "$X_0"), (VM.ArgIndex 0, VM.Var "$X_1")],
       testCase "leq idempotence: active occurrence's partner args constrained" $ do
         -- idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
         -- Occurrence 5 (the kept head) is elided as subsumed by the
@@ -164,7 +164,7 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_4"
-          [(VM.ArgIndex 0, VM.Var "X_0"), (VM.ArgIndex 1, VM.Var "X_1")],
+          [(VM.ArgIndex 0, VM.Var "$X_0"), (VM.ArgIndex 1, VM.Var "$X_1")],
       testCase "leq transitivity: single shared variable lifted" $ do
         -- transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
         -- Each occurrence has exactly one HNF equality on the partner.
@@ -172,11 +172,11 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_6"
-          [(VM.ArgIndex 1, VM.Var "X_0")]
+          [(VM.ArgIndex 1, VM.Var "$X_0")]
         assertForeachConditions
           prog
           "occurrence_order__leq2_7"
-          [(VM.ArgIndex 0, VM.Var "X_1")],
+          [(VM.ArgIndex 0, VM.Var "$X_1")],
       testCase "leq reflexivity: no partners, equality stays residual" $ do
         -- reflexivity @ leq(X, X) <=> true.
         -- The Foreach is absent (single-headed rule), and the residual
@@ -186,15 +186,15 @@ indexConditionPushdownTests =
           Nothing -> assertFailure "occurrence_order__leq2_1 not found"
           Just p -> do
             findForeach p.body @?= Nothing
-            -- The residual check should contain Equal X_0 X_1.
+            -- The residual check should contain Equal $X_0 $X_1.
             let hasSelfEqual = any containsSelfEqual p.body
-            assertBool "expected residual Equal X_0 X_1" hasSelfEqual
+            assertBool "expected residual Equal $X_0 $X_1" hasSelfEqual
     ]
   where
     containsSelfEqual (VM.If e _ _) = exprHasSelfEqual e
     containsSelfEqual _ = False
-    exprHasSelfEqual (VM.BEqual (VM.Var "X_0") (VM.Var "X_1")) = True
-    exprHasSelfEqual (VM.BEqual (VM.Var "X_1") (VM.Var "X_0")) = True
+    exprHasSelfEqual (VM.BEqual (VM.Var "$X_0") (VM.Var "$X_1")) = True
+    exprHasSelfEqual (VM.BEqual (VM.Var "$X_1") (VM.Var "$X_0")) = True
     exprHasSelfEqual (VM.BAnd a b) = exprHasSelfEqual a || exprHasSelfEqual b
     exprHasSelfEqual _ = False
 
@@ -882,7 +882,7 @@ aggregateGoalTests =
           Just p ->
             callsTo "occurrence_aggl__d1_1" p.body
               @?= [ [ VM.AId (VM.IdVar "active"),
-                      VM.AVal (VM.Var (VM.Name "X_0")),
+                      VM.AVal (VM.Var (VM.Name "$X_0")),
                       VM.AVal (VM.Lit (VM.BoolLit False))
                     ]
                   ],

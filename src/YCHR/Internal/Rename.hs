@@ -1458,6 +1458,11 @@ renameConjunct ctx loc origin outerName outerArity t = case t of
   CompoundTerm n args
     | Just k <- aggregateKindOf n (length args) ->
         (: []) . AggNested <$> renameAggregate ctx loc origin k args
+    | isPrimitiveName n (length args) -> do
+        emitErrorIn
+          ctx
+          (AnnP (MacroPrimitiveOutsideMacro (unqualifiedText n) (length args)) loc origin)
+        pure []
     -- A macro use inside an aggregate goal is a goal position like any
     -- other, but 'renameConjunct' does not expand it. Report that instead
     -- of resolving the name as a constraint, which would fail as an
@@ -1482,6 +1487,17 @@ renameConjunct ctx loc origin outerName outerArity t = case t of
           let err = AmbiguousName (unqualifiedText n) (length args) ms
           emitErrorIn ctx (AnnP err loc origin)
           pure []
+        -- A reserved name passes through 'resolveName' unqualified for the
+        -- forms that use it, which would reach Resolve as an internal
+        -- error; report the unknown constraint here, as 'renameCon' does
+        -- for a head.
+        NotAMacro
+          | Unqualified base <- n,
+            isReserved base,
+            null (visibleProviders ctx base (length args)) -> do
+              traverse_ (renameTerm ctx loc origin NoResolve) args
+              emitErrorIn ctx (AnnP (UnknownName base (length args)) loc origin)
+              pure []
         NotAMacro -> do
           renamedName <- resolveName ResolveTop ctx loc origin n (length args)
           renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) args

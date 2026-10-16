@@ -281,9 +281,11 @@ Trying a goal occurrence means:
 
 A goal occurrence only *locates* the combinations of regular heads
 the active constraint may affect. The active constraint is not a head
-of the rule. Firing does not remove it, except when a
-`takemin`/`takemax` re-selects it, and it does not enter the
-propagation history.
+of the rule, so firing does not remove it as a goal constraint. It can
+still disappear: a match may also match it as one of the rule's
+removed regular heads, and that head's removal takes it, just as a
+`takemin`/`takemax` re-selection does. It never enters the propagation
+history.
 
 **Order.** Goal occurrences are numbered with the ordinary ones. A
 rule's ordinary occurrences are numbered first, in ωr order — its
@@ -491,8 +493,13 @@ lowers an aggregate in the occurrence procedure itself:
   calls the same procedure with a constraint that is already dead; a
   dead constraint must not be stored, and the fold cannot count it
   because it is not in the store. The store is idempotent, and the
-  partner loops have taken their snapshot, so the active constraint
-  cannot match itself as a partner.
+  partner loops have taken their snapshot before it, so storing the
+  active cannot change the combinations they enumerate. A goal
+  occurrence whose active constraint was already stored — a reactivated
+  one — can therefore match it as a regular head, and vice versa: the
+  goal distinctness rule compares two goal conjuncts, never a goal
+  conjunct with a head. That is only an extra try, since the fire step
+  recomputes the aggregates from the regular heads.
 - The [removal step](#3-the-removal-step) is a call sequence at the
   start of the body of a rule that removes a constraint with goal
   occurrences: one call per goal occurrence of each removed head's

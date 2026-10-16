@@ -688,11 +688,13 @@ bookkeeping — constraint store, propagation history, reactivation
 queue, call stack, trace depth — and it is what the catch depends on.
 It does *not* extend to local variables. An aggregate fold called from a
 guard is the narrow case: it binds the fresh out-cells its caller
-created (`genGuardedFire` / `genAggregateProcedure`), and those
-bindings are real. They are harmless because each cell is created per
-candidate, is unreachable from the store, and is the *left* operand of
-the `bunify`, so binding it enqueues no reactivation and leaves nothing
-observable behind when the guard fails.
+created (`genGuardedFire` / `genAggregateProcedure`), and it binds each
+goal variable it reads as a plain local under that variable's source
+name (`bindGoalArgs`). Those bindings are real. They are harmless
+because they are untrailed locals unreachable from the store: an
+out-cell is created per candidate and is the *left* operand of the
+`bunify`, so binding it enqueues no reactivation, and a goal local is
+just a slot. Nothing observable is left behind when the guard fails.
 
 It does *not* extend to a `HostCall` in the guard either. A host function
 receives the session and can bind shared logical-variable cells; the

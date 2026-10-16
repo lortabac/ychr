@@ -1,0 +1,8 @@
+% A reserved name in an aggregate goal is an unknown constraint, not an
+% internal error from the resolver.
+:- module(aggregates_reserved_in_goal, [c/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1.
+
+c(X), count(tell(X), N) ==> c(X).

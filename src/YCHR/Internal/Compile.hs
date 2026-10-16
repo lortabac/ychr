@@ -606,6 +606,13 @@ genGoalOccurrenceBody symTab cType goal condMap occ fire = do
           | (i, HeadVar v) <- zip [0 ..] occ.activeArgs
           ]
       headLoops = wrapInPartnerLoops cType occ condMap fire
+  -- The active conjunct's own guards are evaluated by
+  -- 'wrapGoalConjuncts' at 'goal.goalActiveIndex', so the enclosing
+  -- goals' conjuncts may only be appended *after* the current goal's
+  -- list: the index is into the concatenated list. Nested aggregates
+  -- need the enclosing conjuncts looped before the current goal with
+  -- their bindings in scope, so this concatenation will have to change
+  -- when they land (the list is always empty until then).
   wrapGoalConjuncts
     symTab
     si
@@ -657,12 +664,16 @@ genGuardedFire symTab occMap varMap occ = do
       -- Late Storage, moved: a rule with aggregates stores its active
       -- constraint before computing them, so a fold sees the constraint
       -- being activated in its true store position and counts it once.
-      -- The store is idempotent, and the partner loops have already taken
-      -- their snapshot, so this cannot make the active constraint match
-      -- itself as a partner. A goal occurrence may be called by the
-      -- removal step with a constraint that is already dead, so its store
-      -- is liveness-guarded: a dead suspension must not enter the store,
-      -- where a fold would count it.
+      -- The store is idempotent, and the partner loops have taken their
+      -- snapshot before it, so storing the active cannot change the
+      -- combinations they enumerate. A goal occurrence whose active
+      -- constraint was already stored can match it as a regular head,
+      -- which is allowed (goal distinctness never compares a goal
+      -- conjunct with a head) and only an extra try, since the fold
+      -- recomputes from the store. A goal occurrence may also be called
+      -- by the removal step with a constraint that is already dead, so
+      -- its store is liveness-guarded: a dead suspension must not enter
+      -- the store, where a fold would count it.
       aggregateStoreStmts
         | null occ.aggregates = []
         | isJust occ.goalOcc =
@@ -1105,10 +1116,14 @@ wrapInPartnerLoops activeCType occ condMap inner =
           -- @if@ goes with them.) The surviving tests are exactly the
           -- same-type pairs, the only case where one suspension could be
           -- mistaken for another.
-          -- A goal occurrence's active constraint is not a head, and it
-          -- may be the very suspension a regular head matches: the spec's
-          -- `task(T), \+ depends(T, _) \ depends(U, T)` shape depends on
-          -- that, so the test is suppressed for a goal occurrence.
+          -- Distinctness is only ever within one group. A goal
+          -- occurrence's active constraint is not a head, and the spec
+          -- lets a goal conjunct and a regular head be the same
+          -- suspension (`task(T), \+ depends(T, _) \ depends(U, T)`), so
+          -- the test against the active is suppressed for a goal
+          -- occurrence. That can only add tries — the fire step
+          -- recomputes and the history rejects a combination that
+          -- already fired — never change which firings happen.
           distinctActive
             | isJust occ.goalOcc = []
             | partner.cType == activeCType =
@@ -1338,6 +1353,12 @@ genRemovalStmts occMap occ = concatMap oneHead (sortOn textualPos (removedHeads 
     -- the reverse of the head position.
     sourcePos idx = length headNode.removed - 1 - idx.unHeadPosition
 
+    -- A goal occurrence is never passive: 'YCHR.Internal.Compile.Passive.isPassive'
+    -- exempts any rule whose head has an aggregate. It is deliberately
+    -- not filtered here: should a future pass ever mark one passive, the
+    -- call below would name a procedure that does not exist and the
+    -- closed-procedure-name check would fail the compile loudly, where a
+    -- filter would silently lose firings.
     oneHead (_, ident, idExpr, argExprs) =
       [ ExprStmt
           ( CallExpr
@@ -1345,8 +1366,7 @@ genRemovalStmts occMap occ = concatMap oneHead (sortOn textualPos (removedHeads 
               (AId idExpr : map AVal argExprs ++ [AVal (Lit (BoolLit True))])
           )
       | target <- lookupOccurrences ident occMap,
-        isJust target.goalOcc,
-        not target.passive
+        isJust target.goalOcc
       ]
 
 -- ---------------------------------------------------------------------------

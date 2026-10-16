@@ -240,9 +240,17 @@ argNames :: Int -> [Name]
 argNames arity = [argName i | i <- [0 .. arity - 1]]
 
 -- | Local-variable name for the @i@-th argument of the active
--- constraint: @X_i@.
+-- constraint: @$X_i@.
+--
+-- The @$@ keeps it out of reach of source code: a source variable is
+-- @[A-Z_][A-Za-z0-9_]*@, so it can never spell @$X_i@. Without it, a
+-- source variable literally named @X_0@ would shadow the slot holding the
+-- active constraint's first argument — the runtime's flat environment
+-- resolves a read of a name to the latest binding of that name — and a
+-- guard, or a later loop's index condition, would read the wrong value.
+-- See 'inconclusiveName' for the same convention.
 argName :: Int -> Name
-argName i = Name ("X_" <> T.pack (show i))
+argName i = Name ("$X_" <> T.pack (show i))
 
 -- ---------------------------------------------------------------------------
 -- Partner-loop variables
