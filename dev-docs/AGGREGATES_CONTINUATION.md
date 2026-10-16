@@ -209,7 +209,9 @@ make test            # the python suites, including test-scheme
 make bench
 ```
 
-Baseline before the phase E/F work: `cabal test` 2299/2299,
-`test-style` 134, `test-repl` 75, `test-typecheck` 21, `test-docs` 44,
-`test-stlc` 11, `test-scheme` 800 passed / 3 skipped, and
-`test-scheme-runtime` clean.
+Baseline at the phase G tip: `cabal test` 2314/2314, `test-style` 134,
+`test-repl` 76, `test-typecheck` 21, `test-docs` 44, `test-stlc` 11,
+`test-scheme` 806 passed / 3 skipped, `test-scheme-runtime` clean.
+`make bench` runs; the aggregate cases measure ~32 µs
+(`aggregates_sum`), ~943 µs (`aggregates_many`) and ~14 µs
+(`aggregates_no_match`).

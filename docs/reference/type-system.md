@@ -1317,12 +1317,12 @@ yet**. The encoded rule head drops the aggregate list
 (`YCHR.Internal.TypeCheck.Encode.ruleHead` sends only `kept` and
 `removed`), so the checker never sees an aggregate's positions: `Agg`,
 `Element`, `Goal` and `Result` impose no type on anything. A variable
-that an aggregate's goal binds and that also reaches the checker
-through the rule's guard or body — a shared variable, or a goal local,
-which the compiler reports as `AggregateLocalEscapes` unless it is
-merely compared — is collected from there by `collect_vars_rule` in
-`typechecker/skel.chr` and gets an ordinary flexible slot, narrowed by
-whatever its later uses say. It is not explicitly forced to `ty_any`.
+the guard or body also mentions — a shared variable, or a goal local
+the compiler already rejects as escaping — is collected from there by
+`collect_vars_rule` in `typechecker/skel.chr` and gets an ordinary
+flexible slot, narrowed by whatever its uses say. The aggregate itself
+contributes nothing to that slot, and it is not explicitly forced to
+`ty_any`.
 
 The intended typing rules, for when this is implemented:
 
