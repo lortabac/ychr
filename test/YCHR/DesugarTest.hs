@@ -153,11 +153,11 @@ hnfTests =
             [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
                 [ D.HeadVar "X",
-                  D.HeadVar "_hnf_0"
+                  D.HeadVar "$hnf_0"
                 ]
             ]
             []
-        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "_hnf_0")],
+        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "$hnf_0")],
       testCase "non-variable argument (integer) generates equality guard" $ do
         let m = simpleModule (Simplification [qcon "M" "leq" [var "X", IntTerm 5]] [])
         rule <- singleRule [m]
@@ -167,11 +167,11 @@ hnfTests =
             [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
                 [ D.HeadVar "X",
-                  D.HeadVar "_hnf_0"
+                  D.HeadVar "$hnf_0"
                 ]
             ]
             []
-        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "_hnf_0") (R.IntExpr 5)],
+        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "$hnf_0") (R.IntExpr 5)],
       testCase "non-variable argument (atom) generates equality guard" $ do
         let m = simpleModule (Simplification [qcon "M" "leq" [var "X", atom "foo"]] [])
         rule <- singleRule [m]
@@ -181,11 +181,11 @@ hnfTests =
             [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
                 [ D.HeadVar "X",
-                  D.HeadVar "_hnf_0"
+                  D.HeadVar "$hnf_0"
                 ]
             ]
             []
-        getNode rule.guard @?= [D.GuardMatch (R.VarExpr "_hnf_0") (Unqualified "foo") 0],
+        getNode rule.guard @?= [D.GuardMatch (R.VarExpr "$hnf_0") (Unqualified "foo") 0],
       testCase "cross-constraint duplicate variable" $ do
         let m =
               simpleModule
@@ -202,10 +202,10 @@ hnfTests =
             [ D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "X", D.HeadVar "Y"],
               D.HeadConstraint
                 (D.QualifiedName "M" "leq")
-                [D.HeadVar "_hnf_0", D.HeadVar "Z"]
+                [D.HeadVar "$hnf_0", D.HeadVar "Z"]
             ]
             []
-        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "_hnf_0")],
+        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "$hnf_0")],
       testCase "simpagation: kept processed before removed" $ do
         let m =
               simpleModule
@@ -220,10 +220,10 @@ hnfTests =
             [D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "X", D.HeadVar "Y"]]
             [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
-                [D.HeadVar "_hnf_0", D.HeadVar "Z"]
+                [D.HeadVar "$hnf_0", D.HeadVar "Z"]
             ]
             []
-        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "_hnf_0")],
+        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "$hnf_0")],
       testCase "hnf guards prepended before user guards" $ do
         let m =
               module' "M"
@@ -238,7 +238,7 @@ hnfTests =
                            ]
         rule <- singleRule [m]
         getNode rule.guard
-          @?= [ D.GuardEqual (R.VarExpr "X") (R.VarExpr "_hnf_0"),
+          @?= [ D.GuardEqual (R.VarExpr "X") (R.VarExpr "$hnf_0"),
                 D.GuardExpr (R.HostExpr "gt" [R.VarExpr "X", R.IntExpr 0])
               ],
       testCase "two wildcards stay as wildcards without guards" $ do
@@ -262,11 +262,11 @@ hnfTests =
             [ D.HeadConstraint
                 (D.QualifiedName "M" "foo")
                 [ D.HeadWildcard,
-                  D.HeadVar "_hnf_0"
+                  D.HeadVar "$hnf_0"
                 ]
             ]
             []
-        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "_hnf_0") (R.IntExpr 1)]
+        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "$hnf_0") (R.IntExpr 1)]
     ]
 
 --------------------------------------------------------------------------------
@@ -865,11 +865,11 @@ aggregateTests =
         rule <- singleRule [simpleModule hd]
         case onlyAggregate rule of
           D.Aggregate {goal = [D.AggConstraint hcon guards]} -> do
-            hcon.args @?= [D.HeadVar "_hnf_0"]
+            hcon.args @?= [D.HeadVar "$hnf_0"]
             guards
-              @?= [ D.GuardMatch (R.VarExpr "_hnf_0") (Unqualified "pair") 2,
-                    D.GuardGetArg "X" (R.VarExpr "_hnf_0") 0,
-                    D.GuardGetArg "Y" (R.VarExpr "_hnf_0") 1
+              @?= [ D.GuardMatch (R.VarExpr "$hnf_0") (Unqualified "pair") 2,
+                    D.GuardGetArg "X" (R.VarExpr "$hnf_0") 0,
+                    D.GuardGetArg "Y" (R.VarExpr "$hnf_0") 1
                   ]
             -- The guards belong to the conjunct, so they are evaluated
             -- inside its loop and never join the rule's guard.
@@ -885,8 +885,8 @@ aggregateTests =
           D.Aggregate {goal = [D.AggConstraint hcon guards]} -> do
             -- The goal starts from an empty seen set: X's first occurrence
             -- binds, the second is matched against it.
-            hcon.args @?= [D.HeadVar "X", D.HeadVar "_hnf_0"]
-            guards @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "_hnf_0")]
+            hcon.args @?= [D.HeadVar "X", D.HeadVar "$hnf_0"]
+            guards @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "$hnf_0")]
           a -> assertFailure ("unexpected aggregate: " ++ show a),
       testCase "head and goal share one fresh-name counter" $ do
         let hd =
@@ -899,11 +899,11 @@ aggregateTests =
                     Wildcard
                 ]
         rule <- singleRule [simpleModule hd]
-        -- The head's compound argument consumed _hnf_0, so the goal's is
-        -- _hnf_1: the counter is shared, the seen set is not.
+        -- The head's compound argument consumed $hnf_0, so the goal's is
+        -- \$hnf_1: the counter is shared, the seen set is not.
         case onlyAggregate rule of
           D.Aggregate {goal = [D.AggConstraint hcon _]} ->
-            hcon.args @?= [D.HeadVar "_hnf_1"]
+            hcon.args @?= [D.HeadVar "$hnf_1"]
           a -> assertFailure ("unexpected aggregate: " ++ show a)
         length (getNode rule.guard) @?= 3,
       testCase "lambda in element captures a goal variable" $ do

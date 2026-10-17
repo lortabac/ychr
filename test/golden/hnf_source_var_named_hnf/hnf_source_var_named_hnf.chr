@@ -1,0 +1,12 @@
+% A source variable literally named _hnf_0 must not collide with the
+% fresh names HNF creates for decomposed arguments (they are $hnf_N).
+:- module(hnf_source_var_named_hnf, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, e/2, d/1, out/1, ask/1, go/1.
+
+c(X), count((e(X, _hnf_0), d(_hnf_0)), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> e(1, 7), d(7), c(1), ask(A).

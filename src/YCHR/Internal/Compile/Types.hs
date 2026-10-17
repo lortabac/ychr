@@ -45,13 +45,11 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Types
-  ( AggregateKind,
-    HeadArg,
+  ( HeadArg,
     HeadConstraint,
     Identifier,
     Name,
     RuleId,
-    Term,
   )
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (ArgIndex, BoolExpr, ConstraintType, Stmt, ValExpr)
@@ -226,21 +224,19 @@ data Partner = Partner
 data AggregatePlan = AggregatePlan
   { -- | Source order of this aggregate within the rule head.
     planIndex :: Int,
-    planKind :: AggregateKind,
     -- | The procedure that computes it.
     planProcName :: VM.Name,
     planAgg :: Maybe D.Expr,
     planElement :: D.Expr,
     planGoal :: [D.AggregateConjunct],
-    planResult :: Term,
     -- | Source variables the aggregate reads as inputs, in the canonical
     -- order the procedure's @aggregate_shared_N@ parameters and every call
     -- site use.
     planShared :: [Text],
     -- | Result variables the procedure binds, in the canonical order its
     -- @aggregate_out_N@ parameters use. Every other variable of the
-    -- result pattern is either an input or a goal-local, so it is matched
-    -- with an equality instead of bound.
+    -- result pattern is a shared input, so it is matched with an equality
+    -- instead of bound.
     planBind :: [Text],
     -- | What the procedure does with the computed result: the tests the
     -- pattern has to pass and the out-cell bindings that follow them.

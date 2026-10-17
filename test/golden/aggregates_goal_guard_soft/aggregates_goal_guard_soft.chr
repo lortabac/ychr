@@ -1,0 +1,12 @@
+% An inconclusive ? guard in the location phase skips the candidate
+% instead of aborting the query; the fold is undefined, so nothing fires.
+:- module(aggregates_goal_guard_soft, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, out/1, ask/1, go/1.
+
+c(K), count((d(X), ? X > 1), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> d(Y), c(1), ask(A).

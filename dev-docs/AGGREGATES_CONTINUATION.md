@@ -62,16 +62,22 @@ Golden cases: `aggregates_count`, `aggregates_sum`,
 `aggregates_multi`, `aggregates_view_stored`,
 `aggregates_view_removed`, `aggregates_goal_late`,
 `aggregates_goal_self`, `aggregates_goal_distinct`,
+`aggregates_goal_shadow`, `aggregates_goal_compound_shared`,
+`aggregates_goal_hnf_scope`, `aggregates_goal_hnf_later`,
+`aggregates_goal_guard_shared`, `aggregates_goal_guard_soft`,
+`aggregates_head_hnf_var`, `aggregates_result_literal`,
+`aggregates_result_compound`, `aggregates_result_repeat`,
 `aggregates_removal_step`, `aggregates_many`, `aggregates_no_match`,
-plus the negative `aggregates_element_unbound`,
-`aggregates_local_escapes`, `aggregates_macro_in_goal` and
+`hnf_arg_slot_shadow`, `hnf_source_var_named_hnf`, plus the negative
+`aggregates_element_unbound`, `aggregates_local_escapes`,
+`aggregates_macro_in_goal`, `aggregates_reserved_in_goal` and
 `constraint_use_aggregate_goal`. Each positive case runs on the Haskell
 interpreter and the Scheme backend.
 
 Unit cases: `test/YCHR/DesugarTest.hs` (`aggregates` group) and
-`test/YCHR/CompileTest.hs` (`aggregate folds` and
-`aggregate goal occurrences` groups). `test/repl/test_repl.py` has the
-`:trace` case for a goal occurrence.
+`test/YCHR/CompileTest.hs` (`aggregate folds`, `aggregate result
+patterns` and `aggregate goal occurrences` groups).
+`test/repl/test_repl.py` has the `:trace` case for a goal occurrence.
 
 ## What remains
 
@@ -182,11 +188,21 @@ rules. The two hook points are:
 - **Generated locals must be unspellable in source.** The runtime
   environment is flat per invocation, so a source variable named
   `X_0` shadows a local of the same name. `argName` therefore emits
-  `$X_i`, not `X_i`; every other generated local is either
-  `$`-prefixed (`$aggregate_susp_`, `$removal`, the out-cells) or
-  starts lowercase (`pArg_k_j`, `active`, `dropped`), and a source
-  variable is `[A-Z_][A-Za-z0-9_]*`, so none of them collides. A future
-  pass that introduces a local must keep that property.
+  `$X_i`, not `X_i`, and HNF's fresh names are `$hnf_N` for the same
+  reason; every other generated local is either `$`-prefixed
+  (`$aggregate_susp_`, `$removal`, the out-cells) or starts lowercase
+  (`pArg_k_j`, `active`, `dropped`), and a source variable is
+  `[A-Z_][A-Za-z0-9_]*`, so none of them collides. A future pass that
+  introduces a local must keep that property.
+- **The location phase is an over-approximation.** It runs outside the
+  regular-head loops, so a goal's shared input is not bound yet at a
+  `?` guard's goal-order position; the location phase skips such a
+  guard and soft-guards the rest. The fold still evaluates every guard,
+  so the fire step is what enforces them.
+- **The result pattern's tests must run before its bindings.** The
+  aggregate procedure does this in `maybeValueStmts`; a literal,
+  compound or repeated variable is a test, and only a not-yet-bound
+  variable is bound.
 - **An inert type registers no observers**, which is why a type with
   goal occurrences must not be inert.
 - **`storeConstraint` on a dead suspension inserts it.** Every store a
@@ -217,9 +233,9 @@ make test            # the python suites, including test-scheme
 make bench
 ```
 
-Baseline at the phase G tip: `cabal test` 2314/2314, `test-style` 134,
+Baseline at the phase G tip: `cabal test` 2330/2330, `test-style` 134,
 `test-repl` 76, `test-typecheck` 21, `test-docs` 44, `test-stlc` 11,
-`test-scheme` 806 passed / 3 skipped, `test-scheme-runtime` clean.
+`test-scheme` 818 passed / 3 skipped, `test-scheme-runtime` clean.
 `make bench` runs; the aggregate cases measure ~32 µs
 (`aggregates_sum`), ~943 µs (`aggregates_many`) and ~14 µs
 (`aggregates_no_match`).

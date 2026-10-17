@@ -31,6 +31,7 @@ tests =
       softGuardWrapTests,
       callablesDispatchTests,
       aggregateFoldTests,
+      aggregateResultTests,
       aggregateGoalTests
     ]
 
@@ -942,3 +943,79 @@ aggregateGoalTests =
           Nothing -> assertFailure "no c/1 ordinary occurrence procedure"
           Just p -> callsTo "occurrence_aggl__d1_1" p.body @?= []
     ]
+
+--------------------------------------------------------------------------------
+-- Aggregate result patterns
+--------------------------------------------------------------------------------
+
+-- | A result pattern with a compound and a literal, plus one repeated
+-- variable: the tests it induces must be emitted.
+resultPatternSource :: Text
+resultPatternSource =
+  ":- module(aggrp, [c/1, d/1, out/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, out/2.\n\
+  \\n\
+  \c(X), collect(Y, d(Y), [H, 2]) ==> out(H, X).\n\
+  \c(X), collect(Y, d(Y), [A, A]) ==> out(A, X).\n"
+
+-- | A shared variable inside a compound goal argument: the fold must test
+-- the extracted value against the shared input instead of rebinding it.
+compoundGoalSource :: Text
+compoundGoalSource =
+  ":- module(aggc, [c/1, e/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_type t ---> f(any).\n\
+  \:- chr_constraint c/1, e/1, n/2.\n\
+  \\n\
+  \c(K), count(e(f(K)), N) ==> n(K, N).\n"
+
+aggregateResultTests :: TestTree
+aggregateResultTests =
+  testGroup
+    "aggregate result patterns"
+    [ testCase "a literal test in the result pattern is emitted" $ do
+        prog <- compileOrFail [("m.chr", resultPatternSource)]
+        case findProcedure prog "aggregate_0_0" of
+          Nothing -> assertFailure "no fold procedure"
+          Just p ->
+            assertBool
+              "expected the literal 2 to be tested against the payload"
+              (any isTwoTest (ifConditions p.body)),
+      testCase "a repeated result variable is bound once and tested" $ do
+        prog <- compileOrFail [("m.chr", resultPatternSource)]
+        case findProcedure prog "aggregate_1_0" of
+          Nothing -> assertFailure "no second fold procedure"
+          Just p -> do
+            length (bunifyExprs p.body) @?= 1
+            assertBool
+              "expected a test between the two payload paths"
+              (any isPayloadTest (ifConditions p.body)),
+      testCase "a shared variable in a compound goal argument is a test" $ do
+        prog <- compileOrFail [("m.chr", compoundGoalSource)]
+        case findProcedure prog "aggregate_0_0" of
+          Nothing -> assertFailure "no fold procedure"
+          Just p -> do
+            assertBool
+              "expected the extracted value to be tested against the shared input"
+              (any isSharedFieldTest (ifConditions p.body))
+            assertBool
+              "the shared input K must not be rebound in the fold"
+              (not (any isVLet (nestedStmts p.body)))
+    ]
+  where
+    isTwoTest (VM.BEqual (VM.Lit (VM.IntLit 2)) _) = True
+    isTwoTest (VM.BEqual _ (VM.Lit (VM.IntLit 2))) = True
+    isTwoTest _ = False
+    isPayloadTest (VM.BEqual a b) = isPayloadPath a && isPayloadPath b
+    isPayloadTest _ = False
+    isPayloadPath (VM.Var n) = n.unName == "$aggregate_payload"
+    isPayloadPath (VM.GetArg e _) = isPayloadPath e
+    isPayloadPath _ = False
+    isSharedFieldTest (VM.BEqual (VM.Var n) (VM.GetArg _ _)) =
+      n.unName == "aggregate_shared_0"
+    isSharedFieldTest (VM.BEqual (VM.GetArg _ _) (VM.Var n)) =
+      n.unName == "aggregate_shared_0"
+    isSharedFieldTest _ = False
+    isVLet (VM.LetVal (VM.Name "K") _) = True
+    isVLet _ = False

@@ -1,0 +1,14 @@
+% A shared variable inside a compound goal argument is an input, not
+% something the match binds: e(f(K)) must only match the K of the head.
+:- module(aggregates_goal_compound_shared, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type t ---> f(any).
+
+:- chr_constraint c/1, e/1, out/1, ask/1, go/1.
+
+c(K), count(e(f(K)), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> e(f(5)), e(f(6)), c(1), ask(A).

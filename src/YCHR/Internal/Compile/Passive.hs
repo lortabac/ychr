@@ -161,7 +161,7 @@ headVarsOf :: [HeadConstraint] -> Set Text
 headVarsOf hcs = Set.fromList [v | hc <- hcs, HeadVar v <- hc.args]
 
 -- | Build head-variable equivalence classes from the head-variable
--- equality guards induced by HNF (e.g. @X = _hnf_0@). Only guards
+-- equality guards induced by HNF (e.g. @X = $hnf_0@). Only guards
 -- equating two head variables union classes; all others are ignored here
 -- (they are rejected separately by 'allGuardsHeadEq').
 buildClasses :: Set Text -> [D.Guard] -> ClassMap

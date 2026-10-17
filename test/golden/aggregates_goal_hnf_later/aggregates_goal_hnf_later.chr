@@ -1,0 +1,14 @@
+% A variable bound by an earlier goal conjunct's HNF guard (Z, extracted
+% from e(Y, f(Z))) is in scope for the conjuncts after it.
+:- module(aggregates_goal_hnf_later, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type t ---> f(any).
+
+:- chr_constraint c/1, e/2, d/1, out/1, ask/1, go/1.
+
+c(Y), count((e(Y, f(Z)), d(Z)), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> e(1, f(7)), d(7), c(1), ask(A).

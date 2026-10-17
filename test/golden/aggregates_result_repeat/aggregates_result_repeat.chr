@@ -1,0 +1,17 @@
+% A repeated variable in the result pattern must agree with its first
+% occurrence: [A, A] matches only a list of two equal elements, while
+% [A, B] matches [1, 2]. Bindings are not two independent out-cells.
+:- module(aggregates_result_repeat, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type verdict ---> same ; diff.
+
+:- chr_constraint c/1, d/1, same/1, diff/2, ask/1, go/1.
+
+c(_), collect(Y, d(Y), [A, A]) ==> same(A).
+c(_), collect(Y, d(Y), [A, B]) ==> diff(A, B).
+
+same(_) \ ask(R) <=> R = same.
+diff(_, _) \ ask(R) <=> R = diff.
+
+go(A) <=> d(1), d(2), c(1), ask(A).

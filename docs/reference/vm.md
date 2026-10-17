@@ -263,7 +263,9 @@ guard or a later loop would read the wrong value. `$` cannot appear in a
 source variable, so the slot is unspellable. The partner loop variables
 (`pArg_k_j`, `pId_k`), the active id (`active`) and the other generated
 locals are lowercase-initial for the same reason, and a source variable
-must start with an uppercase letter or `_`.
+must start with an uppercase letter or `_`. The names HNF invents for
+decomposed arguments (`$hnf_N`) and the aggregate procedure's own locals
+(`$aggregate_*`, `$removal`) use the same `$` convention.
 
 There is no dispatcher procedure for a dynamic call: `'$call'` lowers to
 `apply-closure`, which resolves the callee through the `callables` table

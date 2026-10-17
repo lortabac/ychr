@@ -130,7 +130,11 @@ exception: their goal variables are visible to the rest of the rule.
 
 A local variable is not visible to the rule's guard or body. Using its
 name there anyway is an error (`AggregateLocalEscapes`), not a
-distinct variable, so a typo cannot silently change its meaning.
+distinct variable, so a typo cannot silently change its meaning. A
+variable that occurs both in the goal and in that same aggregate's
+`Result` is bound by the result match, not read out of the loop: the
+loop's binding is local to the aggregate and after the fold holds only
+the last match's value.
 
 `Element` must be computable from the match: a variable of `Element`
 that occurs neither in `Goal` nor among the shared variables is an
@@ -156,7 +160,9 @@ follows:
    where `Element_i` is `Element` evaluated under that match.
 4. `Final(Wn)`: `nothing` makes the aggregate undefined and the rule
    inapplicable; `just(R)` makes `R` its result.
-5. Match `Result` against `R`. A failed match makes the rule
+5. Match `Result` against `R`. The pattern is head-matched: a literal,
+   a compound shape or a repeated variable is a test, and a variable the
+   pattern has not bound yet is bound. A failed match makes the rule
    inapplicable.
 
 **Goal order** is nested-loop order over the goal's constraint
@@ -475,6 +481,20 @@ lowers an aggregate in the occurrence procedure itself:
   loops test that. A goal conjunct and a regular head are deliberately
   *not* compared: a goal partner may be the same suspension as a
   regular head.
+- The result pattern is checked in the aggregate procedure's tail: every
+  test runs before any out-cell is bound, so a pattern that cannot match
+  leaves nothing half-done. A repeated variable is tested against its
+  first occurrence, and a fresh one is bound through an out-cell.
+- A `?` guard in a goal is evaluated in place in the fold; an
+  instantiation error inside it propagates to the `BSoftGuard` around the
+  aggregate call, so the aggregate is undefined, as
+  [Errors](#errors) requires. In the location phase the loops run
+  outside the regular-head loops, so a shared input is not bound yet at
+  a guard's goal-order position: the location phase over-approximates,
+  skipping such a guard and soft-guarding the rest, so an inconclusive
+  one skips the candidate instead of aborting the query. That can only
+  locate extra combinations; the fire step recomputes the aggregate, so
+  the guard is still enforced.
 - A [goal occurrence](#2-goal-occurrences) is an ordinary occurrence
   procedure with two differences. First, its loops are the goal's
   conjuncts, nested outside the partner loops that search the regular

@@ -137,8 +137,13 @@ data DesugarError
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
 -- transformation (see 'normalizeHead').
+--
+-- The leading @$@ keeps the name out of reach of source code: a source
+-- variable is @[A-Z_][A-Za-z0-9_]*@, so it can never spell @$hnf_0@. A
+-- bare @_hnf_0@ would be a legal source variable name and would shadow the
+-- slot HNF created for a decomposed argument.
 hnfPrefix :: Text
-hnfPrefix = "_hnf_"
+hnfPrefix = "$hnf_"
 
 -- | Prefix for fresh variables introduced when rewriting a non-variable
 -- @T is E@ form into @R is E, R = T@ (see 'desugarBodyGoal').
@@ -329,7 +334,10 @@ desugarAggregates st0 loc origin = go st0 []
 -- variable map, not here. Reusing the head's set would make a shared
 -- variable's first occurrence in the goal look like a duplicate and emit a
 -- redundant equality against a fresh name, and a sibling aggregate's local
--- variable would leak into this one's guards.
+-- variable would leak into this one's guards. A shared variable reached
+-- through a compound argument is recognized the same way: HNF emits a
+-- get-arg for it, and the fold's variable map already binds it, so the
+-- extraction becomes a test rather than a rebinding.
 desugarAggregate ::
   HnfState ->
   P.SourceLoc ->
@@ -1335,7 +1343,7 @@ Notes
 Why HNF processes 'kept' constraints before 'removed' ones: variables
 that appear for the first time in a kept constraint become the canonical
 binding for that name. A variable that then recurs in a removed
-constraint is renamed to a fresh @_hnf_N@ and equated to the canonical
+constraint is renamed to a fresh @$hnf_N@ and equated to the canonical
 one via a 'D.GuardEqual'. Reversing the order would work just as well
 mathematically but would mean the canonical binding "moves" whenever a
 rule is rewritten from simpagation to simplification/propagation, which
@@ -1343,7 +1351,7 @@ the paper's scheme avoids.
 
 Why there are three different fresh-variable prefixes:
 
-  * @_hnf_N@   — HNF-introduced variables for duplicated or non-variable
+  * @$hnf_N@   — HNF-introduced variables for duplicated or non-variable
                 head arguments ('normalizeHead', 'decomposeCompound').
   * @__is_N@   — fresh LHS variables for the non-variable @is@ form
                 (@T is E@ becomes @R is E, R = T@). Double-underscore so
@@ -1380,7 +1388,7 @@ compiled program.
 Why 'liftEquation's scope includes 'guardVars': HNF may decompose a
 compound pattern like @[X|Xs]@ into a 'D.GuardGetArg' that binds @X@ and
 @Xs@. Those names are not visible from @eq.params@ (which only
-contains the top-level @_hnf_N@), but they are valid references from
+contains the top-level @$hnf_N@), but they are valid references from
 the RHS — including from inside a lambda. The lambda-lifter therefore
 has to see them too, otherwise the lambda would be lifted without
 capturing them and the reference would dangle at runtime. Test:

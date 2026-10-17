@@ -59,6 +59,7 @@ where
 import Control.Monad.Trans.Writer.CPS (Writer, tell)
 import Data.Foldable (toList)
 import Data.List qualified as List
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -108,6 +109,13 @@ collectAggregatePlans ruleIdx rule = do
         | hc <- rule.head.node.kept ++ rule.head.node.removed,
           arg <- hc.args
         ]
+        `Set.union` hnfBoundVars
+    -- HNF decomposes a compound head argument into a fresh variable plus
+    -- 'GuardGetArg' guards, so a variable introduced that way —
+    -- @c(f(X)), count(d(X), N)@ — is a head variable too, not a goal
+    -- local. Only HNF emits 'GuardGetArg', so the rule's guards contain
+    -- no other binding form.
+    hnfBoundVars = Set.fromList [v | D.GuardGetArg v _ _ <- rule.guard.node]
 
     go _ _ acc [] = pure (reverse acc)
     go k bound acc (a : rest) = do
@@ -115,25 +123,21 @@ collectAggregatePlans ruleIdx rule = do
       if not supported
         then go (k + 1) bound acc rest
         else do
-          let goalLocals = aggregateGoalLocals a.goal
-              shared =
+          let shared =
                 Set.toAscList (aggregateMentionedVars a `Set.intersection` bound)
               resolve v
                 | Just i <- List.elemIndex v shared =
                     Just (Var (aggregateSharedParam i))
-                | Set.member v goalLocals = Just (Var (Name v))
                 | otherwise = Nothing
               resultMatch =
                 aggregateResultMatch (Var aggregatePayloadName) resolve a.result
               plan =
                 AggregatePlan
                   { planIndex = k,
-                    planKind = a.kind,
                     planProcName = aggregateProcName ruleIdx k,
                     planAgg = a.agg,
                     planElement = a.element,
                     planGoal = a.goal,
-                    planResult = a.result,
                     planShared = shared,
                     planBind = map fst resultMatch.resultBinds,
                     planResultMatch = resultMatch
@@ -319,14 +323,20 @@ justConName = Types.Qualified "maybe" "just"
 -- Every test precedes every binding, so a pattern that cannot match leaves
 -- the out-cells untouched: the rule does not apply and no half-done binding
 -- survives the guard's soft failure. A variable already in scope — a shared
--- input or a goal-local — is compared with @BEqual@, which has ask
--- semantics and is total on unbound operands, while a fresh one is bound
--- with @BUnify@. The out-cell is always the /left/ operand of that
--- @BUnify@: unification binds its left operand and returns that operand's
--- observers, so binding a fresh cell enqueues no reactivation, whereas the
--- other order would bind the computed result and enqueue whatever observes
--- it — inside the guard window, where Late Storage leaves the active
--- constraint unstored. See @dev-docs\/INVARIANTS.md@.
+-- input — is compared with @BEqual@, which has ask semantics and is total
+-- on unbound operands, while a fresh one (or one that repeats an earlier
+-- position of the same pattern) is either bound or compared against the
+-- first occurrence's value. The out-cell is always the /left/ operand of
+-- that @BUnify@: unification binds its left operand and returns that
+-- operand's observers, so binding a fresh cell enqueues no reactivation,
+-- whereas the other order would bind the computed result and enqueue
+-- whatever observes it — inside the guard window, where Late Storage
+-- leaves the active constraint unstored. See @dev-docs\/INVARIANTS.md@.
+--
+-- A variable of the goal that the result pattern mentions is /not/ an
+-- input here: the goal's variables are local to the aggregate, and after
+-- the fold the loop slot holds only the last match's value (or nothing).
+-- It is bound as a fresh result variable instead.
 aggregateResultMatch ::
   -- | The computed payload, in the procedure that computes it.
   ValExpr ->
@@ -335,27 +345,38 @@ aggregateResultMatch ::
   (Text -> Maybe ValExpr) ->
   Term ->
   ResultMatch
-aggregateResultMatch payload resolve = go []
+aggregateResultMatch payload resolve term = fst (go Map.empty [] term)
   where
     at [] = payload
     at path = List.foldl' (\e i -> GetArg e i) payload path
 
-    go path t = case t of
-      Wildcard -> mempty
+    -- @bound@ maps each variable the pattern has already bound to the
+    -- path it was bound at, so a repeated variable is tested against the
+    -- first occurrence instead of being bound twice (which would be two
+    -- independent unifications of the same name).
+    go :: Map.Map Text [Word] -> [Word] -> Term -> (ResultMatch, Map.Map Text [Word])
+    go bound path t = case t of
+      Wildcard -> (mempty, bound)
       VarTerm v -> case resolve v of
-        Just e -> test (BEqual e (at path))
-        Nothing -> ResultMatch [] [(v, at path)]
-      IntTerm n -> test (BEqual (Lit (IntLit n)) (at path))
-      FloatTerm f -> test (BEqual (Lit (FloatLit f)) (at path))
-      TextTerm s -> test (BEqual (Lit (TextLit s)) (at path))
+        Just e -> (test (BEqual e (at path)), bound)
+        Nothing -> case Map.lookup v bound of
+          Just first -> (test (BEqual (at first) (at path)), bound)
+          Nothing -> (ResultMatch [] [(v, at path)], Map.insert v path bound)
+      IntTerm n -> (test (BEqual (Lit (IntLit n)) (at path)), bound)
+      FloatTerm f -> (test (BEqual (Lit (FloatLit f)) (at path)), bound)
+      TextTerm s -> (test (BEqual (Lit (TextLit s)) (at path)), bound)
       CompoundTerm name [] ->
-        test (BEqual (Lit (AtomLit (functorAtom name))) (at path))
+        (test (BEqual (Lit (AtomLit (functorAtom name))) (at path)), bound)
       CompoundTerm name args ->
-        test (BMatchTerm (at path) (vmName name) (fromIntegral (length args)))
-          <> mconcat
-            [ go (path ++ [i]) arg
-            | (i, arg) <- zip [0 ..] args
-            ]
+        let step (rm, b) (i, arg) =
+              let (rm', b') = go b (path ++ [i]) arg
+               in (rm <> rm', b')
+            (argsMatch, bound') =
+              List.foldl' step (mempty, bound) (zip [0 ..] args)
+         in ( test (BMatchTerm (at path) (vmName name) (fromIntegral (length args)))
+                <> argsMatch,
+              bound'
+            )
 
     test b = ResultMatch [b] []
 

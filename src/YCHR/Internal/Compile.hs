@@ -79,6 +79,7 @@ import Data.Text qualified as T
 import YCHR.Internal.Compile.Names
 import YCHR.Internal.Compile.Occurrences (collectOccurrences)
 import YCHR.Internal.Compile.Types
+import YCHR.Internal.Desugar (guardVars)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Loc (SourceLoc)
@@ -831,9 +832,11 @@ genAggregateProcedure symTab display (rule, plan) = do
 -- | The tail of an aggregate procedure: apply @Final@, decode the @maybe@
 -- it returned, and match the result pattern against the payload.
 --
--- A value that is neither @just\/1@ nor @nothing@ is a runtime error naming
--- the protocol: silently treating it as undefined would turn a missing
--- @library(maybe)@ import into a rule that never fires.
+-- The pattern's tests run first and a failed one returns @false@ (the rule
+-- does not apply) before any out-cell is bound. A value that is neither
+-- @just\/1@ nor @nothing@ is a runtime error naming the protocol: silently
+-- treating it as undefined would turn a missing @library(maybe)@ import
+-- into a rule that never fires.
 maybeValueStmts :: ResultMatch -> [Stmt]
 maybeValueStmts resultMatch =
   [ LetVal
@@ -862,8 +865,21 @@ maybeValueStmts resultMatch =
       ]
   ]
   where
+    -- Every test runs before any binding: a pattern that cannot match
+    -- must leave the out-cells untouched. The tests are a short-circuiting
+    -- 'BAnd' chain in pattern order, so a compound test precedes the field
+    -- extractions that depend on it.
     matchedStmts =
-      bindsStmts resultMatch.resultBinds ++ [Return (Lit (BoolLit True))]
+      let bindAll =
+            bindsStmts resultMatch.resultBinds ++ [Return (Lit (BoolLit True))]
+       in case resultMatch.resultTests of
+            [] -> bindAll
+            t : ts ->
+              [ If
+                  (List.foldl' BAnd t ts)
+                  bindAll
+                  [Return (Lit (BoolLit False))]
+              ]
 
 -- | The out-cell bindings a result match asks for, in the order the
 -- procedure's out parameters were declared.
@@ -939,7 +955,12 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
                     (conds, lettStmts, vm') = bindGoalArgs suspName vm hcon
                     distinct = distinctTests seen cType suspName
                 compiled <- compileGuards Nothing Nothing vm' si guards
-                restStmts <- go (j + 1) ((j, cType) : seen) vm' rest
+                -- The conjunct's HNF guards bind the variables they
+                -- decompose (a compound or literal argument), and the
+                -- conjuncts after this one, and the element, need those
+                -- bindings.
+                restStmts <-
+                  go (j + 1) ((j, cType) : seen) compiled.extendedVarMap rest
                 let body =
                       lettStmts
                         ++ compiled.matchWrapper
@@ -947,10 +968,26 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
                 pure [Foreach (aggregateLabel labelIdx j) cType suspName conds body]
       -- A @? Guard@ is checked in place: it sees the variables the conjuncts
       -- before it bound, and filters before the ones after it are searched.
+      --
+      -- In the location phase the loop nest runs outside the regular-head
+      -- loops, so a shared input is not bound yet. Such a guard is skipped
+      -- there: it can only narrow the matches, and the fire step recomputes
+      -- the aggregate, so dropping it is an over-approximation. The fold
+      -- still compiles it, so a variable that is genuinely unbound is
+      -- reported there. The location phase also soft-guards the guard, so
+      -- an inconclusive one skips the candidate instead of aborting the
+      -- query; a raise inside the fold still makes the aggregate
+      -- undefined, as the spec requires.
       D.AggGuard g -> do
-        compiled <- compileGuards Nothing Nothing vm si [g]
         restStmts <- go (j + 1) seen vm rest
-        pure (compiled.matchWrapper (withResidual compiled restStmts))
+        let isLocation = isJust mActive
+            inScope =
+              all (\v -> isJust (lookupVar v vm)) (Set.toList (guardVars [g]))
+        if isLocation && not inScope
+          then pure restStmts
+          else do
+            compiled <- compileGuards Nothing Nothing vm si [g]
+            pure (compiled.matchWrapper (withGuardResidual compiled restStmts))
       -- A nested aggregate is rejected by
       -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
       -- compiles never reaches this arm.
@@ -975,6 +1012,15 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
     withResidual compiled stmts = case compiled.residualCheck of
       Nothing -> stmts
       Just cond -> [If cond stmts []]
+
+    -- A @?@ guard in the location phase is soft-guarded, so an
+    -- inconclusive guard skips this candidate. Elsewhere the raise
+    -- propagates, which is what makes an aggregate undefined.
+    withGuardResidual compiled stmts = case compiled.residualCheck of
+      Nothing -> stmts
+      Just cond
+        | isJust mActive -> [If (softenGuard cond) stmts []]
+        | otherwise -> [If cond stmts []]
 
 -- | Bind one goal conjunct's arguments against the candidate suspension:
 -- index conditions for the values already in scope, @field-arg@ reads for
@@ -1762,15 +1808,25 @@ compileMatchGuard si acc (D.GuardMatch operand name arity) = do
   pure acc {wrapper = acc.wrapper . check}
 compileMatchGuard si acc (D.GuardGetArg vname operand idx) = do
   operandExpr <- compileExpr acc.varMap si operand
-  let binding body = LetVal (Name vname) (GetArg operandExpr idx) : body
-  pure
-    acc
-      { wrapper = acc.wrapper . binding,
-        varMap = insertVar vname (Var (Name vname)) acc.varMap,
-        -- The extracted variable is reached through the same top-level
-        -- parameter as the compound it came out of.
-        dispatch = inheritRootIndex vname operand <$> acc.dispatch
-      }
+  case lookupVar vname acc.varMap of
+    -- The variable is already in scope, so this decomposition is a test,
+    -- not a binding: an aggregate goal's shared inputs are supplied by the
+    -- caller, and a fresh local here would shadow the input and lose the
+    -- agreement check. (HNF only emits a get-arg for a variable it has not
+    -- seen, so in a head or an equation the variable is never in scope.)
+    Just existing ->
+      let check body = [If (BEqual existing (GetArg operandExpr idx)) body []]
+       in pure acc {wrapper = acc.wrapper . check}
+    Nothing ->
+      let binding body = LetVal (Name vname) (GetArg operandExpr idx) : body
+       in pure
+            acc
+              { wrapper = acc.wrapper . binding,
+                varMap = insertVar vname (Var (Name vname)) acc.varMap,
+                -- The extracted variable is reached through the same top-level
+                -- parameter as the compound it came out of.
+                dispatch = inheritRootIndex vname operand <$> acc.dispatch
+              }
 -- Only reached in equation mode; rule occurrences keep routing
 -- 'D.GuardEqual' through 'compileCheckGuards' (see 'compileGuards').
 compileMatchGuard si acc (D.GuardEqual t1 t2) = do

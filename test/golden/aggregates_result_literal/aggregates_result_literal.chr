@@ -1,0 +1,15 @@
+% A literal in the result pattern is a test. The 2-count rule must not
+% fire when the count is 3; the 3-count rule must.
+:- module(aggregates_result_literal, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type which ---> two ; three.
+
+:- chr_constraint c/1, d/1, out/1, ask/1, go/1.
+
+c(X), count(d(_), 2) ==> out(two).
+c(X), count(d(_), 3) ==> out(three).
+
+out(Which) \ ask(A) <=> A = Which.
+
+go(A) <=> d(1), d(2), d(3), c(1), ask(A).
