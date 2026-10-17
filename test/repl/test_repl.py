@@ -432,7 +432,7 @@ def test_trace_aggregate_goal_occurrence(ychr_bin, tmp_path):
         "  activate c#0: aggt2:c(1)\n"
         "    try occurrence aggt2:c #1 (rule step)\n"
         "      store c#0: aggt2:c(1)\n"
-        "      call $aggregate:aggregate_23_0(_, 1)\n"
+        "      call $aggregate:aggregate_RULE_0(_, 1)\n"
         "        call aggregates:count_spec\n"
         "        return aggregates:aggregator(0, 'aggregates:count_inc' / 2,"
         " 'aggregates:just_final' / 1)\n"
@@ -446,7 +446,7 @@ def test_trace_aggregate_goal_occurrence(ychr_bin, tmp_path):
         "    try occurrence aggt2:d #1 (rule step)\n"
         "      partner c#0: aggt2:c(1)\n"
         "        store c#1: aggt2:d(1)\n"
-        "        call $aggregate:aggregate_23_0(_, 1)\n"
+        "        call $aggregate:aggregate_RULE_0(_, 1)\n"
         "          call aggregates:count_spec\n"
         "          return aggregates:aggregator(0, 'aggregates:count_inc' / 2,"
         " 'aggregates:just_final' / 1)\n"
@@ -464,7 +464,11 @@ def test_trace_aggregate_goal_occurrence(ychr_bin, tmp_path):
         "          activate c#2: aggt2:n(1, 1)\n"
         "            store c#2: aggt2:n(1, 1)\n"
     )
-    assert result.stdout == expected
+    # The fold procedure's name embeds the rule's program-wide index, which
+    # shifts with the stdlib's rule count; only the aggregate's own index
+    # is meaningful here.
+    normalized = re.sub(r"aggregate_\d+_", "aggregate_RULE_", result.stdout)
+    assert normalized == expected
 
 
 def test_repl_dynamic_tell(ychr_bin, tmp_path):

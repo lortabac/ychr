@@ -6,8 +6,8 @@ are implemented; what remains is the selection forms, nested aggregates
 and the aggregator typing. Keep this file until the spec is fully
 implemented; delete it then.
 
-Branch `aggregates`, worktree `.worktrees/aggregates`. Started from
-`569ba4a`; phases 1 and A–G are done. A program that uses the core form
+Branch `aggregates`, worktree `.worktrees/aggregates`, rebased onto
+`master` (`e19fcd8`); phases 1 and A–G are done. A program that uses the core form
 or a predefined aggregate runs on both backends; a selection form or a
 nested aggregate is recognized, reported (`YCHR-40004`) and dropped, so
 nothing compiles into a rule that never fires. `forall/2` is not defined
@@ -237,9 +237,10 @@ make test            # the python suites, including test-scheme
 make bench
 ```
 
-Baseline at the phase G tip: `cabal test` 2334/2334, `test-style` 134,
-`test-repl` 76, `test-typecheck` 21, `test-docs` 44, `test-stlc` 11,
-`test-scheme` 821 passed / 3 skipped, `test-scheme-runtime` clean.
+Baseline at the phase G tip (rebased onto `master`): `cabal test`
+2357/2357, `test-style` 134, `test-repl` 86, `test-typecheck` 21,
+`test-docs` 44, `test-stlc` 11, `test-scheme` 830 passed / 3 skipped,
+`test-scheme-runtime` clean.
 `make bench` runs; the aggregate cases measure ~32 µs
 (`aggregates_sum`), ~943 µs (`aggregates_many`) and ~14 µs
 (`aggregates_no_match`).

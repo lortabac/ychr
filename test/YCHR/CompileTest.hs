@@ -110,6 +110,17 @@ findProcedure prog wanted =
         [p] -> Just p
         _ -> Nothing
 
+-- | Find the generated fold procedure for the aggregate at source index
+-- @aggIdx@ of the @userIdx@-th rule of a program with @userRules@ user
+-- rules. The absolute rule index — and therefore the procedure name —
+-- depends on how many rules the stdlib contributes, so it is counted from
+-- the end rather than pinned.
+findAggregateProcedure :: CompiledProgram -> Int -> Int -> Int -> Maybe VM.Procedure
+findAggregateProcedure prog userRules userIdx aggIdx =
+  findProcedure prog (T.pack ("aggregate_" <> show ruleIdx <> "_" <> show aggIdx))
+  where
+    ruleIdx = length prog.program.ruleNames - userRules + userIdx
+
 -- | Assert that the named occurrence procedure contains a Foreach with
 -- the given index conditions.
 assertForeachConditions ::
@@ -661,8 +672,8 @@ aggregateFoldTests =
     "aggregate folds"
     [ testCase "a rule with an aggregate gets one fold procedure" $ do
         prog <- compileOrFail [("m.chr", aggregateSource)]
-        case findProcedure prog "aggregate_0_0" of
-          Nothing -> assertFailure "no procedure named aggregate_0_0"
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no fold procedure for aggregate_0"
           Just p -> do
             assertBool "expected parameters" (not (null p.params))
             -- The procedure is tagged as a function with a reserved name,
@@ -673,8 +684,8 @@ aggregateFoldTests =
               other -> assertFailure ("unexpected proc kind: " ++ show other),
       testCase "the fold procedure only reads, apart from binding its out-cells" $ do
         prog <- compileOrFail [("m.chr", aggregateSource)]
-        case findProcedure prog "aggregate_0_0" of
-          Nothing -> assertFailure "no procedure named aggregate_0_0"
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no fold procedure for aggregate_0"
           Just p -> do
             assertBool
               ( "a fold procedure reachable from a guard must not"
@@ -923,7 +934,7 @@ aggregateGoalTests =
               @?= [VM.Label "aggregate_loop_0_0", VM.Label "L1"],
       testCase "two same-type conjuncts in one goal must match distinct suspensions" $ do
         prog <- compileOrFail [("m.chr", distinctGoalSource)]
-        case findProcedure prog "aggregate_0_0" of
+        case findAggregateProcedure prog 1 0 0 of
           Nothing -> assertFailure "no fold procedure"
           Just p -> do
             foreachLabels p.body
@@ -962,7 +973,7 @@ aggregateGoalTests =
             assertBool
               "the location phase must not evaluate the guard"
               (not (any isGuardEval (ifConditions p.body)))
-        case findProcedure prog "aggregate_0_0" of
+        case findAggregateProcedure prog 1 0 0 of
           Nothing -> assertFailure "no fold procedure"
           Just p ->
             assertBool
@@ -1007,7 +1018,7 @@ aggregateResultTests =
     "aggregate result patterns"
     [ testCase "a literal test in the result pattern is emitted" $ do
         prog <- compileOrFail [("m.chr", resultPatternSource)]
-        case findProcedure prog "aggregate_0_0" of
+        case findAggregateProcedure prog 2 0 0 of
           Nothing -> assertFailure "no fold procedure"
           Just p ->
             assertBool
@@ -1015,7 +1026,7 @@ aggregateResultTests =
               (any isTwoTest (ifConditions p.body)),
       testCase "a repeated result variable is bound once and tested" $ do
         prog <- compileOrFail [("m.chr", resultPatternSource)]
-        case findProcedure prog "aggregate_1_0" of
+        case findAggregateProcedure prog 2 1 0 of
           Nothing -> assertFailure "no second fold procedure"
           Just p -> do
             length (bunifyExprs p.body) @?= 1
@@ -1024,7 +1035,7 @@ aggregateResultTests =
               (any isPayloadTest (ifConditions p.body)),
       testCase "a shared variable in a compound goal argument is a test" $ do
         prog <- compileOrFail [("m.chr", compoundGoalSource)]
-        case findProcedure prog "aggregate_0_0" of
+        case findAggregateProcedure prog 1 0 0 of
           Nothing -> assertFailure "no fold procedure"
           Just p -> do
             assertBool
