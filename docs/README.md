@@ -24,6 +24,7 @@ Conventions for these pages: [`dev-docs/DOC_CONVENTIONS.md`](../dev-docs/DOC_CON
 - [Macros](reference/macros.md) — `:- macro`, compile-time term rewriting (goal and declaration macros).
 - [Type system](reference/type-system.md)
 - [Search](reference/search.md) — `library(search)`
+- [State](reference/state.md) — `library(state)`, typed mutable variables
 - [REPL](reference/repl.md)
 - [Haskell DSL](reference/dsl.md)
 - [Haskell conversion](reference/convert.md) — `ToTerm`/`FromTerm`, typed queries, host functions.

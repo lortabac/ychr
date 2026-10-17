@@ -1,0 +1,9 @@
+:- module(polymorphic_key).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k.
+
+% A type variable makes the holder polymorphic. The generated rules then
+% fail the type checker, with the mismatch reported at this directive.
+:- state(k, T).

@@ -1,0 +1,12 @@
+:- module(put_wrong_type).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k.
+
+:- state(k, int).
+
+:- chr_constraint bad/0.
+
+% The key holds an int, so putting a string is a static type error.
+bad <=> new_k(1), put_k("a").

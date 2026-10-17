@@ -1,0 +1,11 @@
+:- module(new_wrong_type).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k.
+
+:- state(k, int).
+
+:- chr_constraint bad/0.
+
+bad <=> new_k("a").

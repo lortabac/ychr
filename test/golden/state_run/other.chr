@@ -1,9 +1,0 @@
-% Exports constraints named like library(state)'s. A run's own goals
-% must not become ambiguous because of them, though nothing here
-% imports this module.
-:- module(other, [get/2, new_states/1]).
-
-:- chr_constraint get(any, any), new_states(any).
-
-get(_, _) <=> true.
-new_states(_) <=> true.
