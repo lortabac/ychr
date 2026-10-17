@@ -969,10 +969,12 @@ prelude is always compiled in, so the real dump also has one
 `evaluables` entry, one `callables` entry, one `func_*` procedure and
 one export per prelude function — elided here (`; ...`). It also
 declares the prelude's `tell_list/N`, so the real type-name vector,
-`tellables` and `tellables-unqualified` tables carry entries beyond the
-ones shown; only the user's constraint and procedure are spelled out
-below. The constraint is `mymodule:leq/2`, so procedure names follow
-`<prefix>_mymodule__leq2`:
+`rule-names`, `tellables` and `tellables-unqualified` tables carry
+entries beyond the ones shown. The prelude also contributes rules, and
+they come first in the program-wide rule list, so the rule below has id
+(and history key) `20` rather than `0`; only the user's constraint and
+procedure are spelled out below. The constraint is `mymodule:leq/2`, so
+procedure names follow `<prefix>_mymodule__leq2`:
 
 ```scheme
 (vm-program
@@ -980,7 +982,9 @@ below. The constraint is `mymodule:leq/2`, so procedure names follow
   (program 1
     (type-names (qualified "mymodule" "leq"))
     1
-    (rule-names "reflexivity")
+    (rule-names
+      ; ... the prelude's tell_list/N rule names elided
+      "reflexivity")
     (evaluables
       ("prelude__+" 2 "func_prelude____u2b__2")
       ; ... one entry per prelude function elided
@@ -1018,7 +1022,7 @@ below. The constraint is `mymodule:leq/2`, so procedure names follow
     ; occurrence_mymodule__leq2_1: after HNF,
     ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
     (procedure "occurrence_mymodule__leq2_1" ("active" "$X_0" "$X_1")
-               (occurrence 0 1 0 "reflexivity")
+               (occurrence 0 1 20 "reflexivity")
       (push-frame "rule reflexivity" 4 15 "mymodule.chr" "leq(X, X)")
       (if (bequal (var "$X_0") (var "$X_1"))
         ((kill (id-var "active"))
