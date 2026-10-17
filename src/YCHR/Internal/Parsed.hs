@@ -48,6 +48,7 @@ module YCHR.Internal.Parsed
     OpDecl (..),
     Rule (..),
     Head (..),
+    headAggregates,
     FunctionEquation (..),
     MacroDef (..),
     MacroKind (..),
@@ -66,6 +67,9 @@ module YCHR.Internal.Parsed
     DataConstructor (..),
     TypeExpr (..),
     BoundSig (..),
+    Aggregate (..),
+    AggregateKind (..),
+    AggregateConjunct (..),
   )
 where
 
@@ -74,7 +78,10 @@ import Data.Text (Text)
 import YCHR.Internal.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
 import YCHR.Internal.PExpr (OpType (..), PExpr (..))
 import YCHR.Internal.Types
-  ( BoundSig (..),
+  ( Aggregate (..),
+    AggregateConjunct (..),
+    AggregateKind (..),
+    BoundSig (..),
     Constraint (..),
     ConstraintUse (..),
     DataConstructor (..),
@@ -363,9 +370,22 @@ data Rule = Rule
   }
   deriving (Show, Eq)
 
--- | A rule head: the constraints to match, split by rule kind.
+-- | A rule head: the constraints to match, split by rule kind, plus the
+-- rule's aggregates.
+--
+-- The parser never produces an aggregate — it sees only the @Term@s a
+-- macro expanded to — so a freshly parsed head has an empty
+-- 'aggregates' list. The renamer fills it in when it recognizes the
+-- aggregate core form or a selection form. See
+-- docs/reference/aggregates.md.
 data Head
-  = Simplification [Constraint]
-  | Propagation [Constraint]
-  | Simpagation [Constraint] [Constraint]
+  = Simplification [Constraint] [Aggregate]
+  | Propagation [Constraint] [Aggregate]
+  | Simpagation [Constraint] [Constraint] [Aggregate]
   deriving (Show, Eq)
+
+-- | The aggregates of a head, whichever kind it is.
+headAggregates :: Head -> [Aggregate]
+headAggregates (Simplification _ aggs) = aggs
+headAggregates (Propagation _ aggs) = aggs
+headAggregates (Simpagation _ _ aggs) = aggs

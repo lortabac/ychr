@@ -1,0 +1,13 @@
+% The same, for a rule that removes the constraint it is counting: it is
+% stored before the fold too, so it is counted, and the firing's kill takes
+% it out of the store afterwards.
+:- module(aggregates_view_removed, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, seen/2, ask/1, setup/1.
+
+c(X), count(c(_), N) <=> seen(X, N).
+
+seen(_, N) \ ask(A) <=> A = N.
+
+setup(A) <=> c(1), ask(A).

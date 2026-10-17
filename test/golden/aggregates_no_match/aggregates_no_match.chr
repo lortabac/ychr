@@ -1,0 +1,16 @@
+% The no-match case: max over an empty goal is undefined, so that rule
+% never applies, while \+ holds. Both folds run; only the second fires.
+:- module(aggregates_no_match, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type answer ---> no_match ; matched.
+
+:- chr_constraint go/1, bag/1, item/1, best/1, none/0, ask/1.
+
+bag(1), max(V, item(V), M) ==> best(M).
+
+bag(1), \+ item(_) ==> none.
+
+none \ ask(A) <=> A = no_match.
+
+go(A) <=> bag(1), ask(A).

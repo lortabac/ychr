@@ -58,8 +58,20 @@ markPassive = occMapMap (map mark)
     mark occ = occ {passive = occ.passive || isPassive occ}
 
 -- | Is this occurrence passive under any v1 source?
+--
+-- A rule with a head aggregate is exempt: its applicability also depends on
+-- what the fold finds in the store, so the argument both sources rest on —
+-- the ωr-earlier occurrence always fires before the later one is tried —
+-- does not hold. Dropping the optimization for those rules is conservative,
+-- and passivity is only ever an optimization.
 isPassive :: Occurrence -> Bool
-isPassive occ = idempotencePassive occ || symmetryPassive occ
+isPassive occ
+  | aggregateRule occ = False
+  | otherwise = idempotencePassive occ || symmetryPassive occ
+
+-- | Whether this occurrence belongs to a rule whose head has an aggregate.
+aggregateRule :: Occurrence -> Bool
+aggregateRule occ = not (null (ruleHead occ.rule).aggregates)
 
 -- ---------------------------------------------------------------------------
 -- Subsumption / symmetry analysis
@@ -111,9 +123,11 @@ symmetryPassive occ =
 -- | Among the two occurrences of a symmetric two-head rule, the passive
 -- one is the ωr-later of the two. Occurrence positions in the combined
 -- (removed-first, right-to-left) head list run @0@ (tried first) and @1@
--- (tried later); the later one is passive.
+-- (tried later); the later one is passive. A goal occurrence has no
+-- active regular head and is never reached here (a rule with an
+-- aggregate is exempt), but 'activeHeadPosition' says so in the types.
 isLaterOccurrence :: Occurrence -> Bool
-isLaterOccurrence occ = occ.activeIdx == HeadPosition 1
+isLaterOccurrence occ = activeHeadPosition occ == Just (HeadPosition 1)
 
 -- | Whether the two heads describe the same unordered match: there is a
 -- bijection on argument class-tokens mapping @h0@ to @h1@ and @h1@ to
@@ -147,7 +161,7 @@ headVarsOf :: [HeadConstraint] -> Set Text
 headVarsOf hcs = Set.fromList [v | hc <- hcs, HeadVar v <- hc.args]
 
 -- | Build head-variable equivalence classes from the head-variable
--- equality guards induced by HNF (e.g. @X = _hnf_0@). Only guards
+-- equality guards induced by HNF (e.g. @X = $hnf_0@). Only guards
 -- equating two head variables union classes; all others are ignored here
 -- (they are rejected separately by 'allGuardsHeadEq').
 buildClasses :: Set Text -> [D.Guard] -> ClassMap

@@ -1,0 +1,16 @@
+% A fold over many matches, and the benchmark's many-match case: a
+% recursive rule builds 200 item/1 constraints, and the aggregate counts
+% them.
+:- module(aggregates_many, [go/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint go/2, gen/1, item/1, bag/1, total/1, ask/1.
+
+gen(0) <=> true.
+gen(N) <=> N > 0 | item(1), gen(N - 1).
+
+bag(1), count(item(_), N) ==> total(N).
+
+total(N) \ ask(R) <=> R = N.
+
+go(N, R) <=> gen(N), bag(1), ask(R).

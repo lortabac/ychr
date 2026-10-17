@@ -71,7 +71,7 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -90,6 +90,7 @@ import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( ConstraintKey (..),
     HeadArg (..),
+    HeadConstraint (..),
     Identifier (..),
     SymbolTable,
     Term (..),
@@ -135,15 +136,28 @@ compile prog symTab =
       procs = concatMap (.constraintProcedures) constraintProcs
       (funProcs, funErrs) = runWriter $ do
         traverse compileFunctionDef prog.functions
+      -- One procedure per head aggregate, in rule order. A rule without
+      -- aggregates contributes nothing, so a program that uses none emits
+      -- exactly the procedures it emitted before.
+      aggregateWork =
+        [ (display, rule, plan)
+        | (display, rule, plans) <-
+            zip3 ruleDisplayNames prog.rules collected.aggregatePlans,
+          plan <- plans
+        ]
+      (aggProcs, aggErrs) = runWriter $ do
+        traverse
+          (\(display, rule, plan) -> genAggregateProcedure symTab display (rule, plan))
+          aggregateWork
       dispatch = genReactivateDispatch symTab
-      allErrs = occErrs ++ procErrs ++ funErrs
+      allErrs = occErrs ++ procErrs ++ funErrs ++ aggErrs
    in if null allErrs
         then
           Right
             Program
               { typeNames = buildTypeNames symTab,
                 ruleNames = ruleDisplayNames,
-                procedures = procs ++ funProcs ++ [dispatch],
+                procedures = procs ++ funProcs ++ aggProcs ++ [dispatch],
                 evaluables = buildEvaluables prog.functions,
                 callables = buildCallables prog.functions,
                 tellables = buildTellables prog,
@@ -397,7 +411,7 @@ genConstraintProcs symTab occMap (ident, cType) = do
   let occs = filter (not . (.passive)) (lookupOccurrences ident occMap)
       tellProc = genTell ident.name cType ident.arity
       activate = genActivate ident.name cType ident.arity occs
-  occProcs <- traverse (genOccurrence symTab ident.name cType ident.arity) occs
+  occProcs <- traverse (genOccurrence symTab occMap ident.name cType ident.arity) occs
   pure
     ConstraintProcs
       { constraintProcedures = tellProc : activate : occProcs,
@@ -467,9 +481,13 @@ genActivate name cType arity occs =
   where
     occCallArgs =
       AId (IdVar activeName) : map (AVal . Var) (argNames arity)
+    -- A goal occurrence takes one more argument: the removal-step flag.
+    -- 'activate_c' always calls it with 'false' (see 'genFireStmts' for
+    -- the 'true' caller).
     genActivateCall occ =
       let occName = occProcName name arity occ.number
-       in [ LetVal dropResultName (CallExpr occName occCallArgs),
+          callArgs = occCallArgs ++ [AVal (Lit (BoolLit False)) | isJust occ.goalOcc]
+       in [ LetVal dropResultName (CallExpr occName callArgs),
             If (BFromVal (Var dropResultName)) [Return (Lit (BoolLit True))] []
           ]
 
@@ -479,18 +497,25 @@ genActivate name cType arity occs =
 
 -- | Generate the @occurrence_c_j@ procedure for one occurrence of a
 -- constraint type.
+--
+-- A goal occurrence (see 'GoalOccurrence') takes one more parameter, the
+-- removal-step flag, and its body is built by 'genOccurrenceBody'.
 genOccurrence ::
   SymbolTable ->
+  OccurrenceMap ->
   Types.Name ->
   ConstraintType ->
   Int ->
   Occurrence ->
   Writer [Diagnostic CompileError] Procedure
-genOccurrence symTab name cType arity occ = do
-  let params = activeName : argNames arity
+genOccurrence symTab occMap name cType arity occ = do
+  let params =
+        activeName
+          : argNames arity
+          ++ [removalParamName | isJust occ.goalOcc]
       procName' = occProcName name arity occ.number
       varMap = buildVarMap occ
-  body <- genOccurrenceBody symTab cType varMap occ
+  body <- genOccurrenceBody symTab occMap cType varMap occ
   pure
     Procedure
       { name = procName',
@@ -501,7 +526,7 @@ genOccurrence symTab name cType arity occ = do
       }
 
 -- | Map every user-written head variable in an 'Occurrence' to the
--- generated VM variable that holds its value (an @X_i@ for the active
+-- generated VM variable that holds its value (a @$X_i@ for the active
 -- constraint, a @pArg_k_j@ for partner @k@). 'HeadWildcard' arguments
 -- contribute no binding: wildcards are never referenced from guards
 -- or bodies. See Note [Head variable extraction].
@@ -521,15 +546,24 @@ buildVarMap occ =
 -- | Compile the body of an occurrence procedure: build the innermost
 -- "guards-then-fire" block, wrap it in one nested 'Foreach' per partner,
 -- then append the trailing @Return false@ that signals "no early drop".
+--
+-- A goal occurrence is different: its active constraint is one conjunct
+-- of an aggregate goal, so the loop nest is the rest of that goal (and
+-- the enclosing goals) outside the head partner loops, and the active
+-- conjunct's own guards are checked in place. See 'genGoalOccurrenceBody'.
 genOccurrenceBody ::
   SymbolTable ->
+  OccurrenceMap ->
   ConstraintType ->
   VarMap ->
   Occurrence ->
   Writer [Diagnostic CompileError] [Stmt]
-genOccurrenceBody symTab cType varMap occ = do
-  (inner, condMap) <- genGuardedFire symTab varMap occ
-  let body = wrapInPartnerLoops cType occ condMap inner
+genOccurrenceBody symTab occMap cType varMap occ = do
+  (inner, condMap) <- genGuardedFire symTab occMap varMap occ
+  body <-
+    case occ.goalOcc of
+      Nothing -> pure (wrapInPartnerLoops cType occ condMap inner)
+      Just goal -> genGoalOccurrenceBody symTab cType goal condMap occ inner
   -- Push the rule frame at procedure entry, so it is live during guard
   -- evaluation (and the history check) as well as body execution. A guard
   -- that errors (e.g. evaluates to a non-boolean) then reports the rule's
@@ -538,27 +572,484 @@ genOccurrenceBody symTab cType varMap occ = do
   -- call returns, so it does not accumulate.
   pure (PushFrame (mkRuleFrame occ) : body ++ [Return (Lit (BoolLit False))])
 
+-- | Compile the location phase of a goal occurrence: bind the active
+-- conjunct's arguments, then nest the goal's conjuncts — the active one's
+-- guards in their goal-order place, the others as loops — outside the head
+-- partner loops.
+--
+-- The variable map that seeds the conjuncts holds only the active
+-- conjunct's arguments. Every other goal variable — including one that
+-- also occurs in a regular head — is bound by its own loop, because the
+-- head loops are nested /inside/ these loops and their @pArg@ names do
+-- not exist yet at this point. The spec allows this: the fire step
+-- recomputes the aggregates from the regular heads and discards the
+-- goal's bindings, so a pairing the goal does not really support is only
+-- an extra try, never a wrong answer.
+genGoalOccurrenceBody ::
+  SymbolTable ->
+  ConstraintType ->
+  GoalOccurrence ->
+  PartnerCondMap ->
+  Occurrence ->
+  [Stmt] ->
+  Writer [Diagnostic CompileError] [Stmt]
+genGoalOccurrenceBody symTab cType goal condMap occ fire = do
+  let rule = occ.rule
+      si =
+        SrcInfo
+          rule.head.sourceLoc
+          rule.head.parsed
+          (Just ("rule " <> occ.ruleDisplay))
+      seed =
+        varMapFromList
+          [ (v, Var (argName i))
+          | (i, HeadVar v) <- zip [0 ..] occ.activeArgs
+          ]
+      headLoops = wrapInPartnerLoops cType occ condMap fire
+  -- The active conjunct's own guards are evaluated by
+  -- 'wrapGoalConjuncts' at 'goal.goalActiveIndex', so the enclosing
+  -- goals' conjuncts may only be appended *after* the current goal's
+  -- list: the index is into the concatenated list. Nested aggregates
+  -- need the enclosing conjuncts looped before the current goal with
+  -- their bindings in scope, so this concatenation will have to change
+  -- when they land (the list is always empty until then).
+  wrapGoalConjuncts
+    symTab
+    si
+    goal.goalIndex
+    (Just (goal.goalActiveIndex, activeName, cType))
+    (goal.goalAll ++ concat goal.goalEnclosing)
+    seed
+    (\_ -> pure headLoops)
+
 -- | Compile the guards followed by the rule-firing block. Returns the
 -- statements that go at the innermost partner-loop position — any HNF
 -- match-guard wrappers (lets and structural @if@s introduced by
 -- 'D.GuardMatch' / 'D.GuardGetArg') wrapped around the conditional
 -- 'genFireStmts' result — together with the per-partner index
 -- conditions lifted out of equality check guards by 'compileCheckGuards'.
+--
+-- A rule with aggregates extends the guard: one out-cell local per result
+-- variable the aggregate binds is created here, the aggregate's procedure
+-- is called from the guard condition, and the rule's own guard follows it.
+-- Everything sits inside the match-guard wrapper, so a shared variable that
+-- only the head's HNF guards bind is already in scope when the aggregate
+-- reads it.
 genGuardedFire ::
   SymbolTable ->
+  OccurrenceMap ->
   VarMap ->
   Occurrence ->
   Writer [Diagnostic CompileError] ([Stmt], PartnerCondMap)
-genGuardedFire symTab varMap occ = do
+genGuardedFire symTab occMap varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       guardSi = SrcInfo guardLoc guardP ruleLabel
-  compiled <- compileGuards (Just occ) Nothing varMap guardSi guards
-  fireStmts <- genFireStmts symTab compiled.extendedVarMap occ
-  let guarded = case compiled.residualCheck of
-        Nothing -> fireStmts
-        Just gExpr -> [If (softenGuard gExpr) fireStmts []]
-  pure (compiled.matchWrapper guarded, compiled.indexConditions)
+      AnnP {sourceLoc = headLoc, parsed = headP} = occ.rule.head
+      headSi = SrcInfo headLoc headP ruleLabel
+      cellStmts = concatMap aggregateOutCellStmts occ.aggregates
+      -- The cells are in scope for the rule's guard as well as for the body:
+      -- an aggregate's result is readable from both.
+      varMapWithCells =
+        List.foldl' aggregateOutCellVars varMap occ.aggregates
+  compiled <- compileGuards (Just occ) Nothing varMapWithCells guardSi guards
+  aggTests <-
+    traverse (aggregateTest headSi compiled.extendedVarMap) occ.aggregates
+  fire <- genFireStmts symTab occMap compiled.extendedVarMap occ
+  let residual = fromMaybe (BLit True) compiled.residualCheck
+      -- Aggregates are computed left to right, before the rule's own guard,
+      -- and 'BAnd' short-circuits in the same order.
+      condition = List.foldr BAnd residual aggTests
+      guarded stmts = [If (softenGuard condition) stmts []]
+      -- Late Storage, moved: a rule with aggregates stores its active
+      -- constraint before computing them, so a fold sees the constraint
+      -- being activated in its true store position and counts it once.
+      -- The store is idempotent, and the partner loops have taken their
+      -- snapshot before it, so storing the active cannot change the
+      -- combinations they enumerate. A goal occurrence whose active
+      -- constraint was already stored can match it as a regular head,
+      -- which is allowed (goal distinctness never compares a goal
+      -- conjunct with a head) and only an extra try, since the fold
+      -- recomputes from the store. A goal occurrence may also be called
+      -- by the removal step with a constraint that is already dead, so
+      -- its store is liveness-guarded: a dead suspension must not enter
+      -- the store, where a fold would count it.
+      aggregateStoreStmts
+        | null occ.aggregates = []
+        | isJust occ.goalOcc =
+            [If (BAlive (IdVar activeName)) [Store (IdVar activeName)] []]
+        | otherwise = [Store (IdVar activeName)]
+      -- Both checks are pure, so their order is unobservable; putting the
+      -- history in front keeps a combination that already fired from
+      -- refolding. A rule without aggregates keeps the shape it had.
+      body = case (null occ.aggregates, fire.history) of
+        (True, Nothing) -> guarded fire.stmts
+        (True, Just (rid, ids)) ->
+          guarded [If (BNotInHistory rid ids) (AddHistory rid ids : fire.stmts) []]
+        (False, Nothing) ->
+          aggregateStoreStmts ++ cellStmts ++ guarded fire.stmts
+        (False, Just (rid, ids)) ->
+          [ If
+              (BNotInHistory rid ids)
+              ( aggregateStoreStmts
+                  ++ cellStmts
+                  ++ guarded (AddHistory rid ids : fire.stmts)
+              )
+              []
+          ]
+  pure (compiled.matchWrapper body, compiled.indexConditions)
+
+-- ---------------------------------------------------------------------------
+-- Aggregates
+-- ---------------------------------------------------------------------------
+
+-- | The out-cell locals one aggregate's call needs: one fresh unbound
+-- variable per result variable its pattern binds. The aggregate's procedure
+-- binds them, so the rule's guard and body can read the results.
+aggregateOutCellStmts :: AggregatePlan -> [Stmt]
+aggregateOutCellStmts plan =
+  [LetVal (aggregateOutCell plan.planIndex v) NewVar | v <- plan.planBind]
+
+-- | Extend a variable map with the cells one aggregate binds, so a later
+-- aggregate and the rule's guard read its result.
+aggregateOutCellVars :: VarMap -> AggregatePlan -> VarMap
+aggregateOutCellVars vm plan =
+  List.foldl'
+    (\m v -> insertVar v (Var (aggregateOutCell plan.planIndex v)) m)
+    vm
+    plan.planBind
+
+-- | The guard conjunct that computes one aggregate: a call to its procedure
+-- inside 'BFromVal', so 'softenGuard' puts the whole fold under a soft
+-- boundary and an instantiation error anywhere in it makes the aggregate
+-- undefined instead of aborting the query.
+--
+-- The call's arguments are the out-cells the caller created, in the order
+-- the procedure's parameters expect them, followed by the values of the
+-- aggregate's shared variables.
+aggregateTest ::
+  SrcInfo ->
+  VarMap ->
+  AggregatePlan ->
+  Writer [Diagnostic CompileError] BoolExpr
+aggregateTest si varMap plan = do
+  shared <- traverse sharedArg plan.planShared
+  let cells =
+        [AVal (Var (aggregateOutCell plan.planIndex v)) | v <- plan.planBind]
+  pure (BFromVal (CallExpr plan.planProcName (cells ++ map AVal shared)))
+  where
+    -- A shared variable is a head variable by construction. A missing one
+    -- is a compiler invariant violation, reported as an unbound variable
+    -- rather than crashing.
+    sharedArg v = case lookupVar v varMap of
+      Just expr -> pure expr
+      Nothing -> do
+        tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
+        pure unreachableValue
+
+-- | Generate the procedure that computes one head aggregate.
+--
+-- Parameters: the out-cells the caller created (one per result variable the
+-- pattern binds), then the values of the aggregate's shared variables. It
+-- returns a boolean — @true@ when the aggregate is defined and its result
+-- pattern matched, @false@ when it is undefined or did not.
+--
+-- The body evaluates the aggregator, folds the goal's matches into a local
+-- working value, applies the aggregator's @Final@ closure, decodes the
+-- @maybe@ it returns, and matches the result pattern. Apart from binding
+-- its out-cells it is read-only: no store, kill, history, tell or
+-- reactivation statement is reachable from it, which is what lets an
+-- occurrence call it from inside a guard. See Note [Guard-window bindings].
+genAggregateProcedure ::
+  SymbolTable ->
+  Text ->
+  (D.Rule, AggregatePlan) ->
+  Writer [Diagnostic CompileError] Procedure
+genAggregateProcedure symTab display (rule, plan) = do
+  let outParams = [aggregateOutParam i | i <- [0 .. length plan.planBind - 1]]
+      sharedParams =
+        [aggregateSharedParam i | i <- [0 .. length plan.planShared - 1]]
+      params = outParams ++ sharedParams
+      sharedMap = varMapFromList (zip plan.planShared (map Var sharedParams))
+      ruleLabel = Just ("rule " <> display)
+      si = SrcInfo rule.head.sourceLoc rule.head.parsed ruleLabel
+      resultMatch = plan.planResultMatch
+  aggExpr <- traverse (compileExpr sharedMap si) plan.planAgg
+  body <- case aggExpr of
+    -- A selection form has no aggregator, and is reported and dropped by
+    -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
+    -- compiles never gets here. Answering "undefined" keeps the procedure
+    -- well formed if one ever does.
+    Nothing -> pure [Return (Lit (BoolLit False))]
+    Just expr -> do
+      let goalFold p = wrapGoalConjuncts symTab si p.planIndex Nothing p.planGoal
+      foldStmts <-
+        goalFold plan sharedMap $ \innermost -> do
+          elementExpr <- compileExpr innermost si plan.planElement
+          pure
+            [ AssignVal
+                aggregateAccName
+                ( ApplyClosure
+                    (Var aggregateIncName)
+                    [Var aggregateAccName, elementExpr]
+                )
+            ]
+      pure
+        ( [ LetVal aggregateAggName expr,
+            If
+              (BNot (BMatchTerm (Var aggregateAggName) aggregateAggFunctor 3))
+              [ ExprStmt
+                  ( HostCall
+                      chrErrorName
+                      [ Lit
+                          ( AtomLit
+                              ( "aggregate: the Agg expression is not an"
+                                  <> " aggregator(Init, Inc, Final)"
+                              )
+                          )
+                      ]
+                  )
+              ]
+              [],
+            LetVal aggregateAccName (GetArg (Var aggregateAggName) 0),
+            LetVal aggregateIncName (GetArg (Var aggregateAggName) 1),
+            LetVal aggregateFinalName (GetArg (Var aggregateAggName) 2)
+          ]
+            ++ foldStmts
+        )
+  pure
+    Procedure
+      { name = plan.planProcName,
+        params = params,
+        body = body ++ maybeValueStmts resultMatch,
+        procKind =
+          PKFunction
+            (Types.QualifiedName "$aggregate" plan.planProcName.unName)
+            (length params)
+      }
+
+-- | The tail of an aggregate procedure: apply @Final@, decode the @maybe@
+-- it returned, and match the result pattern against the payload.
+--
+-- The pattern's tests run first and a failed one returns @false@ (the rule
+-- does not apply) before any out-cell is bound. A value that is neither
+-- @just\/1@ nor @nothing@ is a runtime error naming the protocol: silently
+-- treating it as undefined would turn a missing @library(maybe)@ import
+-- into a rule that never fires.
+maybeValueStmts :: ResultMatch -> [Stmt]
+maybeValueStmts resultMatch =
+  [ LetVal
+      aggregateMaybeName
+      (ApplyClosure (Var aggregateFinalName) [Var aggregateAccName]),
+    If
+      (BMatchTerm (Var aggregateMaybeName) aggregateJustFunctor 1)
+      ( LetVal aggregatePayloadName (GetArg (Var aggregateMaybeName) 0)
+          : matchedStmts
+      )
+      [ If
+          (BEqual (Var aggregateMaybeName) (Lit aggregateNothingAtom))
+          [Return (Lit (BoolLit False))]
+          [ ExprStmt
+              ( HostCall
+                  chrErrorName
+                  [ Lit
+                      ( AtomLit
+                          ( "aggregate: Final returned neither just(Result) nor"
+                              <> " nothing, so it is not library(maybe)'s maybe"
+                          )
+                      )
+                  ]
+              )
+          ]
+      ]
+  ]
+  where
+    -- Every test runs before any binding: a pattern that cannot match
+    -- must leave the out-cells untouched. The tests are a short-circuiting
+    -- 'BAnd' chain in pattern order, so a compound test precedes the field
+    -- extractions that depend on it.
+    matchedStmts =
+      let bindAll =
+            bindsStmts resultMatch.resultBinds ++ [Return (Lit (BoolLit True))]
+       in case resultMatch.resultTests of
+            [] -> bindAll
+            t : ts ->
+              [ If
+                  (List.foldl' BAnd t ts)
+                  bindAll
+                  [Return (Lit (BoolLit False))]
+              ]
+
+-- | The out-cell bindings a result match asks for, in the order the
+-- procedure's out parameters were declared.
+bindsStmts :: [(Text, ValExpr)] -> [Stmt]
+bindsStmts binds =
+  [ BoolExprStmt (BUnify (Var (aggregateOutParam i)) rhs)
+  | (i, (_, rhs)) <- zip [0 ..] binds
+  ]
+
+-- | Wrap a block in the loops and the in-place guards that match a goal's
+-- conjuncts, left to right, and hand the innermost block the variable map
+-- in scope there.
+--
+-- A conjunct's own HNF guards are evaluated inside its loop, right after
+-- its arguments are bound, so they filter candidates before the conjuncts
+-- that follow are searched. Source order is the loop order: the first
+-- conjunct's loop is the outermost.
+--
+-- A shared variable is an index condition on the conjunct's argument
+-- position — evaluated before the loop body, so the iterator can skip
+-- candidates without entering it — while a variable the goal binds is read
+-- out of the candidate with @field-arg@. A variable bound by an earlier
+-- conjunct is an index condition too, since it is in scope at this loop's
+-- evaluation point.
+--
+-- @labelIdx@ is the enclosing aggregate's source index: it keeps the loop
+-- labels unique within one procedure. @mActive@ is the active conjunct of
+-- a goal occurrence: its position in the list, the constraint being tried,
+-- and its type. Its loop is not built — the active constraint already is
+-- it — but its own guards are evaluated in place there, so a guard that
+-- compares a variable of an earlier conjunct with a fresh name sees the
+-- earlier binding, and a later conjunct sees whatever the active guards
+-- bound. The fold passes 'Nothing': its firing's active constraint is not
+-- one of the loops wrapped here.
+--
+-- Two conjuncts of the same type inside one goal must match /different/
+-- suspensions, like two head conjuncts of the same type. The fold needs
+-- those tests as much as the location phase does, so that the two agree on
+-- what a match is. A goal conjunct and a regular head are deliberately not
+-- compared (see 'wrapInPartnerLoops').
+wrapGoalConjuncts ::
+  SymbolTable ->
+  SrcInfo ->
+  Int ->
+  Maybe (Int, Name, ConstraintType) ->
+  [D.AggregateConjunct] ->
+  VarMap ->
+  (VarMap -> Writer [Diagnostic CompileError] [Stmt]) ->
+  Writer [Diagnostic CompileError] [Stmt]
+wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
+  go 0 [] varMap0 conjuncts
+  where
+    go _ _ vm [] = inner vm
+    go j seen vm (conjunct : rest) = case conjunct of
+      D.AggConstraint hcon guards
+        | Just (activeIdx, _activeSusp, _activeCType) <- mActive,
+          j == activeIdx -> do
+            -- The active conjunct: its constraint is the one being
+            -- activated, so only its guards need compiling here. It is
+            -- deliberately not added to @seen@: it has no loop variable,
+            -- and distinctness against it is emitted from 'mActive'.
+            compiled <- compileGuards Nothing Nothing vm si guards
+            restStmts <- go (j + 1) seen compiled.extendedVarMap rest
+            pure (compiled.matchWrapper (withResidual compiled restStmts))
+        | otherwise -> do
+            mCType <- lookupGoalCType symTab si hcon
+            case mCType of
+              -- The miss is already reported: keep going so the rest of the
+              -- program still produces diagnostics.
+              Nothing -> go (j + 1) seen vm rest
+              Just cType -> do
+                let suspName = aggregateSuspName j
+                    (conds, lettStmts, vm') = bindGoalArgs suspName vm hcon
+                    distinct = distinctTests seen cType suspName
+                compiled <- compileGuards Nothing Nothing vm' si guards
+                -- The conjunct's HNF guards bind the variables they
+                -- decompose (a compound or literal argument), and the
+                -- conjuncts after this one, and the element, need those
+                -- bindings.
+                restStmts <-
+                  go (j + 1) ((j, cType) : seen) compiled.extendedVarMap rest
+                let body =
+                      lettStmts
+                        ++ compiled.matchWrapper
+                          (withResidual compiled (guardedDistinct distinct restStmts))
+                pure [Foreach (aggregateLabel labelIdx j) cType suspName conds body]
+      -- A @? Guard@ is checked in place: it sees the variables the conjuncts
+      -- before it bound, and filters before the ones after it are searched.
+      --
+      -- The location phase drops every @?@ guard, so that it is a true
+      -- over-approximation: a guard there could be inconclusive (a shared
+      -- input is not bound yet, or a match's argument is still unbound) and
+      -- skipping the combination would lose a firing that the fold, run
+      -- later against a different store, would have found. The fold always
+      -- evaluates the guard, and it reports a variable that is genuinely
+      -- unbound at its goal-order position.
+      D.AggGuard g
+        | isJust mActive -> go (j + 1) seen vm rest
+        | otherwise -> do
+            compiled <- compileGuards Nothing Nothing vm si [g]
+            restStmts <- go (j + 1) seen vm rest
+            pure (compiled.matchWrapper (withResidual compiled restStmts))
+      -- A nested aggregate is rejected by
+      -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
+      -- compiles never reaches this arm.
+      D.AggNested _ -> go (j + 1) seen vm rest
+
+    -- One @not (susp_j = susp_j')@ per earlier conjunct of the same type,
+    -- plus one against the constraint being tried when that is a conjunct
+    -- of this goal.
+    distinctTests seen cType suspName =
+      [ BNot (BIdEqual (IdVar suspName) (IdVar (aggregateSuspName j')))
+      | (j', cType') <- seen,
+        cType' == cType
+      ]
+        ++ [ BNot (BIdEqual (IdVar suspName) (IdVar activeSusp))
+           | Just (_, activeSusp, activeCType) <- [mActive],
+             activeCType == cType
+           ]
+
+    guardedDistinct [] stmts = stmts
+    guardedDistinct (c : cs) stmts = [If (List.foldl' BAnd c cs) stmts []]
+
+    withResidual compiled stmts = case compiled.residualCheck of
+      Nothing -> stmts
+      Just cond -> [If cond stmts []]
+
+-- | Bind one goal conjunct's arguments against the candidate suspension:
+-- index conditions for the values already in scope, @field-arg@ reads for
+-- the variables the goal binds, nothing for a wildcard.
+bindGoalArgs ::
+  Name ->
+  VarMap ->
+  HeadConstraint ->
+  ([(ArgIndex, ValExpr)], [Stmt], VarMap)
+bindGoalArgs suspName vm0 hcon =
+  List.foldl' step ([], [], vm0) (zip [0 ..] hcon.args)
+  where
+    step (conds, lets, vm) (i, arg) = case arg of
+      HeadWildcard -> (conds, lets, vm)
+      HeadVar v -> case lookupVar v vm of
+        Just expr -> (conds ++ [(ArgIndex i, expr)], lets, vm)
+        Nothing ->
+          ( conds,
+            lets ++ [LetVal (Name v) (FieldArg (IdVar suspName) (ArgIndex i))],
+            insertVar v (Var (Name v)) vm
+          )
+
+-- | The constraint type of an aggregate-goal conjunct, reported like a head
+-- constraint's when the type is unknown.
+lookupGoalCType ::
+  SymbolTable ->
+  SrcInfo ->
+  HeadConstraint ->
+  Writer [Diagnostic CompileError] (Maybe ConstraintType)
+lookupGoalCType symTab si hcon =
+  case Types.lookupSymbol ident symTab of
+    Just cType -> pure (Just cType)
+    Nothing -> do
+      tell
+        [ Diagnostic
+            si.srcLabel
+            (AnnP (UnknownConstraintType ident.name) si.srcLoc si.srcParsed)
+            []
+        ]
+      pure Nothing
+  where
+    ident =
+      Identifier
+        (Types.qualifiedToName hcon.name)
+        (length hcon.args)
 
 -- | Wrap a rule-occurrence guard residual in 'BSoftGuard', so that an
 -- instantiation failure inside it (an unbound variable reached a
@@ -655,10 +1146,19 @@ wrapInPartnerLoops activeCType occ condMap inner =
           -- @if@ goes with them.) The surviving tests are exactly the
           -- same-type pairs, the only case where one suspension could be
           -- mistaken for another.
-          distinctActive =
-            [ BNot (BIdEqual (IdVar (partIdName k)) (IdVar activeName))
-            | partner.cType == activeCType
-            ]
+          -- Distinctness is only ever within one group. A goal
+          -- occurrence's active constraint is not a head, and the spec
+          -- lets a goal conjunct and a regular head be the same
+          -- suspension (`task(T), \+ depends(T, _) \ depends(U, T)`), so
+          -- the test against the active is suppressed for a goal
+          -- occurrence. That can only add tries — the fire step
+          -- recomputes and the history rejects a combination that
+          -- already fired — never change which firings happen.
+          distinctActive
+            | isJust occ.goalOcc = []
+            | partner.cType == activeCType =
+                [BNot (BIdEqual (IdVar (partIdName k)) (IdVar activeName))]
+            | otherwise = []
           distinctEarlier =
             [ BNot (BIdEqual (IdVar (partIdName k)) (IdVar (partIdName j)))
             | j <- [PartnerIndex 0 .. k - 1],
@@ -673,30 +1173,35 @@ wrapInPartnerLoops activeCType occ condMap inner =
 -- Fire: history check + kill + body + early drop + backjumping
 -- ---------------------------------------------------------------------------
 
--- | Compile a rule firing: the history check and kills for a
--- propagation rule, Late Storage, the body goals, early drop, and
+-- | Compile a rule firing: the removal step, the history check and kills
+-- for a propagation rule, Late Storage, the body goals, early drop, and
 -- backjumping.
 genFireStmts ::
   SymbolTable ->
+  OccurrenceMap ->
   VarMap ->
   Occurrence ->
-  Writer [Diagnostic CompileError] [Stmt]
-genFireStmts symTab varMap occ = do
+  Writer [Diagnostic CompileError] CompiledFire
+genFireStmts symTab occMap varMap occ = do
   let rule = occ.rule
-      AnnP {node = ruleHead} = rule.head
-      isPropagation = null ruleHead.removed
       activeIsRemoved = not occ.isKept
-      ruleId' = occ.ruleId
-      historyIds = buildHistoryIds occ
+      isGoal = isJust occ.goalOcc
       killStmts = genKillStmts occ
+      removalStmts = genRemovalStmts occMap occ
   let AnnP {node = ruleBody, sourceLoc = bodyLoc, parsed = bodyP} = rule.body
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       bodySi = SrcInfo bodyLoc bodyP ruleLabel
   bodyStmts <- compileBodyGoals symTab varMap bodySi ruleBody
-  let earlyDropStmts
+  let aliveCheck =
+        If (BNot (BAlive (IdVar activeName))) [Return (Lit (BoolLit True))] []
+      earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
-        | otherwise =
-            [If (BNot (BAlive (IdVar activeName))) [Return (Lit (BoolLit True))] []]
+        -- A removal-step call passes a constraint the firing already
+        -- removed, so it is dead on entry and the liveness test would
+        -- abandon every later combination of regular heads.
+        | isGoal =
+            [If (BFromVal (Var removalParamName)) [] [aliveCheck]]
+        | otherwise = [aliveCheck]
       -- Backjumping (paper §5.3): after body execution, check each
       -- partner's liveness outermost-first.  If a partner died (e.g.
       -- killed by a rule fired during body execution), Continue to its
@@ -717,35 +1222,64 @@ genFireStmts symTab varMap occ = do
               p.isKept
             ]
       -- Late Storage (paper §5.3): a kept active constraint must be in
-      -- the store before a non-empty body runs — the body may tell
-      -- constraints that need it as a partner, or unify variables it
-      -- must be reactivated on. A removed active was just killed, and
-      -- an empty body observes nothing, so both leave storage to the
-      -- end of @activate_c@. Sound only because guard residuals do not
-      -- tell (dev-docs/INVARIANTS.md): nothing can mutate the store or
-      -- bind variables while the constraint is alive but unstored.
-      -- (The store can still be *read* in that window — a guard
-      -- reaching @write_store_to_list@ through a host call will not
-      -- list the active constraint; see INVARIANTS.md §Scope.)
-      storeStmts =
-        [Store (IdVar activeName) | not activeIsRemoved, not (null bodyStmts)]
+      -- the store before a non-empty body — or a removal step — runs: the
+      -- body may tell constraints that need it as a partner, or unify
+      -- variables it must be reactivated on, and a fold the removal step
+      -- triggers has to see it. A removed active was just killed, and an
+      -- empty body with nothing to retry observes nothing, so both leave
+      -- storage to the end of @activate_c@. Sound only because guard
+      -- residuals do not tell (dev-docs/INVARIANTS.md): nothing can mutate
+      -- the store or bind variables while the constraint is alive but
+      -- unstored. (The store can still be *read* in that window — a guard
+      -- reaching @write_store_to_list@ through a host call will not list
+      -- the active constraint; see INVARIANTS.md §Scope.)
+      --
+      -- A goal occurrence may be called by the removal step with a
+      -- dead constraint, so its store is liveness-guarded.
+      storeStmts
+        | activeIsRemoved = []
+        | null bodyStmts && null removalStmts = []
+        | isGoal =
+            [If (BAlive (IdVar activeName)) [Store (IdVar activeName)] []]
+        | otherwise = [Store (IdVar activeName)]
       -- The rule frame is pushed at occurrence-procedure entry (see
       -- 'genOccurrenceBody'), so it is already on the call stack here.
+      --
+      -- The removal step is the first thing the body does, before its
+      -- first goal, and runs for any rule that removes a constraint with
+      -- goal occurrences.
       coreFireStmts =
         killStmts
           ++ storeStmts
+          ++ removalStmts
           ++ bodyStmts
           ++ earlyDropStmts
           ++ backjumpStmts
-  pure $
-    if isPropagation
-      then
-        [ If
-            (BNotInHistory ruleId' historyIds)
-            (AddHistory ruleId' historyIds : coreFireStmts)
-            []
-        ]
-      else coreFireStmts
+  pure CompiledFire {history = ruleHistory occ, stmts = coreFireStmts}
+
+-- | What compiling one firing contributes: the propagation-history key the
+-- rule fires under, if it keeps one, and the statements of the firing
+-- itself. 'genGuardedFire' places the history guard, because a rule with an
+-- aggregate has to run it before the folds.
+data CompiledFire = CompiledFire
+  { -- | 'Nothing' when the rule keeps no history: it removes a regular head,
+    -- so the same combination of heads cannot match again anyway.
+    history :: Maybe (RuleId, HistoryIds),
+    stmts :: [Stmt]
+  }
+
+-- | The key a rule's firings are recorded under, or 'Nothing' when it keeps
+-- none.
+--
+-- A rule keeps a history when it removes no regular head (a propagation
+-- rule, as in ωr) /or/ when it has an aggregate: the spec fires an aggregate
+-- rule at most once per combination of its regular heads whatever its kind,
+-- so a later change in an aggregate's value must not fire it again.
+ruleHistory :: Occurrence -> Maybe (RuleId, HistoryIds)
+ruleHistory occ
+  | null occ.rule.head.node.removed || not (null occ.aggregates) =
+      Just (occ.ruleId, buildHistoryIds occ)
+  | otherwise = Nothing
 
 -- | Collect constraint identifiers for the propagation history tuple.
 -- Each id is tagged with its head position and handed to
@@ -753,13 +1287,17 @@ genFireStmts symTab varMap occ = do
 -- same partner combination always produces an identical tuple
 -- regardless of which occurrence is active (paper §5.2, Listing 1,
 -- line 14).
+--
+-- A goal occurrence has no active regular head, so its tuple is built
+-- from its regular-head partners alone — the same tuple the rule's
+-- ordinary occurrences build for that combination.
 buildHistoryIds :: Occurrence -> HistoryIds
 buildHistoryIds occ =
   mkHistoryIds $
-    (occ.activeIdx, IdVar activeName)
-      : [ (p.idx, IdVar (partIdName k))
-        | (k, p) <- zip [PartnerIndex 0 ..] occ.partners
-        ]
+    [(idx, IdVar activeName) | Just idx <- [activeHeadPosition occ]]
+      ++ [ (p.idx, IdVar (partIdName k))
+         | (k, p) <- zip [PartnerIndex 0 ..] occ.partners
+         ]
 
 -- | Build a 'StackFrame' for a rule firing.
 mkRuleFrame :: Occurrence -> StackFrame
@@ -790,6 +1328,76 @@ genKillStmts occ =
       -- Kill active if removed
       activeKill = [Kill (IdVar activeName) | not occ.isKept]
    in partnerKills ++ activeKill
+
+-- | The removal step of a firing: for each removed regular head, in
+-- textual order, call every goal occurrence of its type with the removed
+-- constraint (spec §3).
+--
+-- This is emitted for any rule whose firing removes a constraint with
+-- goal occurrences, whether or not the rule has an aggregate: it is how
+-- a `\+` in another rule notices its last match going away. Nothing is
+-- added to the runtime 'Kill'.
+--
+-- The firing rule's own goal occurrences are included, so a dependency
+-- chain is retried ("self-triggering") and a rule that removes a
+-- constraint one of its own aggregates observes is tried again before
+-- its body runs. The calls nest: a rule firing inside the removal step
+-- has its own removal step.
+--
+-- The removed constraint is passed dead (already killed above), and the
+-- goal-occurrence procedure's trailing flag tells it so: it must not be
+-- stored, and no fold can count it, since it is no longer in the store.
+genRemovalStmts :: OccurrenceMap -> Occurrence -> [Stmt]
+genRemovalStmts occMap occ = concatMap oneHead (sortOn textualPos (removedHeads occ))
+  where
+    headNode = occ.rule.head.node
+
+    -- The textual position of a removed head, first field of an entry.
+    textualPos (pos, _, _, _) = pos
+
+    -- (textual position, constraint identifier, id expression, argument
+    -- expressions). Removed partners carry their loop variables; a
+    -- removed active head is not in the partner list and is added by
+    -- hand.
+    removedHeads o =
+      [ ( sourcePos p.idx,
+          Identifier
+            (Types.qualifiedToName p.constraint.name)
+            (length p.constraint.args),
+          IdVar (partIdName k),
+          [Var (partArgName k j) | j <- [0 .. length p.constraint.args - 1]]
+        )
+      | (k, p) <- zip [PartnerIndex 0 ..] o.partners,
+        not p.isKept
+      ]
+        ++ [ ( sourcePos o.activeIdx,
+               Identifier o.conName (occurrenceArity o),
+               IdVar activeName,
+               [Var (argName j) | j <- [0 .. occurrenceArity o - 1]]
+             )
+           | not o.isKept
+           ]
+
+    -- 'ruleOccurrences' numbers the removed heads right-to-left
+    -- ('HeadPosition' counts them in reverse), so a textual position is
+    -- the reverse of the head position.
+    sourcePos idx = length headNode.removed - 1 - idx.unHeadPosition
+
+    -- A goal occurrence is never passive: 'YCHR.Internal.Compile.Passive.isPassive'
+    -- exempts any rule whose head has an aggregate. It is deliberately
+    -- not filtered here: should a future pass ever mark one passive, the
+    -- call below would name a procedure that does not exist and the
+    -- closed-procedure-name check would fail the compile loudly, where a
+    -- filter would silently lose firings.
+    oneHead (_, ident, idExpr, argExprs) =
+      [ ExprStmt
+          ( CallExpr
+              (occProcName ident.name ident.arity target.number)
+              (AId idExpr : map AVal argExprs ++ [AVal (Lit (BoolLit True))])
+          )
+      | target <- lookupOccurrences ident occMap,
+        isJust target.goalOcc
+      ]
 
 -- ---------------------------------------------------------------------------
 -- Compile terms
@@ -1184,15 +1792,25 @@ compileMatchGuard si acc (D.GuardMatch operand name arity) = do
   pure acc {wrapper = acc.wrapper . check}
 compileMatchGuard si acc (D.GuardGetArg vname operand idx) = do
   operandExpr <- compileExpr acc.varMap si operand
-  let binding body = LetVal (Name vname) (GetArg operandExpr idx) : body
-  pure
-    acc
-      { wrapper = acc.wrapper . binding,
-        varMap = insertVar vname (Var (Name vname)) acc.varMap,
-        -- The extracted variable is reached through the same top-level
-        -- parameter as the compound it came out of.
-        dispatch = inheritRootIndex vname operand <$> acc.dispatch
-      }
+  case lookupVar vname acc.varMap of
+    -- The variable is already in scope, so this decomposition is a test,
+    -- not a binding: an aggregate goal's shared inputs are supplied by the
+    -- caller, and a fresh local here would shadow the input and lose the
+    -- agreement check. (HNF only emits a get-arg for a variable it has not
+    -- seen, so in a head or an equation the variable is never in scope.)
+    Just existing ->
+      let check body = [If (BEqual existing (GetArg operandExpr idx)) body []]
+       in pure acc {wrapper = acc.wrapper . check}
+    Nothing ->
+      let binding body = LetVal (Name vname) (GetArg operandExpr idx) : body
+       in pure
+            acc
+              { wrapper = acc.wrapper . binding,
+                varMap = insertVar vname (Var (Name vname)) acc.varMap,
+                -- The extracted variable is reached through the same top-level
+                -- parameter as the compound it came out of.
+                dispatch = inheritRootIndex vname operand <$> acc.dispatch
+              }
 -- Only reached in equation mode; rule occurrences keep routing
 -- 'D.GuardEqual' through 'compileCheckGuards' (see 'compileGuards').
 compileMatchGuard si acc (D.GuardEqual t1 t2) = do

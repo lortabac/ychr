@@ -127,14 +127,20 @@ genConstraint = do
   pure (Constraint name args)
 
 -- | Generate a parsed 'P.Head'.
+--
+-- The aggregates slot is always empty: a parsed head never carries one,
+-- because the parser sees only the terms the source wrote, and it is
+-- the renamer that recognizes an aggregate. Generating aggregates here
+-- would exercise a shape no parse can produce.
 genHead :: Gen P.Head
 genHead =
   Gen.choice
-    [ P.Simplification <$> Gen.list (Range.linear 1 3) genConstraint,
-      P.Propagation <$> Gen.list (Range.linear 1 3) genConstraint,
+    [ P.Simplification <$> Gen.list (Range.linear 1 3) genConstraint <*> pure [],
+      P.Propagation <$> Gen.list (Range.linear 1 3) genConstraint <*> pure [],
       P.Simpagation
         <$> Gen.list (Range.linear 1 2) genConstraint
         <*> Gen.list (Range.linear 1 2) genConstraint
+        <*> pure []
     ]
 
 -- | Generate a parsed 'P.Rule'.

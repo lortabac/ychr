@@ -1,0 +1,9 @@
+% A macro use inside an aggregate goal is a goal position, but macro
+% expansion there is not implemented: the compiler says so instead of
+% reporting an unknown constraint.
+:- module(aggregates_macro_in_goal, [c/1, d/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1.
+
+c(X), count(count(d(X), M), N) ==> c(X).

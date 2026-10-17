@@ -1,0 +1,22 @@
+% The removal step: `\+ depends(T, _)` notices its last match going away.
+% depends(1, 2) and depends(1, 3) block ready(1); removing only one of
+% them is not enough, and the second removal retries the aggregate's goal
+% occurrence and fires.
+:- module(aggregates_removal_step, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint task/1, depends/2, done/1, ready/1, ask/1, setup/1.
+
+task(T), \+ depends(T, _) ==> ready(T).
+
+done(D) \ depends(_, D) <=> true.
+
+ready(T) \ ask(A) <=> A = T.
+
+setup(A) <=>
+    depends(1, 2),
+    depends(1, 3),
+    task(1),
+    done(2),
+    done(3),
+    ask(A).

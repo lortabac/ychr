@@ -1,0 +1,14 @@
+% A goal variable named X_1 must not shadow the slot holding the active
+% conjunct's second argument: it did, and the s(U) index condition then
+% read r's argument instead of U, losing the combination. The compiler
+% reserves the slot names ($X_0, $X_1, ...), which source cannot spell.
+:- module(aggregates_goal_shadow, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, c/2, r/1, s/1, out/1, ask/1, go/1.
+
+p(W), count((c(W, U), r(X_1), s(U)), N) ==> N > 0 | out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> p(1), r(7), s(5), c(1, 5), ask(A).

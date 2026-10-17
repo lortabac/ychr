@@ -262,12 +262,12 @@ Applied to `src/`:
 
 | edit | sites |
 |---|---|
-| `import Prelude hiding (head)` | `Compile.hs`, `Compile/Occurrences.hs`, `Compile/Passive.hs`, `Desugar.hs`, `Desugar/Disjunction.hs`, `Pretty.hs`, `Resolve.hs`, `TypeCheck/Encode.hs` |
+| `import Prelude hiding (head)` | `Compile.hs`, `Compile/Aggregate.hs`, `Compile/Occurrences.hs`, `Compile/Passive.hs`, `ConstraintUse.hs`, `Desugar.hs`, `Desugar/Disjunction.hs`, `Desugar/Inline.hs`, `Pretty.hs`, `Resolve.hs`, `TypeCheck/Encode.hs` |
 | local `guard` renamed to `guardTerm` | `TypeCheck/Encode.hs` |
 | `length` qualified as `List.length` | `Runtime/Monad.hs:176` |
 
-Hiding the list function is safe in all eight modules: none of them calls
-it. `Rename.hs` and `Runtime/Trail.hs` are left alone (see "Breadth"
+Hiding the list function is safe in all eleven modules: none of them
+calls it. `Rename.hs` and `Runtime/Trail.hs` are left alone (see "Breadth"
 above).
 
 Two error shapes the sweep produced that belong to this gap and are not
@@ -350,10 +350,10 @@ workaround is the same.
 ## 3. Record update on a record-dot expression doesn't parse
 
 > **Re-verified.** Still open upstream; the workaround is now applied to
-> `src/`. The doc recorded one site; there are four, all in the
-> desugaring passes. With them hoisted, `mhs -fno-code -isrc
-> YCHR.Internal.Desugar` and `…YCHR.Internal.Desugar.Disjunction` report
-> `No code generated`.
+> `src/`. The doc recorded one site; there are five, all in the
+> desugaring passes (the fifth came with the aggregates work). With them
+> hoisted, `mhs -fno-code -isrc YCHR.Internal.Desugar` and
+> `…YCHR.Internal.Desugar.Disjunction` report `No code generated`.
 
 The expression form `e.fld { f = ... }` (record update applied to the
 result of a record-dot selector chain) fails with a parse error — the
@@ -384,6 +384,7 @@ selector that used to be written inline:
 |---|---|
 | `src/YCHR/Internal/Desugar.hs:966` | `func {D.equations = eqsAnn {node = eqs'}}` |
 | `src/YCHR/Internal/Desugar.hs:1034-1035` | `rule {D.guard = guardAnn {node = guards'}, D.body = bodyAnn {node = body'}}` |
+| `src/YCHR/Internal/Desugar.hs` `liftRule` (aggregates) | `rule.head {node = headNode {D.aggregates = aggs'}}` |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:109` | `rule {D.body = bodyAnn {node = goals}}` |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:157,164-165` | `headAnn {node = ...}`, `bodyAnn {node = ...}` |
 
@@ -407,7 +408,7 @@ Applied to `src/` as a hoist of the selector into a local binding:
 | site | hoist |
 |---|---|
 | `Desugar.hs` `liftFunction` | `eqsAnn = func.equations` |
-| `Desugar.hs` `liftRule` | `guardAnn = rule.guard`, `bodyAnn = rule.body` |
+| `Desugar.hs` `liftRule` | `headAnn = rule.head`, `guardAnn = rule.guard`, `bodyAnn = rule.body` |
 | `Disjunction.hs` `lowerRule` | `bodyAnn = rule.body` |
 | `Disjunction.hs` `liftBranch` | `headAnn = ctx.headAnn`, `bodyAnn = ctx.bodyAnn` |
 

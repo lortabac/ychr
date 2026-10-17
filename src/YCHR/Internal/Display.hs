@@ -364,6 +364,11 @@ renameErrorCode (MacroKindMismatch _ _ _) = ErrorCode 20035
 renameErrorCode (MalformedMacroPrimitive _ _) = ErrorCode 20036
 renameErrorCode (MacroPrimitiveOutsideMacro _ _) = ErrorCode 20037
 renameErrorCode (MacroExpansionTooLarge _ _) = ErrorCode 20038
+renameErrorCode AggregateOnlyHead = ErrorCode 20039
+renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
+renameErrorCode (MalformedAggregateGoal _ _ _) = ErrorCode 20041
+renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
+renameErrorCode (MacroInAggregateGoal _ _) = ErrorCode 20043
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -408,6 +413,9 @@ desugarErrorCode (InlineCycle _) = ErrorCode 30010
 compileErrorCode :: CompileError -> ErrorCode
 compileErrorCode (UnknownConstraintType _) = ErrorCode 40001
 compileErrorCode (UnboundVariable _) = ErrorCode 40002
+compileErrorCode (AggregateLocalEscapes _) = ErrorCode 40003
+compileErrorCode (AggregateNotImplemented _ _) = ErrorCode 40004
+compileErrorCode AggregateResultNotMaybe = ErrorCode 40005
 
 -- | 45xxx — constraint-use check. Its own bucket rather than the type
 -- checker's 6xxxx band: the pass is independent of the CHR checker,
@@ -1246,6 +1254,44 @@ renameErrorMsg (MacroPrimitiveOutsideMacro prim arity) =
     ( "'$compound'/2 and '$atom'/1 are evaluated only where they are"
         ++ " written in a macro body; the two names are reserved"
     )
+renameErrorMsg AggregateOnlyHead =
+  withHint
+    "A rule head consists of aggregates only"
+    ( "an aggregate reads the store, so the rule needs at least one"
+        ++ " regular head constraint to fire on"
+    )
+renameErrorMsg (AggregateOutsideHead name arity) =
+  withHint
+    ("Aggregate '" ++ T.unpack name ++ "/" ++ show arity ++ "' outside a rule head")
+    ( "an aggregate decides whether a rule applies, so it is a head"
+        ++ " conjunct; it cannot appear in a body, a query or a guard"
+    )
+renameErrorMsg (MalformedAggregateGoal name required actual) =
+  withHint
+    ("Invalid aggregate '" ++ T.unpack name ++ "/" ++ show actual ++ "'")
+    ( "expected "
+        ++ show required
+        ++ " arguments, and each goal conjunct"
+        ++ " to be a constraint, a nested aggregate or a '?' guard"
+    )
+renameErrorMsg GuardOutsideAggregateGoal =
+  withHint
+    "'?' guard outside an aggregate goal"
+    ( "a '? Guard' conjunct is recognized inside an aggregate's goal;"
+        ++ " write a rule guard with '|' and a body goal directly"
+    )
+renameErrorMsg (MacroInAggregateGoal macroName macroArity) =
+  withHint
+    ( "Macro '"
+        ++ macroQn macroName
+        ++ "/"
+        ++ show macroArity
+        ++ "' in an aggregate goal is not implemented yet"
+    )
+    ( "the goal of an aggregate is a goal position, but macro expansion"
+        ++ " inside it is still to come; write the core form"
+        ++ " 'aggregate(Agg, Element, Goal, Result)' instead"
+    )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint
     ( "Macro '"
@@ -1576,6 +1622,29 @@ compileErrorMsg (UnboundVariable var) =
     ("Unbound variable '" ++ T.unpack var ++ "'")
     ( "variables used in a guard or body must also appear in the rule"
         ++ " head or the equation's parameters"
+    )
+compileErrorMsg (AggregateLocalEscapes var) =
+  withHint
+    ("Aggregate-local variable '" ++ T.unpack var ++ "' escapes its aggregate")
+    ( "a variable only an aggregate's goal binds is not visible to the"
+        ++ " rule's guard or body; bind it with '=' in the body instead"
+    )
+compileErrorMsg (AggregateNotImplemented name arity) =
+  withHint
+    ( "Aggregate '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' is not implemented yet"
+    )
+    ( "this compiler recognizes the form but does not evaluate it:"
+        ++ " selection aggregates and nested aggregates are still to come"
+    )
+compileErrorMsg AggregateResultNotMaybe =
+  withHint
+    "No 'maybe:just/1' constructor is visible"
+    ( "an aggregator's Final closure must return library(maybe)'s maybe;"
+        ++ " import it with :- use_module(library(maybe))"
     )
 
 instance Display (Diagnostic TypeCheckError) where

@@ -1,0 +1,14 @@
+% A head pattern variable named X_0 must not shadow the slot holding the
+% active constraint's first argument. It did, so the guard read the
+% extracted constant instead of A. The slot names are reserved now.
+:- module(hnf_arg_slot_shadow, [go/1]).
+
+:- chr_type t ---> f(any).
+
+:- chr_constraint c/2, out/1, ask/1, go/1.
+
+c(A, f(X_0)) ==> A > 0 | out(A).
+
+out(A) \ ask(R) <=> R = A.
+
+go(R) <=> c(5, f(0)), ask(R).

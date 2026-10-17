@@ -1,0 +1,27 @@
+% min and max over a goal, including the undefined case: with no match the
+% aggregate is `nothing`, so the rule does not apply.
+:- module(aggregates_minmax, [setup/3, empty/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint known/1, item/2, range/3, none/1, setup/3, empty/1,
+                  ask_lo/2, ask_hi/2.
+
+% min and max of the same goal, in one rule.
+known(X), min(V, item(X, V), M), max(V, item(X, V), H) ==> range(X, M, H).
+
+% A goal with no matches at all: `\+` is defined exactly when the count is
+% zero, so this rule fires only for a known with no items.
+known(X), \+ item(X, _) ==> none(X).
+
+range(X, M, _) \ ask_lo(X, A) <=> A = M.
+range(X, _, H) \ ask_hi(X, B) <=> B = H.
+
+setup(A, B, C) <=>
+    item(1, 5),
+    item(1, 3),
+    item(1, 9),
+    known(1),
+    ask_lo(1, A),
+    ask_hi(1, B),
+    known(2),
+    ask_hi(2, C).

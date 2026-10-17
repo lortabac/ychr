@@ -27,6 +27,52 @@ version 3.
   `deserialize` accepts only version 3; a version-2 dump is rejected at
   the version gate, as version 1 already was.
 
+Aggregates are implemented for the core form and the predefined
+aggregates ([docs/reference/aggregates.md](docs/reference/aggregates.md)).
+A rule with a head aggregate fires at most once per combination of its
+regular heads, and an aggregate may be written kept or removed.
+
+- Goal occurrences: every CHR constraint conjunct of an aggregate goal
+  is an occurrence of its type, tried when a constraint of that type is
+  activated. A rule therefore fires whether its goal's constraints
+  arrive before or after its regular heads.
+- The removal step: a rule that removes a constraint which some
+  aggregate goal observes retries those goal occurrences before its own
+  body runs, so `\+`, `min` and `max` notice a constraint going away.
+  Nothing is added to the runtime's `Kill`.
+- `library(aggregates)` provides the aggregator constructor and the
+  macros `count/2`, `sum/3`, `prod/3`, `min/3`, `max/3`, `avg/3`,
+  `collect/3`, `exists/1` and `\+/1`, plus the prefix operators
+  `?` and `\+`.
+- The aggregate's `Result` is head-matched: a literal, a compound shape
+  or a repeated variable is a test, and a variable the pattern has not
+  bound yet is bound. A failed match makes the rule inapplicable. A `?`
+  guard that cannot be decided makes the aggregate undefined (soft
+  failure), not a query abort.
+- New errors: `AggregateLocalEscapes` (YCHR-40003, a variable only an
+  aggregate's goal binds is read by the guard or body),
+  `AggregateNotImplemented` (YCHR-40004, a selection or nested
+  aggregate), `AggregateResultNotMaybe` (YCHR-40005, the program
+  declares no `maybe:just/1`), and `MacroInAggregateGoal`
+  (YCHR-20043, a macro use inside an aggregate goal).
+- A constraint in an aggregate goal counts as a kept occurrence for
+  `:- constraint_use` (YCHR-45001 applies).
+- **Breaking:** the aggregate functors `aggregate/4`, `argmin/2`,
+  `argmax/2`, `takemin/2` and `takemax/2` are reserved in head position
+  (recognized before macro expansion, regardless of imports), and
+  `?/1` is reserved everywhere: `'?'(G)` outside an aggregate goal is
+  now `GuardOutsideAggregateGoal` (YCHR-20042) instead of an ordinary
+  compound. A program that used those names as constraints or
+  functions needs renaming.
+- **Breaking:** `YCHR.Internal.Compile.Types.Occurrence` has a new
+  `goalOcc` field, and `YCHR.Internal.Rename.RenameError` a new
+  `MacroInAggregateGoal` constructor.
+- Not implemented yet: selection aggregates
+  (`argmin`/`argmax`/`takemin`/`takemax`), nested aggregates,
+  `forall/2`, and the aggregator typing (an aggregate's positions are
+  not type-checked). A rule with an aggregate is exempt from the
+  passive-occurrence optimization.
+
 Goal macros follow the revised macro specification
 ([docs/reference/macros.md](docs/reference/macros.md)), and declaration
 macros (`:- macro_decls`) are implemented.

@@ -1,0 +1,17 @@
+% A fold over the active constraint's own type on the goal-occurrence
+% path. The active bag is stored before the fold, so the fold counts it:
+% the rule fires when the *second* bag arrives, with N = 2.
+:- module(aggregates_goal_self, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint item/1, bag/1, full/1, ask/1, setup/1.
+
+item(X), count(bag(X), N) ==> N > 1 | full(X).
+
+full(X) \ ask(A) <=> A = X.
+
+setup(A) <=>
+    item(1),
+    bag(1),
+    bag(1),
+    ask(A).

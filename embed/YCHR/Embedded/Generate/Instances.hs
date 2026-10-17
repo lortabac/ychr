@@ -53,7 +53,10 @@ import YCHR.Internal.Parsed
     TypeExportDeclBody (..),
   )
 import YCHR.Internal.Types
-  ( BoundSig (..),
+  ( Aggregate (..),
+    AggregateConjunct (..),
+    AggregateKind (..),
+    BoundSig (..),
     Constraint (..),
     ConstraintType (..),
     ConstraintUse (..),
@@ -126,6 +129,12 @@ deriving instance Generic Name
 
 deriving instance Generic Constraint
 
+deriving instance Generic Aggregate
+
+deriving instance Generic AggregateKind
+
+deriving instance Generic AggregateConjunct
+
 deriving instance Generic Term
 
 deriving instance Generic TypeDefinition
@@ -152,6 +161,15 @@ instance ToCode Name where
   toCode = genericToCode
 
 instance ToCode Constraint where
+  toCode = genericToCode
+
+instance ToCode Aggregate where
+  toCode = genericToCode
+
+instance ToCode AggregateKind where
+  toCode = genericToCode
+
+instance ToCode AggregateConjunct where
   toCode = genericToCode
 
 instance ToCode Term where

@@ -158,7 +158,11 @@ liftBranch ctx st branch =
                 { node =
                     D.Head
                       { kept = [],
-                        removed = [HeadConstraint qname (map HeadVar params)]
+                        removed = [HeadConstraint qname (map HeadVar params)],
+                        -- A lifted branch is a plain goal tell: it has
+                        -- no head of its own, so it cannot carry the
+                        -- enclosing rule's aggregates.
+                        aggregates = []
                       }
                 },
             guard = bodyAnn {node = []},

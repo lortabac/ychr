@@ -26,6 +26,11 @@ module YCHR.Internal.Types
     HeadArg (..),
     headArgToTerm,
 
+    -- * Aggregates
+    Aggregate (..),
+    AggregateKind (..),
+    AggregateConjunct (..),
+
     -- * Rules
     RuleId (..),
 
@@ -272,6 +277,65 @@ data HeadConstraint = HeadConstraint
 headArgToTerm :: HeadArg -> Term
 headArgToTerm (HeadVar v) = VarTerm v
 headArgToTerm HeadWildcard = Wildcard
+
+-- | An aggregate head conjunct: @aggregate(Agg, Element, Goal, Result)@
+-- or one of the selection forms. An aggregate summarizes an unbounded
+-- part of the constraint store, so it is matched neither kept nor
+-- removed. See docs/reference/aggregates.md.
+--
+-- The renamer builds one of these per aggregate, after macro expansion
+-- has turned a predefined aggregate such as @sum/3@ into its
+-- @aggregate/4@ core form. The same shape carries through resolution and
+-- desugaring, with the fields' 'Term's turned into typed expressions.
+data Aggregate = Aggregate
+  { -- | Which aggregate this is: the core form, or a selection form.
+    kind :: AggregateKind,
+    -- | An expression evaluating to an @aggregator(Init, Inc, Final)@.
+    -- 'Nothing' for a selection form, which has no working value.
+    agg :: Maybe Term,
+    -- | The expression evaluated once per match of 'goal'. For a
+    -- selection form this is the key the matches are ranked by.
+    element :: Term,
+    -- | The aggregate goal: constraints, nested aggregates, and
+    -- @? Guard@ conjuncts, in source order.
+    goal :: [AggregateConjunct],
+    -- | The pattern the computed result is matched against. Unused by
+    -- the selection forms.
+    result :: Term
+  }
+  deriving (Show, Eq)
+
+-- | The core aggregate form and the four selection forms.
+--
+-- The selection forms are core rather than aggregates over a fold
+-- because their goal's variables stay visible to the rest of the rule
+-- instead of being renamed apart per match.
+data AggregateKind
+  = -- | @aggregate(Agg, Element, Goal, Result)@
+    AggPlain
+  | -- | @argmin(X, Goal)@: only the matches whose @X@ is minimal, and
+    -- the goal's variables are shared with the rest of the rule.
+    AggArgmin
+  | -- | @argmax(X, Goal)@
+    AggArgmax
+  | -- | @takemin(X, Goal)@: as 'AggArgmin', and the selected match's
+    -- constraints are removed when the rule fires.
+    AggTakemin
+  | -- | @takemax(X, Goal)@
+    AggTakemax
+  deriving (Show, Eq)
+
+-- | A conjunct of an aggregate goal.
+data AggregateConjunct
+  = -- | A CHR constraint. A /goal occurrence/ of its type — a rule
+    -- observes the store through it.
+    AggConstraint Constraint
+  | -- | A nested aggregate.
+    AggNested Aggregate
+  | -- | A @? Guard@: an ask-only boolean checked in place, left to
+    -- right, so it can test variables bound by the conjuncts before it.
+    AggGuard Term
+  deriving (Show, Eq)
 
 -- | A CHR type declaration.
 data TypeDefinition = TypeDefinition

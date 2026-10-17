@@ -63,7 +63,14 @@ benchmarkPrograms =
     -- the bound. The other three searches are flat or shallow, so
     -- this is the one that moves when the driver's per-level costs
     -- change.
-    "search_deep"
+    "search_deep",
+    -- Aggregates: the fold over a goal. "aggregates_sum" is the banking
+    -- example (two matches, a guarded rule); "aggregates_many" folds 200
+    -- matches, so the fold loop dominates; "aggregates_no_match" folds an
+    -- empty goal, which is the per-aggregate fixed cost.
+    "aggregates_sum",
+    "aggregates_many",
+    "aggregates_no_match"
   ]
 
 goldenDir :: FilePath

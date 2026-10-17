@@ -462,12 +462,12 @@ termTests =
         bodyOf "c(X) <=> X." >>= (@?= [VarTerm "X"]),
       testCase "wildcard in head" $
         headOf "c(_) <=> true."
-          >>= (@?= Simplification [Constraint (Unqualified "c") [Wildcard]]),
+          >>= (@?= Simplification [Constraint (Unqualified "c") [Wildcard]] []),
       testCase "underscore-prefixed variable in body" $
         bodyOf "c(X) <=> _X." >>= (@?= [VarTerm "_X"]),
       testCase "underscore-prefixed variable in head" $
         headOf "c(_X) <=> true."
-          >>= (@?= Simplification [Constraint (Unqualified "c") [VarTerm "_X"]]),
+          >>= (@?= Simplification [Constraint (Unqualified "c") [VarTerm "_X"]] []),
       testCase "underscore-prefixed variable as list tail" $
         bodyOf "c <=> f([H | _Tail])."
           >>= ( @?=
@@ -543,6 +543,7 @@ negativeIntTests =
           >>= ( @?=
                   Simplification
                     [Constraint (Unqualified "c") [IntTerm (-3), VarTerm "X"]]
+                    []
               ),
       testCase "negative literal in guard" $
         guardOf "r @ c(X) <=> host:'>='(X, -1) | true."
@@ -571,6 +572,7 @@ floatLiteralTests =
           >>= ( @?=
                   Simplification
                     [Constraint (Unqualified "c") [FloatTerm 1.5, VarTerm "X"]]
+                    []
               ),
       testCase "zero float" $
         bodyOf "c <=> f(0.0)."
@@ -683,6 +685,7 @@ ruleTests =
                               VarTerm "X"
                             ]
                         ]
+                        []
                     )
                 )
                 (noAnnP [])
@@ -702,6 +705,7 @@ ruleTests =
                               VarTerm "X"
                             ]
                         ]
+                        []
                     )
                 )
                 (noAnnP [])
@@ -718,6 +722,7 @@ ruleTests =
                         [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
                           Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
                         ]
+                        []
                     )
                 )
                 (noAnnP [])
@@ -733,6 +738,7 @@ ruleTests =
                     ( Simpagation
                         [Constraint (Unqualified "kept") []]
                         [Constraint (Unqualified "removed") []]
+                        []
                     )
                 )
                 (noAnnP [])
@@ -752,6 +758,7 @@ ruleTests =
                               VarTerm "Y"
                             ]
                         ]
+                        []
                     )
                 )
                 (noAnnP [CompoundTerm (Unqualified "g") [VarTerm "X"]])
@@ -768,7 +775,7 @@ ruleTests =
               ),
       testCase "zero-arity constraint in head" $
         headOf "fire <=> true."
-          >>= (@?= Simplification [Constraint (Unqualified "fire") []])
+          >>= (@?= Simplification [Constraint (Unqualified "fire") []] [])
     ]
 
 -- ---------------------------------------------------------------------------
@@ -932,6 +939,7 @@ moduleTests =
                                     (Unqualified "leq")
                                     [VarTerm "X", VarTerm "X"]
                                 ]
+                                []
                             )
                         )
                         (noAnnP [])
@@ -948,6 +956,7 @@ moduleTests =
                                     (Unqualified "leq")
                                     [VarTerm "Y", VarTerm "X"]
                                 ]
+                                []
                             )
                         )
                         (noAnnP [])
@@ -969,6 +978,7 @@ moduleTests =
                                     (Unqualified "leq")
                                     [VarTerm "Y", VarTerm "Z"]
                                 ]
+                                []
                             )
                         )
                         (noAnnP [])
@@ -1030,6 +1040,7 @@ commentTests =
                             (Unqualified "foo")
                             []
                         ]
+                        []
                     )
                 )
                 (noAnnP [])
@@ -1047,6 +1058,7 @@ commentTests =
                             (Unqualified "foo")
                             []
                         ]
+                        []
                     )
                 )
                 (noAnnP [])

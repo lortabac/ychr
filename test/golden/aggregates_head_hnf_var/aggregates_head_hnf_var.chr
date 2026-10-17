@@ -1,0 +1,15 @@
+% A variable a head compound argument introduces through HNF (c(f(X)))
+% is a head variable, not an aggregate-local: using it in the goal is
+% not an escape.
+:- module(aggregates_head_hnf_var, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type t ---> f(any).
+
+:- chr_constraint c/1, d/1, out/1, ask/1, go/1.
+
+c(f(X)), count(d(X), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> d(1), d(2), c(f(1)), ask(A).

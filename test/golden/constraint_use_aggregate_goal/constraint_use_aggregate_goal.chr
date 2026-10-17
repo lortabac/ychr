@@ -1,0 +1,9 @@
+% A constraint in an aggregate goal is a kept occurrence for
+% `:- constraint_use`, so a tell_only constraint may not occur there.
+:- module(constraint_use_aggregate_goal, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, alt/1.
+:- constraint_use tell_only(alt/1).
+
+c(X), count(alt(X), N) ==> c(X).

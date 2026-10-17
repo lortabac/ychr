@@ -1,0 +1,9 @@
+% The element has to be computable from the match: a variable of it that
+% neither the goal nor the shared variables bind is an unbound name.
+:- module(aggregates_element_unbound, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, setup/1.
+
+% Y is neither in the goal nor in the rule head.
+c(X), sum(Y, d(X), S) ==> c(X).

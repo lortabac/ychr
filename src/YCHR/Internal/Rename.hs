@@ -72,6 +72,7 @@ import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -85,6 +86,7 @@ import YCHR.Internal.Rename.Macro
   ( HeadConjunctResult (..),
     PrimitiveError (..),
     PrimitiveOperand,
+    flattenConj,
     goalsToChain,
     headConjunct,
     importListPermitsMacro,
@@ -300,6 +302,29 @@ data RenameError
     -- used as a directive, or a declaration macro in a goal position.
     -- Name, arity, and the kind of the macro found.
     MacroKindMismatch QualifiedName Int MacroKind
+  | -- | A rule head consists of aggregates only. An aggregate reads the
+    -- store, so a rule with no regular head conjunct has no combination
+    -- of heads to fire on. Checked after macro expansion, so a macro
+    -- that expands to nothing but aggregates still reports.
+    AggregateOnlyHead
+  | -- | The aggregate core form or a selection form is used outside a
+    -- rule head: in a body, a query or a guard. Carries the functor's
+    -- name and the arity used.
+    AggregateOutsideHead Text Int
+  | -- | An aggregate's arguments are malformed: the wrong number of
+    -- them, or a goal conjunct that is neither a constraint, a nested
+    -- aggregate nor a @?@ guard. Carries the aggregate's functor name,
+    -- the arity the form requires, and the arity used.
+    MalformedAggregateGoal Text Int Int
+  | -- | A @?\/1@ guard outside an aggregate goal. It is recognized
+    -- structurally inside one, and has no meaning anywhere else.
+    GuardOutsideAggregateGoal
+  | -- | A macro use inside an aggregate goal. The goal is a goal
+    -- position, but 'renameConjunct' does not expand macros, so the
+    -- compiler reports the form it does not implement rather than
+    -- resolving the name as an unknown constraint. Carries the macro's
+    -- qualified name and the arity used.
+    MacroInAggregateGoal QualifiedName Int
   deriving (Eq, Show)
 
 -- | A part of a rule head, for 'MacroEmptyHead'.
@@ -1189,7 +1214,21 @@ renameRule ctx0 r = do
     traverse
       (fmap (orTrue . concat) . traverse (renameBodyGoal ctx r.body.sourceLoc r.body.parsed))
       r.body
+  -- 'h' is the whole head, so its node is the post-expansion head: an
+  -- aggregate-only rule is exactly one whose kept and removed lists are
+  -- both empty.
+  let hd = h.node
+      nHeads = case hd of
+        Simplification cs _ -> length cs
+        Propagation cs _ -> length cs
+        Simpagation ks rs _ -> length ks + length rs
+  checkAggregateOnlyHead ctx r.head.sourceLoc r.head.parsed nHeads (aggregateCount hd)
   pure r {head = h, guard = g, body = b}
+  where
+    aggregateCount hd = case hd of
+      Simplification _ as -> length as
+      Propagation _ as -> length as
+      Simpagation _ _ as -> length as
 
 -- | A rule body or query whose goals all expanded to nothing means
 -- @true@ (see the Zero goals section of the macro reference).
@@ -1220,34 +1259,72 @@ renameEquation ctx0 eq = do
 
 renameHead :: RenameCtx -> SourceLoc -> PExpr -> Head -> Rename Head
 renameHead ctx loc origin h = case h of
-  Simplification cs -> Simplification <$> part WholeHead cs
-  Propagation cs -> Propagation <$> part WholeHead cs
-  Simpagation k r -> Simpagation <$> part KeptPart k <*> part RemovedPart r
+  -- The parsed head carries no aggregates: the parser sees only the
+  -- terms the source wrote, and an aggregate is a macro expansion (or a
+  -- direct use of the reserved functors) that only this pass
+  -- recognizes. The aggregates the parser could not see are therefore
+  -- dropped here and rebuilt by 'renameCon'.
+  Simplification cs _ -> do
+    (ks, aggs) <- part WholeHead cs
+    pure (Simplification ks aggs)
+  Propagation cs _ -> do
+    (ks, aggs) <- part WholeHead cs
+    pure (Propagation ks aggs)
+  Simpagation k r _ -> do
+    (ks, kaggs) <- part KeptPart k
+    (rs, raggs) <- part RemovedPart r
+    pure (Simpagation ks rs (kaggs ++ raggs))
   where
     -- Every part of a head is required by its rule's form. A part that
     -- had conjuncts in the source but none after expansion (and lost
     -- none to an error already reported) is 'MacroEmptyHead': turning
     -- the rule into another kind of rule silently would change its
     -- semantics.
+    --
+    -- A macro in an aggregate's goal expands in place too, so the
+    -- expansion is spliced before this runs and a head part may hold
+    -- aggregates that came out of a macro body.
     part label cs = do
       items <- concat <$> traverse (renameCon ctx loc origin) cs
       let kept = [c | HeadOk c <- items]
+          aggs = [a | HeadAggregate a <- items]
       when (null items && not (null cs)) $
         emitErrorIn ctx (AnnP (MacroEmptyHead label) loc origin)
-      pure kept
+      pure (kept, aggs)
+
+-- | A rule must have at least one regular head conjunct: an aggregate
+-- reads the store and contributes no constraint of its own, so a rule
+-- of aggregates only would have no combination of heads to fire on and
+-- no combination to record in the propagation history.
+--
+-- Checked per rule rather than per head part, after macro expansion, so
+-- it also catches a macro that expanded to aggregates only. A rule with
+-- no head conjuncts at all is not this error: it is the parser's
+-- business, and it cannot carry an aggregate either.
+checkAggregateOnlyHead :: RenameCtx -> SourceLoc -> PExpr -> Int -> Int -> Rename ()
+checkAggregateOnlyHead ctx loc origin nHeads nAggs =
+  when (nAggs > 0 && nHeads == 0) $
+    emitErrorIn ctx (AnnP AggregateOnlyHead loc origin)
 
 -- | One conjunct produced by renaming a head conjunct: a renamed
--- constraint, or a placeholder for one dropped after its error was
--- reported (so an empty part is not reported a second time as
--- 'MacroEmptyHead').
-data HeadItem = HeadOk Constraint | HeadDropped
+-- constraint, a renamed aggregate, or a placeholder for one dropped
+-- after its error was reported (so an empty part is not reported a
+-- second time as 'MacroEmptyHead').
+data HeadItem = HeadOk Constraint | HeadAggregate Aggregate | HeadDropped
 
 -- | Rename one head conjunct. A macro use expands to zero or more
--- constraint conjuncts, spliced into the head at the position of the
--- use ('expandHeadUse'); an ordinary constraint renames to exactly
--- one, as before.
+-- constraint conjuncts (and, inside a macro body, aggregates), spliced
+-- into the head at the position of the use ('expandHeadUse'); an
+-- ordinary constraint renames to exactly one, as before; the aggregate
+-- core form and the selection forms rename to an 'Aggregate'.
 renameCon :: RenameCtx -> SourceLoc -> PExpr -> Constraint -> Rename [HeadItem]
 renameCon ctx loc origin (Constraint cname cargs)
+  | Just k <- aggregateKindOf cname (length cargs) =
+      -- Checked before 'classifyGoalName': a user may define a macro or
+      -- function called @aggregate/4@, but the reserved aggregate
+      -- functors always mean the aggregate form. The call site is the
+      -- same shape, so the two cannot be told apart by name alone.
+      (: []) . HeadAggregate <$> renameAggregate ctx loc origin k cargs
   | isPrimitiveName cname (length cargs) = do
       emitErrorIn
         ctx
@@ -1287,6 +1364,170 @@ kindMismatch :: RenameCtx -> SourceLoc -> PExpr -> Text -> Name -> Int -> Rename
 kindMismatch ctx loc origin providerMod name arity =
   let qn = QualifiedName providerMod (unqualifiedText name)
    in emitErrorIn ctx (AnnP (MacroKindMismatch qn arity DeclMacro) loc origin)
+
+-- | The 'AggregateKind' a head conjunct names, if it names one. Only an
+-- unqualified name matches: a qualified @M:aggregate@ is an ordinary
+-- constraint, so a user module can shadow an aggregate name locally.
+aggregateKindOf :: Name -> Int -> Maybe AggregateKind
+aggregateKindOf (Qualified _ _) _ = Nothing
+aggregateKindOf (Unqualified n) arity = case (n, arity) of
+  ("aggregate", 4) -> Just AggPlain
+  ("argmin", 2) -> Just AggArgmin
+  ("argmax", 2) -> Just AggArgmax
+  ("takemin", 2) -> Just AggTakemin
+  ("takemax", 2) -> Just AggTakemax
+  _ -> Nothing
+
+-- | Rename one aggregate. The arguments are renamed like head or body
+-- terms, except the goal, whose conjuncts are classified structurally
+-- ('?\/1' guards and nested aggregates) and whose constraints are
+-- resolved like head constraints, since the rule observes the store
+-- through them.
+--
+-- A malformed argument list (an aggregate at the wrong arity, or a goal
+-- conjunct that is neither a constraint, a nested aggregate nor a @?@
+-- guard) is reported and the aggregate dropped, so the rule keeps
+-- compiling without it.
+renameAggregate ::
+  RenameCtx -> SourceLoc -> PExpr -> AggregateKind -> [Term] -> Rename Aggregate
+renameAggregate ctx loc origin k cargs = do
+  (mAgg, mElement, goalTerm, mResult) <- argTerms
+  agg' <- traverse (renameTerm ctx loc origin ResolveAll) mAgg
+  -- The element / selection key is a pattern over each match, so it is
+  -- renamed without resolving names: a bare name in it is a user-written
+  -- atom, and a variable of it that the goal does not bind is reported
+  -- later, by the compiler (YCHR-40002).
+  element' <- traverse (renameTerm ctx loc origin NoResolve) mElement
+  result' <- traverse (renameTerm ctx loc origin NoResolve) mResult
+  goal' <-
+    concat
+      <$> traverse
+        (renameConjunct ctx loc origin (aggregateName k) (requiredArity k))
+        (flattenConj goalTerm)
+  pure
+    Aggregate
+      { kind = k,
+        agg = agg',
+        element = fromMaybe (CompoundTerm (Unqualified "") []) element',
+        goal = goal',
+        result = fromMaybe Wildcard result'
+      }
+  where
+    argTerms = case cargs of
+      -- aggregate(Agg, Element, Goal, Result)
+      [a, e, g, r] | k == AggPlain -> pure (Just a, Just e, g, Just r)
+      -- argmin(X, Goal) and friends: X is the selection key, which takes
+      -- the place of the element. The Result is unused.
+      [x, g] | k /= AggPlain -> pure (Nothing, Just x, g, Nothing)
+      _ -> badArity
+
+    badArity = do
+      emitErrorIn
+        ctx
+        ( AnnP
+            (MalformedAggregateGoal (aggregateName k) (requiredArity k) (length cargs))
+            loc
+            origin
+        )
+      pure (Nothing, Nothing, CompoundTerm (Unqualified "") [], Nothing)
+
+-- | How many arguments an aggregate form takes, for diagnostics.
+requiredArity :: AggregateKind -> Int
+requiredArity AggPlain = 4
+requiredArity _ = 2
+
+-- | Rename one conjunct of an aggregate goal. The enclosing aggregate's
+-- functor name and required arity are carried for diagnostics.
+renameConjunct ::
+  RenameCtx ->
+  SourceLoc ->
+  PExpr ->
+  Text ->
+  Int ->
+  Term ->
+  Rename [AggregateConjunct]
+renameConjunct ctx loc origin outerName outerArity t = case t of
+  CompoundTerm n args | isGuardFunctor n (length args) -> do
+    let g = case args of
+          [g0] -> g0
+          -- Unreachable: 'isGuardFunctor' pins the arity at 1. Kept
+          -- total rather than partial to avoid an irrefutable pattern.
+          _ -> CompoundTerm (Unqualified "") []
+    g' <- renameTerm ctx loc origin ResolveAll g
+    pure [AggGuard g']
+  CompoundTerm n args
+    | Just k <- aggregateKindOf n (length args) ->
+        (: []) . AggNested <$> renameAggregate ctx loc origin k args
+    | isPrimitiveName n (length args) -> do
+        emitErrorIn
+          ctx
+          (AnnP (MacroPrimitiveOutsideMacro (unqualifiedText n) (length args)) loc origin)
+        pure []
+    -- A macro use inside an aggregate goal is a goal position like any
+    -- other, but 'renameConjunct' does not expand it. Report that instead
+    -- of resolving the name as a constraint, which would fail as an
+    -- unknown name and hide what the user wrote.
+    | otherwise -> case classifyGoalName ctx n (length args) of
+        IsMacro providerMod -> do
+          emitErrorIn
+            ctx
+            ( AnnP
+                ( MacroInAggregateGoal
+                    (QualifiedName providerMod (unqualifiedText n))
+                    (length args)
+                )
+                loc
+                origin
+            )
+          pure []
+        IsDeclMacro providerMod -> do
+          kindMismatch ctx loc origin providerMod n (length args)
+          pure []
+        AmbiguousGoalName ms -> do
+          let err = AmbiguousName (unqualifiedText n) (length args) ms
+          emitErrorIn ctx (AnnP err loc origin)
+          pure []
+        -- A reserved name passes through 'resolveName' unqualified for the
+        -- forms that use it, which would reach Resolve as an internal
+        -- error; report the unknown constraint here, as 'renameCon' does
+        -- for a head.
+        NotAMacro
+          | Unqualified base <- n,
+            isReserved base,
+            null (visibleProviders ctx base (length args)) -> do
+              traverse_ (renameTerm ctx loc origin NoResolve) args
+              emitErrorIn ctx (AnnP (UnknownName base (length args)) loc origin)
+              pure []
+        NotAMacro -> do
+          renamedName <- resolveName ResolveTop ctx loc origin n (length args)
+          renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) args
+          pure [AggConstraint (Constraint renamedName renamedArgs)]
+  _ -> do
+    -- The offending conjunct is not a constraint, an aggregate or a
+    -- guard. Report it against the enclosing aggregate at the arity it
+    -- was written with, which is the arity the user can see.
+    emitErrorIn
+      ctx
+      (AnnP (MalformedAggregateGoal outerName outerArity outerArity) loc origin)
+    pure []
+
+-- | Whether a name and arity are the @?\/1@ aggregate-goal guard.
+--
+-- Recognition is structural, by name and arity, so both the operator
+-- spelling @? G@ and the quoted functor @'?'(G)@ work, with or without
+-- the operator declared. Only an unqualified name matches, so
+-- @M:'?'(G)@ stays an ordinary constraint.
+isGuardFunctor :: Name -> Int -> Bool
+isGuardFunctor (Unqualified n) arity = n == "?" && arity == 1
+isGuardFunctor (Qualified _ _) _ = False
+
+-- | The reserved functor name of an aggregate kind, for diagnostics.
+aggregateName :: AggregateKind -> Text
+aggregateName AggPlain = "aggregate"
+aggregateName AggArgmin = "argmin"
+aggregateName AggArgmax = "argmax"
+aggregateName AggTakemin = "takemin"
+aggregateName AggTakemax = "takemax"
 
 -- | Expand a macro use found in head position ('expandMacroUse'), and
 -- classify each resulting goal with 'headConjunct': a constraint-shaped
@@ -1479,6 +1720,16 @@ renameBodySeq ctx loc origin t = case t of
 renameBodyGoal :: RenameCtx -> SourceLoc -> PExpr -> Term -> Rename [Term]
 renameBodyGoal ctx loc origin t = case t of
   CompoundTerm name args
+    | Just _ <- aggregateKindOf name (length args) -> do
+        -- An aggregate reads the store to decide whether a rule applies,
+        -- which is a head position. Refusing it here keeps the failure
+        -- from surfacing as "unknown constraint aggregate/4".
+        let err = AggregateOutsideHead (unqualifiedText name) (length args)
+        emitErrorIn ctx (AnnP err loc origin)
+        pure []
+    | isGuardFunctor name (length args) -> do
+        emitErrorIn ctx (AnnP GuardOutsideAggregateGoal loc origin)
+        pure []
     | isPrimitiveName name (length args) -> (: []) <$> renameTerm ctx loc origin ResolveTop t
   CompoundTerm (Unqualified "tell") args
     | null args || length args > maxTellArity -> do
@@ -1560,6 +1811,13 @@ searchModuleName = "search"
 
 renameTerm :: RenameCtx -> SourceLoc -> PExpr -> ResolveMode -> Term -> Rename Term
 renameTerm ctx loc origin mode t = case t of
+  -- @?/1@ is recognized structurally inside an aggregate goal, and has
+  -- no meaning anywhere else: a rule guard uses @|@, a body uses @;@.
+  -- Reported even in pattern and quoted positions, where the functor
+  -- would otherwise survive as an undeclared-constructor warning.
+  CompoundTerm name args | isGuardFunctor name (length args) -> do
+    emitErrorIn ctx (AnnP GuardOutsideAggregateGoal loc origin)
+    pure t
   -- A construction primitive is evaluated only where it is written in a
   -- macro body, during expansion; one that is still here, in any
   -- position (@quote\/1@ and patterns included), was not.

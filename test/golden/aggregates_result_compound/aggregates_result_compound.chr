@@ -1,0 +1,12 @@
+% A compound in the result pattern is matched (and its variables bound)
+% against the computed list.
+:- module(aggregates_result_compound, [go/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, out/2, ask/2, go/2.
+
+c(_), collect(Y, d(Y), [H|T]) ==> out(H, T).
+
+out(H, T) \ ask(A, B) <=> A = H, B = T.
+
+go(A, B) <=> d(1), d(2), c(1), ask(A, B).

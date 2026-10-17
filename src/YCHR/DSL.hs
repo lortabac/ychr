@@ -363,11 +363,11 @@ class IsRuleHead h where
   toRuleHead :: h -> Head
 
 instance IsRuleHead [Term] where
-  toRuleHead = Simplification . map termToConstraint
+  toRuleHead = \cs -> Simplification (map termToConstraint cs) []
 
 instance IsRuleHead Simpa where
   toRuleHead s =
-    Simpagation (map termToConstraint s.kept) (map termToConstraint s.removed)
+    Simpagation (map termToConstraint s.kept) (map termToConstraint s.removed) []
 
 -- | Head-constraint occurrence from a compound or atom 'Term'; anything
 -- else throws (see the module header).
@@ -393,7 +393,7 @@ h <=> body =
 lhs ==> rhs =
   Rule
     Nothing
-    (noAnnP (Propagation (map termToConstraint lhs)))
+    (noAnnP (Propagation (map termToConstraint lhs) []))
     (noAnnP [])
     (noAnnP rhs)
     []

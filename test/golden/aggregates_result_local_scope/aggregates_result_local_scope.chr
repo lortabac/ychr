@@ -1,0 +1,12 @@
+% A goal variable that the result pattern binds is an out-cell, so the
+% rule's body may read it: it is not an escaping goal local.
+:- module(aggregates_result_local_scope, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint k/1, e/2, out/1, ask/1, go/1.
+
+k(_), count(e(X, _), X) ==> out(X).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> e(1, 1), e(2, 2), k(0), ask(A).

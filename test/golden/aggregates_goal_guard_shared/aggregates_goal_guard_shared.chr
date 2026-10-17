@@ -1,0 +1,13 @@
+% A ? guard over a shared head variable: the location phase cannot see K
+% (it runs outside the head loops), so it skips the guard; the fire step
+% computes the fold, which sees K.
+:- module(aggregates_goal_guard_shared, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, out/1, ask/1, go/1.
+
+c(K), count((d(X), ? X > K), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> d(5), c(1), ask(A).

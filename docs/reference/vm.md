@@ -250,11 +250,22 @@ The roles of the generated procedures:
 
 | Procedure | Purpose | Parameter kinds |
 |-----------|---------|-----------------|
-| `tell_c(X_0, ..., X_n)` | Creates a constraint suspension and calls `activate_c`. Storage happens later (Late Storage): inside a fired occurrence that keeps the constraint, or at the end of `activate_c`. | all values |
+| `tell_c($X_0, ..., $X_n)` | Creates a constraint suspension and calls `activate_c`. Storage happens later (Late Storage): inside a fired occurrence that keeps the constraint, or at the end of `activate_c`. | all values |
 | `activate_c(susp)` | Extracts arguments from the suspension, tries each occurrence in order. If the constraint survives all occurrences, stores it and returns `false`. | id |
-| `occurrence_c_j(id, X_0, ..., X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. | id, then values |
+| `occurrence_c_j(id, $X_0, ..., $X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. | id, then values |
 | `reactivate_dispatch(susp)` | Checks the suspension's constraint type and calls the appropriate `activate_c`. | id |
 | `func_f(arg_0, ..., arg_n)` | Evaluates a user-defined function. | all values |
+
+The active constraint's argument slots are `$X_0, …, $X_n`. The leading
+`$` matters: the runtime environment is flat per invocation, so a slot
+named `X_0` would be shadowed by a source variable of that name, and a
+guard or a later loop would read the wrong value. `$` cannot appear in a
+source variable, so the slot is unspellable. The partner loop variables
+(`pArg_k_j`, `pId_k`), the active id (`active`) and the other generated
+locals are lowercase-initial for the same reason, and a source variable
+must start with an uppercase letter or `_`. The names HNF invents for
+decomposed arguments (`$hnf_N`) and the aggregate procedure's own locals
+(`$aggregate_*`, `$removal`) use the same `$` convention.
 
 There is no dispatcher procedure for a dynamic call: `'$call'` lowers to
 `apply-closure`, which resolves the callee through the `callables` table
@@ -769,10 +780,22 @@ Whether the value is a compound term with the given functor and arity.
 - **`bequal`** (ask semantics, Prolog `==`): structural equality, no
   mutation; two distinct unbound variables give `false`. Used in
   guards, which must not leave half-done bindings on failure. Guard
-  residuals are mutation-free as a whole — no `bunify`, `store`,
-  `kill` or `add-history` is reachable from one — which is also what
-  makes `bsoft-guard` sound: a guard abandoned part-way leaves
-  nothing to undo.
+  residuals are mutation-free as a whole — no `store`, `kill` or
+  `add-history` is reachable from one, and no `bunify` acts on a value
+  the store can reach — which is also what makes `bsoft-guard` sound: a
+  guard abandoned part-way leaves nothing to undo.
+
+A guard *can* reach a `bunify` through a called procedure: an aggregate
+fold ([aggregates.md](aggregates.md#implementation-notes)) binds the
+out-cells its caller created, and binds each goal variable it reads as
+a plain local under that variable's source name. Those bindings are
+real, but they are untrailed locals unreachable from the store: the
+out-cell is fresh per candidate and is the *left* operand of the
+`bunify`, so unification returns an operand with no observers, and a
+goal local is just a slot. The bindings therefore enqueue no
+reactivation and leave nothing behind when the guard fails. "Mutation
+free" in this section means the store, the propagation history, the
+reactivation queue and the call stack — not local variables.
 - **`bid-equal`** compares two constraint identifiers for equality.
 
 ### Constraint observation
@@ -856,10 +879,12 @@ occurrence once the missing variable is bound.
 Catching is sound under two conditions, both maintained by the
 compiler rather than checked by the instruction:
 
-- guard residuals do not tell (see `bequal`): no `bunify`, `store`,
-  `kill` or `add-history` is reachable from one, so there is no
-  partial store, history or reactivation-queue state to roll back. A
-  `host-call` in the guard is outside this guarantee, but its effects
+- guard residuals do not tell (see `bequal`): no `store`, `kill` or
+  `add-history` is reachable from one, and no `bunify` acts on a value
+  the store can reach, so there is no partial store, history or
+  reactivation-queue state to roll back. An aggregate fold called from
+  a guard binds only its own fresh out-cells, which nothing observes.
+  A `host-call` in the guard is outside this guarantee, but its effects
   survive a guard that evaluates to `false` just as they survive an
   abandoned one, so the catch changes nothing there;
 - the runtime call stack is restored at the `bsoft-guard` boundary, so
@@ -944,10 +969,12 @@ prelude is always compiled in, so the real dump also has one
 `evaluables` entry, one `callables` entry, one `func_*` procedure and
 one export per prelude function — elided here (`; ...`). It also
 declares the prelude's `tell_list/N`, so the real type-name vector,
-`tellables` and `tellables-unqualified` tables carry entries beyond the
-ones shown; only the user's constraint and procedure are spelled out
-below. The constraint is `mymodule:leq/2`, so procedure names follow
-`<prefix>_mymodule__leq2`:
+`rule-names`, `tellables` and `tellables-unqualified` tables carry
+entries beyond the ones shown. The prelude also contributes rules, and
+they come first in the program-wide rule list, so the rule below has id
+(and history key) `20` rather than `0`; only the user's constraint and
+procedure are spelled out below. The constraint is `mymodule:leq/2`, so
+procedure names follow `<prefix>_mymodule__leq2`:
 
 ```scheme
 (vm-program
@@ -955,7 +982,9 @@ below. The constraint is `mymodule:leq/2`, so procedure names follow
   (program 1
     (type-names (qualified "mymodule" "leq"))
     1
-    (rule-names "reflexivity")
+    (rule-names
+      ; ... the prelude's tell_list/N rule names elided
+      "reflexivity")
     (evaluables
       ("prelude__+" 2 "func_prelude____u2b__2")
       ; ... one entry per prelude function elided
@@ -969,30 +998,33 @@ below. The constraint is `mymodule:leq/2`, so procedure names follow
     (tellables-unqualified)
     (inert-types)
 
-    ; tell_mymodule__leq2(X_0, X_1): create, store, activate
-    (procedure "tell_mymodule__leq2" ("X_0" "X_1") (tell 0)
-      (let-id "active" (create-constraint 0 (var "X_0") (var "X_1")))
-      (store (id-var "active"))
+    ; tell_mymodule__leq2($X_0, $X_1): create, then activate.
+    ; Storage is Late Storage: activate stores the constraint at the end,
+    ; and a fired occurrence that keeps it stores it before its body.
+    (procedure "tell_mymodule__leq2" ("$X_0" "$X_1") (tell 0)
+      (let-id "active" (create-constraint 0 (var "$X_0") (var "$X_1")))
       (expr-stmt (call-expr "activate_mymodule__leq2"
                    (arg-id (id-var "active")))))
 
-    ; activate_mymodule__leq2(active): extract args, try each occurrence
+    ; activate_mymodule__leq2(active): extract args, try each occurrence,
+    ; store what survives them.
     (procedure "activate_mymodule__leq2" ("active") (activate 0)
-      (let-val "X_0" (field-arg (id-var "active") 0))
-      (let-val "X_1" (field-arg (id-var "active") 1))
+      (let-val "$X_0" (field-arg (id-var "active") 0))
+      (let-val "$X_1" (field-arg (id-var "active") 1))
       (let-val "dropped" (call-expr "occurrence_mymodule__leq2_1"
                            (arg-id (id-var "active"))
-                           (arg-val (var "X_0"))
-                           (arg-val (var "X_1"))))
+                           (arg-val (var "$X_0"))
+                           (arg-val (var "$X_1"))))
       (if (bfrom-val (var "dropped")) ((return true)) ())
+      (store (id-var "active"))
       (return false))
 
     ; occurrence_mymodule__leq2_1: after HNF,
     ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
-    (procedure "occurrence_mymodule__leq2_1" ("active" "X_0" "X_1")
-               (occurrence 0 1 0 "reflexivity")
+    (procedure "occurrence_mymodule__leq2_1" ("active" "$X_0" "$X_1")
+               (occurrence 0 1 20 "reflexivity")
       (push-frame "rule reflexivity" 4 15 "mymodule.chr" "leq(X, X)")
-      (if (bequal (var "X_0") (var "X_1"))
+      (if (bequal (var "$X_0") (var "$X_1"))
         ((kill (id-var "active"))
          (return true))
         ())

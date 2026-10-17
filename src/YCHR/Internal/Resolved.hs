@@ -24,6 +24,9 @@ module YCHR.Internal.Resolved
     Program (..),
     Rule (..),
     Head (..),
+    headAggregates,
+    Aggregate (..),
+    AggregateConjunct (..),
     FunctionDef (..),
     FunctionEquation (..),
     Expr (..),
@@ -45,7 +48,8 @@ import Data.Text (Text)
 import YCHR.Internal.Loc (Ann)
 import YCHR.Internal.Parsed (AnnP)
 import YCHR.Internal.Types
-  ( BoundSig,
+  ( AggregateKind,
+    BoundSig,
     ConstraintKey,
     ConstraintUse,
     HeadArg,
@@ -110,10 +114,44 @@ data Rule = Rule
 -- 'QualifiedConstraint' so the constraint-name qualification invariant
 -- is reflected in the type. Desugaring flattens the three kinds into
 -- the uniform @kept \/ removed@ shape of 'YCHR.Internal.Desugared.Head'.
+--
+-- Each kind carries the rule's aggregates alongside its head
+-- constraints. Aggregates are neither kept nor removed, so they do not
+-- affect which kind the rule is.
 data Head
-  = Simplification [QualifiedConstraint]
-  | Propagation [QualifiedConstraint]
-  | Simpagation [QualifiedConstraint] [QualifiedConstraint]
+  = Simplification [QualifiedConstraint] [Aggregate]
+  | Propagation [QualifiedConstraint] [Aggregate]
+  | Simpagation [QualifiedConstraint] [QualifiedConstraint] [Aggregate]
+  deriving (Show, Eq)
+
+-- | A resolved rule's aggregates, whichever kind it is.
+headAggregates :: Head -> [Aggregate]
+headAggregates (Simplification _ aggs) = aggs
+headAggregates (Propagation _ aggs) = aggs
+headAggregates (Simpagation _ _ aggs) = aggs
+
+-- | A resolved aggregate. Same shape as
+-- 'YCHR.Internal.Types.Aggregate', with the goal's constraint names
+-- qualified like head constraints and the four expressions typed.
+data Aggregate = Aggregate
+  { kind :: AggregateKind,
+    agg :: Maybe Expr,
+    element :: Expr,
+    goal :: [AggregateConjunct],
+    -- | The result pattern, kept as a 'Term' like a head argument: it
+    -- is matched, not evaluated.
+    result :: Term
+  }
+  deriving (Show, Eq)
+
+-- | A resolved aggregate-goal conjunct.
+data AggregateConjunct
+  = -- | A CHR constraint, a /goal occurrence/ of its type.
+    AggConstraint QualifiedConstraint
+  | -- | A nested aggregate.
+    AggNested Aggregate
+  | -- | A @? Guard@, an ask-only boolean over the goal's variables.
+    AggGuard Expr
   deriving (Show, Eq)
 
 -- | A function definition with its equations grouped together.

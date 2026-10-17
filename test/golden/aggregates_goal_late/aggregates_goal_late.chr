@@ -1,0 +1,19 @@
+% The banking example, with the client told *before* its accounts. The
+% ordinary occurrence of client/1 fires while the store is empty and its
+% guard fails, so only an account's goal occurrence can reach the rule.
+:- module(aggregates_goal_late, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type kind ---> saving ; checking.
+
+:- chr_constraint client/1, account/4, platinum/1, ask/1, setup/1.
+
+client(C), sum(B, account(_, C, _, B), S) ==> S >= 25000 | platinum(C).
+
+platinum(C) \ ask(A) <=> A = C.
+
+setup(A) <=>
+    client(7),
+    account(1, 7, saving, 10000),
+    account(2, 7, checking, 20000),
+    ask(A).

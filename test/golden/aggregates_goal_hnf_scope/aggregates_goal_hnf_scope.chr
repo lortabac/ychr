@@ -1,0 +1,14 @@
+% A variable bound by a goal conjunct's HNF guard (Z, extracted from
+% e(Y, f(Z))) is in scope for the element expression.
+:- module(aggregates_goal_hnf_scope, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type t ---> f(any).
+
+:- chr_constraint c/1, e/2, out/1, ask/1, go/1.
+
+c(Y), sum(Z, e(Y, f(Z)), S) ==> out(S).
+
+out(S) \ ask(A) <=> A = S.
+
+go(A) <=> e(1, f(7)), c(1), ask(A).

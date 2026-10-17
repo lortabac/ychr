@@ -1,0 +1,9 @@
+% X is local to the aggregate's goal: it is not in any regular head, so the
+% rule's body may not read it. A use would silently read whatever the last
+% match left in it.
+:- module(aggregates_local_escapes, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, seen/2, setup/1.
+
+c(Y), count(d(X), N) ==> seen(X, N).

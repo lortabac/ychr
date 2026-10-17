@@ -29,7 +29,10 @@ tests =
       distinctnessElisionTests,
       boolPatternTests,
       softGuardWrapTests,
-      callablesDispatchTests
+      callablesDispatchTests,
+      aggregateFoldTests,
+      aggregateResultTests,
+      aggregateGoalTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -107,6 +110,17 @@ findProcedure prog wanted =
         [p] -> Just p
         _ -> Nothing
 
+-- | Find the generated fold procedure for the aggregate at source index
+-- @aggIdx@ of the @userIdx@-th rule of a program with @userRules@ user
+-- rules. The absolute rule index — and therefore the procedure name —
+-- depends on how many rules the stdlib contributes, so it is counted from
+-- the end rather than pinned.
+findAggregateProcedure :: CompiledProgram -> Int -> Int -> Int -> Maybe VM.Procedure
+findAggregateProcedure prog userRules userIdx aggIdx =
+  findProcedure prog (T.pack ("aggregate_" <> show ruleIdx <> "_" <> show aggIdx))
+  where
+    ruleIdx = length prog.program.ruleNames - userRules + userIdx
+
 -- | Assert that the named occurrence procedure contains a Foreach with
 -- the given index conditions.
 assertForeachConditions ::
@@ -153,7 +167,7 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_2"
-          [(VM.ArgIndex 1, VM.Var "X_0"), (VM.ArgIndex 0, VM.Var "X_1")],
+          [(VM.ArgIndex 1, VM.Var "$X_0"), (VM.ArgIndex 0, VM.Var "$X_1")],
       testCase "leq idempotence: active occurrence's partner args constrained" $ do
         -- idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
         -- Occurrence 5 (the kept head) is elided as subsumed by the
@@ -162,7 +176,7 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_4"
-          [(VM.ArgIndex 0, VM.Var "X_0"), (VM.ArgIndex 1, VM.Var "X_1")],
+          [(VM.ArgIndex 0, VM.Var "$X_0"), (VM.ArgIndex 1, VM.Var "$X_1")],
       testCase "leq transitivity: single shared variable lifted" $ do
         -- transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
         -- Each occurrence has exactly one HNF equality on the partner.
@@ -170,11 +184,11 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_6"
-          [(VM.ArgIndex 1, VM.Var "X_0")]
+          [(VM.ArgIndex 1, VM.Var "$X_0")]
         assertForeachConditions
           prog
           "occurrence_order__leq2_7"
-          [(VM.ArgIndex 0, VM.Var "X_1")],
+          [(VM.ArgIndex 0, VM.Var "$X_1")],
       testCase "leq reflexivity: no partners, equality stays residual" $ do
         -- reflexivity @ leq(X, X) <=> true.
         -- The Foreach is absent (single-headed rule), and the residual
@@ -184,15 +198,15 @@ indexConditionPushdownTests =
           Nothing -> assertFailure "occurrence_order__leq2_1 not found"
           Just p -> do
             findForeach p.body @?= Nothing
-            -- The residual check should contain Equal X_0 X_1.
+            -- The residual check should contain Equal $X_0 $X_1.
             let hasSelfEqual = any containsSelfEqual p.body
-            assertBool "expected residual Equal X_0 X_1" hasSelfEqual
+            assertBool "expected residual Equal $X_0 $X_1" hasSelfEqual
     ]
   where
     containsSelfEqual (VM.If e _ _) = exprHasSelfEqual e
     containsSelfEqual _ = False
-    exprHasSelfEqual (VM.BEqual (VM.Var "X_0") (VM.Var "X_1")) = True
-    exprHasSelfEqual (VM.BEqual (VM.Var "X_1") (VM.Var "X_0")) = True
+    exprHasSelfEqual (VM.BEqual (VM.Var "$X_0") (VM.Var "$X_1")) = True
+    exprHasSelfEqual (VM.BEqual (VM.Var "$X_1") (VM.Var "$X_0")) = True
     exprHasSelfEqual (VM.BAnd a b) = exprHasSelfEqual a || exprHasSelfEqual b
     exprHasSelfEqual _ = False
 
@@ -564,3 +578,486 @@ lambdaSource =
   \:- function mk/2.\n\
   \mk(X, Y) -> fun(A, B, C) -> X + Y + A + B + C end.\n\
   \r @ go(X, Y, R) <=> F is mk(X, Y), R is '$call'(F, 1, 2, 3).\n"
+
+--------------------------------------------------------------------------------
+-- Aggregate folds
+--------------------------------------------------------------------------------
+
+-- | A rule whose head carries one aggregate over a goal.
+aggregateSource :: Text
+aggregateSource =
+  ":- module(aggm, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count(d(X), N) ==> n(X, N).\n"
+
+-- | A simplification rule with an aggregate: it removes its only regular
+-- head, and still has to fire at most once per combination of regular heads.
+aggregateHistorySource :: Text
+aggregateHistorySource =
+  ":- module(aggh, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count(d(X), N) <=> n(X, N).\n"
+
+-- | A rule shaped like a symmetric simplification, plus an aggregate. Both
+-- of its occurrences have to be tried: the later one would be marked passive
+-- without the aggregate exemption.
+aggregatePassiveSource :: Text
+aggregatePassiveSource =
+  ":- module(aggp, [c/2, d/1]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/2, d/1.\n\
+  \\n\
+  \passive @ c(X, Y) \\ c(Y, X), count(d(X), N) <=> true.\n"
+
+-- | Every statement of a body, flattened through nested bodies.
+nestedStmts :: [VM.Stmt] -> [VM.Stmt]
+nestedStmts = concatMap go
+  where
+    go s =
+      s : case s of
+        VM.If _ t e -> nestedStmts t ++ nestedStmts e
+        VM.Foreach _ _ _ _ b -> nestedStmts b
+        VM.DrainReactivationQueue _ b -> nestedStmts b
+        _ -> []
+
+-- | Every @BUnify@ reachable from the boolean positions of a body, with
+-- the boolean connectives flattened.
+bunifyExprs :: [VM.Stmt] -> [VM.BoolExpr]
+bunifyExprs = concatMap go
+  where
+    go s = case s of
+      VM.If b t e -> flatten b ++ bunifyExprs t ++ bunifyExprs e
+      VM.BoolExprStmt b -> flatten b
+      VM.Foreach _ _ _ _ b -> bunifyExprs b
+      VM.DrainReactivationQueue _ b -> bunifyExprs b
+      _ -> []
+    flatten b = case b of
+      VM.BUnify {} -> [b]
+      VM.BAnd a c -> flatten a ++ flatten c
+      VM.BOr a c -> flatten a ++ flatten c
+      VM.BNot a -> flatten a
+      VM.BSoftGuard a -> flatten a
+      VM.BEvalDeep a -> flatten a
+      _ -> []
+
+-- | Whether a statement mutates the runtime's bookkeeping. An aggregate
+-- procedure is called from a guard, so none of these may be reachable
+-- from one.
+mutatingStmt :: VM.Stmt -> Bool
+mutatingStmt s = case s of
+  VM.Store _ -> True
+  VM.Kill _ -> True
+  VM.AddHistory {} -> True
+  VM.TellTerm {} -> True
+  VM.DrainReactivationQueue {} -> True
+  _ -> False
+
+-- | Whether a boolean expression is a history guard.
+isNotInHistory :: VM.BoolExpr -> Bool
+isNotInHistory (VM.BNotInHistory _ _) = True
+isNotInHistory _ = False
+
+-- | Whether a statement writes the firing history.
+isAddHistory :: VM.Stmt -> Bool
+isAddHistory (VM.AddHistory _ _) = True
+isAddHistory _ = False
+
+aggregateFoldTests :: TestTree
+aggregateFoldTests =
+  testGroup
+    "aggregate folds"
+    [ testCase "a rule with an aggregate gets one fold procedure" $ do
+        prog <- compileOrFail [("m.chr", aggregateSource)]
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no fold procedure for aggregate_0"
+          Just p -> do
+            assertBool "expected parameters" (not (null p.params))
+            -- The procedure is tagged as a function with a reserved name,
+            -- so the tracer renders it without pretending it is a user
+            -- function and no export clause picks it up.
+            case p.procKind of
+              VM.PKFunction qn _ -> qn.moduleName @?= "$aggregate"
+              other -> assertFailure ("unexpected proc kind: " ++ show other),
+      testCase "the fold procedure only reads, apart from binding its out-cells" $ do
+        prog <- compileOrFail [("m.chr", aggregateSource)]
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no fold procedure for aggregate_0"
+          Just p -> do
+            assertBool
+              ( "a fold procedure reachable from a guard must not"
+                  ++ " store, kill, add history or tell"
+              )
+              (not (any mutatingStmt (nestedStmts p.body)))
+            -- Every binding it does make targets an out-cell, and the
+            -- out-cell is the left operand: unification binds its left
+            -- operand and returns that operand's observers, so this is
+            -- what keeps the binding from enqueuing reactivation.
+            assertBool
+              "expected at least one out-cell binding"
+              (not (null (bunifyExprs p.body)))
+            mapM_
+              ( \b -> case b of
+                  VM.BUnify (VM.Var n) _ ->
+                    assertBool
+                      ("bunify binds something that is not an out-cell: " ++ show n.unName)
+                      ("aggregate_out_" `T.isPrefixOf` n.unName)
+                  other -> assertFailure ("unexpected bunify shape: " ++ show other)
+              )
+              (bunifyExprs p.body),
+      testCase "the guard calls the fold inside a soft guard" $ do
+        prog <- compileOrFail [("m.chr", aggregateSource)]
+        case findProcedure prog "occurrence_aggm__c1_1" of
+          Nothing -> assertFailure "no c/1 occurrence procedure"
+          Just p ->
+            assertBool
+              "expected the aggregate call to be soft-guarded"
+              (any isSoftGuard (ifConditions p.body))
+            where
+              isSoftGuard (VM.BSoftGuard _) = True
+              isSoftGuard _ = False,
+      testCase "a rule that removes a regular head keeps a firing history" $ do
+        prog <- compileOrFail [("m.chr", aggregateHistorySource)]
+        case findProcedure prog "occurrence_aggh__c1_1" of
+          Nothing -> assertFailure "no c/1 occurrence procedure"
+          Just p -> do
+            assertBool
+              "expected a history guard"
+              (any isNotInHistory (ifConditions p.body))
+            assertBool
+              "expected a history write"
+              (any isAddHistory (nestedStmts p.body)),
+      testCase "an aggregate rule's occurrences are never passive" $ do
+        prog <- compileOrFail [("m.chr", aggregatePassiveSource)]
+        mapM_
+          ( \name -> case findProcedure prog (T.pack name) of
+              Just _ -> pure ()
+              Nothing -> assertFailure ("missing occurrence procedure " ++ name)
+          )
+          ["occurrence_aggp__c2_1", "occurrence_aggp__c2_2"],
+      testCase "a program without aggregates emits no fold procedure" $ do
+        prog <- compileOrFail [("m.chr", leqSource)]
+        let folded =
+              [ p.name.unName
+              | p <- prog.program.procedures,
+                "aggregate_" `T.isPrefixOf` p.name.unName
+              ]
+        folded @?= []
+    ]
+
+--------------------------------------------------------------------------------
+-- Aggregate goal occurrences
+--------------------------------------------------------------------------------
+
+-- | A rule whose aggregate goal constraint is told after its head: the
+-- ordinary occurrence cannot fire (its guard fails while the store is
+-- empty), so only a goal occurrence of @d\/1@ can reach the rule.
+lateGoalSource :: Text
+lateGoalSource =
+  ":- module(aggl, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count(d(X), N) ==> N > 0 | n(X, N).\n"
+
+-- | A goal with two conjuncts of the same type: the fold needs a
+-- distinctness test between their suspensions.
+distinctGoalSource :: Text
+distinctGoalSource =
+  ":- module(aggd, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count((d(_), d(_)), N) ==> N > 0 | n(X, N).\n"
+
+-- | A goal whose second conjunct must be looped outside the regular-head
+-- loops: @e\/1@ is not a head, so a goal occurrence of @d\/1@ nests the
+-- @e\/1@ loop outside the @c\/1@ partner loop.
+nestGoalSource :: Text
+nestGoalSource =
+  ":- module(aggn, [c/1, d/1, e/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, e/1, n/2.\n\
+  \\n\
+  \c(X), count((d(X), e(X)), N) ==> N > 0 | n(X, N).\n"
+
+-- | A rule whose aggregate goal carries a @?@ guard: the fold evaluates
+-- it, the location phase must not (it can only over-approximate there).
+guardGoalSource :: Text
+guardGoalSource =
+  ":- module(aggq, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count((d(Y), ? Y > 1), N) ==> n(X, N).\n"
+
+-- | A rule with no aggregate of its own that removes a constraint which
+-- another rule's aggregate goal observes: its firing has to run the
+-- removal step.
+removalStepSource :: Text
+removalStepSource =
+  ":- module(aggr, [task/1, depends/2, done/1, ready/1]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint task/1, depends/2, done/1, ready/1.\n\
+  \\n\
+  \task(T), \\+ depends(T, _) ==> ready(T).\n\
+  \done(D) \\ depends(_, D) <=> true.\n"
+
+-- | The argument lists of every call to the named procedure, in
+-- traversal order.
+callsTo :: Text -> [VM.Stmt] -> [[VM.CallArg]]
+callsTo name = concatMap stmt
+  where
+    want = VM.Name name
+    stmt s = case s of
+      VM.LetVal _ e -> val e
+      VM.AssignVal _ e -> val e
+      VM.ExprStmt e -> val e
+      VM.Return e -> val e
+      VM.If _ t f -> callsTo name t ++ callsTo name f
+      VM.Foreach _ _ _ _ b -> callsTo name b
+      VM.DrainReactivationQueue _ b -> callsTo name b
+      _ -> []
+    val e = case e of
+      VM.CallExpr n args -> [args | n == want] ++ concatMap arg args
+      VM.HostCall _ es -> concatMap val es
+      VM.EvalDeep x -> val x
+      VM.EvalIs x -> val x
+      VM.ApplyClosure f es -> val f ++ concatMap val es
+      VM.MakeTerm _ es -> concatMap val es
+      VM.GetArg x _ -> val x
+      VM.FieldArg i _ -> idVal i
+      VM.FieldType i -> idVal i
+      _ -> []
+    arg a = case a of
+      VM.AVal v -> val v
+      VM.AId i -> idVal i
+    idVal i = case i of
+      VM.IdVar _ -> []
+      VM.CreateConstraint _ es -> concatMap val es
+
+-- | The labels of every 'Foreach' reachable from a statement list, in
+-- pre-order: outer loops before inner ones.
+foreachLabels :: [VM.Stmt] -> [VM.Label]
+foreachLabels = concatMap go
+  where
+    go (VM.Foreach l _ _ _ b) = l : foreachLabels b
+    go (VM.If _ t f) = foreachLabels t ++ foreachLabels f
+    go (VM.DrainReactivationQueue _ b) = foreachLabels b
+    go _ = []
+
+isSuspDistinct :: VM.BoolExpr -> Bool
+isSuspDistinct (VM.BIdEqual (VM.IdVar a) (VM.IdVar b)) =
+  any ("$aggregate_susp_" `T.isPrefixOf`) [a.unName, b.unName]
+isSuspDistinct _ = False
+
+isStoreStmt :: VM.Stmt -> Bool
+isStoreStmt (VM.Store _) = True
+isStoreStmt _ = False
+
+-- | Whether a boolean expression evaluates a goal's @?@ guard expression
+-- (a host call under @bfrom-val . eval-deep@), as opposed to an aggregate
+-- procedure call.
+isGuardEval :: VM.BoolExpr -> Bool
+isGuardEval (VM.BFromVal (VM.EvalDeep (VM.HostCall _ _))) = True
+isGuardEval _ = False
+
+-- | Whether every 'Store' reachable from a statement list sits under an
+-- @If@ whose condition tests liveness. A goal occurrence is called by the
+-- removal step with a dead constraint, so none of its stores may run
+-- unguarded.
+storesAliveGuarded :: [VM.Stmt] -> Bool
+storesAliveGuarded = go False
+  where
+    go alive = all (one alive)
+    one alive s = case s of
+      VM.Store _ -> alive
+      VM.If e t f ->
+        let guarded = alive || any isAlive (flatten e)
+         in go guarded t && go guarded f
+      VM.Foreach _ _ _ _ b -> go alive b
+      VM.DrainReactivationQueue _ b -> go alive b
+      _ -> True
+    flatten e =
+      e : case e of
+        VM.BNot a -> flatten a
+        VM.BAnd a b -> flatten a ++ flatten b
+        VM.BOr a b -> flatten a ++ flatten b
+        VM.BEvalDeep a -> flatten a
+        VM.BSoftGuard a -> flatten a
+        _ -> []
+    isAlive (VM.BAlive _) = True
+    isAlive _ = False
+
+aggregateGoalTests :: TestTree
+aggregateGoalTests =
+  testGroup
+    "aggregate goal occurrences"
+    [ testCase "a goal occurrence takes the removal-step flag, an ordinary one does not" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "occurrence_aggl__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p -> length p.params @?= 3
+        case findProcedure prog "occurrence_aggl__c1_1" of
+          Nothing -> assertFailure "no c/1 ordinary occurrence procedure"
+          Just p -> length p.params @?= 2,
+      testCase "activate calls the goal occurrence with the flag false" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "activate_aggl__d1" of
+          Nothing -> assertFailure "no d/1 activate procedure"
+          Just p ->
+            callsTo "occurrence_aggl__d1_1" p.body
+              @?= [ [ VM.AId (VM.IdVar "active"),
+                      VM.AVal (VM.Var (VM.Name "$X_0")),
+                      VM.AVal (VM.Lit (VM.BoolLit False))
+                    ]
+                  ],
+      testCase "a goal occurrence's loops sit outside the head loops" $ do
+        prog <- compileOrFail [("m.chr", nestGoalSource)]
+        case findProcedure prog "occurrence_aggn__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p ->
+            -- The active conjunct is d/1 at goal position 0, so the only
+            -- loop is e/1 at goal position 1, outside the c/1 head loop.
+            foreachLabels p.body
+              @?= [VM.Label "aggregate_loop_0_1", VM.Label "L1"]
+        -- The e/1 occurrence's active conjunct is at goal position 1 and
+        -- its HNF guard compares a variable of the earlier d/1 conjunct
+        -- with a fresh name, so the d/1 loop has to run first.
+        case findProcedure prog "occurrence_aggn__e1_1" of
+          Nothing -> assertFailure "no e/1 goal occurrence procedure"
+          Just p ->
+            foreachLabels p.body
+              @?= [VM.Label "aggregate_loop_0_0", VM.Label "L1"],
+      testCase "two same-type conjuncts in one goal must match distinct suspensions" $ do
+        prog <- compileOrFail [("m.chr", distinctGoalSource)]
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no fold procedure"
+          Just p -> do
+            foreachLabels p.body
+              @?= [VM.Label "aggregate_loop_0_0", VM.Label "aggregate_loop_0_1"]
+            assertBool
+              "expected a suspension distinctness test"
+              (any isSuspDistinct (ifConditions p.body)),
+      testCase "a goal occurrence stores its active constraint only while alive" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "occurrence_aggl__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p -> do
+            assertBool
+              "expected a store in the goal occurrence"
+              (any isStoreStmt (nestedStmts p.body))
+            assertBool
+              "expected every store under a liveness test"
+              (storesAliveGuarded p.body),
+      testCase "a rule removing a goal-observed constraint runs the removal step" $ do
+        prog <- compileOrFail [("m.chr", removalStepSource)]
+        case findProcedure prog "occurrence_aggr__done1_1" of
+          Nothing -> assertFailure "no done/1 occurrence procedure"
+          Just p ->
+            callsTo "occurrence_aggr__depends2_1" p.body
+              @?= [ [ VM.AId (VM.IdVar "pId_0"),
+                      VM.AVal (VM.Var (VM.Name "pArg_0_0")),
+                      VM.AVal (VM.Var (VM.Name "pArg_0_1")),
+                      VM.AVal (VM.Lit (VM.BoolLit True))
+                    ]
+                  ],
+      testCase "the location phase drops ? guards; the fold keeps them" $ do
+        prog <- compileOrFail [("m.chr", guardGoalSource)]
+        case findProcedure prog "occurrence_aggq__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p ->
+            assertBool
+              "the location phase must not evaluate the guard"
+              (not (any isGuardEval (ifConditions p.body)))
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no fold procedure"
+          Just p ->
+            assertBool
+              "the fold must evaluate the guard"
+              (any isGuardEval (ifConditions p.body)),
+      testCase "a rule that removes nothing has no removal step" $ do
+        prog <- compileOrFail [("m.chr", lateGoalSource)]
+        case findProcedure prog "occurrence_aggl__c1_1" of
+          Nothing -> assertFailure "no c/1 ordinary occurrence procedure"
+          Just p -> callsTo "occurrence_aggl__d1_1" p.body @?= []
+    ]
+
+--------------------------------------------------------------------------------
+-- Aggregate result patterns
+--------------------------------------------------------------------------------
+
+-- | A result pattern with a compound and a literal, plus one repeated
+-- variable: the tests it induces must be emitted.
+resultPatternSource :: Text
+resultPatternSource =
+  ":- module(aggrp, [c/1, d/1, out/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, out/2.\n\
+  \\n\
+  \c(X), collect(Y, d(Y), [H, 2]) ==> out(H, X).\n\
+  \c(X), collect(Y, d(Y), [A, A]) ==> out(A, X).\n"
+
+-- | A shared variable inside a compound goal argument: the fold must test
+-- the extracted value against the shared input instead of rebinding it.
+compoundGoalSource :: Text
+compoundGoalSource =
+  ":- module(aggc, [c/1, e/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_type t ---> f(any).\n\
+  \:- chr_constraint c/1, e/1, n/2.\n\
+  \\n\
+  \c(K), count(e(f(K)), N) ==> n(K, N).\n"
+
+aggregateResultTests :: TestTree
+aggregateResultTests =
+  testGroup
+    "aggregate result patterns"
+    [ testCase "a literal test in the result pattern is emitted" $ do
+        prog <- compileOrFail [("m.chr", resultPatternSource)]
+        case findAggregateProcedure prog 2 0 0 of
+          Nothing -> assertFailure "no fold procedure"
+          Just p ->
+            assertBool
+              "expected the literal 2 to be tested against the payload"
+              (any isTwoTest (ifConditions p.body)),
+      testCase "a repeated result variable is bound once and tested" $ do
+        prog <- compileOrFail [("m.chr", resultPatternSource)]
+        case findAggregateProcedure prog 2 1 0 of
+          Nothing -> assertFailure "no second fold procedure"
+          Just p -> do
+            length (bunifyExprs p.body) @?= 1
+            assertBool
+              "expected a test between the two payload paths"
+              (any isPayloadTest (ifConditions p.body)),
+      testCase "a shared variable in a compound goal argument is a test" $ do
+        prog <- compileOrFail [("m.chr", compoundGoalSource)]
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no fold procedure"
+          Just p -> do
+            assertBool
+              "expected the extracted value to be tested against the shared input"
+              (any isSharedFieldTest (ifConditions p.body))
+            assertBool
+              "the shared input K must not be rebound in the fold"
+              (not (any isVLet (nestedStmts p.body)))
+    ]
+  where
+    isTwoTest (VM.BEqual (VM.Lit (VM.IntLit 2)) _) = True
+    isTwoTest (VM.BEqual _ (VM.Lit (VM.IntLit 2))) = True
+    isTwoTest _ = False
+    isPayloadTest (VM.BEqual a b) = isPayloadPath a && isPayloadPath b
+    isPayloadTest _ = False
+    isPayloadPath (VM.Var n) = n.unName == "$aggregate_payload"
+    isPayloadPath (VM.GetArg e _) = isPayloadPath e
+    isPayloadPath _ = False
+    isSharedFieldTest (VM.BEqual (VM.Var n) (VM.GetArg _ _)) =
+      n.unName == "aggregate_shared_0"
+    isSharedFieldTest (VM.BEqual (VM.GetArg _ _) (VM.Var n)) =
+      n.unName == "aggregate_shared_0"
+    isSharedFieldTest _ = False
+    isVLet (VM.LetVal (VM.Name "K") _) = True
+    isVLet _ = False

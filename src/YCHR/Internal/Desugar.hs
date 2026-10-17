@@ -137,8 +137,13 @@ data DesugarError
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
 -- transformation (see 'normalizeHead').
+--
+-- The leading @$@ keeps the name out of reach of source code: a source
+-- variable is @[A-Z_][A-Za-z0-9_]*@, so it can never spell @$hnf_0@. A
+-- bare @_hnf_0@ would be a legal source variable name and would shadow the
+-- slot HNF created for a decomposed argument.
 hnfPrefix :: Text
-hnfPrefix = "_hnf_"
+hnfPrefix = "$hnf_"
 
 -- | Prefix for fresh variables introduced when rewriting a non-variable
 -- @T is E@ form into @R is E, R = T@ (see 'desugarBodyGoal').
@@ -257,8 +262,9 @@ extractSymbolTable prog =
    in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
 
 -- | Helper to find every constraint instance in a desugared rule,
--- returning its qualified name and arity. Head and body tells are both
--- included, since both contribute to the constraint-symbol table.
+-- returning its qualified name and arity. Head constraints, body tells
+-- and aggregate goals are all included, since all contribute to the
+-- constraint-symbol table.
 getRuleConstraints :: D.Rule -> [(QualifiedName, Int)]
 getRuleConstraints r =
   let AnnP {node = rHead} = r.head
@@ -266,19 +272,33 @@ getRuleConstraints r =
       headPair hc = (hc.name, length hc.args)
    in map headPair rHead.kept
         ++ map headPair rHead.removed
+        ++ concatMap aggPairs rHead.aggregates
         ++ [(qn, length args) | D.BodyTell qn args <- rBody]
+  where
+    aggPairs a = concatMap conjunctPair a.goal
+    conjunctPair (D.AggConstraint hc _) = [(hc.name, length hc.args)]
+    conjunctPair (D.AggNested a) = aggPairs a
+    conjunctPair (D.AggGuard _) = []
 
 -- | Desugar one resolved rule: classify its body goals, desugar its user
--- guards, flatten the head kind, and run HNF on the head. HNF-emitted
--- guards are prepended to the user guards so they run first.
+-- guards, flatten the head kind, and run HNF on the head and on every
+-- aggregate goal. HNF-emitted head guards are prepended to the user guards
+-- so they run first; an aggregate goal's guards stay with the conjunct that
+-- emitted them.
 desugarRule :: R.Rule -> Writer [Diagnostic DesugarError] D.Rule
 desugarRule r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
+      headLoc = r.head.sourceLoc
+      headOrigin = r.head.parsed
   ruleBody <-
     desugarBodyGoals r.moduleName ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc r.guard.parsed) r.guard.node
-  let (rawKept, rawRemoved) = flattenHeadKind r.head.node
-      (guards, normalizedHead) = normalizeHead rawKept rawRemoved
+  let (rawKept, rawRemoved, rawAggs) = flattenHeadKind r.head.node
+      initState = HnfState 0 Set.empty Seq.empty
+      (st1, kept', removed') = normalizeHeadConstraints initState rawKept rawRemoved
+  (st2, aggs) <- desugarAggregates st1 headLoc headOrigin rawAggs
+  let guards = toList st2.guards
+      normalizedHead = D.Head kept' removed' aggs
   pure
     D.Rule
       { name = fmap (.node) r.name,
@@ -287,17 +307,94 @@ desugarRule r = do
         body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
--- | Map the three resolved head kinds to a uniform @(kept, removed)@
--- pair of raw 'QualifiedConstraint' lists. Propagation rules keep every
--- constraint; simplification rules remove every constraint; simpagation
--- rules carry both lists explicitly. The result is fed to
--- 'normalizeHead', which produces the 'D.Head' with HNF-narrowed
--- 'HeadConstraint' arguments.
-flattenHeadKind :: R.Head -> ([QualifiedConstraint], [QualifiedConstraint])
+-- | Desugar the rule's aggregates, threading the rule's HNF state through
+-- each of them so that the fresh-name counter stays shared with the head.
+desugarAggregates ::
+  HnfState ->
+  P.SourceLoc ->
+  PExpr ->
+  [R.Aggregate] ->
+  Writer [Diagnostic DesugarError] (HnfState, [D.Aggregate])
+desugarAggregates st0 loc origin = go st0 []
+  where
+    go st acc [] = pure (st, reverse acc)
+    go st acc (a : rest) = do
+      (st', a') <- desugarAggregate st loc origin a
+      go st' (a' : acc) rest
+
+-- | Desugar one resolved aggregate. Its expressions are already typed
+-- (resolution did that); the guards are classified here, so a non-boolean
+-- @?@ conjunct fails at compile time like any other guard, and the goal's
+-- constraints are normalized here, so the guards HNF emits for them stay
+-- with them.
+--
+-- The goal starts from an empty @seen@ set even though the counter is
+-- shared with the head: a goal's variables are bound by its own loop nest,
+-- and which of them are inputs is decided on the occurrence side from the
+-- variable map, not here. Reusing the head's set would make a shared
+-- variable's first occurrence in the goal look like a duplicate and emit a
+-- redundant equality against a fresh name, and a sibling aggregate's local
+-- variable would leak into this one's guards. A shared variable reached
+-- through a compound argument is recognized the same way: HNF emits a
+-- get-arg for it, and the fold's variable map already binds it, so the
+-- extraction becomes a test rather than a rebinding.
+desugarAggregate ::
+  HnfState ->
+  P.SourceLoc ->
+  PExpr ->
+  R.Aggregate ->
+  Writer [Diagnostic DesugarError] (HnfState, D.Aggregate)
+desugarAggregate st0 loc origin a = do
+  (st1, goal') <- desugarConjuncts (st0 {seen = Set.empty}) loc origin a.goal
+  pure
+    ( st1,
+      D.Aggregate
+        { D.kind = a.kind,
+          D.agg = a.agg,
+          D.element = a.element,
+          D.goal = goal',
+          D.result = a.result
+        }
+    )
+
+-- | Desugar one aggregate's goal conjuncts, left to right, threading the
+-- HNF state so that a variable repeated across two conjuncts of the same
+-- goal is matched by an equality guard.
+desugarConjuncts ::
+  HnfState ->
+  P.SourceLoc ->
+  PExpr ->
+  [R.AggregateConjunct] ->
+  Writer [Diagnostic DesugarError] (HnfState, [D.AggregateConjunct])
+desugarConjuncts st0 loc origin = go st0 []
+  where
+    go st acc [] = pure (st, reverse acc)
+    go st acc (c : rest) = case c of
+      R.AggConstraint qc -> do
+        let (st', hc, own) = normalizeGoalConstraint st qc
+        go st' (D.AggConstraint hc own : acc) rest
+      R.AggNested a -> do
+        (st', a') <- desugarAggregate st loc origin a
+        go st' (D.AggNested a' : acc) rest
+      R.AggGuard g -> do
+        g' <- desugarGuard loc origin g
+        go st (D.AggGuard g' : acc) rest
+
+-- | Map the three resolved head kinds to a uniform @(kept, removed,
+-- aggregates)@ triple. Propagation rules keep every constraint;
+-- simplification rules remove every constraint; simpagation rules carry
+-- both lists explicitly. The constraint lists are fed to
+-- 'normalizeHead'.
+flattenHeadKind ::
+  R.Head ->
+  ( [QualifiedConstraint],
+    [QualifiedConstraint],
+    [R.Aggregate]
+  )
 flattenHeadKind h = case h of
-  R.Simplification rs -> ([], rs)
-  R.Propagation ks -> (ks, [])
-  R.Simpagation ks rs -> (ks, rs)
+  R.Simplification rs aggs -> ([], rs, aggs)
+  R.Propagation ks aggs -> (ks, [], aggs)
+  R.Simpagation ks rs aggs -> (ks, rs, aggs)
 
 -- ---------------------------------------------------------------------------
 -- Head Normal Form (HNF)
@@ -326,12 +423,37 @@ data HnfState = HnfState
 -- processed before removed so that variables first appearing in kept
 -- constraints become the canonical binding (see the note at the bottom
 -- of this module).
-normalizeHead :: [QualifiedConstraint] -> [QualifiedConstraint] -> ([D.Guard], D.Head)
-normalizeHead kept removed =
-  let initState = HnfState 0 Set.empty Seq.empty
-      (st1, kept') = mapAccumL normalizeConstraint initState kept
+--
+-- The state that comes back carries the head's guards, its fresh-name
+-- counter, and the variables it has seen. 'desugarAggregates' continues
+-- from it, so a fresh name is unique across the whole rule.
+normalizeHeadConstraints ::
+  HnfState ->
+  [QualifiedConstraint] ->
+  [QualifiedConstraint] ->
+  (HnfState, [HeadConstraint], [HeadConstraint])
+normalizeHeadConstraints initState kept removed =
+  let (st1, kept') = mapAccumL normalizeConstraint initState kept
       (st2, removed') = mapAccumL normalizeConstraint st1 removed
-   in (toList st2.guards, D.Head kept' removed')
+   in (st2, kept', removed')
+
+-- | Normalize one constraint conjunct of an aggregate goal, returning the
+-- updated state, the normalized constraint, and that conjunct's own guards
+-- in emission order.
+--
+-- The guards are taken back out of the shared accumulator, so they stay
+-- with the conjunct they came from: they are evaluated inside the loop that
+-- matches that conjunct, not in the rule's guard beside the head's own HNF
+-- guards.
+normalizeGoalConstraint ::
+  HnfState ->
+  QualifiedConstraint ->
+  (HnfState, HeadConstraint, [D.Guard])
+normalizeGoalConstraint st qc =
+  let saved = st.guards
+      (st', hc) = normalizeConstraint (st {guards = Seq.empty}) qc
+      own = toList st'.guards
+   in (st' {guards = saved}, hc, own)
 
 -- | Normalize the arguments of one head constraint, narrowing them
 -- from raw 'Term's to 'HeadArg's.
@@ -1072,9 +1194,13 @@ guardVars = Set.unions . map gVars
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body).
+--
+-- The aggregates are lifted last, so a rule without aggregates keeps the
+-- traversal order — and so the @__lambda_N@ numbering — it had before.
 liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
 liftRule st rule =
-  let headNode = rule.head.node
+  let headAnn = rule.head
+      headNode = headAnn.node
       guardAnn = rule.guard
       bodyAnn = rule.body
       scope =
@@ -1086,12 +1212,98 @@ liftRule st rule =
         mapAccumL (liftGuard modName scope) st guardAnn.node
       (st'', body') =
         mapAccumL (liftBodyGoal modName scope) st' bodyAnn.node
-   in ( st'',
+      (st''', aggs') =
+        mapAccumL (liftAggregate modName scope) st'' headNode.aggregates
+   in ( st''',
         rule
-          { D.guard = guardAnn {node = guards'},
+          { D.head = headAnn {node = headNode {D.aggregates = aggs'}},
+            D.guard = guardAnn {node = guards'},
             D.body = bodyAnn {node = body'}
           }
       )
+
+-- | Lift lambdas in one aggregate. Its three expression positions see
+-- different scopes:
+--
+--   * @agg@ is evaluated once, before the fold's loops, so a lambda in it
+--     may capture only what the rule's own scope holds. A capture of one of
+--     the aggregate's goal variables is not in that scope, so the name is
+--     left out of the closure and compiling the lifted body reports it as
+--     unbound — the right diagnostic for a value the closure cannot have.
+--
+--   * @element@ and the goal's @?@ guards are evaluated inside those loops,
+--     so a lambda in them may capture the goal's own variables: the closure
+--     is built there, and the lifter turns each capture into a leading
+--     parameter.
+liftAggregate ::
+  Text ->
+  Set.Set Text ->
+  LiftState ->
+  D.Aggregate ->
+  (LiftState, D.Aggregate)
+liftAggregate modName outerScope st a =
+  let innerScope = outerScope `Set.union` aggregateGoalVars a
+      (st1, agg') = liftMaybeExpr modName outerScope st a.agg
+      (st2, element') = liftExpr modName innerScope st1 a.element
+      (st3, goal') =
+        mapAccumL (liftConjunct modName innerScope) st2 a.goal
+   in ( st3,
+        a
+          { D.agg = agg',
+            D.element = element',
+            D.goal = goal'
+          }
+      )
+
+-- | Lift lambdas in one aggregate-goal conjunct: the conjunct's own HNF
+-- guards, a @?@ guard's expression, or a nested aggregate, which shares the
+-- enclosing goal's scope.
+liftConjunct ::
+  Text ->
+  Set.Set Text ->
+  LiftState ->
+  D.AggregateConjunct ->
+  (LiftState, D.AggregateConjunct)
+liftConjunct modName scope st c = case c of
+  D.AggConstraint hc guards ->
+    let (st', guards') = mapAccumL (liftGuard modName scope) st guards
+     in (st', D.AggConstraint hc guards')
+  D.AggNested a ->
+    let (st', a') = liftAggregate modName scope st a
+     in (st', D.AggNested a')
+  D.AggGuard g ->
+    let (st', g') = liftGuard modName scope st g
+     in (st', D.AggGuard g')
+
+-- | 'liftExpr' over an optional expression: an aggregate's @agg@, which is
+-- 'Nothing' for a selection form.
+liftMaybeExpr ::
+  Text ->
+  Set.Set Text ->
+  LiftState ->
+  Maybe R.Expr ->
+  (LiftState, Maybe R.Expr)
+liftMaybeExpr modName scope st mexpr = case mexpr of
+  Nothing -> (st, Nothing)
+  Just expr ->
+    let (st', expr') = liftExpr modName scope st expr
+     in (st', Just expr')
+
+-- | Variables an aggregate's goal makes available inside its loops: the
+-- arguments of its constraint conjuncts, the fresh variables their HNF
+-- guards introduce, the variables a @?@ guard mentions, and — for a nested
+-- aggregate — the variables its result pattern is matched against.
+--
+-- The aggregate's own @result@ is deliberately absent: it is matched after
+-- the fold, outside the loops an element or a goal guard is evaluated in.
+aggregateGoalVars :: D.Aggregate -> Set.Set Text
+aggregateGoalVars a = Set.unions (map conjunctVars a.goal)
+  where
+    conjunctVars (D.AggConstraint hc guards) =
+      Set.unions (map headArgVars hc.args) `Set.union` guardVars guards
+    conjunctVars (D.AggGuard g) = guardVars [g]
+    conjunctVars (D.AggNested n) =
+      aggregateGoalVars n `Set.union` exprVars (headTermToExpr n.result)
 
 -- | Post-desugaring pass: lift all lambda expressions into top-level
 -- functions. Returns any diagnostics produced while classifying lambda
@@ -1132,7 +1344,7 @@ Notes
 Why HNF processes 'kept' constraints before 'removed' ones: variables
 that appear for the first time in a kept constraint become the canonical
 binding for that name. A variable that then recurs in a removed
-constraint is renamed to a fresh @_hnf_N@ and equated to the canonical
+constraint is renamed to a fresh @$hnf_N@ and equated to the canonical
 one via a 'D.GuardEqual'. Reversing the order would work just as well
 mathematically but would mean the canonical binding "moves" whenever a
 rule is rewritten from simpagation to simplification/propagation, which
@@ -1140,7 +1352,7 @@ the paper's scheme avoids.
 
 Why there are three different fresh-variable prefixes:
 
-  * @_hnf_N@   — HNF-introduced variables for duplicated or non-variable
+  * @$hnf_N@   — HNF-introduced variables for duplicated or non-variable
                 head arguments ('normalizeHead', 'decomposeCompound').
   * @__is_N@   — fresh LHS variables for the non-variable @is@ form
                 (@T is E@ becomes @R is E, R = T@). Double-underscore so
@@ -1177,7 +1389,7 @@ compiled program.
 Why 'liftEquation's scope includes 'guardVars': HNF may decompose a
 compound pattern like @[X|Xs]@ into a 'D.GuardGetArg' that binds @X@ and
 @Xs@. Those names are not visible from @eq.params@ (which only
-contains the top-level @_hnf_N@), but they are valid references from
+contains the top-level @$hnf_N@), but they are valid references from
 the RHS — including from inside a lambda. The lambda-lifter therefore
 has to see them too, otherwise the lambda would be lifted without
 capturing them and the reference would dangle at runtime. Test:

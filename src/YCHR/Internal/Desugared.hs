@@ -34,6 +34,10 @@ module YCHR.Internal.Desugared
     BodyGoal (..),
     FunStmt (..),
 
+    -- * Aggregates
+    Aggregate (..),
+    AggregateConjunct (..),
+
     -- * Expressions
     Expr (..),
 
@@ -46,6 +50,7 @@ module YCHR.Internal.Desugared
     TypeExpr (..),
     TypeDefinition (..),
     BoundSig (..),
+    AggregateKind (..),
   )
 where
 
@@ -54,7 +59,9 @@ import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Internal.Parsed (AnnP)
 import YCHR.Internal.Resolved (Expr (..))
-import YCHR.Internal.Types
+-- The desugared 'Aggregate' and 'AggregateConjunct' below replace the
+-- surface ones in "YCHR.Internal.Types"; 'AggregateKind' is shared.
+import YCHR.Internal.Types hiding (Aggregate (..), AggregateConjunct (..))
 
 -- | A whole desugared program, ready for symbol-table extraction and
 -- compilation.
@@ -85,12 +92,55 @@ data Rule = Rule
   }
   deriving (Show)
 
--- | A rule head split into the constraints kept after firing and the
--- constraints removed by it.
+-- | A rule head split into the constraints kept after firing, the
+-- constraints removed by it, and its aggregates.
+--
+-- An aggregate is neither kept nor removed: it reads the store, and the
+-- constraints of its goal stay there (except for a @takemin@/@takemax@,
+-- which removes the selected match). Keeping the three lists separate
+-- means every walker that only cares about head occurrences still sees
+-- exactly what it saw before aggregates existed.
 data Head = Head
   { kept :: [HeadConstraint],
-    removed :: [HeadConstraint]
+    removed :: [HeadConstraint],
+    -- | The rule's aggregates, in source order. Empty for a program
+    -- without aggregates.
+    aggregates :: [Aggregate]
   }
+  deriving (Show, Eq)
+
+-- | A desugared aggregate: the same shape as
+-- 'YCHR.Internal.Types.Aggregate', with the expressions the compiler
+-- needs instead of their surface 'Term' spellings.
+--
+-- 'agg' is 'Nothing' for a selection form, which has no aggregator; for
+-- a selection form 'element' is the selection key and 'result' is
+-- unused.
+data Aggregate = Aggregate
+  { kind :: AggregateKind,
+    agg :: Maybe Expr,
+    element :: Expr,
+    goal :: [AggregateConjunct],
+    -- | The result pattern, kept as a 'Term' like a head argument: it
+    -- is matched, not evaluated.
+    result :: Term
+  }
+  deriving (Show, Eq)
+
+-- | A desugared aggregate-goal conjunct.
+data AggregateConjunct
+  = -- | A CHR constraint, a /goal occurrence/ of its type, in head normal
+    -- form: its arguments are variables or wildcards, and the guards HNF
+    -- emitted for it — one per compound or duplicated argument it had —
+    -- are carried alongside. Those guards are evaluated in place, inside
+    -- the loop that matches this conjunct, so they filter matches before
+    -- the conjuncts after it are searched and never join the rule's
+    -- guard.
+    AggConstraint HeadConstraint [Guard]
+  | -- | A nested aggregate.
+    AggNested Aggregate
+  | -- | A @? Guard@, checked in place left to right.
+    AggGuard Guard
   deriving (Show, Eq)
 
 -- | Guards over the typed 'Expr' AST. 'GuardMatch' and 'GuardGetArg'

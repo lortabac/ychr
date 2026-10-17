@@ -399,6 +399,7 @@ library
                     , YCHR.Internal.ConstraintUse
                     , YCHR.Internal.Compile
                     , YCHR.Internal.Loc
+                    , YCHR.Internal.Compile.Aggregate
                     , YCHR.Internal.Compile.Pipeline
                     , YCHR.Internal.Compile.Names
                     , YCHR.Internal.Compile.Occurrences
