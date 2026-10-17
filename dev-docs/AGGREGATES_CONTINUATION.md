@@ -65,8 +65,10 @@ Golden cases: `aggregates_count`, `aggregates_sum`,
 `aggregates_goal_shadow`, `aggregates_goal_compound_shared`,
 `aggregates_goal_hnf_scope`, `aggregates_goal_hnf_later`,
 `aggregates_goal_guard_shared`, `aggregates_goal_guard_soft`,
+`aggregates_goal_guard_removal`, `aggregates_goal_guard_bind`,
 `aggregates_head_hnf_var`, `aggregates_result_literal`,
 `aggregates_result_compound`, `aggregates_result_repeat`,
+`aggregates_result_local_scope`,
 `aggregates_removal_step`, `aggregates_many`, `aggregates_no_match`,
 `hnf_arg_slot_shadow`, `hnf_source_var_named_hnf`, plus the negative
 `aggregates_element_unbound`, `aggregates_local_escapes`,
@@ -194,11 +196,13 @@ rules. The two hook points are:
   (`pArg_k_j`, `active`, `dropped`), and a source variable is
   `[A-Z_][A-Za-z0-9_]*`, so none of them collides. A future pass that
   introduces a local must keep that property.
-- **The location phase is an over-approximation.** It runs outside the
-  regular-head loops, so a goal's shared input is not bound yet at a
-  `?` guard's goal-order position; the location phase skips such a
-  guard and soft-guards the rest. The fold still evaluates every guard,
-  so the fire step is what enforces them.
+- **The location phase is a strict over-approximation: it drops every
+  `?` guard.** It runs outside the regular-head loops, so a shared input
+  is not bound yet, and a matched argument may still be unbound; either
+  way a guard there can be inconclusive, and skipping the candidate
+  would lose a firing that the fold, run later against a different store
+  (a removal can make it defined), would have found. The fold evaluates
+  every guard, so the fire step is what enforces them.
 - **The result pattern's tests must run before its bindings.** The
   aggregate procedure does this in `maybeValueStmts`; a literal,
   compound or repeated variable is a test, and only a not-yet-bound
@@ -233,9 +237,9 @@ make test            # the python suites, including test-scheme
 make bench
 ```
 
-Baseline at the phase G tip: `cabal test` 2330/2330, `test-style` 134,
+Baseline at the phase G tip: `cabal test` 2334/2334, `test-style` 134,
 `test-repl` 76, `test-typecheck` 21, `test-docs` 44, `test-stlc` 11,
-`test-scheme` 818 passed / 3 skipped, `test-scheme-runtime` clean.
+`test-scheme` 821 passed / 3 skipped, `test-scheme-runtime` clean.
 `make bench` runs; the aggregate cases measure ~32 µs
 (`aggregates_sum`), ~943 µs (`aggregates_many`) and ~14 µs
 (`aggregates_no_match`).

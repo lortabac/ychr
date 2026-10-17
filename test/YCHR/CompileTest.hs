@@ -773,6 +773,16 @@ nestGoalSource =
   \\n\
   \c(X), count((d(X), e(X)), N) ==> N > 0 | n(X, N).\n"
 
+-- | A rule whose aggregate goal carries a @?@ guard: the fold evaluates
+-- it, the location phase must not (it can only over-approximate there).
+guardGoalSource :: Text
+guardGoalSource =
+  ":- module(aggq, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count((d(Y), ? Y > 1), N) ==> n(X, N).\n"
+
 -- | A rule with no aggregate of its own that removes a constraint which
 -- another rule's aggregate goal observes: its firing has to run the
 -- removal step.
@@ -836,6 +846,13 @@ isSuspDistinct _ = False
 isStoreStmt :: VM.Stmt -> Bool
 isStoreStmt (VM.Store _) = True
 isStoreStmt _ = False
+
+-- | Whether a boolean expression evaluates a goal's @?@ guard expression
+-- (a host call under @bfrom-val . eval-deep@), as opposed to an aggregate
+-- procedure call.
+isGuardEval :: VM.BoolExpr -> Bool
+isGuardEval (VM.BFromVal (VM.EvalDeep (VM.HostCall _ _))) = True
+isGuardEval _ = False
 
 -- | Whether every 'Store' reachable from a statement list sits under an
 -- @If@ whose condition tests liveness. A goal occurrence is called by the
@@ -937,6 +954,20 @@ aggregateGoalTests =
                       VM.AVal (VM.Lit (VM.BoolLit True))
                     ]
                   ],
+      testCase "the location phase drops ? guards; the fold keeps them" $ do
+        prog <- compileOrFail [("m.chr", guardGoalSource)]
+        case findProcedure prog "occurrence_aggq__d1_1" of
+          Nothing -> assertFailure "no d/1 goal occurrence procedure"
+          Just p ->
+            assertBool
+              "the location phase must not evaluate the guard"
+              (not (any isGuardEval (ifConditions p.body)))
+        case findProcedure prog "aggregate_0_0" of
+          Nothing -> assertFailure "no fold procedure"
+          Just p ->
+            assertBool
+              "the fold must evaluate the guard"
+              (any isGuardEval (ifConditions p.body)),
       testCase "a rule that removes nothing has no removal step" $ do
         prog <- compileOrFail [("m.chr", lateGoalSource)]
         case findProcedure prog "occurrence_aggl__c1_1" of

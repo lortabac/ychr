@@ -1,0 +1,15 @@
+% The location phase drops ? guards, so removing the only matching
+% constraint still reaches the rule: the fold now finds no match, the
+% count is 0, and the guard is never evaluated.
+:- module(aggregates_goal_guard_removal, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, out/1, ask/1, rm/0, go/1.
+
+c(_), count((d(X), ? X > 1), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+rm \ d(_) <=> true.
+
+go(A) <=> d(Y), c(1), rm, ask(A).

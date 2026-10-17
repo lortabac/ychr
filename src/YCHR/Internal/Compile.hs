@@ -79,7 +79,6 @@ import Data.Text qualified as T
 import YCHR.Internal.Compile.Names
 import YCHR.Internal.Compile.Occurrences (collectOccurrences)
 import YCHR.Internal.Compile.Types
-import YCHR.Internal.Desugar (guardVars)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Loc (SourceLoc)
@@ -969,25 +968,19 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
       -- A @? Guard@ is checked in place: it sees the variables the conjuncts
       -- before it bound, and filters before the ones after it are searched.
       --
-      -- In the location phase the loop nest runs outside the regular-head
-      -- loops, so a shared input is not bound yet. Such a guard is skipped
-      -- there: it can only narrow the matches, and the fire step recomputes
-      -- the aggregate, so dropping it is an over-approximation. The fold
-      -- still compiles it, so a variable that is genuinely unbound is
-      -- reported there. The location phase also soft-guards the guard, so
-      -- an inconclusive one skips the candidate instead of aborting the
-      -- query; a raise inside the fold still makes the aggregate
-      -- undefined, as the spec requires.
-      D.AggGuard g -> do
-        restStmts <- go (j + 1) seen vm rest
-        let isLocation = isJust mActive
-            inScope =
-              all (\v -> isJust (lookupVar v vm)) (Set.toList (guardVars [g]))
-        if isLocation && not inScope
-          then pure restStmts
-          else do
+      -- The location phase drops every @?@ guard, so that it is a true
+      -- over-approximation: a guard there could be inconclusive (a shared
+      -- input is not bound yet, or a match's argument is still unbound) and
+      -- skipping the combination would lose a firing that the fold, run
+      -- later against a different store, would have found. The fold always
+      -- evaluates the guard, and it reports a variable that is genuinely
+      -- unbound at its goal-order position.
+      D.AggGuard g
+        | isJust mActive -> go (j + 1) seen vm rest
+        | otherwise -> do
             compiled <- compileGuards Nothing Nothing vm si [g]
-            pure (compiled.matchWrapper (withGuardResidual compiled restStmts))
+            restStmts <- go (j + 1) seen vm rest
+            pure (compiled.matchWrapper (withResidual compiled restStmts))
       -- A nested aggregate is rejected by
       -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
       -- compiles never reaches this arm.
@@ -1012,15 +1005,6 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
     withResidual compiled stmts = case compiled.residualCheck of
       Nothing -> stmts
       Just cond -> [If cond stmts []]
-
-    -- A @?@ guard in the location phase is soft-guarded, so an
-    -- inconclusive guard skips this candidate. Elsewhere the raise
-    -- propagates, which is what makes an aggregate undefined.
-    withGuardResidual compiled stmts = case compiled.residualCheck of
-      Nothing -> stmts
-      Just cond
-        | isJust mActive -> [If (softenGuard cond) stmts []]
-        | otherwise -> [If cond stmts []]
 
 -- | Bind one goal conjunct's arguments against the candidate suspension:
 -- index conditions for the values already in scope, @field-arg@ reads for

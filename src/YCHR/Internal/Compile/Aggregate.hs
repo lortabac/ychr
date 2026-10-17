@@ -169,12 +169,15 @@ checkLocalEscapes rule plans = case Set.toAscList escaped of
       | v <- variables
       ]
   where
-    -- A shared variable is a head variable, so it is not an escape; a result
-    -- variable the pattern binds is in scope in the guard and body by
-    -- design, and is not a goal local either.
+    -- A shared variable is a head variable, so it is not an escape, and a
+    -- variable the result pattern binds is bound by the aggregate call, so
+    -- it is in scope in the guard and body by design. Every other variable
+    -- a goal binds is local to the aggregate.
     locals =
       Set.unions
-        [ aggregateGoalLocals p.planGoal `Set.difference` Set.fromList p.planShared
+        [ aggregateGoalLocals p.planGoal
+            `Set.difference` Set.fromList p.planShared
+            `Set.difference` Set.fromList p.planBind
         | p <- plans
         ]
     escaped =

@@ -1,0 +1,13 @@
+% The location phase drops ? guards; binding the still-free argument
+% later reactivates the constraint, and the fold then evaluates the guard
+% (false, so zero matches and a defined count of 0).
+:- module(aggregates_goal_guard_bind, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, out/1, ask/1, go/1.
+
+c(_), count((d(X), ? X > 1), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> d(Y), c(1), Y = 0, ask(A).

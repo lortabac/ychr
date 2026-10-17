@@ -277,7 +277,9 @@ Trying a goal occurrence means:
 1. Match the active constraint against the conjunct.
 2. Find matches for the remaining conjuncts and guards of the same
    aggregate goal, then for those of every enclosing aggregate goal,
-   then for the rule's regular heads.
+   then for the rule's regular heads. (The compiler's location phase may
+   skip the guards — the next step recomputes the aggregate and enforces
+   them — so this step may over-approximate.)
 3. Keep only the regular head constraints of each match found, and
    discard every binding of an aggregate goal's variables. For each
    *distinct* combination of regular heads, in the order first found,
@@ -488,13 +490,13 @@ lowers an aggregate in the occurrence procedure itself:
 - A `?` guard in a goal is evaluated in place in the fold; an
   instantiation error inside it propagates to the `BSoftGuard` around the
   aggregate call, so the aggregate is undefined, as
-  [Errors](#errors) requires. In the location phase the loops run
-  outside the regular-head loops, so a shared input is not bound yet at
-  a guard's goal-order position: the location phase over-approximates,
-  skipping such a guard and soft-guarding the rest, so an inconclusive
-  one skips the candidate instead of aborting the query. That can only
-  locate extra combinations; the fire step recomputes the aggregate, so
-  the guard is still enforced.
+  [Errors](#errors) requires. The location phase evaluates no `?` guard
+  at all. A guard there can be inconclusive — a shared input is not
+  bound yet, or a matched argument is still unbound — and skipping the
+  combination would lose a firing that the fold, run later against a
+  different store, would have found (a removal can make the fold
+  defined). Dropping every guard is a true over-approximation: it can
+  only try more combinations, since the fold still enforces the guard.
 - A [goal occurrence](#2-goal-occurrences) is an ordinary occurrence
   procedure with two differences. First, its loops are the goal's
   conjuncts, nested outside the partner loops that search the regular
