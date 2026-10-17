@@ -225,6 +225,11 @@ rules. The two hook points are:
   `test-style` checks; run `test-style` after formatting.
 - Guile 3 is `/usr/bin/guile3.0`; `make test-scheme` resolves it by
   name, so `PATH` must include `/usr/bin`.
+- **`make mhs-build` is a CI gate too.** The aggregates work broke it
+  twice with the constructs `dev-docs/MICROHS_GAPS.md` records: a record
+  update on a selector chain (`rule.head {node = …}`, gap 3) and a
+  `.head` field access in a module that does not hide `Prelude.head`
+  (gap 1). Check `make mhs-build` after touching `src/`.
 
 ## Verification recipe
 
@@ -234,6 +239,7 @@ CABAL_DIR=/home/lorenzo/Development/ychr/.cabal-home cabal build all
 CABAL_DIR=/home/lorenzo/Development/ychr/.cabal-home cabal test
 make format && make test-style
 make test            # the python suites, including test-scheme
+make mhs-build       # CI's MicroHs job; easy to forget, see below
 make bench
 ```
 

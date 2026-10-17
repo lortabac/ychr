@@ -63,6 +63,9 @@ import YCHR.Internal.Types
     flattenName,
     qualifiedToName,
   )
+-- MicroHs: a field named @head@ is not recognized as a label when
+-- @Prelude.head@ is in scope (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- | A candidate's eligible shape: its parameters and its (possibly
 -- already-inlined) return expression.

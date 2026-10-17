@@ -1199,7 +1199,8 @@ guardVars = Set.unions . map gVars
 -- traversal order — and so the @__lambda_N@ numbering — it had before.
 liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
 liftRule st rule =
-  let headNode = rule.head.node
+  let headAnn = rule.head
+      headNode = headAnn.node
       guardAnn = rule.guard
       bodyAnn = rule.body
       scope =
@@ -1215,7 +1216,7 @@ liftRule st rule =
         mapAccumL (liftAggregate modName scope) st'' headNode.aggregates
    in ( st''',
         rule
-          { D.head = rule.head {node = headNode {D.aggregates = aggs'}},
+          { D.head = headAnn {node = headNode {D.aggregates = aggs'}},
             D.guard = guardAnn {node = guards'},
             D.body = bodyAnn {node = body'}
           }
