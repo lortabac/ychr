@@ -73,10 +73,11 @@ data CompileError
   | -- | A local variable of an aggregate is used in the rule's guard or
     -- body. Raised by 'YCHR.Internal.Compile.Aggregate'.
     AggregateLocalEscapes Text
-  | -- | An aggregate nested in an aggregate goal, which the compiler does
-    -- not implement yet, with the form's name and arity. Raised by
+  | -- | A @takemin@\/@takemax@ nested in an aggregate goal, with the
+    -- form's name. It would have to remove one match per match of the
+    -- enclosing goal, so it is not allowed. Raised by
     -- 'YCHR.Internal.Compile.Aggregate'.
-    AggregateNotImplemented Text Int
+    AggregateNestedTake Text
   | -- | A rule has an aggregate but the program does not declare
     -- @maybe:just/1@, the constructor an aggregator's @Final@ closure has
     -- to return. Raised by 'YCHR.Internal.Compile.Aggregate'.
@@ -175,8 +176,8 @@ data GoalOccurrence = GoalOccurrence
     -- active constraint already is it) but evaluates its guards in
     -- place.
     goalAll :: [D.AggregateConjunct],
-    -- | The conjuncts of each enclosing goal, outermost first. Always
-    -- empty until nested aggregates land.
+    -- | The conjuncts of each enclosing goal, innermost first: the order
+    -- the location phase loops them in. Empty for a top-level goal.
     goalEnclosing :: [[D.AggregateConjunct]]
   }
   deriving (Show, Eq)
@@ -228,8 +229,13 @@ data Partner = Partner
 -- therefore serves every occurrence of the rule and one procedure serves
 -- them all.
 data AggregatePlan = AggregatePlan
-  { -- | Source order of this aggregate within the rule head.
+  { -- | Source order of this aggregate within the rule head. For a
+    -- nested aggregate, its position in the enclosing goal.
     planIndex :: Int,
+    -- | Where the aggregate sits: its index in the rule head, then one
+    -- goal position per level of nesting. A top-level plan's path is
+    -- @[planIndex]@. Nested procedure and cell names are built from it.
+    planPath :: [Int],
     -- | Which form it is: the core form or one of the selection forms.
     planKind :: AggregateKind,
     -- | The procedure that computes it.
@@ -252,7 +258,10 @@ data AggregatePlan = AggregatePlan
     -- | What the procedure does with the computed result: the tests the
     -- pattern has to pass and the out-cell bindings that follow them.
     -- Empty for a selection form, which has no result pattern.
-    planResultMatch :: ResultMatch
+    planResultMatch :: ResultMatch,
+    -- | The plans of the aggregates nested in 'planGoal', keyed by their
+    -- position in it. The fold computes each one in place.
+    planNested :: [(Int, AggregatePlan)]
   }
   deriving (Show, Eq)
 

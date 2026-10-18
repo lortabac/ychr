@@ -59,7 +59,9 @@ module YCHR.Internal.Compile.Names
     aggregateSharedParam,
     aggregateOutParam,
     aggregateOutCell,
+    nestedOutCell,
     aggregateSuspName,
+    aggregateLevelSuspName,
     aggregatePayloadName,
     aggregateMaybeName,
     aggregateAccName,
@@ -67,6 +69,7 @@ module YCHR.Internal.Compile.Names
     aggregateIncName,
     aggregateFinalName,
     aggregateLabel,
+    aggregateLevelLabel,
     aggregateAggFunctor,
     aggregateJustFunctor,
     aggregateNothingAtom,
@@ -363,18 +366,15 @@ blockedArgName = "$chr_blocked_arg"
 -- Aggregate names
 -- ---------------------------------------------------------------------------
 
--- | Name of the procedure that computes one head aggregate:
--- @aggregate_\<rule\>_\<index\>@. Deliberately not prefixed @func_@: the
--- Scheme backend's export clause keys on that prefix, and this is not a
--- user function.
-aggregateProcName :: Int -> Int -> Name
-aggregateProcName ruleIdx aggIdx =
-  Name
-    ( "aggregate_"
-        <> T.pack (show ruleIdx)
-        <> "_"
-        <> T.pack (show aggIdx)
-    )
+-- | Name of the procedure that computes one aggregate:
+-- @aggregate_\<rule\>_\<path\>@, the path being the aggregate's index in
+-- the head and then, for a nested one, its goal position at each level
+-- ('YCHR.Internal.Compile.Types.planPath'). Deliberately not prefixed
+-- @func_@: the Scheme backend's export clause keys on that prefix, and
+-- this is not a user function.
+aggregateProcName :: Int -> [Int] -> Name
+aggregateProcName ruleIdx path =
+  Name ("aggregate_" <> T.intercalate "_" (map (T.pack . show) (ruleIdx : path)))
 
 -- | Parameter name of the @i@-th shared input of an aggregate procedure.
 -- A procedure takes one out-cell per variable it binds, then one of these
@@ -400,9 +400,24 @@ aggregateOutCell :: Int -> Text -> Name
 aggregateOutCell aggIdx v =
   Name ("$aggregate_cell_" <> T.pack (show aggIdx) <> "_" <> v)
 
+-- | Caller-side local holding the out-cell for one variable a nested
+-- aggregate binds: @$aggregate_ncell_\<path\>_\<variable\>@. A separate
+-- prefix from 'aggregateOutCell', since a take form's firing can call a
+-- nested aggregate from the occurrence procedure that holds the top-level
+-- cells.
+nestedOutCell :: [Int] -> Text -> Name
+nestedOutCell path v =
+  Name ("$aggregate_ncell_" <> T.intercalate "_" (map (T.pack . show) path) <> "_" <> v)
+
 -- | Name of the local a fold binds one candidate suspension to.
 aggregateSuspName :: Int -> Name
 aggregateSuspName j = Name ("$aggregate_susp_" <> T.pack (show j))
+
+-- | 'aggregateSuspName' for goal level @d > 0@ of a goal occurrence's
+-- location phase, where the loops of several goals share one procedure.
+aggregateLevelSuspName :: Int -> Int -> Name
+aggregateLevelSuspName d j =
+  Name ("$aggregate_susp_" <> T.pack (show d) <> "_" <> T.pack (show j))
 
 -- | Name of the local holding the computed result inside an aggregate
 -- procedure, as the value an aggregator's @Final@ closure returned. The
@@ -439,6 +454,19 @@ aggregateLabel k j =
   Label
     ( "aggregate_loop_"
         <> T.pack (show k)
+        <> "_"
+        <> T.pack (show j)
+    )
+
+-- | 'aggregateLabel' for goal level @d > 0@ of a goal occurrence's
+-- location phase.
+aggregateLevelLabel :: Int -> Int -> Int -> Label
+aggregateLevelLabel k d j =
+  Label
+    ( "aggregate_loop_"
+        <> T.pack (show k)
+        <> "_level_"
+        <> T.pack (show d)
         <> "_"
         <> T.pack (show j)
     )

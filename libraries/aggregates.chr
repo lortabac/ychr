@@ -27,6 +27,7 @@
     macro(collect/3),
     macro(exists/1),
     macro('\\+'/1),
+    macro(forall/2),
     fun count_spec/0,
     fun sum_spec/0,
     fun prod_spec/0,
@@ -96,6 +97,8 @@
 :- macro collect(X, G, L) ---> [aggregate(aggregates:collect_spec, X, G, L)].
 :- macro exists(G) ---> [aggregate(aggregates:exists_spec, 1, G, _)].
 :- macro '\\+'(G) ---> [aggregate(aggregates:not_spec, 1, G, _)].
+:- macro forall(G, C) --->
+       [aggregates:'\\+'((G, aggregates:'\\+'(C)))].
 
 % Counting: the number of matches. The element is irrelevant, and every
 % predefined aggregate that only counts passes 1 for it.

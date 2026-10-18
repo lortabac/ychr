@@ -319,12 +319,6 @@ data RenameError
   | -- | A @?\/1@ guard outside an aggregate goal. It is recognized
     -- structurally inside one, and has no meaning anywhere else.
     GuardOutsideAggregateGoal
-  | -- | A macro use inside an aggregate goal. The goal is a goal
-    -- position, but 'renameConjunct' does not expand macros, so the
-    -- compiler reports the form it does not implement rather than
-    -- resolving the name as an unknown constraint. Carries the macro's
-    -- qualified name and the arity used.
-    MacroInAggregateGoal QualifiedName Int
   deriving (Eq, Show)
 
 -- | A part of a rule head, for 'MacroEmptyHead'.
@@ -1464,22 +1458,17 @@ renameConjunct ctx loc origin outerName outerArity t = case t of
           (AnnP (MacroPrimitiveOutsideMacro (unqualifiedText n) (length args)) loc origin)
         pure []
     -- A macro use inside an aggregate goal is a goal position like any
-    -- other, but 'renameConjunct' does not expand it. Report that instead
-    -- of resolving the name as a constraint, which would fail as an
-    -- unknown name and hide what the user wrote.
+    -- other: it expands in place, and each goal of the expansion is a
+    -- conjunct again (a constraint, a nested aggregate or a guard).
     | otherwise -> case classifyGoalName ctx n (length args) of
-        IsMacro providerMod -> do
-          emitErrorIn
-            ctx
-            ( AnnP
-                ( MacroInAggregateGoal
-                    (QualifiedName providerMod (unqualifiedText n))
-                    (length args)
-                )
-                loc
-                origin
-            )
-          pure []
+        IsMacro providerMod ->
+          expandMacroUse ctx loc origin providerMod n args >>= \case
+            Nothing -> pure []
+            Just (ctx', goals) ->
+              concat
+                <$> traverse
+                  (renameConjunct ctx' loc origin outerName outerArity)
+                  (concatMap flattenConj goals)
         IsDeclMacro providerMod -> do
           kindMismatch ctx loc origin providerMod n (length args)
           pure []

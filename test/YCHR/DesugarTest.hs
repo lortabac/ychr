@@ -888,6 +888,24 @@ aggregateTests =
             hcon.args @?= [D.HeadVar "X", D.HeadVar "$hnf_0"]
             guards @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "$hnf_0")]
           a -> assertFailure ("unexpected aggregate: " ++ show a),
+      testCase "a nested goal does not change what the enclosing goal has seen" $ do
+        let nested = plainAgg (Just (int 0)) (int 1) [var "Y"] Wildcard
+            outer =
+              (plainAgg (Just (int 0)) (int 1) [] Wildcard)
+                { goal =
+                    [ AggConstraint (qcon "M" "c" [var "X"]),
+                      AggNested nested,
+                      AggConstraint (qcon "M" "c" [var "X"])
+                    ]
+                }
+        rule <- singleRule [simpleModule (Propagation [leqQual2] [outer])]
+        case onlyAggregate rule of
+          D.Aggregate {goal = [_, D.AggNested _, D.AggConstraint hcon guards]} -> do
+            -- X was seen by the enclosing goal before the nested one, so
+            -- its second occurrence is still matched against the first.
+            hcon.args @?= [D.HeadVar "$hnf_0"]
+            guards @?= [D.GuardEqual (R.VarExpr "X") (R.VarExpr "$hnf_0")]
+          a -> assertFailure ("unexpected aggregate: " ++ show a),
       testCase "head and goal share one fresh-name counter" $ do
         let hd =
               Propagation

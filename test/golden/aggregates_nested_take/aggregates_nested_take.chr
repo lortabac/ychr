@@ -1,0 +1,8 @@
+% A take form cannot be nested in an aggregate goal: it would have to
+% remove one match per match of the enclosing goal.
+:- module(aggregates_nested_take, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, item/2, q/1.
+
+p(K), count((q(K), takemin(X, item(K, X))), _) ==> true.

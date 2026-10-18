@@ -1,0 +1,9 @@
+% Y occurs in the nested aggregate and in a later conjunct of the
+% enclosing goal, so it is shared, but nothing binds it yet where the
+% nested aggregate is computed (goal order). Write c(Y) first.
+:- module(aggregates_nested_shared_later, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/0, b/1, c/1.
+
+p, count((\+ b(Y), c(Y)), _) ==> true.

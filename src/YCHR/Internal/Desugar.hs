@@ -373,9 +373,12 @@ desugarConjuncts st0 loc origin = go st0 []
       R.AggConstraint qc -> do
         let (st', hc, own) = normalizeGoalConstraint st qc
         go st' (D.AggConstraint hc own : acc) rest
+      -- A nested goal has its own variables: keep the counter it advanced,
+      -- but not its @seen@ set, so the conjuncts after it are normalized
+      -- against this goal's variables only.
       R.AggNested a -> do
         (st', a') <- desugarAggregate st loc origin a
-        go st' (D.AggNested a' : acc) rest
+        go st' {seen = st.seen} (D.AggNested a' : acc) rest
       R.AggGuard g -> do
         g' <- desugarGuard loc origin g
         go st (D.AggGuard g' : acc) rest

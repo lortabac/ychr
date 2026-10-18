@@ -1,0 +1,17 @@
+% Two conjuncts only have to match different constraints within one goal.
+% The nested exists(c(X)) may match the very c the outer goal matched, so
+% one c is enough for it to hold.
+:- module(aggregates_nested_distinct, [go/1, late/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, start/0, out/1, ask/1, go/1, late/1.
+
+start, count((c(X), exists(c(X))), N) ==> N > 0 | out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> c(1), start, ask(A).
+% Told after start, whose first try counts 0 and does not fire: c(1) is
+% then the active constraint of its goal occurrences, the outer goal's
+% and the nested one's.
+late(A) <=> start, c(1), ask(A).

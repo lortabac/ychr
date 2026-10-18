@@ -138,7 +138,7 @@ ruleDisplayName ruleIdx rule = case rule.name of
 --
 -- The rule's aggregates are planned by the caller and shared by all of its
 -- occurrences, so an occurrence can compute them without re-planning. An
--- aggregate the planner dropped (a nested aggregate, until its phase)
+-- aggregate the planner dropped (one with a nested take form)
 -- contributes no goal occurrence: there is no plan to compute it with. A
 -- selection form is planned like any other aggregate, so its conjuncts
 -- are goal occurrences too.
@@ -174,11 +174,12 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
       for orderedOccurrences $ \(idx, con, isKept) ->
         mkOccurrence symTab rule ruleId' display aggregates orderedOccurrences idx con isKept
   -- One goal occurrence per CHR constraint conjunct of a planned
-  -- aggregate's goal. The plan is matched by its source index, since
-  -- the planner drops unsupported forms and leaves gaps in the list.
+  -- aggregate's goal, nested goals included. The plan is matched by its
+  -- source index, since the planner drops unsupported forms and leaves
+  -- gaps in the list.
   goalOccurrences <-
     fmap catMaybes $
-      for goalConjuncts $ \(plan, goal, j, hc) ->
+      for goalConjuncts $ \(plan, goal, enclosing, j, hc) ->
         mkGoalOccurrence
           symTab
           rule
@@ -190,16 +191,28 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
           j
           hc
           goal
+          enclosing
   pure (ordinary ++ goalOccurrences)
   where
     planByIndex i = List.find (\p -> p.planIndex == i) (aggregatePlans !! ruleIdx)
     goalConjuncts =
-      [ (plan, goal, j, hc)
+      [ (plan, goal, enclosing, j, hc)
       | (i, agg) <- zip [0 :: Int ..] rule.head.node.aggregates,
         Just plan <- [planByIndex i],
-        let goal = agg.goal,
+        (goal, enclosing) <- aggregateGoals [] agg,
         (j, D.AggConstraint hc _) <- zip [0 :: Int ..] goal
       ]
+
+-- | Every goal of an aggregate, with the goals enclosing it innermost
+-- first: the aggregate's own goal, then the goals nested in it, in source
+-- order and depth first (spec §2 "Order").
+aggregateGoals ::
+  [[D.AggregateConjunct]] ->
+  D.Aggregate ->
+  [([D.AggregateConjunct], [[D.AggregateConjunct]])]
+aggregateGoals enclosing agg =
+  (agg.goal, enclosing)
+    : concat [aggregateGoals (agg.goal : enclosing) n | D.AggNested n <- agg.goal]
 
 -- | Build a single 'Occurrence' record for the active head constraint
 -- at @activeIdx@. The other entries in @combined@ become the partner
@@ -253,7 +266,8 @@ mkOccurrence
 -- aggregate goal. Every regular head is a partner, since the active
 -- constraint is not a head; @j@ is the conjunct's position in the goal,
 -- which the location phase needs to evaluate the conjunct's own guards
--- in their goal-order place.
+-- in their goal-order place. @outer@ are the goals around this one,
+-- innermost first.
 mkGoalOccurrence ::
   SymbolTable ->
   D.Rule ->
@@ -265,8 +279,9 @@ mkGoalOccurrence ::
   Int ->
   HeadConstraint ->
   [D.AggregateConjunct] ->
+  [[D.AggregateConjunct]] ->
   Writer [Diagnostic CompileError] (Maybe Occurrence)
-mkGoalOccurrence symTab rule ruleId' display aggregates heads aggIndex j activeCon goal = do
+mkGoalOccurrence symTab rule ruleId' display plans heads aggIndex j activeCon goal outer = do
   partners <- resolvePartners symTab rule display heads
   pure $ do
     resolvedPartners <- sequence partners
@@ -285,7 +300,7 @@ mkGoalOccurrence symTab rule ruleId' display aggregates heads aggIndex j activeC
           isKept = True,
           activeArgs = activeCon.args,
           partners = resolvedPartners,
-          aggregates = aggregates,
+          aggregates = plans,
           passive = False,
           goalOcc =
             Just
@@ -293,7 +308,7 @@ mkGoalOccurrence symTab rule ruleId' display aggregates heads aggIndex j activeC
                 { goalIndex = aggIndex,
                   goalActiveIndex = j,
                   goalAll = goal,
-                  goalEnclosing = []
+                  goalEnclosing = outer
                 }
         }
 

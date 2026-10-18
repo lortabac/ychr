@@ -134,9 +134,9 @@ page with a program editor and a REPL. See the
       [search specification](reference/search.md).
 - [ ] Aggregates, as described in Sneyers, Van Weert, Schrijvers,
       Demoen, 2007. *Aggregates in CHR*. The core form, the predefined
-      aggregates, goal occurrences and the removal step are
-      implemented; selection aggregates, nested aggregates and the
-      aggregator typing are the remainder. See the
+      aggregates, selection aggregates, nested aggregates, goal
+      occurrences and the removal step are implemented; the aggregator
+      typing is the remainder. See the
       [aggregates specification](reference/aggregates.md).
 - [ ] Rule priorities
 

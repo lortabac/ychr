@@ -368,7 +368,6 @@ renameErrorCode AggregateOnlyHead = ErrorCode 20039
 renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
 renameErrorCode (MalformedAggregateGoal _ _ _) = ErrorCode 20041
 renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
-renameErrorCode (MacroInAggregateGoal _ _) = ErrorCode 20043
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -414,7 +413,7 @@ compileErrorCode :: CompileError -> ErrorCode
 compileErrorCode (UnknownConstraintType _) = ErrorCode 40001
 compileErrorCode (UnboundVariable _) = ErrorCode 40002
 compileErrorCode (AggregateLocalEscapes _) = ErrorCode 40003
-compileErrorCode (AggregateNotImplemented _ _) = ErrorCode 40004
+compileErrorCode (AggregateNestedTake _) = ErrorCode 40004
 compileErrorCode AggregateResultNotMaybe = ErrorCode 40005
 
 -- | 45xxx — constraint-use check. Its own bucket rather than the type
@@ -1280,18 +1279,6 @@ renameErrorMsg GuardOutsideAggregateGoal =
     ( "a '? Guard' conjunct is recognized inside an aggregate's goal;"
         ++ " write a rule guard with '|' and a body goal directly"
     )
-renameErrorMsg (MacroInAggregateGoal macroName macroArity) =
-  withHint
-    ( "Macro '"
-        ++ macroQn macroName
-        ++ "/"
-        ++ show macroArity
-        ++ "' in an aggregate goal is not implemented yet"
-    )
-    ( "the goal of an aggregate is a goal position, but macro expansion"
-        ++ " inside it is still to come; write the core form"
-        ++ " 'aggregate(Agg, Element, Goal, Result)' instead"
-    )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint
     ( "Macro '"
@@ -1629,15 +1616,12 @@ compileErrorMsg (AggregateLocalEscapes var) =
     ( "a variable only an aggregate's goal binds is not visible to the"
         ++ " rule's guard or body; bind it with '=' in the body instead"
     )
-compileErrorMsg (AggregateNotImplemented name arity) =
+compileErrorMsg (AggregateNestedTake name) =
   withHint
-    ( "Aggregate '"
-        ++ T.unpack name
-        ++ "/"
-        ++ show arity
-        ++ "' inside an aggregate goal is not implemented yet"
+    ("'" ++ T.unpack name ++ "/2' is not allowed inside an aggregate goal")
+    ( "a nested selection cannot remove constraints; use argmin/argmax"
+        ++ " there, or move the take form to the rule head"
     )
-    "this compiler recognizes a nested aggregate but does not evaluate it yet"
 compileErrorMsg AggregateResultNotMaybe =
   withHint
     "No 'maybe:just/1' constructor is visible"

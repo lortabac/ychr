@@ -1,9 +1,16 @@
-% A macro use inside an aggregate goal is a goal position, but macro
-% expansion there is not implemented: the compiler says so instead of
-% reporting an unknown constraint.
-:- module(aggregates_macro_in_goal, [c/1, d/1]).
+% A macro use inside an aggregate goal expands in place, so the
+% predefined aggregates nest.
+:- module(aggregates_macro_in_goal, [open/1, total/1]).
 :- use_module(library(aggregates)).
 
-:- chr_constraint c/1, d/1.
+:- chr_constraint c/1, d/2, e/1, g/1, h/2, out/1, ask/1, open/1, total/1.
 
-c(X), count(count(d(X), M), N) ==> c(X).
+% The number of d(X, _) whose second argument has no e.
+c(X), count((d(X, Y), \+ e(Y)), N) ==> X < 99 | out(N).
+% The sum, over every g, of how many h it has.
+c(X), sum(M, (g(G), count(h(G, _), M)), S) ==> X > 99 | out(S).
+
+out(N) \ ask(A) <=> A = N.
+
+open(A) <=> d(1, 10), d(1, 11), d(1, 12), e(11), c(1), ask(A).
+total(A) <=> g(1), g(2), g(3), h(1, 7), h(1, 8), h(3, 9), c(100), ask(A).

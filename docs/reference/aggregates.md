@@ -1,13 +1,10 @@
 # YCHR Aggregates Specification
 
-**Status: implemented, except for nested aggregates.**
+**Status: implemented, except for typing.**
 The core form, the predefined aggregates, the selection forms
-(`argmin`/`argmax`/`takemin`/`takemax`), goal occurrences and the
-removal step run on both backends. An aggregate in an aggregate goal is
-recognized but rejected at compile time (`YCHR-40004`), so no program
-silently means something else; `forall/2` needs nested aggregates and
-is not defined by `library(aggregates)` yet. Aggregates are not
-type-checked ([type-system.md](type-system.md#aggregates)).
+(`argmin`/`argmax`/`takemin`/`takemax`), nested aggregates, goal
+occurrences and the removal step run on both backends. Aggregates are
+not type-checked ([type-system.md](type-system.md#aggregates)).
 
 An *aggregate* is a rule-head conjunct that summarizes an unbounded
 part of the constraint store: the sum, count, minimum, … of a value
@@ -111,6 +108,10 @@ predefined aggregates may be nested:
 argmax(S, (client(C), sum(B, account(_, C, _, B), S)))
 ```
 
+`takemin` and `takemax` may not be nested (`YCHR-40004`): they would
+have to remove one match per match of the enclosing goal. `argmin` and
+`argmax` may.
+
 ### Variables
 
 A variable of an aggregate's `Goal` or `Element` is *shared* if it
@@ -139,6 +140,12 @@ the last match's value.
 `Element` must be computable from the match: a variable of `Element`
 that occurs neither in `Goal` nor among the shared variables is an
 unbound name (`YCHR-40002`), as in a rule body.
+
+A nested aggregate is computed at its place in the enclosing goal, so a
+variable it shares with the enclosing goal must be bound by then, by a
+conjunct to its left (or be an input of the enclosing aggregate). One
+that only a later conjunct binds is an unbound name (`YCHR-40002`), as
+for a `?` guard: write `(c(Y), \+ b(Y))`, not `(\+ b(Y), c(Y))`.
 
 
 ## Semantics
@@ -173,6 +180,12 @@ nested aggregate contributes no loop of its own; it is computed in
 place for each partial match. For `collect(X, (a(Y), b(Y, X)), L)`,
 the `b` constraints matching the first `a` come first, in store order,
 then those matching the second `a`.
+
+A nested aggregate acts as a filter on the partial match it is computed
+for: if it is undefined, or its `Result` does not match, that partial
+match is not extended. Otherwise its result (or, for `argmin`/`argmax`,
+its goal variables) is bound for the conjuncts after it and for the
+enclosing `Element`.
 
 Because matches are enumerated in goal order, a non-commutative `Inc`
 (as in `collect`) gives a deterministic result.
@@ -429,10 +442,6 @@ when the condition fails, so they need no guard. The macro passes `_`
 as `Result`, so the value the aggregate computes is never observed;
 only whether it is defined matters.
 
-`forall(G, C)` is not defined by the library yet: it needs a nested
-aggregate (`\+ (G, \+ C)`), which the compiler does not implement
-(`YCHR-40004`).
-
 Each macro refers to its aggregator by qualified name, as
 [macros.md](macros.md#names-and-modules) requires of a library macro.
 
@@ -481,7 +490,15 @@ lowers an aggregate in the occurrence procedure itself:
   suspensions, like two head conjuncts of the same type, and the fold's
   loops test that. A goal conjunct and a regular head are deliberately
   *not* compared: a goal partner may be the same suspension as a
-  regular head.
+  regular head. Nor are two conjuncts of different goals, an enclosing
+  one and a nested one: in `count((c(X), exists(c(X))), N)` a single
+  `c(1)` matches both.
+- A nested aggregate is a procedure of its own (its name adds its goal
+  position to the enclosing one's). The enclosing fold calls it in place,
+  in its innermost block so far, with the variables bound there as
+  inputs. The call has no `BSoftGuard` of its own: an instantiation error
+  inside it reaches the one around the top-level aggregate, so the whole
+  aggregate is undefined, as [Errors](#errors) requires.
 - The result pattern is checked in the aggregate procedure's tail: every
   test runs before any out-cell is bound, so a pattern that cannot match
   leaves nothing half-done. A repeated variable is tested against its
@@ -506,6 +523,13 @@ lowers an aggregate in the occurrence procedure itself:
   so a pairing the goal does not really support is only an extra try,
   never a wrong answer. Second, it takes a trailing `$removal` flag,
   explained below.
+- For a conjunct of a nested goal, the location phase loops the rest of
+  that goal, then each enclosing goal from the innermost outward, then
+  the regular heads. It skips every nested aggregate it meets, as it
+  skips a `?` guard: an aggregate only filters, and the fire step
+  recomputes it. A variable that aggregate would bind is then bound by
+  the next conjunct that mentions it, so again the phase can only try
+  more combinations.
 - **Late Storage.** An active constraint is unstored until Late
   Storage, so a fold that only read the store would miss the very
   constraint being activated. Every occurrence of a rule with
@@ -572,10 +596,8 @@ lowers an aggregate in the occurrence procedure itself:
   head, may pick the same constraint; the second kill does nothing, and
   the removal step tries its goal occurrences twice, which the history
   makes harmless.
-- A macro use inside an aggregate goal is a goal position, but macro
-  expansion there is not implemented: the compiler reports it
-  (`YCHR-20043`) instead of resolving the name as an unknown
-  constraint.
+- A macro use inside an aggregate goal expands in place, like one in a
+  head; each goal of the expansion is a conjunct again.
 
 ## Diagnostics
 
@@ -585,10 +607,9 @@ lowers an aggregate in the occurrence procedure itself:
 | YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
 | YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard. |
 | YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal. |
-| YCHR-20043 | `MacroInAggregateGoal` | A macro use inside an aggregate goal. |
 | YCHR-40002 | `UnboundVariable` | An `Element` variable the match cannot supply. |
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
-| YCHR-40004 | `AggregateNotImplemented` | A nested aggregate, until its phase. |
+| YCHR-40004 | `AggregateNestedTake` | A `takemin`/`takemax` inside an aggregate goal. |
 | YCHR-40005 | `AggregateResultNotMaybe` | The program declares no `maybe:just/1`, so no aggregator can produce the protocol's result type. |
 
 
@@ -601,13 +622,8 @@ lowers an aggregate in the occurrence procedure itself:
   between occurrences, and user pragmas in general.
 - **Fire-many semantics**, for any aggregate.
 - **Aggregates in guards, bodies or function equations.**
-- **Nested aggregates**, inside any aggregate goal, a selection's
-  included. They are recognized, reported (`YCHR-40004`) and dropped,
-  so no rule compiles into something that never fires. `forall/2`
-  needs them.
-- **Aggregates in an aggregate goal that are written as macros**
-  (`YCHR-20043`): the goal is a goal position, but the renamer does not
-  expand macros there yet.
+- **Nested `takemin`/`takemax`** (`YCHR-40004`). This one is not
+  planned: see [Aggregate goals](#aggregate-goals).
 - **Typing.** The aggregate's positions are not type-checked; see
   [type-system.md](type-system.md#aggregates). As a consequence the
   integer folds (`sum`, `prod`, `min`, `max`, `avg`) are integer-typed
