@@ -611,23 +611,37 @@ genGoalOccurrenceBody symTab cType goal condMap occ fire = do
   -- enclosing goal from the innermost outward, then the head loops. Each
   -- level has its own loop names and its own distinctness tests, since
   -- two conjuncts only have to differ within one goal.
+  --
+  -- Going out one level, only the inner aggregate's shared inputs stay in
+  -- the variable map. Everything else the inner goal bound is local to it,
+  -- or is an output (a result, a selection's goal variables) whose value
+  -- the fold takes from the whole goal and not from this match. Joining
+  -- the outer goal on such a value could skip a combination the fold
+  -- accepts.
   let depth = length goal.goalEnclosing
-      levels =
-        (depth, LocateGoal (Just (goal.goalActiveIndex, activeName, cType)), goal.goalAll)
-          : [ (depth - 1 - i, LocateGoal Nothing, g)
-            | (i, g) <- zip [0 ..] goal.goalEnclosing
-            ]
+      outer =
+        [ (depth - 1 - i, LocateGoal Nothing, g, shared)
+        | (i, g, shared) <- zip3 [0 ..] goal.goalEnclosing goal.goalLevelShared
+        ]
+      only shared vm = varMapFromList [(v, e) | v <- shared, Just e <- [lookupVar v vm]]
       nest [] _ = pure headLoops
-      nest ((level, mode, conjuncts) : more) vm =
+      nest ((level, mode, conjuncts, shared) : more) vm =
         wrapGoalConjuncts
           symTab
           si
           (levelLoopNames goal.goalIndex level)
           mode
           conjuncts
-          vm
+          (only shared vm)
           (nest more)
-  nest levels seed
+  wrapGoalConjuncts
+    symTab
+    si
+    (levelLoopNames goal.goalIndex depth)
+    (LocateGoal (Just (goal.goalActiveIndex, activeName, cType)))
+    goal.goalAll
+    seed
+    (nest outer)
 
 -- | Compile the guards followed by the rule-firing block. Returns the
 -- statements that go at the innermost partner-loop position — any HNF

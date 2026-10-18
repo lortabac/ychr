@@ -144,7 +144,9 @@ planAggregate ruleIdx rule path bound a = do
   nested <- planNestedAggregates ruleIdx rule path (Set.fromList shared) a.goal
   pure
     AggregatePlan
-      { planIndex = last' path,
+      { planIndex = case reverse path of
+          i : _ -> i
+          [] -> 0,
         planPath = path,
         planKind = a.kind,
         planProcName = aggregateProcName ruleIdx path,
@@ -164,7 +166,6 @@ planAggregate ruleIdx rule path bound a = do
     resultMatch
       | a.kind /= AggPlain = mempty
       | otherwise = aggregateResultMatch (Var aggregatePayloadName) resolve a.result
-    last' = List.foldl' (\_ x -> x) 0
 
 -- | The variables an aggregate's procedure binds through its out-cells, in
 -- the order of its out parameters. A selection binds the goal's own
@@ -197,7 +198,9 @@ boundAfter bound a
 -- A variable of a nested aggregate that also occurs in a later conjunct of
 -- the enclosing goal is shared by the spec, but nothing has bound it yet
 -- when the nested aggregate is computed. That is reported as an unbound
--- variable, as for a @?@ guard that reads a variable too early.
+-- variable, as for a @?@ guard that reads a variable too early. A later
+-- nested aggregate does not count: as at the top level, two sibling
+-- aggregates may each have a local of the same name.
 planNestedAggregates ::
   Int ->
   D.Rule ->
@@ -220,13 +223,17 @@ planNestedAggregates ruleIdx rule path = go 0
               aggregateMentionedVars n
                 `Set.difference` scope
                 `Set.difference` Set.fromList (aggregateBinds scope n)
-            tooEarly = locals `Set.intersection` aggregateGoalLocals rest
+            tooEarly =
+              locals `Set.intersection` aggregateGoalLocals [r | r <- rest, not (isNested r)]
         tell
           [ Diagnostic label (AnnP (UnboundVariable v) loc origin) []
           | v <- Set.toAscList tooEarly
           ]
         plan <- planAggregate ruleIdx rule (path ++ [j]) scope n
         ((j, plan) :) <$> go (j + 1) (boundAfter scope n) rest
+
+    isNested (D.AggNested _) = True
+    isNested _ = False
 
     label = fmap ("rule " <>) rule.name
     loc = rule.head.sourceLoc
@@ -259,16 +266,17 @@ checkLocalEscapes rule plans = case Set.toAscList escaped of
     -- it is in scope in the guard and body by design. Every other variable
     -- a goal binds is local to the aggregate.
     --
-    -- A selection's goal variables are visible, so a selection has no
-    -- locals, and a name it binds is not an escape even when an aggregate
-    -- to its left has a local of the same name.
+    -- A selection's goal variables are visible, so its only locals are
+    -- those of the aggregates nested in its goal, and a name it binds is
+    -- not an escape even when another aggregate has a local of the same
+    -- name. The same formula covers both kinds: a selection binds its
+    -- visible goal variables.
     locals =
       Set.unions
         [ aggregateGoalLocals p.planGoal
             `Set.difference` Set.fromList p.planShared
             `Set.difference` Set.fromList p.planBind
-        | p <- plans,
-          not (isSelectionPlan p)
+        | p <- plans
         ]
     visible = Set.fromList [v | p <- plans, isSelectionPlan p, v <- p.planBind]
     escaped =
@@ -285,13 +293,17 @@ argVars :: HeadArg -> Set Text
 argVars (HeadVar v) = Set.singleton v
 argVars HeadWildcard = Set.empty
 
--- | Every variable an aggregate mentions, in any of its four positions.
+-- | Every variable an aggregate mentions, in any of its four positions,
+-- and in the four positions of every aggregate nested in its goal. A head
+-- variable that only a nested @Element@ reads is still an input, so it has
+-- to be passed down.
 aggregateMentionedVars :: D.Aggregate -> Set Text
 aggregateMentionedVars a =
   Set.unions
     [ maybe Set.empty exprVars a.agg,
       exprVars a.element,
       aggregateGoalLocals a.goal,
+      Set.unions [aggregateMentionedVars n | D.AggNested n <- a.goal],
       termVars a.result
     ]
 

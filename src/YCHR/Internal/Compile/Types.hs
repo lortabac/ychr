@@ -178,7 +178,11 @@ data GoalOccurrence = GoalOccurrence
     goalAll :: [D.AggregateConjunct],
     -- | The conjuncts of each enclosing goal, innermost first: the order
     -- the location phase loops them in. Empty for a top-level goal.
-    goalEnclosing :: [[D.AggregateConjunct]]
+    goalEnclosing :: [[D.AggregateConjunct]],
+    -- | For each entry of 'goalEnclosing', the shared inputs of the nested
+    -- aggregate the location phase leaves to reach it: the only variables
+    -- of the inner goal that may be joined with the outer one.
+    goalLevelShared :: [[Text]]
   }
   deriving (Show, Eq)
 

@@ -146,6 +146,8 @@ variable it shares with the enclosing goal must be bound by then, by a
 conjunct to its left (or be an input of the enclosing aggregate). One
 that only a later conjunct binds is an unbound name (`YCHR-40002`), as
 for a `?` guard: write `(c(Y), \+ b(Y))`, not `(\+ b(Y), c(Y))`.
+A later *nested aggregate* does not count here: as in a rule head, two
+sibling aggregates may each have a local of the same name.
 
 
 ## Semantics
@@ -528,8 +530,13 @@ lowers an aggregate in the occurrence procedure itself:
   the regular heads. It skips every nested aggregate it meets, as it
   skips a `?` guard: an aggregate only filters, and the fire step
   recomputes it. A variable that aggregate would bind is then bound by
-  the next conjunct that mentions it, so again the phase can only try
-  more combinations.
+  the next conjunct that mentions it. Going out from a nested goal to
+  the goal around it, only the nested aggregate's shared inputs stay
+  bound. Its other variables are its locals or its outputs (a result
+  that also occurs in its goal, a selection's goal variables), whose
+  value the fold takes from the whole nested goal, not from the
+  constraint being tried. So again the phase can only try more
+  combinations.
 - **Late Storage.** An active constraint is unstored until Late
   Storage, so a fold that only read the store would miss the very
   constraint being activated. Every occurrence of a rule with

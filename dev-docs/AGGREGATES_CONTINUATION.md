@@ -83,10 +83,13 @@ Golden cases: `aggregates_count`, `aggregates_sum`,
 `reactivation_indexed_position`, for phase I `aggregates_forall`,
 `aggregates_nested_not`, `aggregates_nested_select`,
 `aggregates_nested_distinct`, `aggregates_nested_soft`,
-`aggregates_select_nested` and `aggregates_macro_in_goal`, plus the
+`aggregates_nested_locate_output`, `aggregates_nested_element_head`,
+`aggregates_nested_siblings`, `aggregates_select_nested` and
+`aggregates_macro_in_goal`, plus the
 negative `aggregates_element_unbound`, `aggregates_local_escapes`,
 `aggregates_reserved_in_goal`, `aggregates_nested_take`,
-`aggregates_nested_shared_later`, `constraint_use_aggregate_goal` and
+`aggregates_nested_shared_later`, `aggregates_nested_select_escape`,
+`constraint_use_aggregate_goal` and
 `constraint_use_takemin_fact`. Each positive case runs on the Haskell
 interpreter and the Scheme backend.
 
@@ -203,9 +206,9 @@ make mhs-build       # CI's MicroHs job; easy to forget, see below
 make bench
 ```
 
-Baseline at the phase I tip: `cabal test` 2395/2395, `test-style` 134,
+Baseline at the phase I tip: `cabal test` 2402/2402, `test-style` 134,
 `test-repl` 86, `test-typecheck` 21, `test-docs` 45, `test-stlc` 11,
-`test-scheme` 860 passed / 3 skipped, `test-scheme-runtime` clean,
+`test-scheme` 866 passed / 3 skipped, `test-scheme-runtime` clean,
 `make mhs-build` clean. `make bench`: ~29 µs (`aggregates_sum`),
 ~744 µs (`aggregates_many`), ~14 µs (`aggregates_no_match`), ~7.5 ms
 (`aggregates_takemin_many`).

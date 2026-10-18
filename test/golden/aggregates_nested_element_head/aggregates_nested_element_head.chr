@@ -1,0 +1,12 @@
+% A head variable that only a nested aggregate's element reads is an
+% input of both aggregates.
+:- module(aggregates_nested_element_head, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint rate/1, order/1, line/2, total/1, go/1, ask/1.
+
+rate(R), sum(C, (order(O), sum(P * R, line(O, P), C)), T) ==> total(T).
+
+total(T) \ ask(X) <=> X = T.
+
+go(X) <=> order(1), line(1, 2), line(1, 3), order(2), line(2, 4), rate(10), ask(X).

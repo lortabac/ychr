@@ -179,7 +179,7 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
   -- gaps in the list.
   goalOccurrences <-
     fmap catMaybes $
-      for goalConjuncts $ \(plan, goal, enclosing, j, hc) ->
+      for goalConjuncts $ \(plan, (goal, enclosing, levelShared), j, hc) ->
         mkGoalOccurrence
           symTab
           rule
@@ -187,32 +187,40 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
           display
           aggregates
           orderedOccurrences
-          plan.planIndex
-          j
           hc
-          goal
-          enclosing
+          GoalOccurrence
+            { goalIndex = plan.planIndex,
+              goalActiveIndex = j,
+              goalAll = goal,
+              goalEnclosing = enclosing,
+              goalLevelShared = levelShared
+            }
   pure (ordinary ++ goalOccurrences)
   where
     planByIndex i = List.find (\p -> p.planIndex == i) (aggregatePlans !! ruleIdx)
     goalConjuncts =
-      [ (plan, goal, enclosing, j, hc)
-      | (i, agg) <- zip [0 :: Int ..] rule.head.node.aggregates,
+      [ (plan, level, j, hc)
+      | (i, _) <- zip [0 :: Int ..] rule.head.node.aggregates,
         Just plan <- [planByIndex i],
-        (goal, enclosing) <- aggregateGoals [] agg,
+        level@(goal, _, _) <- aggregateGoals [] [] plan,
         (j, D.AggConstraint hc _) <- zip [0 :: Int ..] goal
       ]
 
--- | Every goal of an aggregate, with the goals enclosing it innermost
--- first: the aggregate's own goal, then the goals nested in it, in source
--- order and depth first (spec §2 "Order").
+-- | Every goal of an aggregate, with the goals enclosing it innermost first
+-- and, for each of those, the shared inputs of the nested aggregate whose
+-- goal sits inside it: the aggregate's own goal, then the goals nested in
+-- it, in source order and depth first (spec §2 "Order").
 aggregateGoals ::
   [[D.AggregateConjunct]] ->
-  D.Aggregate ->
-  [([D.AggregateConjunct], [[D.AggregateConjunct]])]
-aggregateGoals enclosing agg =
-  (agg.goal, enclosing)
-    : concat [aggregateGoals (agg.goal : enclosing) n | D.AggNested n <- agg.goal]
+  [[Text]] ->
+  AggregatePlan ->
+  [([D.AggregateConjunct], [[D.AggregateConjunct]], [[Text]])]
+aggregateGoals enclosing shared plan =
+  (plan.planGoal, enclosing, shared)
+    : concat
+      [ aggregateGoals (plan.planGoal : enclosing) (n.planShared : shared) n
+      | (_, n) <- plan.planNested
+      ]
 
 -- | Build a single 'Occurrence' record for the active head constraint
 -- at @activeIdx@. The other entries in @combined@ become the partner
@@ -264,10 +272,10 @@ mkOccurrence
 
 -- | Build the 'Occurrence' for one CHR constraint conjunct of an
 -- aggregate goal. Every regular head is a partner, since the active
--- constraint is not a head; @j@ is the conjunct's position in the goal,
--- which the location phase needs to evaluate the conjunct's own guards
--- in their goal-order place. @outer@ are the goals around this one,
--- innermost first.
+-- constraint is not a head. The 'GoalOccurrence' says where the conjunct
+-- sits: its position in its goal, which the location phase needs to
+-- evaluate the conjunct's own guards in their goal-order place, and the
+-- goals around it.
 mkGoalOccurrence ::
   SymbolTable ->
   D.Rule ->
@@ -275,13 +283,10 @@ mkGoalOccurrence ::
   Text ->
   [AggregatePlan] ->
   [(HeadPosition, HeadConstraint, Bool)] ->
-  Int ->
-  Int ->
   HeadConstraint ->
-  [D.AggregateConjunct] ->
-  [[D.AggregateConjunct]] ->
+  GoalOccurrence ->
   Writer [Diagnostic CompileError] (Maybe Occurrence)
-mkGoalOccurrence symTab rule ruleId' display plans heads aggIndex j activeCon goal outer = do
+mkGoalOccurrence symTab rule ruleId' display plans heads activeCon goal = do
   partners <- resolvePartners symTab rule display heads
   pure $ do
     resolvedPartners <- sequence partners
@@ -302,14 +307,7 @@ mkGoalOccurrence symTab rule ruleId' display plans heads aggIndex j activeCon go
           partners = resolvedPartners,
           aggregates = plans,
           passive = False,
-          goalOcc =
-            Just
-              GoalOccurrence
-                { goalIndex = aggIndex,
-                  goalActiveIndex = j,
-                  goalAll = goal,
-                  goalEnclosing = outer
-                }
+          goalOcc = Just goal
         }
 
 -- | Resolve every partner entry's constraint type, reporting a miss and
