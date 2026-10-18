@@ -1,0 +1,7 @@
+:- module(b, []).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k.
+
+:- state(k, int).

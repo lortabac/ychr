@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+`library(state)` is now a declaration macro plus a runner, and state
+values are typed.
+
+- **Breaking:** `library(state)` no longer declares a value-level key API:
+  `new_state/2`, `get/2`, `put/2`, `modify/2`, `close_state/1`,
+  `new_states/1`, `close_states/1` and `run_state/3`/`run_states/2` in
+  their old form are gone. A stateful variable is declared with
+  `:- state(Key, Type).`, which expands to a private `state_Key(Type)`
+  holder plus `new_Key`, `get_Key`, `put_Key`, `modify_Key` and
+  `close_Key`, each typed at `Type`. A mismatch in a request written
+  directly in a rule is a compile error, and `Type` must be ground. Keys
+  are compile-time atoms, so there is no runtime key and no dedicated
+  unground-key error (an unbound key fails the runner's dispatcher), and
+  no bulk `new_states`/`close_states`.
+- `new_Key` and `close_Key` are the low-level API. The recommended entry
+  points are `run_state(K, V, quote(Goal))` and
+  `run_states(KVs, quote(Goal))`, which create the listed keys, run the
+  goal in a fork of the calling session and return the final value(s), as
+  on master. A key named in the runner is a data constructor
+  (`kv(k, 1)`), so declare it with `:- chr_type`, and the generated names
+  must stay unique across the program. A dynamically told goal is not
+  type-checked. See
+  [docs/reference/state.md](docs/reference/state.md).
+
 The prelude tells a list of goals, and the s-expression VM format is now
 version 3.
 
@@ -181,32 +205,6 @@ compares bindings only); the primitives are pinned directly by
 with a runtime error carrying the given message. It returns no value, so
 it fits any expression position. A panic in a rule guard is a hard
 failure, not a soft one, and only `run_chr_session/1` catches it.
-
-`library(state)` emulates mutable variables with constraints, under a
-key-value interface: `new_state(K, V)` creates key `K` with initial
-value `V`, `get(K, R)` unifies `R` with its value, `put(K, V)` replaces
-it, and `modify(K, F)` replaces it with `F` applied to it. The
-associations are held by a private `state/2` constraint. Values are
-typed `any`, since different keys may hold values of different types.
-`close_state(K)` deletes a key, which may then be created again;
-`new_states(KVs)` creates every key of a `list(pair(K, any))` of
-`kv(K, V)` and `close_states(Ks)` deletes every key of a list, one
-element at a time, in order. Misuse panics when the request is made: a
-request on a non-ground key, `new_state` on a key that already exists,
-`get`, `put`, `modify` or `close_state` on a key that does not exist,
-and `new_states` or `close_states` on anything but a proper list (of
-`kv` pairs, for `new_states`), checked before any element takes effect.
-
-`library(state)` also has a scoped interface, after Haskell's
-`runState`: `run_state(K, V, quote(Goal))` runs `Goal` with key `K`
-created at `V` and returns the key's final value, and
-`run_states(KVs, quote(Goal))` does the same for a list of `kv(K, V)`
-and returns the final `kv` list. The goal runs through `search:solve/1`
-in a fresh session, so its keys need no closing and cannot clash with
-the caller's, its constraints must be exported, and errors in it
-propagate. The final values are read before any choice point the goal
-leaves is explored, so the goal should be deterministic. Haskell
-runtime only, like `library(search)`.
 
 `\==` is the prelude's ask-disequality: `X \== Y` is true when the two
 arguments are not structurally identical after dereferencing, so it is

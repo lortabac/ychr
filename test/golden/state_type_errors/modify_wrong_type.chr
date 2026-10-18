@@ -1,0 +1,12 @@
+:- module(modify_wrong_type).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k.
+
+:- state(k, int).
+
+:- chr_constraint bad/0.
+
+% The update function must map int to int; this one returns a string.
+bad <=> new_k(1), modify_k(fun(X) -> "a" end).

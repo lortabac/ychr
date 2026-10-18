@@ -475,17 +475,18 @@ def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
 
 def test_search_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
     """The `library(search)` counterpart of
-    `test_meta_module_host_calls_are_bound`: the driver calls are stubs
-    on this backend, but each must lower to a bound runtime procedure so
-    that a program importing the library (directly, or through
-    `library(state)`) still loads on Chez.
+    `test_meta_module_host_calls_are_bound`: each driver call must lower
+    to a bound runtime procedure so that a program importing the library
+    (directly, or through `library(state)`) still loads on Chez.
     """
     program = tmp_path / "searchb.chr"
     program.write_text(
         ":- module(searchb, [go/1]).\n"
         ":- use_module(library(state)).\n"
+        ":- chr_type key ---> k.\n"
+        ":- state(k, int).\n"
         ":- chr_constraint go(any).\n"
-        "go(R) <=> new_state(k, 1), get(k, R).\n"
+        "go(R) <=> new_k(1), get_k(R).\n"
     )
     result = subprocess.run(
         [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), str(program)],

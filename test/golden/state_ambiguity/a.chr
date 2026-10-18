@@ -1,0 +1,9 @@
+% Two modules declaring the same key generate the same bare `new_k/1`.
+% The runner tells its goals by bare name, so the name is ambiguous.
+:- module(a, [type(key/0)]).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k.
+
+:- state(k, int).

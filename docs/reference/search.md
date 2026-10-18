@@ -105,8 +105,9 @@ rest of type checking, `--no-check` skips that check.
 
 `solve(quote(Goal))`, `findall(Template, quote(Goal))` and
 `fold_solutions(Template, quote(Goal), F, Acc0)` — and everything built
-on them: `forall/3`, `find_n/3`, and `library(state)`'s `run_state/3`
-and `run_states/2` — run `Goal` in a **fork of the calling session**:
+on them: `forall/3`, `find_n/3`, and `library(state)`'s
+`run_state/3` and `run_states/2` ([state.md](state.md)) — run `Goal` in a
+**fork of the calling session**:
 a session of the same program whose constraint store and propagation
 history start as a copy of the caller's, at the moment the entry point
 is called. The fork has its own reactivation queue, which starts empty,

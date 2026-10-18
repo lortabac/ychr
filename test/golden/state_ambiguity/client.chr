@@ -1,0 +1,9 @@
+:- module(client, [run/1]).
+
+:- use_module(library(state)).
+:- use_module(library(pairs)).
+:- use_module(a).
+
+:- chr_constraint run/1.
+
+run(R) <=> [kv(k, R)] is run_states([kv(k, 1)], quote([])).
