@@ -32,7 +32,8 @@ tests =
       callablesDispatchTests,
       aggregateFoldTests,
       aggregateResultTests,
-      aggregateGoalTests
+      aggregateGoalTests,
+      selectionTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -1061,3 +1062,93 @@ aggregateResultTests =
     isSharedFieldTest _ = False
     isVLet (VM.LetVal (VM.Name "K") _) = True
     isVLet _ = False
+
+--------------------------------------------------------------------------------
+-- Selection aggregates
+--------------------------------------------------------------------------------
+
+-- | An argmin over a goal with one shared variable (K) and two visible
+-- ones (X and G).
+argminSource :: Text
+argminSource =
+  ":- module(sela, [p/1, item/3, best/3]).\n\
+  \:- chr_constraint p/1, item/3, best/3.\n\
+  \\n\
+  \p(K), argmin(X, item(K, X, G)) ==> best(K, X, G).\n"
+
+-- | A takemin that removes the selected job.
+takeminSource :: Text
+takeminSource =
+  ":- module(selt, [m/1, job/3, run/1]).\n\
+  \:- chr_constraint m/1, job/3, run/1.\n\
+  \\n\
+  \m(M) \\ takemin(D, job(M, D, J)) <=> run(J).\n"
+
+isKillStmt :: VM.Stmt -> Bool
+isKillStmt (VM.Kill _) = True
+isKillStmt _ = False
+
+selectionTests :: TestTree
+selectionTests =
+  testGroup
+    "selection aggregates"
+    [ testCase "an argmin procedure binds one out-cell per visible goal variable" $ do
+        prog <- compileOrFail [("m.chr", argminSource)]
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no selection procedure"
+          Just p -> do
+            let outs =
+                  [ n.unName
+                  | n <- p.params,
+                    "aggregate_out_" `T.isPrefixOf` n.unName
+                  ]
+            -- X and G are bound; K is a shared input.
+            length outs @?= 2
+            length p.params @?= 3,
+      testCase "the selection procedure only reads, apart from binding its out-cells" $ do
+        prog <- compileOrFail [("m.chr", argminSource)]
+        case findAggregateProcedure prog 1 0 0 of
+          Nothing -> assertFailure "no selection procedure"
+          Just p -> do
+            assertBool
+              "a selection procedure must not store, kill, add history or tell"
+              (not (any mutatingStmt (nestedStmts p.body)))
+            mapM_
+              ( \b -> case b of
+                  VM.BUnify (VM.Var n) _ ->
+                    assertBool
+                      ("bunify binds something that is not an out-cell: " ++ show n.unName)
+                      ("aggregate_out_" `T.isPrefixOf` n.unName)
+                  other -> assertFailure ("unexpected bunify shape: " ++ show other)
+              )
+              (bunifyExprs p.body),
+      testCase "an argmin firing kills nothing" $ do
+        prog <- compileOrFail [("m.chr", argminSource)]
+        case findProcedure prog "occurrence_sela__p1_1" of
+          Nothing -> assertFailure "no p/1 occurrence procedure"
+          Just p ->
+            assertBool
+              "an argmin keeps its goal's constraints"
+              (not (any isKillStmt (nestedStmts p.body))),
+      testCase "a takemin firing finds its match again before the kills" $ do
+        prog <- compileOrFail [("m.chr", takeminSource)]
+        case findProcedure prog "occurrence_selt__m1_1" of
+          Nothing -> assertFailure "no m/1 occurrence procedure"
+          Just p -> do
+            let stmts = nestedStmts p.body
+                label = VM.Label "selection_loop_0_0"
+                selected = VM.Kill (VM.IdVar "$selection_id_0_0")
+                position x = lookup x (zip stmts [0 :: Int ..])
+            assertBool "expected the relocation loop" (label `elem` foreachLabels p.body)
+            case (position (VM.Break label), position selected) of
+              (Just b, Just k) ->
+                assertBool "the break must come before the kill" (b < k)
+              other -> assertFailure ("missing break or kill: " ++ show other)
+            callsTo "occurrence_selt__job3_1" p.body
+              @?= [ VM.AId (VM.IdVar "$selection_id_0_0")
+                      : [ VM.AVal (VM.FieldArg (VM.IdVar "$selection_id_0_0") (VM.ArgIndex i))
+                        | i <- [0, 1, 2]
+                        ]
+                      ++ [VM.AVal (VM.Lit (VM.BoolLit True))]
+                  ]
+    ]

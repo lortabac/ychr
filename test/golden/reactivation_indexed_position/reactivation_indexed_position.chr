@@ -1,0 +1,15 @@
+% A constraint must observe its variables even when its type has a
+% position some loop looks up by index. `X == 4` becomes an index
+% condition on item's second argument, so item has an indexed position,
+% but the store is far too small to be indexed yet. Binding V later must
+% still reactivate item(1, V), so the rule fires.
+:- module(reactivation_indexed_position, [start/1]).
+
+:- chr_constraint p/1, item/2, fired/0, ask/1, start/1.
+
+p(K), item(K, X) ==> X == 4 | fired.
+
+fired \ ask(R) <=> R = 1.
+ask(R) <=> R = 0.
+
+start(A) <=> item(1, V), p(1), V = 4, ask(A).

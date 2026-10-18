@@ -1,0 +1,12 @@
+% An event constraint may occur inside takemin, which removes it.
+:- module(constraint_use_takemin_event, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint m/1, job/2, ran/1, ask/1, setup/1.
+:- constraint_use event(job/2).
+
+m(M) \ takemin(D, job(M, D)) <=> ran(D).
+
+ran(D) \ ask(R) <=> R = D.
+
+setup(R) <=> job(1, 4), job(1, 2), m(1), ask(R).

@@ -37,7 +37,8 @@ import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Types
-  ( ConstraintKey (..),
+  ( AggregateKind (..),
+    ConstraintKey (..),
     ConstraintUse (..),
     HeadConstraint (..),
     QualifiedName,
@@ -71,12 +72,15 @@ checkConstraintUse prog
               ++ [(hc, RemovedOccurrence) | hc <- h.removed]
               -- A constraint in an aggregate goal is a kept occurrence: an
               -- aggregate keeps its goal's constraints (spec
-              -- §Interaction with other features). The removal a
-              -- takemin/takemax performs is not reachable yet, since
-              -- selection aggregates are still rejected by the compiler.
-              ++ [ (hc, KeptOccurrence)
+              -- §Interaction with other features). The exception is a
+              -- top-level takemin/takemax, which removes the match it
+              -- selects. A nested aggregate's constraints stay kept.
+              ++ [ (hc, role)
                  | agg <- h.aggregates,
-                   hc <- goalConstraints agg
+                   (hc, topLevel) <- goalConstraints agg,
+                   let role
+                         | topLevel && removesMatch agg = RemovedOccurrence
+                         | otherwise = KeptOccurrence
                  ]
        in [ Diagnostic label (AnnP err loc origin) []
           | (hc, role) <- occurrences,
@@ -87,11 +91,15 @@ checkConstraintUse prog
           ]
 
     -- The CHR constraint conjuncts of an aggregate goal, including those
-    -- of a nested aggregate.
+    -- of a nested aggregate, each flagged with whether it sits directly
+    -- in this goal.
     goalConstraints agg = concatMap conjunctConstraints agg.goal
-    conjunctConstraints (D.AggConstraint hc _) = [hc]
-    conjunctConstraints (D.AggNested nested) = goalConstraints nested
+    conjunctConstraints (D.AggConstraint hc _) = [(hc, True)]
+    conjunctConstraints (D.AggNested nested) =
+      [(hc, False) | (hc, _) <- goalConstraints nested]
     conjunctConstraints (D.AggGuard _) = []
+
+    removesMatch agg = agg.kind == AggTakemin || agg.kind == AggTakemax
 
 -- | Whether a declared policy allows an occurrence in the given position.
 allows :: ConstraintUse -> OccurrenceRole -> Bool

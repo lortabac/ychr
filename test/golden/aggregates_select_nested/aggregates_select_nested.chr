@@ -1,0 +1,7 @@
+% A nested aggregate is not implemented yet, inside a selection goal too.
+:- module(aggregates_select_nested, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, item/2, q/1.
+
+p(K), argmin(X, (item(K, X), aggregate(aggregates:count_spec, 1, q(X), _))) ==> true.

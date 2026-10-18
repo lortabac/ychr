@@ -1,0 +1,19 @@
+% p is told before the goal has a match. The selection fires through a
+% goal occurrence of the second conjunct when the match is completed, and
+% a better match told later does not fire it again.
+:- module(aggregates_select_late, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, item/2, cost/2, best/2, ask/2, setup/1.
+
+p(K), argmin(X, (item(K, I), cost(I, X))) ==> best(K, I).
+
+ask(K, R), collect(I, best(K, I), L) <=> R = L.
+
+setup(A) <=>
+    p(1),
+    item(1, 10),
+    item(1, 20),
+    cost(20, 3),
+    cost(10, 1),
+    ask(1, A).

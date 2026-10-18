@@ -426,8 +426,11 @@
               (if (not worth)
                   ;; Too small to be worth indexing: still the pre-index
                   ;; path, and the whole bucket is filed in one pass
-                  ;; later if it grows past the threshold.
-                  (growable-push! s g susp)
+                  ;; later if it grows past the threshold. That pass only
+                  ;; files keys, so the observers are registered here.
+                  (begin
+                    (observe-args! susp (suspension-args susp))
+                    (growable-push! s g susp))
                   (let ((entries (keys-and-observe! susp positions)))
                     (when (not indexed)
                       (file-backlog! s ctype g positions))

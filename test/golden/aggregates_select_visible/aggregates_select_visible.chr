@@ -1,0 +1,23 @@
+% The goal variables of a selection are visible to the guard and the
+% body, and a later aggregate reads them as shared inputs.
+:- module(aggregates_select_visible, [setup/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, item/3, member/2, res/2, ask/2, setup/2.
+
+p(K), argmin(X, item(K, X, G)), count(member(G, _), N) ==> X > 0 | res(K, [X, G, N]).
+
+res(K, V) \ ask(K, R) <=> R = V.
+
+setup(A, B) <=>
+    item(1, 4, 7),
+    item(1, 2, 8),
+    item(2, 3, 7),
+    item(2, -1, 9),
+    member(8, 1),
+    member(8, 2),
+    member(7, 3),
+    p(1),
+    p(2),
+    ask(1, A),
+    ask(2, B).

@@ -2,15 +2,16 @@
 
 Working notes for finishing `docs/reference/aggregates.md`. The core
 form, the predefined aggregates, goal occurrences and the removal step
-are implemented; what remains is the selection forms, nested aggregates
-and the aggregator typing. Keep this file until the spec is fully
+and the selection forms are implemented; what remains is nested
+aggregates and the aggregator typing. Keep this file until the spec is fully
 implemented; delete it then.
 
 Branch `aggregates`, worktree `.worktrees/aggregates`, rebased onto
-`master` (`e19fcd8`); phases 1 and A–G are done. A program that uses the core form
-or a predefined aggregate runs on both backends; a selection form or a
-nested aggregate is recognized, reported (`YCHR-40004`) and dropped, so
-nothing compiles into a rule that never fires. `forall/2` is not defined
+`master` (`e19fcd8`); phases 1 and A–G are done. Phase H is on branch
+`selection-aggregates` (from `a85f36c`). A program that uses the core
+form, a predefined aggregate or a selection form runs on both backends;
+a nested aggregate is recognized, reported (`YCHR-40004`) and dropped,
+so nothing compiles into a rule that never fires. `forall/2` is not defined
 by `library(aggregates)` yet, because it needs a nested aggregate.
 
 ## Where the work stands
@@ -25,7 +26,7 @@ by `library(aggregates)` yet, because it needs a nested aggregate.
 | E. goal occurrences | **done** |
 | F. removal step | **done** |
 | G. typing, docs, bench | **done** (typing documented as not implemented) |
-| H. selection aggregates | not started |
+| H. selection aggregates | **done**, branch `selection-aggregates` |
 | I. nested aggregates | not started |
 
 ## What is implemented, and how it is pinned
@@ -70,49 +71,47 @@ Golden cases: `aggregates_count`, `aggregates_sum`,
 `aggregates_result_compound`, `aggregates_result_repeat`,
 `aggregates_result_local_scope`,
 `aggregates_removal_step`, `aggregates_many`, `aggregates_no_match`,
-`hnf_arg_slot_shadow`, `hnf_source_var_named_hnf`, plus the negative
+`hnf_arg_slot_shadow`, `hnf_source_var_named_hnf`, and for phase H
+`aggregates_argmin`, `aggregates_argmax_tie`,
+`aggregates_select_visible`, `aggregates_select_late`,
+`aggregates_select_soft`, `aggregates_takemin_drain`,
+`aggregates_takemax_once`, `aggregates_take_removal_step`,
+`aggregates_takemin_many`, `aggregates_take_multi`,
+`constraint_use_takemin_event` and
+`reactivation_indexed_position`, plus the negative
 `aggregates_element_unbound`, `aggregates_local_escapes`,
-`aggregates_macro_in_goal`, `aggregates_reserved_in_goal` and
-`constraint_use_aggregate_goal`. Each positive case runs on the Haskell
+`aggregates_macro_in_goal`, `aggregates_reserved_in_goal`,
+`aggregates_select_nested`, `constraint_use_aggregate_goal` and
+`constraint_use_takemin_fact`. Each positive case runs on the Haskell
 interpreter and the Scheme backend.
 
 Unit cases: `test/YCHR/DesugarTest.hs` (`aggregates` group) and
 `test/YCHR/CompileTest.hs` (`aggregate folds`, `aggregate result
-patterns` and `aggregate goal occurrences` groups).
+patterns`, `aggregate goal occurrences` and `selection aggregates`
+groups).
 `test/repl/test_repl.py` has the `:trace` case for a goal occurrence.
 
 ## What remains
 
-### Phase H — selection aggregates
+### Phase H — selection aggregates (done)
 
-`argmin(X, Goal)`, `argmax(X, Goal)`, `takemin(X, Goal)`,
-`takemax(X, Goal)` (spec §Selection aggregates). They are core forms,
-not aggregators, and they are recognized already
-(`Rename.aggregateKindOf`, `AggregateKind`), but
-`Compile/Aggregate.checkSupported` reports and drops them.
+Two steps, because a procedure cannot hand a suspension back and the
+guard must stay read-only:
 
-What the implementation has to add:
-
-- The goal's variables are **not local**: they are visible to the rest of
-  the rule, so `planShared`/`planBind` and the escape check do not apply
-  the way they do to an `AggPlain`. `Aggregate.checkSupported`'s
-  `AggKind` gate is the first thing to change.
-- Selection is over the matches ordered by the key `X`: the fold keeps
-  the minimal (maximal) `X` and, on ties, the first in goal order. It is
-  not an `Inc`-style fold, so `genAggregateProcedure` needs a second
-  shape: either a `Foreach` that keeps `(X, match-locals)` in a local and
-  compares, or a two-pass enumeration (find the extreme, then match it).
-- The selected match's *constraints* are what the rule then uses, which
-  is what makes the goal's variables visible. A `takemin`/`takemax`
-  removes the selected match, which means the removal step has to take
-  those constraints as well, after the removed heads, "in the textual
-  order of the selection forms and then in goal order"
-  (`genRemovalStmts`'s `removedHeads`).
-- The fire-once history is over the regular heads only, as for
-  `AggPlain`; the spec's `p(K), argmin(X, item(K, X)) ==> best(K, X)`
-  fires once per `p(K)`, not once per `item`.
-- `ConstraintUse`: a `takemin`/`takemax` conjunct is a *removed*
-  occurrence (`test/golden/constraint_use_*`).
+- The selection procedure (`Compile.genSelectionBody`, same name and call
+  site as a fold) keeps the first match with the best key and binds one
+  out-cell per visible goal variable (`planBind`), plus the match's
+  position for `take*` (`Names.selectionPosCell`).
+- For `take*`, the firing walks the goal again before the kills
+  (`Compile.genSelectStmts`), counting up to that position, and keeps the
+  suspensions in `$selection_id_<k>_<j>`. `genKillStmts` kills them and
+  `genRemovalStmts` adds them after the removed heads.
+- `wrapGoalConjuncts` takes a `GoalLoopNames`, so the relocation loops
+  (`selection_loop_<k>_<j>`) don't clash with a goal occurrence's own
+  loops for the same aggregate.
+- Fixed on the way: the Scheme store registered no observers for a type
+  with an indexed position while it was below the index threshold
+  (`scheme/ychr/store.sls`, pinned by `reactivation_indexed_position`).
 
 ### Phase I — nested aggregates
 
@@ -171,6 +170,7 @@ rules. The two hook points are:
 | the removal step | `Compile.hs` `genRemovalStmts` |
 | the removal flag | `Compile/Names.hs` `removalParamName` |
 | gates | `Compile/Aggregate.hs` `checkSupported`, `checkLocalEscapes` |
+| selection | `Compile.hs` `genSelectionBody`, `genSelectStmts`, `GoalLoopNames`; `Aggregate.hs` `selectionGoalVars` |
 | passivity exemption | `Compile/Passive.hs` `isPassive`, `aggregateRule` |
 | constraint use | `ConstraintUse.hs` `checkConstraintUse.goalConstraints` |
 | the macro-in-goal gate | `Rename.hs` `renameConjunct`, `Display.hs` `renameErrorCode`/`renameErrorMsg` |

@@ -1,0 +1,22 @@
+% With only kept regular heads, a takemax fires once per machine. Machine 2
+% exists before its jobs, so the first job is selected while it is the
+% active constraint.
+:- module(aggregates_takemax_once, [setup/4]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint machine/1, job/3, run/2, ask/3, setup/4.
+
+machine(M) \ takemax(D, job(M, D, J)) <=> run(M, J).
+
+ask(M, R, N), collect(J, run(M, J), L), count(job(M, _, _), C) <=> R = L, N = C.
+
+setup(R1, N1, R2, N2) <=>
+    job(1, 5, 50),
+    job(1, 9, 90),
+    job(1, 2, 20),
+    machine(1),
+    machine(2),
+    job(2, 4, 40),
+    job(2, 8, 80),
+    ask(1, R1, N1),
+    ask(2, R2, N2).

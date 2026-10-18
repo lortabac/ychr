@@ -68,9 +68,12 @@ benchmarkPrograms =
     -- example (two matches, a guarded rule); "aggregates_many" folds 200
     -- matches, so the fold loop dominates; "aggregates_no_match" folds an
     -- empty goal, which is the per-aggregate fixed cost.
+    -- "aggregates_takemin_many" drains 100 jobs with takemin, one
+    -- selection and one relocation per job.
     "aggregates_sum",
     "aggregates_many",
-    "aggregates_no_match"
+    "aggregates_no_match",
+    "aggregates_takemin_many"
   ]
 
 goldenDir :: FilePath

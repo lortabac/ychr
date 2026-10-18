@@ -1635,11 +1635,9 @@ compileErrorMsg (AggregateNotImplemented name arity) =
         ++ T.unpack name
         ++ "/"
         ++ show arity
-        ++ "' is not implemented yet"
+        ++ "' inside an aggregate goal is not implemented yet"
     )
-    ( "this compiler recognizes the form but does not evaluate it:"
-        ++ " selection aggregates and nested aggregates are still to come"
-    )
+    "this compiler recognizes a nested aggregate but does not evaluate it yet"
 compileErrorMsg AggregateResultNotMaybe =
   withHint
     "No 'maybe:just/1' constructor is visible"

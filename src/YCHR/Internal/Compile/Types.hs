@@ -15,6 +15,9 @@ module YCHR.Internal.Compile.Types
     activeHeadPosition,
     Partner (..),
     AggregatePlan (..),
+    isSelectionPlan,
+    isTakePlan,
+    selectsMax,
     ResultMatch (..),
     IndexCondition (..),
     CompiledGuards (..),
@@ -45,7 +48,8 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Types
-  ( HeadArg,
+  ( AggregateKind (..),
+    HeadArg,
     HeadConstraint,
     Identifier,
     Name,
@@ -69,8 +73,8 @@ data CompileError
   | -- | A local variable of an aggregate is used in the rule's guard or
     -- body. Raised by 'YCHR.Internal.Compile.Aggregate'.
     AggregateLocalEscapes Text
-  | -- | A recognized aggregate form the compiler does not implement yet,
-    -- with the form's name and arity. Raised by
+  | -- | An aggregate nested in an aggregate goal, which the compiler does
+    -- not implement yet, with the form's name and arity. Raised by
     -- 'YCHR.Internal.Compile.Aggregate'.
     AggregateNotImplemented Text Int
   | -- | A rule has an aggregate but the program does not declare
@@ -142,10 +146,12 @@ data Occurrence = Occurrence
     --
     -- A goal occurrence's active constraint is not one of the rule's
     -- heads, so 'activeIdx' is meaningless for it: use
-    -- 'activeHeadPosition'. 'isKept' is always 'True' (firing never
-    -- removes the active goal constraint), and 'partners' is still only
-    -- the regular heads, so every consumer that must see heads alone
-    -- keeps working unchanged.
+    -- 'activeHeadPosition'. 'isKept' is always 'True': firing never
+    -- removes it as the active head. It can still die in the firing,
+    -- through a @takemin@\/@takemax@ that selected it or a removed head
+    -- that matched it, and the early drop test catches that. 'partners'
+    -- is still only the regular heads, so every consumer that must see
+    -- heads alone keeps working unchanged.
     goalOcc :: Maybe GoalOccurrence
   }
 
@@ -224,6 +230,8 @@ data Partner = Partner
 data AggregatePlan = AggregatePlan
   { -- | Source order of this aggregate within the rule head.
     planIndex :: Int,
+    -- | Which form it is: the core form or one of the selection forms.
+    planKind :: AggregateKind,
     -- | The procedure that computes it.
     planProcName :: VM.Name,
     planAgg :: Maybe D.Expr,
@@ -233,16 +241,34 @@ data AggregatePlan = AggregatePlan
     -- order the procedure's @aggregate_shared_N@ parameters and every call
     -- site use.
     planShared :: [Text],
-    -- | Result variables the procedure binds, in the canonical order its
-    -- @aggregate_out_N@ parameters use. Every other variable of the
-    -- result pattern is a shared input, so it is matched with an equality
-    -- instead of bound.
+    -- | Variables the procedure binds, in the canonical order its
+    -- @aggregate_out_N@ parameters use. For the core form these are the
+    -- result variables; every other variable of the result pattern is a
+    -- shared input, so it is matched with an equality instead of bound.
+    -- For a selection form they are the goal's variables that are not
+    -- shared: the selected match's values, visible to the rest of the
+    -- rule.
     planBind :: [Text],
     -- | What the procedure does with the computed result: the tests the
     -- pattern has to pass and the out-cell bindings that follow them.
+    -- Empty for a selection form, which has no result pattern.
     planResultMatch :: ResultMatch
   }
   deriving (Show, Eq)
+
+-- | Whether a plan is one of the four selection forms.
+isSelectionPlan :: AggregatePlan -> Bool
+isSelectionPlan p = p.planKind /= AggPlain
+
+-- | Whether a plan is @takemin@ or @takemax@, so its firing removes the
+-- selected match.
+isTakePlan :: AggregatePlan -> Bool
+isTakePlan p = p.planKind == AggTakemin || p.planKind == AggTakemax
+
+-- | Whether a selection plan keeps the largest key rather than the
+-- smallest.
+selectsMax :: AggregatePlan -> Bool
+selectsMax p = p.planKind == AggArgmax || p.planKind == AggTakemax
 
 -- | A result pattern compiled against the computed payload: the tests it
 -- has to pass, and the bindings of the variables it introduces.
