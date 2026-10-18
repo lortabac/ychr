@@ -1,0 +1,17 @@
+% The drain idiom over many matches, and the benchmark's takemin case:
+% 100 jobs are run shortest first, one firing each. Every firing selects
+% over the jobs left, so the whole run is quadratic in the job count.
+:- module(aggregates_takemin_many, [go/3]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint go/3, gen/1, job/2, next/0, machine/0, ran/1, sum/2, ask/2.
+
+gen(0) <=> true.
+gen(N) <=> N > 0 | job((N * 37) mod 101, N), gen(N - 1).
+
+next, machine \ takemin(D, job(D, _)) <=> ran(D), next.
+
+% The keys are 1..100 in a scrambled order, so the run order is 1..100.
+ask(L, C), collect(D, ran(D), L0), count(job(_, _), N) <=> L = L0, C = N.
+
+go(N, F, C) <=> gen(N), machine, next, ask(F, C).

@@ -1,0 +1,26 @@
+% takemin over a goal with two conjuncts removes both constraints of the
+% selected match. Two take forms in one rule each remove their own match,
+% and may pick the same constraint.
+:- module(aggregates_take_multi, [join/3, two/1, same/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint go/0, item/2, cost/2, ran/2, a/1, r/2, go2/0, go3/0,
+                  join/3, two/1, same/1, ask/3, ask2/1.
+
+go \ takemin(X, (item(I, Y), cost(Y, X))) <=> ran(I, X).
+
+ask(R, C, K), collect(X, ran(_, X), L), count(item(_, _), N),
+    count(cost(_, _), M) <=> R = L, C = N, K = M.
+
+join(R, C, K) <=>
+    item(10, 1), item(20, 2), item(30, 3),
+    cost(1, 30), cost(2, 10), cost(3, 20), cost(2, 5),
+    go, ask(R, C, K).
+
+go2 \ takemin(X, a(X)), takemax(Y, a(Y)) <=> r(X, Y).
+go3 \ takemin(X, a(X)), takemin(Y, a(Y)) <=> r(X, Y).
+
+ask2(R), collect([X, Y], r(X, Y), L), collect(Z, a(Z), L2) <=> R = [L, L2].
+
+two(R) <=> a(3), a(1), a(2), go2, ask2(R).
+same(R) <=> a(3), a(1), go3, ask2(R).

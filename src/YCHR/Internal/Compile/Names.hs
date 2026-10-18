@@ -71,6 +71,20 @@ module YCHR.Internal.Compile.Names
     aggregateJustFunctor,
     aggregateNothingAtom,
 
+    -- * Selection names
+    selectionPosCell,
+    selectionFoundName,
+    selectionBestName,
+    selectionKeyName,
+    selectionCountName,
+    selectionPosName,
+    selectionValName,
+    selectionCountLocal,
+    selectionIdName,
+    selectionLoopSuspName,
+    selectionLocalName,
+    selectionLabel,
+
     -- * Runtime entry-point names
     reactivateDispatchName,
     chrErrorName,
@@ -446,6 +460,70 @@ aggregateJustFunctor = vmName (Types.Qualified "maybe" "just")
 aggregateNothingAtom :: Literal
 aggregateNothingAtom =
   AtomLit (vmName (Types.Qualified "maybe" "nothing")).unName
+
+-- ---------------------------------------------------------------------------
+-- Selection names
+-- ---------------------------------------------------------------------------
+
+-- A selection form (@argmin@ and friends) is computed in two places: its
+-- procedure picks the match in the guard, and for @takemin@\/@takemax@
+-- the firing finds that match's suspensions again before its kills. All
+-- the names start with @$@, so no source variable can clash with them.
+
+-- | Caller-side out-cell for the 1-based position, in goal order, of the
+-- match a @takemin@\/@takemax@ selected.
+selectionPosCell :: Int -> Name
+selectionPosCell k = Name ("$selection_pos_cell_" <> T.pack (show k))
+
+-- | Procedure locals: whether a match was seen yet, the best key so far,
+-- the current match's key, how many matches were seen, and the position
+-- of the best one.
+selectionFoundName, selectionBestName, selectionKeyName :: Name
+selectionFoundName = "$selection_found"
+selectionBestName = "$selection_best"
+selectionKeyName = "$selection_key"
+
+selectionCountName, selectionPosName :: Name
+selectionCountName = "$selection_count"
+selectionPosName = "$selection_pos"
+
+-- | Procedure local holding the best match's value of the @i@-th bound
+-- goal variable.
+selectionValName :: Int -> Name
+selectionValName i = Name ("$selection_val_" <> T.pack (show i))
+
+-- | Firing-side match counter for selection @k@.
+selectionCountLocal :: Int -> Name
+selectionCountLocal k = Name ("$selection_count_" <> T.pack (show k))
+
+-- | Firing-side id of the suspension the selected match has for conjunct
+-- @j@ of selection @k@. The kills and the removal step read it.
+selectionIdName :: Int -> Int -> Name
+selectionIdName k j =
+  Name ("$selection_id_" <> T.pack (show k) <> "_" <> T.pack (show j))
+
+-- | Firing-side loop variable for conjunct @j@ of selection @k@.
+selectionLoopSuspName :: Int -> Int -> Name
+selectionLoopSuspName k j =
+  Name ("$selection_susp_" <> T.pack (show k) <> "_" <> T.pack (show j))
+
+-- | Firing-side local for a goal variable @v@ of selection @k@ that is a
+-- direct constraint argument. Distinct from the source name, so it does
+-- not shadow a binding the occurrence procedure already has.
+selectionLocalName :: Int -> Text -> Name
+selectionLocalName k v = Name ("$selection_local_" <> T.pack (show k) <> "_" <> v)
+
+-- | Label of the firing-side loop over conjunct @j@ of selection @k@. Not
+-- 'aggregateLabel': these loops can sit inside a goal occurrence's own
+-- loops for the same @k@.
+selectionLabel :: Int -> Int -> Label
+selectionLabel k j =
+  Label
+    ( "selection_loop_"
+        <> T.pack (show k)
+        <> "_"
+        <> T.pack (show j)
+    )
 
 -- ---------------------------------------------------------------------------
 -- Runtime entry-point names

@@ -24,9 +24,9 @@
 --   * what the computed result is matched against, as a 'ResultMatch': the
 --     tests the pattern has to pass and the bindings that follow them.
 --
---   * the diagnostics for a form this compiler does not implement yet, and
---     for a program whose aggregators cannot produce the result type the
---     protocol needs.
+--   * the diagnostics for a form this compiler does not implement yet (a
+--     nested aggregate), and for a program whose aggregators cannot
+--     produce the result type the protocol needs.
 --
 -- == Note [Aggregator representation]
 --
@@ -63,6 +63,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import YCHR.Internal.Compile.Names
 import YCHR.Internal.Compile.Types
 import YCHR.Internal.Desugar (bodyGoalVars, guardVars)
@@ -129,22 +130,35 @@ collectAggregatePlans ruleIdx rule = do
                 | Just i <- List.elemIndex v shared =
                     Just (Var (aggregateSharedParam i))
                 | otherwise = Nothing
-              resultMatch =
-                aggregateResultMatch (Var aggregatePayloadName) resolve a.result
+              isSelection = a.kind /= AggPlain
+              resultMatch
+                | isSelection = mempty
+                | otherwise =
+                    aggregateResultMatch (Var aggregatePayloadName) resolve a.result
+              -- A selection binds the goal's own variables: they are the
+              -- selected match's values, visible to the rest of the rule.
+              selVars = selectionGoalVars a.goal
+              bind
+                | isSelection = Set.toAscList (selVars `Set.difference` bound)
+                | otherwise = map fst resultMatch.resultBinds
               plan =
                 AggregatePlan
                   { planIndex = k,
+                    planKind = a.kind,
                     planProcName = aggregateProcName ruleIdx k,
                     planAgg = a.agg,
                     planElement = a.element,
                     planGoal = a.goal,
                     planShared = shared,
-                    planBind = map fst resultMatch.resultBinds,
+                    planBind = bind,
                     planResultMatch = resultMatch
                   }
               -- The result of an aggregate is in scope for every aggregate
-              -- to its right, whether the pattern bound it or checked it.
-              bound' = bound `Set.union` termVars a.result
+              -- to its right, whether the pattern bound it or checked it,
+              -- and so are the goal variables of a selection.
+              bound'
+                | isSelection = bound `Set.union` selVars
+                | otherwise = bound `Set.union` termVars a.result
           go (k + 1) bound' (plan : acc) rest
 
 -- | Report every variable only an aggregate's goal binds that the rule's
@@ -173,15 +187,21 @@ checkLocalEscapes rule plans = case Set.toAscList escaped of
     -- variable the result pattern binds is bound by the aggregate call, so
     -- it is in scope in the guard and body by design. Every other variable
     -- a goal binds is local to the aggregate.
+    --
+    -- A selection's goal variables are visible, so a selection has no
+    -- locals, and a name it binds is not an escape even when an aggregate
+    -- to its left has a local of the same name.
     locals =
       Set.unions
         [ aggregateGoalLocals p.planGoal
             `Set.difference` Set.fromList p.planShared
             `Set.difference` Set.fromList p.planBind
-        | p <- plans
+        | p <- plans,
+          not (isSelectionPlan p)
         ]
+    visible = Set.fromList [v | p <- plans, isSelectionPlan p, v <- p.planBind]
     escaped =
-      locals
+      (locals `Set.difference` visible)
         `Set.intersection` ( guardVars rule.guard.node
                                `Set.union` bodyGoalVars rule.body.node
                            )
@@ -217,6 +237,19 @@ aggregateGoalLocals = Set.unions . map conjunctVars
     conjunctVars (D.AggNested n) =
       aggregateGoalLocals n.goal `Set.union` termVars n.result
 
+-- | The variables a selection's goal makes visible to the rest of the
+-- rule: the arguments of its constraint conjuncts and the variables their
+-- HNF guards extract from a compound argument. A @?@ guard binds nothing,
+-- and HNF's own fresh names (@$hnf_N@) are not source variables, so
+-- neither is included.
+selectionGoalVars :: [D.AggregateConjunct] -> Set Text
+selectionGoalVars = Set.filter (not . T.isPrefixOf "$") . Set.unions . map conjunctVars
+  where
+    conjunctVars (D.AggConstraint hc guards) =
+      Set.unions (map argVars hc.args)
+        `Set.union` Set.fromList [v | D.GuardGetArg v _ _ <- guards]
+    conjunctVars _ = Set.empty
+
 -- | The variables an expression mentions. A lambda's parameters are
 -- subtracted: the desugarer's lifter has already replaced every lambda with
 -- a closure term by the time the compiler runs, so this arm exists only to
@@ -247,50 +280,27 @@ termVars t = case t of
   TextTerm _ -> Set.empty
   CompoundTerm _ args -> Set.unions (map termVars args)
 
--- | Report the aggregate forms the compiler does not implement yet, and say
--- whether the aggregate can be planned.
+-- | Report a nested aggregate, which the compiler does not implement yet,
+-- and say whether the aggregate can be planned.
 --
--- Both checks are anchored at the rule head, since an aggregate carries no
+-- The check is anchored at the rule head, since an aggregate carries no
 -- source location of its own. The form name and arity are what the user
 -- wrote, so the diagnostic points at something recognizable.
 checkSupported :: D.Rule -> D.Aggregate -> Writer [Diagnostic CompileError] Bool
-checkSupported rule a = do
-  kindOk <- case a.kind of
-    AggPlain -> pure True
-    kind -> do
-      report (aggregateKindName kind) (aggregateKindArity kind)
-      pure False
-  nestedOk <- case [() | D.AggNested _ <- a.goal] of
-    [] -> pure True
-    _ -> do
-      report "aggregate" 4
-      pure False
-  pure (kindOk && nestedOk)
+checkSupported rule a = case [() | D.AggNested _ <- a.goal] of
+  [] -> pure True
+  _ -> do
+    tell
+      [ Diagnostic
+          label
+          (AnnP (AggregateNotImplemented "aggregate" 4) loc origin)
+          []
+      ]
+    pure False
   where
-    report name arity =
-      tell
-        [ Diagnostic
-            label
-            (AnnP (AggregateNotImplemented name arity) loc origin)
-            []
-        ]
-
     label = fmap ("rule " <>) rule.name
     loc = rule.head.sourceLoc
     origin = rule.head.parsed
-
--- | The reserved functor name of an aggregate kind, as the user wrote it.
-aggregateKindName :: AggregateKind -> Text
-aggregateKindName AggPlain = "aggregate"
-aggregateKindName AggArgmin = "argmin"
-aggregateKindName AggArgmax = "argmax"
-aggregateKindName AggTakemin = "takemin"
-aggregateKindName AggTakemax = "takemax"
-
--- | How many arguments an aggregate kind takes.
-aggregateKindArity :: AggregateKind -> Int
-aggregateKindArity AggPlain = 4
-aggregateKindArity _ = 2
 
 -- | Whether the program declares @library(maybe)@'s @maybe\/1@ and its
 -- @just\/1@ constructor: what an aggregator's @Final@ closure has to return.

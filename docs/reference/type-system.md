@@ -1291,10 +1291,10 @@ The check is deliberately narrow:
   where it may be *told*.
 - It counts a CHR constraint conjunct of an **aggregate goal** as a
   kept occurrence, since an aggregate is a head position
-  ([aggregates.md](aggregates.md#interaction-with-other-features)). So
-  a `tell_only` constraint cannot occur in an aggregate goal either,
-  and an `event` constraint only inside `takemin`/`takemax` — once the
-  selection forms are implemented.
+  ([aggregates.md](aggregates.md#interaction-with-other-features)),
+  and as a removed one directly inside `takemin`/`takemax`. So a
+  `tell_only` constraint cannot occur in an aggregate goal either, and
+  an `event` constraint only inside `takemin`/`takemax`.
 - It does not look inside guards or bodies: a guard expression or a
   body goal mentioning a constraint's name as a function or data
   constructor is not an occurrence.

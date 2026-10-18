@@ -1,0 +1,20 @@
+% The drain idiom: removing next(M) and telling it again makes each step a
+% new combination of regular heads, so the jobs run shortest first.
+:- module(aggregates_takemin_drain, [setup/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint next/1, machine/1, job/3, run/2, ask/3, setup/2.
+
+next(M), machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J), next(M).
+
+ask(M, R, N), collect(J, run(M, J), L), count(job(M, _, _), C) <=> R = L, N = C.
+
+setup(R, N) <=>
+    machine(1),
+    job(1, 5, 50),
+    job(1, 2, 20),
+    job(1, 9, 90),
+    job(1, 2, 21),
+    job(2, 1, 10),
+    next(1),
+    ask(1, R, N).

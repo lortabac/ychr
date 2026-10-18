@@ -1,0 +1,9 @@
+% A constraint in a takemin goal is a removed occurrence, so a fact may
+% not occur there.
+:- module(constraint_use_takemin_fact, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint m/1, job/2.
+:- constraint_use fact(job/2).
+
+m(M) \ takemin(D, job(M, D)) <=> true.

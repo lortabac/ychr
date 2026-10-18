@@ -1,13 +1,13 @@
 # YCHR Aggregates Specification
 
-**Status: implemented, except for selection and nested aggregates.**
-The core form, the predefined aggregates, goal occurrences and the
-removal step run on both backends. The selection forms
-(`argmin`/`argmax`/`takemin`/`takemax`) and aggregates in an aggregate
-goal are recognized but rejected at compile time (`YCHR-40004`), so no
-program silently means something else; `forall/2` needs nested
-aggregates and is not defined by `library(aggregates)` yet. Aggregates
-are not type-checked ([type-system.md](type-system.md#aggregates)).
+**Status: implemented, except for nested aggregates.**
+The core form, the predefined aggregates, the selection forms
+(`argmin`/`argmax`/`takemin`/`takemax`), goal occurrences and the
+removal step run on both backends. An aggregate in an aggregate goal is
+recognized but rejected at compile time (`YCHR-40004`), so no program
+silently means something else; `forall/2` needs nested aggregates and
+is not defined by `library(aggregates)` yet. Aggregates are not
+type-checked ([type-system.md](type-system.md#aggregates)).
 
 An *aggregate* is a rule-head conjunct that summarizes an unbounded
 part of the constraint store: the sum, count, minimum, … of a value
@@ -407,9 +407,9 @@ The extension is *conservative*.
 
 ## Predefined aggregates
 
-`library(aggregates)` defines the aggregator constructor, recognizes the
-four selection forms (rejected with `YCHR-40004` until their phase), and
-defines these macros over `aggregate/4`:
+`library(aggregates)` defines the aggregator constructor and the macros
+below, over `aggregate/4`. (The four selection forms are core forms and
+need no library.)
 
 | Macro | Result |
 |---|---|
@@ -454,8 +454,7 @@ imports them individually (see [language.md](language.md)).
   occurrence for [`:- constraint_use`](type-system.md#constraint-use-checking),
   or a removed one inside `takemin`/`takemax`, and YCHR-45001 applies
   as usual. So a `tell_only` constraint cannot occur in an aggregate
-  goal, and an `event` constraint only inside `takemin`/`takemax` (not
-  reachable until the selection forms are implemented).
+  goal, and an `event` constraint only inside `takemin`/`takemax`.
 - **`library(search)`.** Nothing to add: an on-demand aggregate keeps
   no state between attempts, so undo has nothing to restore.
 - **Scheme backend.** Supported. Aggregates compile to existing VM
@@ -554,6 +553,25 @@ lowers an aggregate in the occurrence procedure itself:
   occurrence always fires first, which an aggregate's applicability
   condition can falsify. For a program without aggregates all of this
   is vacuous.
+- A selection form is computed in two steps, because a procedure
+  cannot hand a suspension back and the guard must stay read-only. Its
+  procedure walks the goal's matches in goal order and keeps the first
+  one with the smallest (largest) key, comparing with the host `<`
+  (`>`); the first match is compared with itself, so an unbound key is
+  an instantiation error even when there is only one match. It binds
+  one out-cell per visible goal variable. For `takemin`/`takemax` it
+  also binds the match's 1-based position in goal order. When the rule
+  fires, before any `Kill`, the firing walks the same goal again with
+  the same shared inputs, counts matches up to that position, and keeps
+  the suspensions it lands on (loops labelled `selection_loop_<k>_<j>`,
+  left with a `Break`). The store is the one the guard saw: the guard
+  reads only, and the history write does not touch the store. Counting
+  is exact, where matching the selected values again would not be (a
+  NaN key is not equal to itself). The kills and the removal step then
+  use those suspensions. Two take forms, or a take form and a removed
+  head, may pick the same constraint; the second kill does nothing, and
+  the removal step tries its goal occurrences twice, which the history
+  makes harmless.
 - A macro use inside an aggregate goal is a goal position, but macro
   expansion there is not implemented: the compiler reports it
   (`YCHR-20043`) instead of resolving the name as an unknown
@@ -570,7 +588,7 @@ lowers an aggregate in the occurrence procedure itself:
 | YCHR-20043 | `MacroInAggregateGoal` | A macro use inside an aggregate goal. |
 | YCHR-40002 | `UnboundVariable` | An `Element` variable the match cannot supply. |
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
-| YCHR-40004 | `AggregateNotImplemented` | A selection form or a nested aggregate, until its phase. |
+| YCHR-40004 | `AggregateNotImplemented` | A nested aggregate, until its phase. |
 | YCHR-40005 | `AggregateResultNotMaybe` | The program declares no `maybe:just/1`, so no aggregator can produce the protocol's result type. |
 
 
@@ -583,10 +601,10 @@ lowers an aggregate in the occurrence procedure itself:
   between occurrences, and user pragmas in general.
 - **Fire-many semantics**, for any aggregate.
 - **Aggregates in guards, bodies or function equations.**
-- **Selection aggregates** (`argmin`, `argmax`, `takemin`, `takemax`)
-  and **nested aggregates**. Both are recognized, reported
-  (`YCHR-40004`) and dropped, so no rule compiles into something that
-  never fires. `forall/2` needs the second of the two.
+- **Nested aggregates**, inside any aggregate goal, a selection's
+  included. They are recognized, reported (`YCHR-40004`) and dropped,
+  so no rule compiles into something that never fires. `forall/2`
+  needs them.
 - **Aggregates in an aggregate goal that are written as macros**
   (`YCHR-20043`): the goal is a goal position, but the renamer does not
   expand macros there yet.

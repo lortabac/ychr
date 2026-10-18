@@ -1,0 +1,16 @@
+% The constraint a takemin removes goes through the removal step, so a
+% negation over it fires before the body runs.
+:- module(aggregates_take_removal_step, [setup/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint task/1, job/3, go/1, idle/1, done/1, log/1, ask/1, setup/1.
+
+go(T), takemin(D, job(T, D, J)) <=> done(J).
+task(T), \+ job(T, _, _) ==> idle(T).
+
+idle(_) ==> log(1).
+done(_) ==> log(2).
+
+ask(R), collect(X, log(X), L) <=> R = L.
+
+setup(R) <=> task(1), job(1, 3, 30), go(1), ask(R).

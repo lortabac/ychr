@@ -224,7 +224,8 @@ non-tail-recursive procedure wrapped unconditionally pays O(depth) per
 call and O(depth²) overall (measured at ~20× on the `sum(2000)` example).
 `Break` and `Continue` likewise emit a `call/cc` at the loop that owns
 the label, and only when the loop body names it — the compiler emits
-`Continue` for backjumping but never emits `Break` today.
+`Continue` for backjumping, and `Break` only where a `takemin`/`takemax`
+firing finds its selected match again.
 
 ### Constraint Store Implementation
 

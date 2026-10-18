@@ -616,7 +616,7 @@ genGoalOccurrenceBody symTab cType goal condMap occ fire = do
   wrapGoalConjuncts
     symTab
     si
-    goal.goalIndex
+    (aggregateLoopNames goal.goalIndex)
     (Just (goal.goalActiveIndex, activeName, cType))
     (goal.goalAll ++ concat goal.goalEnclosing)
     seed
@@ -704,11 +704,20 @@ genGuardedFire symTab occMap varMap occ = do
 -- ---------------------------------------------------------------------------
 
 -- | The out-cell locals one aggregate's call needs: one fresh unbound
--- variable per result variable its pattern binds. The aggregate's procedure
--- binds them, so the rule's guard and body can read the results.
+-- variable per variable it binds. The aggregate's procedure binds them, so
+-- the rule's guard and body can read the results. A @takemin@\/@takemax@
+-- gets one more, for the position of the match it selected, which the
+-- firing needs to find that match again ('genSelectStmts').
 aggregateOutCellStmts :: AggregatePlan -> [Stmt]
 aggregateOutCellStmts plan =
   [LetVal (aggregateOutCell plan.planIndex v) NewVar | v <- plan.planBind]
+    ++ [LetVal (selectionPosCell plan.planIndex) NewVar | isTakePlan plan]
+
+-- | The out-cells a call passes, in parameter order.
+aggregateOutCellArgs :: AggregatePlan -> [CallArg]
+aggregateOutCellArgs plan =
+  [AVal (Var (aggregateOutCell plan.planIndex v)) | v <- plan.planBind]
+    ++ [AVal (Var (selectionPosCell plan.planIndex)) | isTakePlan plan]
 
 -- | Extend a variable map with the cells one aggregate binds, so a later
 -- aggregate and the rule's guard read its result.
@@ -734,9 +743,10 @@ aggregateTest ::
   Writer [Diagnostic CompileError] BoolExpr
 aggregateTest si varMap plan = do
   shared <- traverse sharedArg plan.planShared
-  let cells =
-        [AVal (Var (aggregateOutCell plan.planIndex v)) | v <- plan.planBind]
-  pure (BFromVal (CallExpr plan.planProcName (cells ++ map AVal shared)))
+  pure
+    ( BFromVal
+        (CallExpr plan.planProcName (aggregateOutCellArgs plan ++ map AVal shared))
+    )
   where
     -- A shared variable is a head variable by construction. A missing one
     -- is a compiler invariant violation, reported as an unbound variable
@@ -749,84 +759,201 @@ aggregateTest si varMap plan = do
 
 -- | Generate the procedure that computes one head aggregate.
 --
--- Parameters: the out-cells the caller created (one per result variable the
--- pattern binds), then the values of the aggregate's shared variables. It
--- returns a boolean — @true@ when the aggregate is defined and its result
--- pattern matched, @false@ when it is undefined or did not.
+-- Parameters: the out-cells the caller created (one per variable the
+-- aggregate binds, plus a position cell for a @takemin@\/@takemax@), then
+-- the values of the aggregate's shared variables. It returns a boolean —
+-- @true@ when the aggregate is defined and its result pattern matched,
+-- @false@ when it is undefined or did not.
 --
--- The body evaluates the aggregator, folds the goal's matches into a local
--- working value, applies the aggregator's @Final@ closure, decodes the
--- @maybe@ it returns, and matches the result pattern. Apart from binding
--- its out-cells it is read-only: no store, kill, history, tell or
--- reactivation statement is reachable from it, which is what lets an
--- occurrence call it from inside a guard. See Note [Guard-window bindings].
+-- For the core form the body evaluates the aggregator, folds the goal's
+-- matches into a local working value, applies the aggregator's @Final@
+-- closure, decodes the @maybe@ it returns, and matches the result pattern.
+-- A selection form picks one match instead ('genSelectionBody'). Apart
+-- from binding its out-cells the procedure is read-only: no store, kill,
+-- history, tell or reactivation statement is reachable from it, which is
+-- what lets an occurrence call it from inside a guard. See Note
+-- [Guard-window bindings].
 genAggregateProcedure ::
   SymbolTable ->
   Text ->
   (D.Rule, AggregatePlan) ->
   Writer [Diagnostic CompileError] Procedure
 genAggregateProcedure symTab display (rule, plan) = do
-  let outParams = [aggregateOutParam i | i <- [0 .. length plan.planBind - 1]]
+  let outCount = length (aggregateOutCellArgs plan)
+      outParams = [aggregateOutParam i | i <- [0 .. outCount - 1]]
       sharedParams =
         [aggregateSharedParam i | i <- [0 .. length plan.planShared - 1]]
       params = outParams ++ sharedParams
       sharedMap = varMapFromList (zip plan.planShared (map Var sharedParams))
       ruleLabel = Just ("rule " <> display)
       si = SrcInfo rule.head.sourceLoc rule.head.parsed ruleLabel
-      resultMatch = plan.planResultMatch
-  aggExpr <- traverse (compileExpr sharedMap si) plan.planAgg
-  body <- case aggExpr of
-    -- A selection form has no aggregator, and is reported and dropped by
-    -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
-    -- compiles never gets here. Answering "undefined" keeps the procedure
-    -- well formed if one ever does.
-    Nothing -> pure [Return (Lit (BoolLit False))]
-    Just expr -> do
-      let goalFold p = wrapGoalConjuncts symTab si p.planIndex Nothing p.planGoal
-      foldStmts <-
-        goalFold plan sharedMap $ \innermost -> do
-          elementExpr <- compileExpr innermost si plan.planElement
-          pure
-            [ AssignVal
-                aggregateAccName
-                ( ApplyClosure
-                    (Var aggregateIncName)
-                    [Var aggregateAccName, elementExpr]
-                )
-            ]
-      pure
-        ( [ LetVal aggregateAggName expr,
-            If
-              (BNot (BMatchTerm (Var aggregateAggName) aggregateAggFunctor 3))
-              [ ExprStmt
-                  ( HostCall
-                      chrErrorName
-                      [ Lit
-                          ( AtomLit
-                              ( "aggregate: the Agg expression is not an"
-                                  <> " aggregator(Init, Inc, Final)"
-                              )
-                          )
-                      ]
-                  )
-              ]
-              [],
-            LetVal aggregateAccName (GetArg (Var aggregateAggName) 0),
-            LetVal aggregateIncName (GetArg (Var aggregateAggName) 1),
-            LetVal aggregateFinalName (GetArg (Var aggregateAggName) 2)
-          ]
-            ++ foldStmts
-        )
+  body <-
+    if isSelectionPlan plan
+      then genSelectionBody symTab si sharedMap plan
+      else genFoldBody symTab si sharedMap plan
   pure
     Procedure
       { name = plan.planProcName,
         params = params,
-        body = body ++ maybeValueStmts resultMatch,
+        body = body,
         procKind =
           PKFunction
             (Types.QualifiedName "$aggregate" plan.planProcName.unName)
             (length params)
       }
+
+-- | The body of a core-form aggregate procedure: evaluate the aggregator,
+-- fold the goal's matches, then decode and match the result.
+genFoldBody ::
+  SymbolTable ->
+  SrcInfo ->
+  VarMap ->
+  AggregatePlan ->
+  Writer [Diagnostic CompileError] [Stmt]
+genFoldBody symTab si sharedMap plan = do
+  -- Only a malformed aggregate has no aggregator, and that is reported by
+  -- the renamer, so the placeholder never runs.
+  aggExpr <- maybe (pure unreachableValue) (compileExpr sharedMap si) plan.planAgg
+  foldStmts <-
+    wrapGoalConjuncts
+      symTab
+      si
+      (aggregateLoopNames plan.planIndex)
+      Nothing
+      plan.planGoal
+      sharedMap
+      $ \innermost -> do
+        elementExpr <- compileExpr innermost si plan.planElement
+        pure
+          [ AssignVal
+              aggregateAccName
+              ( ApplyClosure
+                  (Var aggregateIncName)
+                  [Var aggregateAccName, elementExpr]
+              )
+          ]
+  pure
+    ( [ LetVal aggregateAggName aggExpr,
+        If
+          (BNot (BMatchTerm (Var aggregateAggName) aggregateAggFunctor 3))
+          [ ExprStmt
+              ( HostCall
+                  chrErrorName
+                  [ Lit
+                      ( AtomLit
+                          ( "aggregate: the Agg expression is not an"
+                              <> " aggregator(Init, Inc, Final)"
+                          )
+                      )
+                  ]
+              )
+          ]
+          [],
+        LetVal aggregateAccName (GetArg (Var aggregateAggName) 0),
+        LetVal aggregateIncName (GetArg (Var aggregateAggName) 1),
+        LetVal aggregateFinalName (GetArg (Var aggregateAggName) 2)
+      ]
+        ++ foldStmts
+        ++ maybeValueStmts plan.planResultMatch
+    )
+
+-- | The body of a selection procedure: walk the goal's matches in goal
+-- order and keep the first one with the smallest (or largest) key.
+--
+-- The comparison is the prelude's @<@ (or @>@), strict, so a later match
+-- with an equal key does not replace an earlier one. The first match is
+-- compared with itself, so a key that is unbound, or that @<@ does not
+-- accept, raises on the first match too and not only once there is a
+-- second one. The call sits in a soft guard, so an instantiation error
+-- makes the aggregate undefined.
+--
+-- When some match was found, the out-cells are bound to the kept match's
+-- values, and for a @takemin@\/@takemax@ the last cell to its 1-based
+-- position in goal order. With no match the rule does not apply.
+genSelectionBody ::
+  SymbolTable ->
+  SrcInfo ->
+  VarMap ->
+  AggregatePlan ->
+  Writer [Diagnostic CompileError] [Stmt]
+genSelectionBody symTab si sharedMap plan = do
+  let takes = isTakePlan plan
+      cmp = Name (if selectsMax plan then ">" else "<")
+      vals = zip [0 ..] plan.planBind
+      falseLit = Lit (BoolLit False)
+      initStmts =
+        [ LetVal selectionFoundName falseLit,
+          LetVal selectionBestName falseLit
+        ]
+          ++ ( if takes
+                 then
+                   [ LetVal selectionCountName (Lit (IntLit 0)),
+                     LetVal selectionPosName (Lit (IntLit 0))
+                   ]
+                 else []
+             )
+          ++ [LetVal (selectionValName i) falseLit | (i, _) <- vals]
+      compareWith other =
+        EvalDeep (HostCall cmp [Var selectionKeyName, other])
+  loops <-
+    wrapGoalConjuncts
+      symTab
+      si
+      (aggregateLoopNames plan.planIndex)
+      Nothing
+      plan.planGoal
+      sharedMap
+      $ \innermost -> do
+        key <- compileExpr innermost si plan.planElement
+        values <- traverse (goalValue innermost) plan.planBind
+        let keep =
+              [ AssignVal selectionFoundName (Lit (BoolLit True)),
+                AssignVal selectionBestName (Var selectionKeyName)
+              ]
+                ++ [AssignVal (selectionValName i) e | (i, e) <- zip [0 ..] values]
+                ++ [AssignVal selectionPosName (Var selectionCountName) | takes]
+        pure
+          ( [LetVal selectionKeyName key]
+              ++ [AssignVal selectionCountName (increment selectionCountName) | takes]
+              ++ [ If
+                     (BNot (BFromVal (Var selectionFoundName)))
+                     (ExprStmt (compareWith (Var selectionKeyName)) : keep)
+                     [If (BFromVal (compareWith (Var selectionBestName))) keep []]
+                 ]
+          )
+  let binds =
+        [ BoolExprStmt (BUnify (Var (aggregateOutParam i)) (Var (selectionValName i)))
+        | (i, _) <- vals
+        ]
+          ++ [ BoolExprStmt
+                 ( BUnify
+                     (Var (aggregateOutParam (length vals)))
+                     (Var selectionPosName)
+                 )
+             | takes
+             ]
+  pure
+    ( initStmts
+        ++ loops
+        ++ [ If
+               (BFromVal (Var selectionFoundName))
+               (binds ++ [Return (Lit (BoolLit True))])
+               [Return (Lit (BoolLit False))]
+           ]
+    )
+  where
+    -- A visible goal variable is bound by the goal's own loops by
+    -- construction. A missing one is a compiler invariant violation,
+    -- reported as an unbound variable rather than crashing.
+    goalValue vm v = case lookupVar v vm of
+      Just e -> pure e
+      Nothing -> do
+        tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
+        pure unreachableValue
+
+-- | @local + 1@, for a match counter.
+increment :: Name -> ValExpr
+increment n = HostCall "+" [Var n, Lit (IntLit 1)]
 
 -- | The tail of an aggregate procedure: apply @Final@, decode the @maybe@
 -- it returned, and match the result pattern against the payload.
@@ -904,8 +1031,9 @@ bindsStmts binds =
 -- conjunct is an index condition too, since it is in scope at this loop's
 -- evaluation point.
 --
--- @labelIdx@ is the enclosing aggregate's source index: it keeps the loop
--- labels unique within one procedure. @mActive@ is the active conjunct of
+-- @names@ picks the loop labels, the loop variables and the locals the
+-- goal's variables are bound to, so that two nests in one procedure do not
+-- clash (see 'GoalLoopNames'). @mActive@ is the active conjunct of
 -- a goal occurrence: its position in the list, the constraint being tried,
 -- and its type. Its loop is not built — the active constraint already is
 -- it — but its own guards are evaluated in place there, so a guard that
@@ -922,13 +1050,13 @@ bindsStmts binds =
 wrapGoalConjuncts ::
   SymbolTable ->
   SrcInfo ->
-  Int ->
+  GoalLoopNames ->
   Maybe (Int, Name, ConstraintType) ->
   [D.AggregateConjunct] ->
   VarMap ->
   (VarMap -> Writer [Diagnostic CompileError] [Stmt]) ->
   Writer [Diagnostic CompileError] [Stmt]
-wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
+wrapGoalConjuncts symTab si names mActive conjuncts varMap0 inner =
   go 0 [] varMap0 conjuncts
   where
     go _ _ vm [] = inner vm
@@ -950,8 +1078,9 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
               -- program still produces diagnostics.
               Nothing -> go (j + 1) seen vm rest
               Just cType -> do
-                let suspName = aggregateSuspName j
-                    (conds, lettStmts, vm') = bindGoalArgs suspName vm hcon
+                let suspName = names.loopSusp j
+                    (conds, lettStmts, vm') =
+                      bindGoalArgs names.loopLocal suspName vm hcon
                     distinct = distinctTests seen cType suspName
                 compiled <- compileGuards Nothing Nothing vm' si guards
                 -- The conjunct's HNF guards bind the variables they
@@ -964,7 +1093,7 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
                       lettStmts
                         ++ compiled.matchWrapper
                           (withResidual compiled (guardedDistinct distinct restStmts))
-                pure [Foreach (aggregateLabel labelIdx j) cType suspName conds body]
+                pure [Foreach (names.loopLabel j) cType suspName conds body]
       -- A @? Guard@ is checked in place: it sees the variables the conjuncts
       -- before it bound, and filters before the ones after it are searched.
       --
@@ -990,7 +1119,7 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
     -- plus one against the constraint being tried when that is a conjunct
     -- of this goal.
     distinctTests seen cType suspName =
-      [ BNot (BIdEqual (IdVar suspName) (IdVar (aggregateSuspName j')))
+      [ BNot (BIdEqual (IdVar suspName) (IdVar (names.loopSusp j')))
       | (j', cType') <- seen,
         cType' == cType
       ]
@@ -1006,15 +1135,43 @@ wrapGoalConjuncts symTab si labelIdx mActive conjuncts varMap0 inner =
       Nothing -> stmts
       Just cond -> [If cond stmts []]
 
+-- | The names one nest of goal loops uses: the label of the loop over
+-- conjunct @j@, the loop variable it binds, and the local a goal variable
+-- is read into.
+--
+-- A fold and a goal occurrence's location phase use the aggregate names.
+-- The firing of a @takemin@\/@takemax@ has its own labels and loop
+-- variables, because its loops can sit inside the location loops of the
+-- same aggregate, in the same procedure. 'loopLocal' only names the
+-- direct constraint arguments: a variable an HNF guard pulls out of a
+-- compound argument keeps its source name. Rebinding such a name there
+-- is harmless, since nothing after the firing's loops reads it.
+data GoalLoopNames = GoalLoopNames
+  { loopLabel :: Int -> Label,
+    loopSusp :: Int -> Name,
+    loopLocal :: Text -> Name
+  }
+
+-- | The names a fold or a location phase uses for aggregate @k@. A goal
+-- variable is read into a local of its own source name.
+aggregateLoopNames :: Int -> GoalLoopNames
+aggregateLoopNames k = GoalLoopNames (aggregateLabel k) aggregateSuspName Name
+
+-- | The names the firing uses to find selection @k@'s match again.
+selectionLoopNames :: Int -> GoalLoopNames
+selectionLoopNames k =
+  GoalLoopNames (selectionLabel k) (selectionLoopSuspName k) (selectionLocalName k)
+
 -- | Bind one goal conjunct's arguments against the candidate suspension:
 -- index conditions for the values already in scope, @field-arg@ reads for
 -- the variables the goal binds, nothing for a wildcard.
 bindGoalArgs ::
+  (Text -> Name) ->
   Name ->
   VarMap ->
   HeadConstraint ->
   ([(ArgIndex, ValExpr)], [Stmt], VarMap)
-bindGoalArgs suspName vm0 hcon =
+bindGoalArgs localName suspName vm0 hcon =
   List.foldl' step ([], [], vm0) (zip [0 ..] hcon.args)
   where
     step (conds, lets, vm) (i, arg) = case arg of
@@ -1023,8 +1180,8 @@ bindGoalArgs suspName vm0 hcon =
         Just expr -> (conds ++ [(ArgIndex i, expr)], lets, vm)
         Nothing ->
           ( conds,
-            lets ++ [LetVal (Name v) (FieldArg (IdVar suspName) (ArgIndex i))],
-            insertVar v (Var (Name v)) vm
+            lets ++ [LetVal (localName v) (FieldArg (IdVar suspName) (ArgIndex i))],
+            insertVar v (Var (localName v)) vm
           )
 
 -- | The constraint type of an aggregate-goal conjunct, reported like a head
@@ -1191,6 +1348,12 @@ genFireStmts symTab occMap varMap occ = do
   let AnnP {node = ruleBody, sourceLoc = bodyLoc, parsed = bodyP} = rule.body
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       bodySi = SrcInfo bodyLoc bodyP ruleLabel
+      headSi = SrcInfo rule.head.sourceLoc rule.head.parsed ruleLabel
+  selectStmts <-
+    concat
+      <$> traverse
+        (genSelectStmts symTab headSi varMap)
+        (filter isTakePlan occ.aggregates)
   bodyStmts <- compileBodyGoals symTab varMap bodySi ruleBody
   let aliveCheck =
         If (BNot (BAlive (IdVar activeName))) [Return (Lit (BoolLit True))] []
@@ -1248,14 +1411,101 @@ genFireStmts symTab occMap varMap occ = do
       -- The removal step is the first thing the body does, before its
       -- first goal, and runs for any rule that removes a constraint with
       -- goal occurrences.
+      --
+      -- A @takemin@\/@takemax@ finds its match again before anything is
+      -- killed, so it sees the store its procedure saw in the guard.
       coreFireStmts =
-        killStmts
+        selectStmts
+          ++ killStmts
           ++ storeStmts
           ++ removalStmts
           ++ bodyStmts
           ++ earlyDropStmts
           ++ backjumpStmts
   pure CompiledFire {history = ruleHistory occ, stmts = coreFireStmts}
+
+-- | Find the suspensions of the match a @takemin@\/@takemax@ selected,
+-- so the firing can kill them.
+--
+-- The procedure cannot hand a suspension back, so it hands back the
+-- match's position in goal order instead, and this walks the same goal
+-- again and stops there. Nothing has changed the store since the guard:
+-- the guard is read-only, and the history write does not touch the store.
+-- The loops are seeded with the shared inputs only, as the procedure's
+-- are, so they enumerate the same matches in the same order. Counting is
+-- exact where matching on the selected values would not be (a @NaN@ key
+-- is not equal to itself).
+--
+-- One id local per constraint conjunct ('selectionIdName') is filled in.
+-- They start as the active constraint only so they are bound. The loops
+-- should always reach the position; if they don't (a host call in the
+-- goal that is not pure could do that), it is a runtime error, so the
+-- placeholder is never killed. A goal without a constraint conjunct
+-- selects nothing to remove.
+genSelectStmts ::
+  SymbolTable ->
+  SrcInfo ->
+  VarMap ->
+  AggregatePlan ->
+  Writer [Diagnostic CompileError] [Stmt]
+genSelectStmts symTab si varMap plan = case conjuncts of
+  [] -> pure []
+  first : _ -> do
+    loops <-
+      wrapGoalConjuncts
+        symTab
+        si
+        (selectionLoopNames k)
+        Nothing
+        plan.planGoal
+        seed
+        ( \_ ->
+            pure
+              [ AssignVal count (increment count),
+                If
+                  (BEqual (Var count) (Var (selectionPosCell k)))
+                  ( [ AssignId (selectionIdName k j) (IdVar (selectionLoopSuspName k j))
+                    | j <- conjuncts
+                    ]
+                      ++ [Break (selectionLabel k first)]
+                  )
+                  []
+              ]
+        )
+    pure
+      ( LetVal count (Lit (IntLit 0))
+          : [LetId (selectionIdName k j) (IdVar activeName) | j <- conjuncts]
+          ++ loops
+          ++ [ If
+                 (BNot (BEqual (Var count) (Var (selectionPosCell k))))
+                 [ ExprStmt
+                     ( HostCall
+                         chrErrorName
+                         [ Lit
+                             ( AtomLit
+                                 ( "takemin/takemax: the selected match is gone"
+                                     <> " when the rule fires"
+                                 )
+                             )
+                         ]
+                     )
+                 ]
+                 []
+             ]
+      )
+  where
+    k = plan.planIndex
+    count = selectionCountLocal k
+    conjuncts = selectionConjuncts plan
+    -- The guard's call already reported a shared variable it could not
+    -- find, so a missing one is skipped here.
+    seed =
+      varMapFromList
+        [(v, e) | v <- plan.planShared, Just e <- [lookupVar v varMap]]
+
+-- | The positions of a selection's constraint conjuncts in its goal.
+selectionConjuncts :: AggregatePlan -> [Int]
+selectionConjuncts plan = [j | (j, D.AggConstraint _ _) <- zip [0 ..] plan.planGoal]
 
 -- | What compiling one firing contributes: the propagation-history key the
 -- rule fires under, if it keeps one, and the statements of the firing
@@ -1315,8 +1565,12 @@ mkFrame label loc pexpr =
     }
 
 -- | Kill the constraint suspensions a firing removes: every removed
--- partner and, when the active constraint is removed, the active
--- constraint itself.
+-- partner, the active constraint when it is removed, and the match each
+-- @takemin@\/@takemax@ selected.
+--
+-- Two of these may be the same suspension (two take forms, or a take form
+-- and a removed head, may pick the same constraint). A second 'Kill' does
+-- nothing.
 genKillStmts :: Occurrence -> [Stmt]
 genKillStmts occ =
   let -- Kill removed partners
@@ -1327,11 +1581,19 @@ genKillStmts occ =
         ]
       -- Kill active if removed
       activeKill = [Kill (IdVar activeName) | not occ.isKept]
-   in partnerKills ++ activeKill
+      selectionKills =
+        [ Kill (IdVar (selectionIdName p.planIndex j))
+        | p <- occ.aggregates,
+          isTakePlan p,
+          j <- selectionConjuncts p
+        ]
+   in partnerKills ++ activeKill ++ selectionKills
 
 -- | The removal step of a firing: for each removed regular head, in
--- textual order, call every goal occurrence of its type with the removed
--- constraint (spec §3).
+-- textual order, and then for each constraint a @takemin@\/@takemax@
+-- removed, in the order of the selection forms and then in goal order,
+-- call every goal occurrence of its type with the removed constraint
+-- (spec §3).
 --
 -- This is emitted for any rule whose firing removes a constraint with
 -- goal occurrences, whether or not the rule has an aggregate: it is how
@@ -1348,12 +1610,28 @@ genKillStmts occ =
 -- goal-occurrence procedure's trailing flag tells it so: it must not be
 -- stored, and no fold can count it, since it is no longer in the store.
 genRemovalStmts :: OccurrenceMap -> Occurrence -> [Stmt]
-genRemovalStmts occMap occ = concatMap oneHead (sortOn textualPos (removedHeads occ))
+genRemovalStmts occMap occ =
+  concatMap oneHead (map dropPos (sortOn textualPos (removedHeads occ)) ++ selectionRemoved)
   where
     headNode = occ.rule.head.node
 
+    dropPos (_, ident, idExpr, args) = (ident, idExpr, args)
+
     -- The textual position of a removed head, first field of an entry.
     textualPos (pos, _, _, _) = pos
+
+    -- The constraints the take forms removed. Their fields are read off
+    -- the (now dead) suspensions, which is allowed.
+    selectionRemoved =
+      [ ( Identifier (Types.qualifiedToName hc.name) (length hc.args),
+          IdVar sel,
+          [FieldArg (IdVar sel) (ArgIndex (fromIntegral i)) | i <- [0 .. length hc.args - 1]]
+        )
+      | p <- occ.aggregates,
+        isTakePlan p,
+        (j, D.AggConstraint hc _) <- zip [0 ..] p.planGoal,
+        let sel = selectionIdName p.planIndex j
+      ]
 
     -- (textual position, constraint identifier, id expression, argument
     -- expressions). Removed partners carry their loop variables; a
@@ -1389,7 +1667,7 @@ genRemovalStmts occMap occ = concatMap oneHead (sortOn textualPos (removedHeads 
     -- call below would name a procedure that does not exist and the
     -- closed-procedure-name check would fail the compile loudly, where a
     -- filter would silently lose firings.
-    oneHead (_, ident, idExpr, argExprs) =
+    oneHead (ident, idExpr, argExprs) =
       [ ExprStmt
           ( CallExpr
               (occProcName ident.name ident.arity target.number)

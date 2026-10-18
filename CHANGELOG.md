@@ -26,6 +26,29 @@ values are typed.
   type-checked. See
   [docs/reference/state.md](docs/reference/state.md).
 
+The selection aggregates `argmin/2`, `argmax/2`, `takemin/2` and
+`takemax/2` are implemented on both backends
+([docs/reference/aggregates.md](docs/reference/aggregates.md#selection-aggregates)).
+
+- `argmin(X, G)` / `argmax(X, G)` select the first match of `G`, in goal
+  order, with the smallest / largest `X` (prelude `<` / `>`). The goal's
+  variables are visible to the guard, the body and later aggregates. No
+  match means the rule does not apply; an unbound key makes the selection
+  undefined.
+- `takemin` / `takemax` also remove the selected constraints when the
+  rule fires. The removal step takes them after the removed heads.
+- A constraint directly inside `takemin`/`takemax` is a removed
+  occurrence for `:- constraint_use`.
+- `AggregateNotImplemented` (YCHR-40004) now means a nested aggregate
+  only. A program that only uses selection forms no longer needs
+  `maybe:just/1` (YCHR-40005).
+- **Breaking:** `YCHR.Internal.Compile.Types.AggregatePlan` has a new
+  `planKind` field.
+- Scheme runtime: a constraint whose type has an indexed position, stored
+  while its store is still below the index threshold, now registers as an
+  observer of its variables. Binding one of them used to not reactivate
+  it, so a rule could silently fail to fire.
+
 The prelude tells a list of goals, and the s-expression VM format is now
 version 3.
 
@@ -75,9 +98,9 @@ regular heads, and an aggregate may be written kept or removed.
   failure), not a query abort.
 - New errors: `AggregateLocalEscapes` (YCHR-40003, a variable only an
   aggregate's goal binds is read by the guard or body),
-  `AggregateNotImplemented` (YCHR-40004, a selection or nested
-  aggregate), `AggregateResultNotMaybe` (YCHR-40005, the program
-  declares no `maybe:just/1`), and `MacroInAggregateGoal`
+  `AggregateNotImplemented` (YCHR-40004, a nested aggregate),
+  `AggregateResultNotMaybe` (YCHR-40005, the program declares no
+  `maybe:just/1`), and `MacroInAggregateGoal`
   (YCHR-20043, a macro use inside an aggregate goal).
 - A constraint in an aggregate goal counts as a kept occurrence for
   `:- constraint_use` (YCHR-45001 applies).
@@ -91,8 +114,7 @@ regular heads, and an aggregate may be written kept or removed.
 - **Breaking:** `YCHR.Internal.Compile.Types.Occurrence` has a new
   `goalOcc` field, and `YCHR.Internal.Rename.RenameError` a new
   `MacroInAggregateGoal` constructor.
-- Not implemented yet: selection aggregates
-  (`argmin`/`argmax`/`takemin`/`takemax`), nested aggregates,
+- Not implemented yet: nested aggregates,
   `forall/2`, and the aggregator typing (an aggregate's positions are
   not type-checked). A rule with an aggregate is exempt from the
   passive-occurrence optimization.

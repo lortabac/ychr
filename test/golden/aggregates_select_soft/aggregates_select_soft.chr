@@ -1,0 +1,14 @@
+% An unbound key makes the selection undefined, even with a single match,
+% so the rule does not apply. Binding the key later fires it.
+:- module(aggregates_select_soft, [bind_later/1, never_bound/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, item/2, best/2, ask/2, bind_later/1, never_bound/1.
+
+p(K), argmin(X, item(K, X)) ==> best(K, X).
+
+ask(K, R), collect(X, best(K, X), L) <=> R = L.
+
+bind_later(A) <=> item(1, V), p(1), ask(1, A0), V = 4, ask(1, A1), A = [A0, A1].
+
+never_bound(A) <=> item(1, _), item(1, 3), p(1), ask(1, A).

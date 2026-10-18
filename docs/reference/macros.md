@@ -831,10 +831,10 @@ declaration macro.
   compatibly, because a qualified name means the same under both
   schemes.
 - **Aggregates.** The aggregate core form is specified separately, in
-  [aggregates.md](aggregates.md), and the core form and the predefined
-  aggregates are implemented. That specification makes the goal
-  argument a goal position, so nested aggregates such as
+  [aggregates.md](aggregates.md), and the core form, the predefined
+  aggregates and the selection forms are implemented. That
+  specification makes the goal argument a goal position, so nested
+  aggregates such as
   `argmax(S, (client(C), sum(B, account(_, C, _, B), S)))` are meant to
   expand there — but the renamer does not expand macros inside an
-  aggregate goal yet, and reports `YCHR-20043` for a use instead. The
-  selection forms themselves are rejected with `YCHR-40004`.
+  aggregate goal yet, and reports `YCHR-20043` for a use instead.

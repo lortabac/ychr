@@ -37,7 +37,8 @@ import YCHR.Internal.PExpr (PExpr)
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Types
-  ( HeadConstraint,
+  ( AggregateKind (..),
+    HeadConstraint,
     Identifier (..),
     RuleId (..),
     SymbolTable,
@@ -95,10 +96,13 @@ collectOccurrences symTab prog = do
 -- aggregators produce: the constructor an aggregate's @Final@ closure
 -- returns, and the one the compiler decodes. Reported once per program, at
 -- the first rule that has an aggregate, and never for a program that uses
--- none.
+-- none. A selection form has no aggregator, so it does not count.
 checkAggregateResultType :: D.Program -> Writer [Diagnostic CompileError] ()
 checkAggregateResultType prog =
-  case [rule | rule <- prog.rules, not (null rule.head.node.aggregates)] of
+  case [ rule
+       | rule <- prog.rules,
+         any (\a -> a.kind == AggPlain) rule.head.node.aggregates
+       ] of
     [] -> pure ()
     rule : _ ->
       if aggregateResultTypeDeclared prog.typeDefinitions
@@ -134,9 +138,10 @@ ruleDisplayName ruleIdx rule = case rule.name of
 --
 -- The rule's aggregates are planned by the caller and shared by all of its
 -- occurrences, so an occurrence can compute them without re-planning. An
--- aggregate the planner dropped (selection and nested forms, until their
--- phase) contributes no goal occurrence: there is no plan to compute it
--- with.
+-- aggregate the planner dropped (a nested aggregate, until its phase)
+-- contributes no goal occurrence: there is no plan to compute it with. A
+-- selection form is planned like any other aggregate, so its conjuncts
+-- are goal occurrences too.
 ruleOccurrences ::
   SymbolTable ->
   [[AggregatePlan]] ->

@@ -1,0 +1,24 @@
+% On a tie, argmax and argmin keep the first match in goal order, which is
+% the order the constraints were told.
+:- module(aggregates_argmax_tie, [setup/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, q/1, item/3, top/2, bot/2, setup/2.
+
+p(K), argmax(X, item(K, X, T)) ==> top(K, T).
+q(K), argmin(X, item(K, X, T)) ==> bot(K, T).
+
+top(1, T) \ setup(A, B) <=> A = T, ask_bot(B).
+
+:- chr_constraint ask_bot/1.
+bot(1, T) \ ask_bot(B) <=> B = T.
+
+setup(A, B) <=>
+    item(1, 5, 10),
+    item(1, 9, 20),
+    item(1, 9, 30),
+    item(1, 2, 40),
+    item(1, 2, 50),
+    p(1),
+    q(1),
+    setup(A, B).
