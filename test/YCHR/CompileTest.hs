@@ -33,7 +33,8 @@ tests =
       aggregateFoldTests,
       aggregateResultTests,
       aggregateGoalTests,
-      selectionTests
+      selectionTests,
+      nestedAggregateTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -1151,4 +1152,103 @@ selectionTests =
                         ]
                       ++ [VM.AVal (VM.Lit (VM.BoolLit True))]
                   ]
+    ]
+
+--------------------------------------------------------------------------------
+-- Nested aggregates
+--------------------------------------------------------------------------------
+
+-- | An aggregate nested in a goal: a @\\+@ inside a @count@.
+nestedSource :: Text
+nestedSource =
+  ":- module(aggx, [c/1, d/1, e/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, e/1, n/2.\n\
+  \\n\
+  \c(X), count((d(Y), \\+ e(Y)), N) ==> N > 0 | n(X, N).\n"
+
+-- | The same type in the outer and the nested goal.
+nestedSameTypeSource :: Text
+nestedSameTypeSource =
+  ":- module(aggy, [c/1, d/1, n/2]).\n\
+  \:- use_module(library(aggregates)).\n\
+  \:- chr_constraint c/1, d/1, n/2.\n\
+  \\n\
+  \c(X), count((d(Y), \\+ d(Y)), N) ==> N > 0 | n(X, N).\n"
+
+-- | The procedure of the aggregate at @path@ in the last rule of a program
+-- with one user rule.
+findNestedProcedure :: CompiledProgram -> [Int] -> Maybe VM.Procedure
+findNestedProcedure prog path =
+  findProcedure
+    prog
+    (T.intercalate "_" ("aggregate" : map (T.pack . show) (ruleIdx : path)))
+  where
+    ruleIdx = length prog.program.ruleNames - 1
+
+-- | How many @if@ conditions call the named procedure: an aggregate is
+-- called from a condition, which 'callsTo' does not look into.
+conditionCalls :: VM.Name -> [VM.Stmt] -> Int
+conditionCalls name body =
+  length [() | VM.BFromVal (VM.CallExpr n _) <- ifConditions body, n == name]
+
+isSoftWrap :: VM.BoolExpr -> Bool
+isSoftWrap (VM.BSoftGuard _) = True
+isSoftWrap _ = False
+
+isIdTest :: VM.BoolExpr -> Bool
+isIdTest (VM.BIdEqual _ _) = True
+isIdTest _ = False
+
+nestedAggregateTests :: TestTree
+nestedAggregateTests =
+  testGroup
+    "nested aggregates"
+    [ testCase "a nested aggregate gets a procedure named by its path" $ do
+        prog <- compileOrFail [("m.chr", nestedSource)]
+        assertBool "no outer procedure" (isJust (findNestedProcedure prog [0]))
+        assertBool "no nested procedure" (isJust (findNestedProcedure prog [0, 1])),
+      testCase "the fold calls the nested procedure in place, not soft-guarded" $ do
+        prog <- compileOrFail [("m.chr", nestedSource)]
+        case (findNestedProcedure prog [0], findNestedProcedure prog [0, 1]) of
+          (Just outer, Just nested) -> do
+            conditionCalls nested.name outer.body @?= 1
+            assertBool
+              "the call must not have its own soft guard"
+              (not (any isSoftWrap (ifConditions outer.body)))
+          _ -> assertFailure "missing aggregate procedures",
+      testCase "goal occurrences come outer goal first, then the nested goal" $ do
+        prog <- compileOrFail [("m.chr", nestedSameTypeSource)]
+        -- d/1 at position 0 of the outer goal: the nested aggregate is
+        -- skipped, so only the head loop is left.
+        case findProcedure prog "occurrence_aggy__d1_1" of
+          Nothing -> assertFailure "no outer d/1 goal occurrence"
+          Just p -> foreachLabels p.body @?= [VM.Label "L1"]
+        -- d/1 in the nested goal: the outer goal is looped at level 0,
+        -- then the head.
+        case findProcedure prog "occurrence_aggy__d1_2" of
+          Nothing -> assertFailure "no nested d/1 goal occurrence"
+          Just p ->
+            foreachLabels p.body
+              @?= [VM.Label "aggregate_loop_0_0", VM.Label "L1"],
+      testCase "the location phase tests distinctness within one goal only" $ do
+        prog <- compileOrFail [("m.chr", nestedSameTypeSource)]
+        case findProcedure prog "occurrence_aggy__d1_2" of
+          Nothing -> assertFailure "no nested d/1 goal occurrence"
+          Just p ->
+            assertBool
+              "an outer-goal loop must not be compared with the nested active"
+              (not (any isIdTest (ifConditions p.body))),
+      testCase "the location phase does not compute a nested aggregate" $ do
+        prog <- compileOrFail [("m.chr", nestedSource)]
+        case ( findProcedure prog "occurrence_aggx__d1_1",
+               findNestedProcedure prog [0],
+               findNestedProcedure prog [0, 1]
+             ) of
+          (Just p, Just outer, Just nested) -> do
+            -- The fire step computes the outer aggregate, which computes
+            -- the nested one; the occurrence never calls it directly.
+            conditionCalls outer.name p.body @?= 1
+            conditionCalls nested.name p.body @?= 0
+          _ -> assertFailure "missing procedures"
     ]

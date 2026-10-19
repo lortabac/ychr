@@ -136,15 +136,16 @@ compile prog symTab =
       procs = concatMap (.constraintProcedures) constraintProcs
       (funProcs, funErrs) = runWriter $ do
         traverse compileFunctionDef prog.functions
-      -- One procedure per head aggregate, in rule order. A rule without
-      -- aggregates contributes nothing, so a program that uses none emits
-      -- exactly the procedures it emitted before.
+      -- One procedure per aggregate, nested ones included, in rule order.
+      -- A rule without aggregates contributes nothing, so a program that
+      -- uses none emits exactly the procedures it emitted before.
       aggregateWork =
         [ (display, rule, plan)
         | (display, rule, plans) <-
             zip3 ruleDisplayNames prog.rules collected.aggregatePlans,
-          plan <- plans
+          plan <- concatMap planTree plans
         ]
+      planTree p = p : concatMap (planTree . snd) p.planNested
       (aggProcs, aggErrs) = runWriter $ do
         traverse
           (\(display, rule, plan) -> genAggregateProcedure symTab display (rule, plan))
@@ -606,21 +607,41 @@ genGoalOccurrenceBody symTab cType goal condMap occ fire = do
           | (i, HeadVar v) <- zip [0 ..] occ.activeArgs
           ]
       headLoops = wrapInPartnerLoops cType occ condMap fire
-  -- The active conjunct's own guards are evaluated by
-  -- 'wrapGoalConjuncts' at 'goal.goalActiveIndex', so the enclosing
-  -- goals' conjuncts may only be appended *after* the current goal's
-  -- list: the index is into the concatenated list. Nested aggregates
-  -- need the enclosing conjuncts looped before the current goal with
-  -- their bindings in scope, so this concatenation will have to change
-  -- when they land (the list is always empty until then).
+  -- One nest per goal level: the active conjunct's goal, then each
+  -- enclosing goal from the innermost outward, then the head loops. Each
+  -- level has its own loop names and its own distinctness tests, since
+  -- two conjuncts only have to differ within one goal.
+  --
+  -- Going out one level, only the inner aggregate's shared inputs stay in
+  -- the variable map. Everything else the inner goal bound is local to it,
+  -- or is an output (a result, a selection's goal variables) whose value
+  -- the fold takes from the whole goal and not from this match. Joining
+  -- the outer goal on such a value could skip a combination the fold
+  -- accepts.
+  let depth = length goal.goalEnclosing
+      outer =
+        [ (depth - 1 - i, LocateGoal Nothing, g, shared)
+        | (i, g, shared) <- zip3 [0 ..] goal.goalEnclosing goal.goalLevelShared
+        ]
+      only shared vm = varMapFromList [(v, e) | v <- shared, Just e <- [lookupVar v vm]]
+      nest [] _ = pure headLoops
+      nest ((level, mode, conjuncts, shared) : more) vm =
+        wrapGoalConjuncts
+          symTab
+          si
+          (levelLoopNames goal.goalIndex level)
+          mode
+          conjuncts
+          (only shared vm)
+          (nest more)
   wrapGoalConjuncts
     symTab
     si
-    (aggregateLoopNames goal.goalIndex)
-    (Just (goal.goalActiveIndex, activeName, cType))
-    (goal.goalAll ++ concat goal.goalEnclosing)
+    (levelLoopNames goal.goalIndex depth)
+    (LocateGoal (Just (goal.goalActiveIndex, activeName, cType)))
+    goal.goalAll
     seed
-    (\_ -> pure headLoops)
+    (nest outer)
 
 -- | Compile the guards followed by the rule-firing block. Returns the
 -- statements that go at the innermost partner-loop position — any HNF
@@ -741,23 +762,31 @@ aggregateTest ::
   VarMap ->
   AggregatePlan ->
   Writer [Diagnostic CompileError] BoolExpr
-aggregateTest si varMap plan = do
+aggregateTest si varMap plan = aggregateCall si varMap plan (aggregateOutCellArgs plan)
+
+-- | A call to an aggregate's procedure, as a boolean: the out-cells given,
+-- then the values of the aggregate's shared variables from @varMap@.
+aggregateCall ::
+  SrcInfo ->
+  VarMap ->
+  AggregatePlan ->
+  [CallArg] ->
+  Writer [Diagnostic CompileError] BoolExpr
+aggregateCall si varMap plan cells = do
   shared <- traverse sharedArg plan.planShared
-  pure
-    ( BFromVal
-        (CallExpr plan.planProcName (aggregateOutCellArgs plan ++ map AVal shared))
-    )
+  pure (BFromVal (CallExpr plan.planProcName (cells ++ map AVal shared)))
   where
-    -- A shared variable is a head variable by construction. A missing one
-    -- is a compiler invariant violation, reported as an unbound variable
-    -- rather than crashing.
+    -- A shared variable is in scope by construction (a head variable, or
+    -- one the enclosing goal bound). A missing one is a compiler invariant
+    -- violation, reported as an unbound variable rather than crashing.
     sharedArg v = case lookupVar v varMap of
       Just expr -> pure expr
       Nothing -> do
         tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
         pure unreachableValue
 
--- | Generate the procedure that computes one head aggregate.
+-- | Generate the procedure that computes one aggregate, top-level or
+-- nested.
 --
 -- Parameters: the out-cells the caller created (one per variable the
 -- aggregate binds, plus a position cell for a @takemin@\/@takemax@), then
@@ -819,7 +848,7 @@ genFoldBody symTab si sharedMap plan = do
       symTab
       si
       (aggregateLoopNames plan.planIndex)
-      Nothing
+      (FoldGoal plan.planNested)
       plan.planGoal
       sharedMap
       $ \innermost -> do
@@ -900,7 +929,7 @@ genSelectionBody symTab si sharedMap plan = do
       symTab
       si
       (aggregateLoopNames plan.planIndex)
-      Nothing
+      (FoldGoal plan.planNested)
       plan.planGoal
       sharedMap
       $ \innermost -> do
@@ -1033,14 +1062,13 @@ bindsStmts binds =
 --
 -- @names@ picks the loop labels, the loop variables and the locals the
 -- goal's variables are bound to, so that two nests in one procedure do not
--- clash (see 'GoalLoopNames'). @mActive@ is the active conjunct of
--- a goal occurrence: its position in the list, the constraint being tried,
--- and its type. Its loop is not built — the active constraint already is
--- it — but its own guards are evaluated in place there, so a guard that
--- compares a variable of an earlier conjunct with a fresh name sees the
--- earlier binding, and a later conjunct sees whatever the active guards
--- bound. The fold passes 'Nothing': its firing's active constraint is not
--- one of the loops wrapped here.
+-- clash (see 'GoalLoopNames'). @mode@ says what to do with @?@ guards and
+-- nested aggregates (see 'GoalMode'), and in the location phase it names
+-- the active conjunct of a goal occurrence when that is in this goal. Its
+-- loop is not built — the active constraint already is it — but its own
+-- guards are evaluated in place there, so a guard that compares a variable
+-- of an earlier conjunct with a fresh name sees the earlier binding, and a
+-- later conjunct sees whatever the active guards bound.
 --
 -- Two conjuncts of the same type inside one goal must match /different/
 -- suspensions, like two head conjuncts of the same type. The fold needs
@@ -1051,14 +1079,18 @@ wrapGoalConjuncts ::
   SymbolTable ->
   SrcInfo ->
   GoalLoopNames ->
-  Maybe (Int, Name, ConstraintType) ->
+  GoalMode ->
   [D.AggregateConjunct] ->
   VarMap ->
   (VarMap -> Writer [Diagnostic CompileError] [Stmt]) ->
   Writer [Diagnostic CompileError] [Stmt]
-wrapGoalConjuncts symTab si names mActive conjuncts varMap0 inner =
+wrapGoalConjuncts symTab si names mode conjuncts varMap0 inner =
   go 0 [] varMap0 conjuncts
   where
+    (locating, mActive) = case mode of
+      FoldGoal _ -> (False, Nothing)
+      LocateGoal m -> (True, m)
+
     go _ _ vm [] = inner vm
     go j seen vm (conjunct : rest) = case conjunct of
       D.AggConstraint hcon guards
@@ -1105,15 +1137,30 @@ wrapGoalConjuncts symTab si names mActive conjuncts varMap0 inner =
       -- evaluates the guard, and it reports a variable that is genuinely
       -- unbound at its goal-order position.
       D.AggGuard g
-        | isJust mActive -> go (j + 1) seen vm rest
+        | locating -> go (j + 1) seen vm rest
         | otherwise -> do
             compiled <- compileGuards Nothing Nothing vm si [g]
             restStmts <- go (j + 1) seen vm rest
             pure (compiled.matchWrapper (withResidual compiled restStmts))
-      -- A nested aggregate is rejected by
-      -- 'YCHR.Internal.Compile.Aggregate.checkSupported', so a program that
-      -- compiles never reaches this arm.
-      D.AggNested _ -> go (j + 1) seen vm rest
+      -- A nested aggregate is computed in place, once per partial match:
+      -- the match goes on only if it is defined and its result matched,
+      -- and what it binds is in scope for the conjuncts after it and for
+      -- the element. The call is not soft-guarded here, so an
+      -- instantiation error inside it makes the whole top-level aggregate
+      -- undefined rather than dropping one match.
+      --
+      -- The location phase skips it, as it skips a @?@ guard: it is only a
+      -- filter, and the fire step recomputes it. What it would bind is then
+      -- unbound, so a later conjunct binds it as a local.
+      D.AggNested _
+        | FoldGoal nested <- mode,
+          Just plan <- lookup j nested -> do
+            let cells = [(v, nestedOutCell plan.planPath v) | v <- plan.planBind]
+                vm' = List.foldl' (\m (v, c) -> insertVar v (Var c) m) vm cells
+            call <- aggregateCall si vm plan [AVal (Var c) | (_, c) <- cells]
+            restStmts <- go (j + 1) seen vm' rest
+            pure ([LetVal c NewVar | (_, c) <- cells] ++ [If call restStmts []])
+        | otherwise -> go (j + 1) seen vm rest
 
     -- One @not (susp_j = susp_j')@ per earlier conjunct of the same type,
     -- plus one against the constraint being tried when that is a conjunct
@@ -1156,6 +1203,27 @@ data GoalLoopNames = GoalLoopNames
 -- variable is read into a local of its own source name.
 aggregateLoopNames :: Int -> GoalLoopNames
 aggregateLoopNames k = GoalLoopNames (aggregateLabel k) aggregateSuspName Name
+
+-- | The names the location phase uses for goal level @d@ of aggregate @k@.
+-- Level 0, the top-level goal, keeps 'aggregateLoopNames'; a nested goal's
+-- loops get names of their own, since they share one procedure with the
+-- loops of the goals around it. A goal variable keeps its source name at
+-- every level, so a variable shared across levels joins through the
+-- variable map.
+levelLoopNames :: Int -> Int -> GoalLoopNames
+levelLoopNames k 0 = aggregateLoopNames k
+levelLoopNames k d = GoalLoopNames (aggregateLevelLabel k d) (aggregateLevelSuspName d) Name
+
+-- | How 'wrapGoalConjuncts' treats the conjuncts that are not loops.
+data GoalMode
+  = -- | A fold, or a take form's firing: every @?@ guard is checked, and
+    -- every nested aggregate is computed in place with its plan, keyed by
+    -- its position in the goal.
+    FoldGoal [(Int, AggregatePlan)]
+  | -- | A goal occurrence's location phase: @?@ guards and nested
+    -- aggregates are skipped. Carries the active conjunct when it is in
+    -- this goal: its position, the constraint being tried, and its type.
+    LocateGoal (Maybe (Int, Name, ConstraintType))
 
 -- | The names the firing uses to find selection @k@'s match again.
 selectionLoopNames :: Int -> GoalLoopNames
@@ -1456,7 +1524,7 @@ genSelectStmts symTab si varMap plan = case conjuncts of
         symTab
         si
         (selectionLoopNames k)
-        Nothing
+        (FoldGoal plan.planNested)
         plan.planGoal
         seed
         ( \_ ->

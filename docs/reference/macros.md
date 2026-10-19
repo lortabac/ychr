@@ -316,8 +316,8 @@ constraints (for example a `;` or a `\`) is rejected, as are body
 goals that are not allowed in a body. The diagnostic names the macro
 (see [Diagnostics](#diagnostics)). Aggregates are valid head
 conjuncts, and `?` guards are valid inside an aggregate goal
-([aggregates.md](aggregates.md)); a macro *use* inside an aggregate
-goal is reported as not implemented (`YCHR-20043`).
+([aggregates.md](aggregates.md)). An aggregate goal is a goal position
+too, so a macro use inside one expands there.
 
 **Termination.** The checks under
 [Recursion and termination](#recursion-and-termination) follow actual
@@ -830,11 +830,3 @@ declaration macro.
 - **Definition-site name resolution** (hygiene). It can be added
   compatibly, because a qualified name means the same under both
   schemes.
-- **Aggregates.** The aggregate core form is specified separately, in
-  [aggregates.md](aggregates.md), and the core form, the predefined
-  aggregates and the selection forms are implemented. That
-  specification makes the goal argument a goal position, so nested
-  aggregates such as
-  `argmax(S, (client(C), sum(B, account(_, C, _, B), S)))` are meant to
-  expand there — but the renamer does not expand macros inside an
-  aggregate goal yet, and reports `YCHR-20043` for a use instead.

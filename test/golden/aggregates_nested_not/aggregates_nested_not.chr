@@ -1,0 +1,18 @@
+% A nested aggregate written in the core form: a task is ready when no
+% dependency of it is still open, \+ (dep(T, U), \+ done(U)). The inner
+% aggregate is computed once per dep, with U bound by the outer goal.
+:- module(aggregates_nested_not, [go/1, open_dep/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint task/1, dep/2, done/1, ready/1, ask/2, go/1, open_dep/1.
+
+task(T),
+  aggregate(aggregates:not_spec, 1,
+            (dep(T, U), aggregate(aggregates:not_spec, 1, done(U), _)), _)
+  ==> ready(T).
+
+ready(T) \ ask(T, A) <=> A = 1.
+ask(_, A) <=> A = 0.
+
+go(A) <=> dep(1, 10), dep(1, 11), done(10), done(11), task(1), ask(1, A).
+open_dep(A) <=> dep(1, 10), dep(1, 11), done(11), task(1), ask(1, A).

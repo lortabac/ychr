@@ -1,0 +1,14 @@
+% An instantiation error inside a nested aggregate makes the whole
+% aggregate undefined: the rule does not fire. It does not drop the one
+% outer match that raised it (that would count 0 here).
+:- module(aggregates_nested_soft, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint c/1, d/1, start/0, out/1, ask/1, go/1.
+
+start, count((c(X), \+ (d(Y), ? Y > X)), N) ==> out(N).
+
+out(N) \ ask(A) <=> A = N.
+ask(A) <=> A = -1.
+
+go(A) <=> c(1), c(V), d(3), start, ask(A).

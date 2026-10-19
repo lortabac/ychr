@@ -1,0 +1,14 @@
+% Two nested aggregates side by side may each have a local of the same
+% name (U here), as two aggregates in a rule head may.
+:- module(aggregates_nested_siblings, [go/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint t/1, d/2, e/2, f/2, done/1, out/1, ask/1, go/1.
+
+% How many d(T, _) there are while every e and every f of T is done.
+t(T), count((d(T, _), forall(e(T, U), done(U)), forall(f(T, U), done(U))), N)
+  ==> N > 0 | out(N).
+
+out(N) \ ask(A) <=> A = N.
+
+go(A) <=> d(1, 1), d(1, 2), e(1, 10), f(1, 11), done(10), done(11), t(1), ask(A).

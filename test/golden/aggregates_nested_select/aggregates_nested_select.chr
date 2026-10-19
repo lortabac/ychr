@@ -1,0 +1,17 @@
+% A selection over a nested sum: the client with the largest total
+% balance. The nested result S is the selection key, and both C and S are
+% visible to the body; the nested aggregate's own B is not.
+:- module(aggregates_nested_select, [go/2]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint client/1, account/3, report/0, best/2, ask/2, go/2.
+
+report, argmax(S, (client(C), sum(B, account(_, C, B), S))) <=> best(C, S).
+
+best(C, S) \ ask(A, B) <=> A = C, B = S.
+
+go(C, S) <=>
+    client(1), client(2), client(3),
+    account(1, 1, 10), account(2, 2, 30), account(3, 1, 15),
+    account(4, 3, 20), account(5, 2, 1),
+    report, ask(C, S).

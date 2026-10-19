@@ -1,0 +1,8 @@
+% B is local to the sum nested in the selection's goal, so the body may
+% not read it, even though the selection's own goal variables are visible.
+:- module(aggregates_nested_select_escape, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint client/1, account/3, report/0, best/1.
+
+report, argmax(S, (client(C), sum(B, account(_, C, B), S))) <=> best(B).

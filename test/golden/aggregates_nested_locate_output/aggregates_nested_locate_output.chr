@@ -1,0 +1,25 @@
+% What a nested aggregate outputs (its result, or a selection's goal
+% variables) must not be joined with the enclosing goal in the location
+% phase: the fold takes it from the whole nested goal, not from the
+% constraint being tried. The rule has to fire whatever the tell order.
+:- module(aggregates_nested_locate_output, [mx_late/1, mx_early/1,
+                                            sel_late/1, sel_early/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint h/1, g/1, p/1, q/2, r/3, s/1, t/1, fired/1, ask/1,
+                  mx_late/1, mx_early/1, sel_late/1, sel_early/1.
+
+% No p whose largest q has a matching s.
+h(K), count((p(X), max(V, q(X, V), V), s(V)), 0) ==> fired(K).
+% No p whose q with the smallest key has a matching t.
+g(K), count((p(X), argmin(V, r(X, V, Y)), t(Y)), 0) ==> fired(K).
+
+fired(_) \ ask(A) <=> A = 1.
+ask(A) <=> A = 0.
+
+% q(1, 12) arrives last and becomes the max; s(12) does not exist.
+mx_late(A) <=> s(9), p(1), q(1, 9), h(7), q(1, 12), ask(A).
+mx_early(A) <=> s(9), p(1), q(1, 9), q(1, 12), h(7), ask(A).
+% r(1, 1, 200) arrives last and becomes the argmin; t(200) does not exist.
+sel_late(A) <=> t(100), p(1), r(1, 3, 100), g(7), r(1, 1, 200), ask(A).
+sel_early(A) <=> t(100), p(1), r(1, 3, 100), r(1, 1, 200), g(7), ask(A).

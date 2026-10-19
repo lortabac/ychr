@@ -138,7 +138,7 @@ ruleDisplayName ruleIdx rule = case rule.name of
 --
 -- The rule's aggregates are planned by the caller and shared by all of its
 -- occurrences, so an occurrence can compute them without re-planning. An
--- aggregate the planner dropped (a nested aggregate, until its phase)
+-- aggregate the planner dropped (one with a nested take form)
 -- contributes no goal occurrence: there is no plan to compute it with. A
 -- selection form is planned like any other aggregate, so its conjuncts
 -- are goal occurrences too.
@@ -174,11 +174,12 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
       for orderedOccurrences $ \(idx, con, isKept) ->
         mkOccurrence symTab rule ruleId' display aggregates orderedOccurrences idx con isKept
   -- One goal occurrence per CHR constraint conjunct of a planned
-  -- aggregate's goal. The plan is matched by its source index, since
-  -- the planner drops unsupported forms and leaves gaps in the list.
+  -- aggregate's goal, nested goals included. The plan is matched by its
+  -- source index, since the planner drops unsupported forms and leaves
+  -- gaps in the list.
   goalOccurrences <-
     fmap catMaybes $
-      for goalConjuncts $ \(plan, goal, j, hc) ->
+      for goalConjuncts $ \(plan, (goal, enclosing, levelShared), j, hc) ->
         mkGoalOccurrence
           symTab
           rule
@@ -186,19 +187,39 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
           display
           aggregates
           orderedOccurrences
-          plan.planIndex
-          j
           hc
-          goal
+          GoalOccurrence
+            { goalIndex = plan.planIndex,
+              goalActiveIndex = j,
+              goalAll = goal,
+              goalEnclosing = enclosing,
+              goalLevelShared = levelShared
+            }
   pure (ordinary ++ goalOccurrences)
   where
     planByIndex i = List.find (\p -> p.planIndex == i) (aggregatePlans !! ruleIdx)
     goalConjuncts =
-      [ (plan, goal, j, hc)
-      | (i, agg) <- zip [0 :: Int ..] rule.head.node.aggregates,
+      [ (plan, level, j, hc)
+      | (i, _) <- zip [0 :: Int ..] rule.head.node.aggregates,
         Just plan <- [planByIndex i],
-        let goal = agg.goal,
+        level@(goal, _, _) <- aggregateGoals [] [] plan,
         (j, D.AggConstraint hc _) <- zip [0 :: Int ..] goal
+      ]
+
+-- | Every goal of an aggregate, with the goals enclosing it innermost first
+-- and, for each of those, the shared inputs of the nested aggregate whose
+-- goal sits inside it: the aggregate's own goal, then the goals nested in
+-- it, in source order and depth first (spec §2 "Order").
+aggregateGoals ::
+  [[D.AggregateConjunct]] ->
+  [[Text]] ->
+  AggregatePlan ->
+  [([D.AggregateConjunct], [[D.AggregateConjunct]], [[Text]])]
+aggregateGoals enclosing shared plan =
+  (plan.planGoal, enclosing, shared)
+    : concat
+      [ aggregateGoals (plan.planGoal : enclosing) (n.planShared : shared) n
+      | (_, n) <- plan.planNested
       ]
 
 -- | Build a single 'Occurrence' record for the active head constraint
@@ -251,9 +272,10 @@ mkOccurrence
 
 -- | Build the 'Occurrence' for one CHR constraint conjunct of an
 -- aggregate goal. Every regular head is a partner, since the active
--- constraint is not a head; @j@ is the conjunct's position in the goal,
--- which the location phase needs to evaluate the conjunct's own guards
--- in their goal-order place.
+-- constraint is not a head. The 'GoalOccurrence' says where the conjunct
+-- sits: its position in its goal, which the location phase needs to
+-- evaluate the conjunct's own guards in their goal-order place, and the
+-- goals around it.
 mkGoalOccurrence ::
   SymbolTable ->
   D.Rule ->
@@ -261,12 +283,10 @@ mkGoalOccurrence ::
   Text ->
   [AggregatePlan] ->
   [(HeadPosition, HeadConstraint, Bool)] ->
-  Int ->
-  Int ->
   HeadConstraint ->
-  [D.AggregateConjunct] ->
+  GoalOccurrence ->
   Writer [Diagnostic CompileError] (Maybe Occurrence)
-mkGoalOccurrence symTab rule ruleId' display aggregates heads aggIndex j activeCon goal = do
+mkGoalOccurrence symTab rule ruleId' display plans heads activeCon goal = do
   partners <- resolvePartners symTab rule display heads
   pure $ do
     resolvedPartners <- sequence partners
@@ -285,16 +305,9 @@ mkGoalOccurrence symTab rule ruleId' display aggregates heads aggIndex j activeC
           isKept = True,
           activeArgs = activeCon.args,
           partners = resolvedPartners,
-          aggregates = aggregates,
+          aggregates = plans,
           passive = False,
-          goalOcc =
-            Just
-              GoalOccurrence
-                { goalIndex = aggIndex,
-                  goalActiveIndex = j,
-                  goalAll = goal,
-                  goalEnclosing = []
-                }
+          goalOcc = Just goal
         }
 
 -- | Resolve every partner entry's constraint type, reporting a miss and

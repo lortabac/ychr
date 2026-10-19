@@ -1,0 +1,33 @@
+% forall(G, C) is \+ (G, \+ C): a nested aggregate. A task is ready when
+% every one of its dependencies is done, whether the task, the dep or the
+% done comes last, and when its last open dependency is removed.
+:- module(aggregates_forall, [some_open/1, all_done/1, done_late/1,
+                              dep_removed/1, no_deps/1, other_task/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint task/1, dep/2, done/1, undep/2, ready/1, ask/2.
+:- chr_constraint some_open/1, all_done/1, done_late/1, dep_removed/1,
+                  no_deps/1, other_task/1.
+
+task(T), forall(dep(T, U), done(U)) ==> ready(T).
+
+undep(T, U), dep(T, U) <=> true.
+
+ready(T) \ ask(T, A) <=> A = 1.
+ask(_, A) <=> A = 0.
+
+% The task comes after its deps: told first, it would have none and be
+% ready at once (a rule with an aggregate fires once and nothing retracts
+% ready/1).
+some_open(A) <=> dep(1, 10), dep(1, 11), done(10), task(1), ask(1, A).
+all_done(A) <=> dep(1, 10), dep(1, 11), done(10), done(11), task(1), ask(1, A).
+% The done that closes the last dependency is told after the task: it is
+% the active constraint of the goal occurrence inside the nested goal.
+done_late(A) <=> dep(1, 10), task(1), done(10), ask(1, A).
+% Removing the open dependency runs the removal step through the
+% occurrence of dep/2 in the outer goal.
+dep_removed(A) <=>
+    dep(1, 10), dep(1, 11), done(10), task(1), undep(1, 11), ask(1, A).
+no_deps(A) <=> task(1), ask(1, A).
+% A dependency of another task does not count.
+other_task(A) <=> dep(2, 10), task(1), ask(1, A).

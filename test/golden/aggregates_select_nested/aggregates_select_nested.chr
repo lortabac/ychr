@@ -1,7 +1,21 @@
-% A nested aggregate is not implemented yet, inside a selection goal too.
-:- module(aggregates_select_nested, []).
+% A selection whose goal holds a nested aggregate: the smallest item that
+% is not blocked. For takemin the firing walks the goal again to find the
+% selected match, and has to skip the blocked items as the selection did,
+% or it would remove the wrong one.
+:- module(aggregates_select_nested, [pick/1, take_one/2]).
 :- use_module(library(aggregates)).
 
-:- chr_constraint p/1, item/2, q/1.
+:- chr_constraint p/0, q/0, item/1, blocked/1, best/1, ask/1, pick/1,
+                  ask_left/1, take_one/2.
 
-p(K), argmin(X, (item(K, X), aggregate(aggregates:count_spec, 1, q(X), _))) ==> true.
+p, argmin(X, (item(X), \+ blocked(X))) ==> best(X).
+q, takemin(X, (item(X), \+ blocked(X))) <=> best(X).
+
+best(X) \ ask(A) <=> A = X.
+item(1) \ ask_left(L) <=> L = 1.
+ask_left(L) <=> L = 0.
+
+pick(A) <=> item(3), item(1), item(2), blocked(1), p, ask(A).
+% takemin removes item(2). Without the nested filter the firing would
+% land on item(1) instead, the second item in store order.
+take_one(A, L) <=> item(3), item(1), item(2), blocked(1), q, ask(A), ask_left(L).
