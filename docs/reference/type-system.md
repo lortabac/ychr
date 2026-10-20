@@ -1561,9 +1561,9 @@ deeper than the selection's goal.
 A bounded constraint in an aggregate goal assumes its bound inside the
 aggregate only: its required signatures are ambient there, not in the
 rule. `Agg`'s own bounds are discharged in the enclosing scope. So
-`min(Y, q(Y), M)` over a polymorphic `q(T)` is `BoundUnsatisfied`
-(YCHR-60012): the matches may be of different instances, and `min`
-would compare them.
+`min(Y, q(Y), M)` over a polymorphic `q(T)` is rejected with
+`BoundUnsatisfied` (YCHR-60012): the matches may be of different
+instances, and `min` would compare them.
 
 ### Gathering order
 

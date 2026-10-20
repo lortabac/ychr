@@ -39,6 +39,9 @@ result_test(A) <=> s("a"), s("b"), r(1), r(2), ask_result(A).
 % An int key compares, and V comes from the one selected match.
 :- chr_constraint start, k(int, U), best(U), ask_select(any), select(any).
 start, argmin(K, k(K, V)) ==> best(V).
+% The rule's guard may pin V: it comes from one match.
+:- chr_constraint use_int(int).
+start, argmin(K, k(K, V)) ==> integer(V) | use_int(V).
 best(V) \ ask_select(A) <=> A = V.
 select(A) <=> k(3, "c"), k(1, "a"), k(2, "b"), start, ask_select(A).
 

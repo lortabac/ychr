@@ -1,4 +1,4 @@
-% The float folds, and min/max over strings and floats.
+% The float folds, min over floats, and min/max over strings.
 :- module(aggregates_typed_folds, [floats/4, strings/2]).
 :- use_module(library(aggregates)).
 
