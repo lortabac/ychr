@@ -414,8 +414,11 @@ library
                     , YCHR.Internal.DeclMacro
                     , YCHR.Internal.Desugared
                     , YCHR.Internal.Desugar
+                    , YCHR.Internal.Desugar.AggregateScope
                     , YCHR.Internal.Desugar.Disjunction
+                    , YCHR.Internal.Desugar.Hnf
                     , YCHR.Internal.Desugar.Inline
+                    , YCHR.Internal.Desugar.Vars
                     , YCHR.Internal.Parser
                     , YCHR.Internal.Parsed
                     , YCHR.Internal.Parsing.Lexer

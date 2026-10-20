@@ -133,7 +133,8 @@ rules. The two hook points are:
 | gates | `Compile/Aggregate.hs` `checkSupported`, `checkLocalEscapes` |
 | nested plans | `Compile/Aggregate.hs` `planAggregate`, `planNestedAggregates`; `AggregatePlan.planNested` |
 | nested calls / levels | `Compile.hs` `GoalMode`, `levelLoopNames`; `Occurrences.hs` `aggregateGoals` |
-| selection | `Compile.hs` `genSelectionBody`, `genSelectStmts`, `GoalLoopNames`; `Aggregate.hs` `selectionGoalVars` |
+| selection | `Compile.hs` `genSelectionBody`, `genSelectStmts`, `GoalLoopNames`; `Desugar/AggregateScope.hs` `selectionGoalVars` |
+| shared / locals / binds, result HNF | `Desugar/AggregateScope.hs` `scopeAggregates` fills `D.aggShared`, `aggLocals`, `aggBinds`, `aggResult`; the compiler reads them |
 | passivity exemption | `Compile/Passive.hs` `isPassive`, `aggregateRule` |
 | constraint use | `ConstraintUse.hs` `checkConstraintUse.goalConstraints` |
 | macros in goals | `Rename.hs` `renameConjunct` |

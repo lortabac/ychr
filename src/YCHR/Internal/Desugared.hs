@@ -37,6 +37,7 @@ module YCHR.Internal.Desugared
     -- * Aggregates
     Aggregate (..),
     AggregateConjunct (..),
+    AggregateResult (..),
 
     -- * Expressions
     Expr (..),
@@ -123,7 +124,43 @@ data Aggregate = Aggregate
     goal :: [AggregateConjunct],
     -- | The result pattern, kept as a 'Term' like a head argument: it
     -- is matched, not evaluated.
-    result :: Term
+    result :: Term,
+    -- | The names it reads from the enclosing scope, sorted: the ones it
+    -- mentions that are bound before it runs.
+    aggShared :: [Text],
+    -- | The names that get a fresh slot in its own scope, sorted: the
+    -- variables of its @element@, of its constraint conjuncts and their
+    -- HNF guards, and of its @?@ guards, plus what its nested aggregates
+    -- bind, less 'aggShared'. A selection's visible variables are
+    -- 'aggBinds', not locals, so its locals are its goal's @$hnf_N@
+    -- names. @agg@ is not included: it is evaluated in the enclosing
+    -- scope. A nested aggregate's own locals are not included either.
+    aggLocals :: [Text],
+    -- | The names it binds in the enclosing scope: the new variables of
+    -- a plain form's result pattern, in pattern order, or a selection's
+    -- goal variables, sorted. The compiler's out-cells follow this
+    -- order.
+    aggBinds :: [Text],
+    -- | The result pattern in head normal form. 'Nothing' for a
+    -- selection form.
+    --
+    -- The four fields above are filled by
+    -- "YCHR.Internal.Desugar.AggregateScope" at the end of desugaring a
+    -- rule; until then they are empty.
+    aggResult :: Maybe AggregateResult
+  }
+  deriving (Show, Eq)
+
+-- | An aggregate's result pattern in head normal form, as HNF treats a
+-- head argument: a variable the payload is bound to, plus the guards
+-- that check it. A variable bound before the aggregate becomes a
+-- 'GuardEqual', a compound a 'GuardMatch' with its 'GuardGetArg's. A
+-- fresh source variable is its own 'resultVar', with no guard;
+-- otherwise 'resultVar' is a fresh @$res_N@ name. Both are slots of the
+-- enclosing scope.
+data AggregateResult = AggregateResult
+  { resultVar :: Text,
+    resultGuards :: [Guard]
   }
   deriving (Show, Eq)
 

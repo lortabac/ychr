@@ -957,5 +957,116 @@ aggregateTests =
         -- outside its scope, so it is not captured. Compiling the lifted
         -- body reports it as an unbound variable, which is the right
         -- diagnostic for a value the closure cannot have.
-        liftedLambdaParams prog' @?= [["Y"]]
+        liftedLambdaParams prog' @?= [["Y"]],
+      testCase "binders: sibling aggregates each own a local of the same name" $ do
+        let first = aggOver "c" [Wildcard, var "X", var "B"] (var "B") (var "Bs")
+            second = aggOver "d" [var "X", var "B"] (int 1) (var "N")
+        rule <- singleRule [simpleModule (Propagation [leqQual] [first, second])]
+        map binders (allAggregates rule)
+          @?= [ (["X"], ["B"], ["Bs"], Just (D.AggregateResult "Bs" [])),
+                (["X"], ["B"], ["N"], Just (D.AggregateResult "N" []))
+              ],
+      testCase "binders: a nested aggregate shares what the enclosing goal bound" $ do
+        let nested = aggOver "d" [var "Z", var "W"] (var "W") (var "S")
+            outer =
+              (aggOver "c" [] (var "Z") (var "R"))
+                { goal =
+                    [ AggConstraint (qcon "M" "c" [var "X", var "Z"]),
+                      AggNested nested
+                    ]
+                }
+        rule <- singleRule [simpleModule (Propagation [leqQual] [outer])]
+        case onlyAggregate rule of
+          a@D.Aggregate {goal = [_, D.AggNested n]} -> do
+            -- The outer element's Z and the nested result S are the
+            -- outer aggregate's locals; X is read from the rule.
+            binders a @?= (["X"], ["S", "Z"], ["R"], Just (D.AggregateResult "R" []))
+            binders n @?= (["Z"], ["W"], ["S"], Just (D.AggregateResult "S" []))
+          a -> assertFailure ("unexpected aggregate: " ++ show a),
+      testCase "binders: a selection binds its goal variables, owns its $hnf names" $ do
+        let sel =
+              Aggregate
+                { kind = AggArgmin,
+                  agg = Nothing,
+                  element = var "K",
+                  goal =
+                    [ AggConstraint
+                        ( qcon
+                            "M"
+                            "c"
+                            [var "K", CompoundTerm (Unqualified "pair") [var "V", var "X"]]
+                        )
+                    ],
+                  result = Wildcard
+                }
+        rule <- singleRule [simpleModule (Propagation [leqQual] [sel])]
+        binders (onlyAggregate rule) @?= (["X"], ["$hnf_0"], ["K", "V"], Nothing),
+      testCase "binders: a result variable that also occurs in the goal" $ do
+        let a = aggOver "c" [var "N"] (int 1) (var "N")
+        rule <- singleRule [simpleModule (Propagation [leqQual] [a])]
+        -- The goal's N is a per-match local; the result's N is a new
+        -- variable of the rule. Same name, two slots.
+        binders (onlyAggregate rule) @?= ([], ["N"], ["N"], Just (D.AggregateResult "N" [])),
+      testCase "binders: a name bound by is inside a lambda is not shared" $ do
+        let body =
+              CompoundTerm
+                (Unqualified ",")
+                [CompoundTerm (Unqualified "is") [var "W", var "Z"], var "W"]
+            a = aggOver "c" [var "V"] (aggLambda [var "Z"] body) (var "S")
+        rule <- singleRule [simpleModule (Propagation [qcon "M" "p" [var "W"]] [a])]
+        -- The lambda's W is its own, so the head's W is not an input.
+        binders (onlyAggregate rule) @?= ([], ["V"], ["S"], Just (D.AggregateResult "S" [])),
+      testCase "binders: a plain goal's $hnf names and ? guard names are locals" $ do
+        let a =
+              (aggOver "c" [] (var "A") (var "N"))
+                { goal =
+                    [ AggConstraint
+                        (qcon "M" "c" [CompoundTerm (Unqualified "pair") [var "A", var "X"]]),
+                      AggGuard (var "G")
+                    ]
+                }
+        rule <- singleRule [simpleModule (Propagation [leqQual] [a])]
+        binders (onlyAggregate rule)
+          @?= (["X"], ["$hnf_0", "A", "G"], ["N"], Just (D.AggregateResult "N" [])),
+      testCase "result HNF: tests for bound variables, one $res counter per rule" $ do
+        let pat = CompoundTerm (Unqualified "f") [var "X", var "A", var "A"]
+            first = aggOver "c" [] (int 1) pat
+            second = aggOver "d" [] (int 1) (var "X")
+            third = aggOver "e" [] (int 1) Wildcard
+        rule <- singleRule [simpleModule (Propagation [leqQual] [first, second, third])]
+        map (.aggResult) (allAggregates rule)
+          @?= [ Just
+                  ( D.AggregateResult
+                      "$res_0"
+                      [ D.GuardMatch (R.VarExpr "$res_0") (Unqualified "f") 3,
+                        D.GuardGetArg "$res_1" (R.VarExpr "$res_0") 0,
+                        D.GuardEqual (R.VarExpr "X") (R.VarExpr "$res_1"),
+                        D.GuardGetArg "A" (R.VarExpr "$res_0") 1,
+                        D.GuardGetArg "$res_2" (R.VarExpr "$res_0") 2,
+                        D.GuardEqual (R.VarExpr "A") (R.VarExpr "$res_2")
+                      ]
+                  ),
+                Just
+                  ( D.AggregateResult
+                      "$res_3"
+                      [D.GuardEqual (R.VarExpr "X") (R.VarExpr "$res_3")]
+                  ),
+                Just (D.AggregateResult "$res_4" [])
+              ]
+        map (.aggBinds) (allAggregates rule) @?= [["A"], [], []]
     ]
+
+-- | A plain aggregate over one constraint of module @M@.
+aggOver :: Text -> [Term] -> Term -> Term -> Aggregate
+aggOver name goalArgs elementTerm resultTerm =
+  (plainAgg (Just (int 0)) elementTerm [] resultTerm)
+    { goal = [AggConstraint (qcon "M" name goalArgs)]
+    }
+
+-- | Every top-level aggregate of a one-rule program's head.
+allAggregates :: D.Rule -> [D.Aggregate]
+allAggregates rule = (getNode rule.head).aggregates
+
+-- | An aggregate's binder fields: shared, locals, binds, result.
+binders :: D.Aggregate -> ([Text], [Text], [Text], Maybe D.AggregateResult)
+binders a = (a.aggShared, a.aggLocals, a.aggBinds, a.aggResult)
