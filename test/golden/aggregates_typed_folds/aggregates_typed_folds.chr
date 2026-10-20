@@ -1,0 +1,20 @@
+% The float folds, and min/max over strings and floats.
+:- module(aggregates_typed_folds, [floats/4, strings/2]).
+:- use_module(library(aggregates)).
+
+:- chr_type fres ---> fres(float, float, float, float).
+:- chr_constraint w(float), fstart, fout(fres), ask_floats(any, any, any, any),
+                  floats(any, any, any, any).
+fstart, fsum(X, w(X), S), fprod(X, w(X), P), favg(X, w(X), A),
+  min(X, w(X), M)
+  ==> fout(fres(S, P, A, M)).
+fout(fres(S, P, A, M)) \ ask_floats(S1, P1, A1, M1) <=>
+    S1 = S, P1 = P, A1 = A, M1 = M.
+floats(S, P, A, M) <=> w(1.5), w(2.0), w(0.5), fstart, ask_floats(S, P, A, M).
+
+:- chr_constraint name(string), sstart, sout(string, string),
+                  ask_strings(any, any), strings(any, any).
+sstart, min(N, name(N), Lo), max(N, name(N), Hi) ==> sout(Lo, Hi).
+sout(Lo, Hi) \ ask_strings(A, B) <=> A = Lo, B = Hi.
+strings(A, B) <=> name("pear"), name("apple"), name("plum"), sstart,
+                  ask_strings(A, B).

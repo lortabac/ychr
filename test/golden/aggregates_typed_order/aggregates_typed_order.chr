@@ -1,0 +1,8 @@
+% W + Z runs while X is still T: the Result test that would show X is
+% an int comes later.
+:- module(aggregates_typed_order, []).
+:- use_module(library(aggregates)).
+:- use_module(library(maybe)).
+:- chr_constraint p(T), q(int), r(int).
+p(X), aggregate(aggregator(X, fun(W, Z) -> W + Z end,
+                           fun(W) -> just(W) end), Z, q(Z), X) ==> true.

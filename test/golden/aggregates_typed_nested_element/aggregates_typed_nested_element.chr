@@ -1,0 +1,5 @@
+% The nested sum's element is a string.
+:- module(aggregates_typed_nested_element, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p(int), q(int, string), start, out(int).
+start, count((p(X), sum(Y, q(X, Y), _)), N) ==> out(N).

@@ -1,0 +1,5 @@
+% The same conflict, with the linked variable also used as the element.
+:- module(aggregates_typed_link_conflict_element, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p(T), r(T), q(T, T), out(list(T)).
+p(X), r(Y), collect(X, q(X, Y), L) ==> out(L).

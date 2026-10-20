@@ -1,0 +1,8 @@
+% The goal pins its copy of X to wrap, but facts do not flow out of a
+% goal: with no q at all the rule still fires, so X stays T and seen(X)
+% is rejected.
+:- module(aggregates_typed_no_flow_out, []).
+:- use_module(library(aggregates)).
+:- chr_type wrap ---> wrap(int).
+:- chr_constraint p(T), q(T, T), seen(wrap).
+p(X), count(q(X, wrap(_)), _) ==> seen(X).

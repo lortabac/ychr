@@ -1,0 +1,6 @@
+% The key is a different instance of T in each match, so the keys
+% cannot be compared.
+:- module(aggregates_typed_select_key, []).
+:- use_module(library(aggregates)).
+:- chr_constraint start, q(T, U), best(U).
+start, argmin(K, q(K, V)) ==> best(V).

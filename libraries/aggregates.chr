@@ -24,6 +24,9 @@
     macro(min/3),
     macro(max/3),
     macro(avg/3),
+    macro(fsum/3),
+    macro(fprod/3),
+    macro(favg/3),
     macro(collect/3),
     macro(exists/1),
     macro('\\+'/1),
@@ -34,6 +37,9 @@
     fun min_spec/0,
     fun max_spec/0,
     fun avg_spec/0,
+    fun fsum_spec/0,
+    fun fprod_spec/0,
+    fun favg_spec/0,
     fun collect_spec/0,
     fun exists_spec/0,
     fun not_spec/0,
@@ -43,10 +49,14 @@
     fun min_inc/2,
     fun max_inc/2,
     fun avg_inc/2,
+    fun fadd_inc/2,
+    fun fmul_inc/2,
+    fun favg_inc/2,
     fun collect_inc/2,
     fun just_final/1,
     fun identity_final/1,
     fun avg_final/1,
+    fun favg_final/1,
     fun collect_final/1,
     fun exists_final/1,
     fun not_final/1
@@ -63,28 +73,38 @@
        aggregator(W, fun(W, E) -> W end, fun(W) -> maybe(R) end).
 
 :- function
-    (count_spec() -> aggregator(int, any, int)),
+    (count_spec() -> aggregator(int, A, int)),
     (sum_spec() -> aggregator(int, int, int)),
     (prod_spec() -> aggregator(int, int, int)),
-    (min_spec() -> aggregator(maybe(int), int, int)),
-    (max_spec() -> aggregator(maybe(int), int, int)),
     (avg_spec() -> aggregator(pair(int, int), int, float)),
-    (collect_spec() -> aggregator(list(any), any, list(any))),
-    (exists_spec() -> aggregator(int, any, bool)),
-    (not_spec() -> aggregator(int, any, bool)),
-    (count_inc(int, any) -> int),
+    (fsum_spec() -> aggregator(float, float, float)),
+    (fprod_spec() -> aggregator(float, float, float)),
+    (favg_spec() -> aggregator(pair(float, int), float, float)),
+    (collect_spec() -> aggregator(list(A), A, list(A))),
+    (exists_spec() -> aggregator(int, A, bool)),
+    (not_spec() -> aggregator(int, A, bool)),
+    (count_inc(int, A) -> int),
     (add_inc(int, int) -> int),
     (mul_inc(int, int) -> int),
-    (min_inc(maybe(int), int) -> maybe(int)),
-    (max_inc(maybe(int), int) -> maybe(int)),
     (avg_inc(pair(int, int), int) -> pair(int, int)),
-    (collect_inc(list(any), any) -> list(any)),
+    (fadd_inc(float, float) -> float),
+    (fmul_inc(float, float) -> float),
+    (favg_inc(pair(float, int), float) -> pair(float, int)),
+    (collect_inc(list(A), A) -> list(A)),
     (just_final(A) -> maybe(A)),
     (identity_final(A) -> A),
     (avg_final(pair(int, int)) -> maybe(float)),
-    (collect_final(list(any)) -> maybe(list(any))),
+    (favg_final(pair(float, int)) -> maybe(float)),
+    (collect_final(list(A)) -> maybe(list(A))),
     (exists_final(int) -> maybe(bool)),
     (not_final(int) -> maybe(bool)).
+
+% `min` and `max` work on any type `<` or `>` covers. A `requiring` clause
+% needs a declaration of its own.
+:- function min_spec() -> aggregator(maybe(T), T, T) requiring '<'(T, T) -> bool.
+:- function min_inc(maybe(T), T) -> maybe(T) requiring '<'(T, T) -> bool.
+:- function max_spec() -> aggregator(maybe(T), T, T) requiring '>'(T, T) -> bool.
+:- function max_inc(maybe(T), T) -> maybe(T) requiring '>'(T, T) -> bool.
 
 % The predefined aggregates. Each macro expands to the core form, naming
 % its aggregator by qualified name, as a library macro must.
@@ -94,6 +114,9 @@
 :- macro min(X, G, M) ---> [aggregate(aggregates:min_spec, X, G, M)].
 :- macro max(X, G, M) ---> [aggregate(aggregates:max_spec, X, G, M)].
 :- macro avg(X, G, A) ---> [aggregate(aggregates:avg_spec, X, G, A)].
+:- macro fsum(X, G, S) ---> [aggregate(aggregates:fsum_spec, X, G, S)].
+:- macro fprod(X, G, P) ---> [aggregate(aggregates:fprod_spec, X, G, P)].
+:- macro favg(X, G, A) ---> [aggregate(aggregates:favg_spec, X, G, A)].
 :- macro collect(X, G, L) ---> [aggregate(aggregates:collect_spec, X, G, L)].
 :- macro exists(G) ---> [aggregate(aggregates:exists_spec, 1, G, _)].
 :- macro '\\+'(G) ---> [aggregate(aggregates:not_spec, 1, G, _)].
@@ -114,6 +137,16 @@ add_inc(W, X) -> W + X.
 prod_spec -> aggregator(1, fun mul_inc/2, fun just_final/1).
 
 mul_inc(W, X) -> W * X.
+
+% The same over floats. They are separate macros because an empty fold
+% returns its seed, and one seed cannot be both `0` and `0.0`.
+fsum_spec -> aggregator(0.0, fun fadd_inc/2, fun just_final/1).
+
+fadd_inc(W, X) -> W + X.
+
+fprod_spec -> aggregator(1.0, fun fmul_inc/2, fun just_final/1).
+
+fmul_inc(W, X) -> W * X.
 
 % Minimum and maximum carry a `maybe` as the working value, so that "no
 % matches" is undefined without a second sentinel, and their `Final` is the
@@ -138,6 +171,13 @@ avg_inc(kv(S, N), X) -> kv(S + X, N + 1).
 
 avg_final(kv(_, 0)) -> nothing.
 avg_final(kv(S, N)) -> just(int_to_float(S) / int_to_float(N)).
+
+favg_spec -> aggregator(kv(0.0, 0), fun favg_inc/2, fun favg_final/1).
+
+favg_inc(kv(S, N), X) -> kv(S + X, N + 1).
+
+favg_final(kv(_, 0)) -> nothing.
+favg_final(kv(S, N)) -> just(S / int_to_float(N)).
 
 % The list of elements, in goal order: the fold prepends, so `Final`
 % reverses.

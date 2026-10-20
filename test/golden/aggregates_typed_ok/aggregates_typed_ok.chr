@@ -1,0 +1,53 @@
+% Rules the checker must accept: the examples of type-system.md
+% §Aggregates, over typed, polymorphic constraints. Each goal sets up the
+% store, then asks for what the rule derived.
+:- module(aggregates_typed_ok,
+          [link/1, siblings/2, pinned/1, result_test/1, select/1, order/1]).
+:- use_module(library(aggregates)).
+:- use_module(library(maybe)).
+
+% A shared variable links the goal's type to the head's: L : list(T).
+:- chr_constraint p(T), q(T, T), out(T, list(T)), ask_link(any), link(any).
+p(X), collect(Y, q(X, Y), L) ==> out(X, L).
+out(_, L) \ ask_link(A) <=> A = L.
+link(A) <=> q(1, 1), q(2, 5), q(1, 3), p(1), ask_link(A).
+
+% Two sibling aggregates, each with its own local B.
+:- chr_constraint client(string), account(int, string, float),
+                  tag(string, string), report(string, list(float), int),
+                  ask_siblings(any, any), siblings(any, any).
+client(C), collect(B, account(_, C, B), Bs), count(tag(C, B), N)
+  ==> report(C, Bs, N).
+report(_, Bs, N) \ ask_siblings(A, M) <=> A = Bs, M = N.
+siblings(A, M) <=>
+    account(1, "ann", 1.5), account(2, "ann", 2.5), account(3, "bob", 9.0),
+    tag("ann", "x"), client("ann"), ask_siblings(A, M).
+
+% A guard in the goal fixes the instance for every counted match.
+:- chr_constraint item(T), snapshot, ints(list(int)), ask_pinned(any),
+                  pinned(any).
+snapshot, collect(Y, (item(Y), ? integer(Y)), L) ==> ints(L).
+ints(L) \ ask_pinned(A) <=> A = L.
+pinned(A) <=> item(1), item("x"), item(2), snapshot, ask_pinned(A).
+
+% The Result test is evidence at the rule's level: X : int in the body.
+:- chr_constraint r(T), s(T), num(int), ask_result(any), result_test(any).
+r(X), count(s(_), X) ==> num(X).
+num(N) \ ask_result(A) <=> A = N.
+result_test(A) <=> s("a"), s("b"), r(1), r(2), ask_result(A).
+
+% An int key compares, and V comes from the one selected match.
+:- chr_constraint start, k(int, U), best(U), ask_select(any), select(any).
+start, argmin(K, k(K, V)) ==> best(V).
+best(V) \ ask_select(A) <=> A = V.
+select(A) <=> k(3, "c"), k(1, "a"), k(2, "b"), start, ask_select(A).
+
+% An earlier Result test pins X before the user Inc reads it.
+:- chr_constraint u(T), w(int), z(int), sum_out(int), ask_order(any),
+                  order(any).
+u(X), count(z(_), X),
+  aggregate(aggregator(X, fun(W, E) -> W + E end, fun(W) -> just(W) end),
+            E, w(E), S)
+  ==> sum_out(S).
+sum_out(S) \ ask_order(A) <=> A = S.
+order(A) <=> z(0), z(0), w(5), w(7), u(1), u(2), ask_order(A).

@@ -238,5 +238,19 @@ tests =
                 ]
             )
         length errs @?= 1
-        ws @?= [InaccessibleBranch "int" "m:color"]
+        ws @?= [InaccessibleBranch "int" "m:color"],
+      testCase "an aggregate goal that can never match warns" $ do
+        -- The goal's link meets string with int, so the count is
+        -- always 0. The rule still fires, so this is not YCHR-20104.
+        (errs, ws) <-
+          checkModule
+            ( T.unlines
+                [ ":- module(m, []).",
+                  ":- use_module(library(aggregates)).",
+                  ":- chr_constraint client(string), order(int, int), report(string, int).",
+                  "client(C), count(order(C, _), N) ==> report(C, N)."
+                ]
+            )
+        errs @?= []
+        ws @?= [AggregateGoalInaccessible "int" "string"]
     ]

@@ -1,0 +1,6 @@
+% A constructor arity error inside a goal is reported.
+:- module(aggregates_typed_goal_arity, []).
+:- use_module(library(aggregates)).
+:- chr_type wrap ---> wrap(int).
+:- chr_constraint q(wrap), start, out(int).
+start, count(q(wrap(_, _)), N) ==> out(N).

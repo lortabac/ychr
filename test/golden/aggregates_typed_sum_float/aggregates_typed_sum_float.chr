@@ -1,0 +1,5 @@
+% sum is over ints; fsum is the float fold.
+:- module(aggregates_typed_sum_float, []).
+:- use_module(library(aggregates)).
+:- chr_constraint w(float), start, out(int).
+start, sum(X, w(X), S) ==> out(S).

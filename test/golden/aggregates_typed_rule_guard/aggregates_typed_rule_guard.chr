@@ -1,0 +1,6 @@
+% The rule's guard is about one match only: integer(A) says nothing
+% about B.
+:- module(aggregates_typed_rule_guard, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p, q(T), use_int(int).
+p, collect(Y, q(Y), [A, B]) ==> integer(A) | use_int(B).

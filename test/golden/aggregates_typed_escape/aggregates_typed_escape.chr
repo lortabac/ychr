@@ -1,0 +1,6 @@
+% Each item may be a different instance of item(T), so A and B may
+% differ in type.
+:- module(aggregates_typed_escape, []).
+:- use_module(library(aggregates)).
+:- chr_constraint item(T), snapshot, same(T, T).
+snapshot, collect(Y, item(Y), [A, B]) ==> same(A, B).

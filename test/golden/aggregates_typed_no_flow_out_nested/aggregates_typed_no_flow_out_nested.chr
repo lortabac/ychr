@@ -1,0 +1,7 @@
+% The Result test pins X to int, and so the box's T, but the body wants
+% a string.
+:- module(aggregates_typed_no_flow_out_nested, []).
+:- use_module(library(aggregates)).
+:- chr_type box(T) ---> box(T).
+:- chr_constraint p(T, box(T)), q(T), out(string).
+p(X, box(Z)), count(q(_), X) ==> out(Z).
