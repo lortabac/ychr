@@ -1,0 +1,6 @@
+% The link to string is made right after q, so Y + 1 is checked at
+% string.
+:- module(aggregates_typed_links_known_mismatch, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p(string), q(T, T), out(int).
+p(X), count((q(X, Y), ? Y + 1 > 0), N) ==> out(N).

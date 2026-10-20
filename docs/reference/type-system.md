@@ -1473,10 +1473,42 @@ variable *one way*:
   `GuardEqual`, but it still binds an inner flexible;
 - an outer side of type `any` gives nothing, as for all evidence.
 
-When a goal has several links, the ones whose outer side is already a
-known type (not an unpinned rigid variable) come first. So if one goal
-rigid is linked both to a known type and to an outer rigid, the known
-type wins, whatever the variables are called.
+**When the links are made.** A link whose outer side is already a known
+type (not an unpinned rigid variable, and not flexible) is made right
+after the first conjunct that matches the variable, so the rest of the
+goal sees that type. The other links are made after all of the goal's
+conjuncts, so that the goal's own facts can pin its rigids first. A
+selection's links follow the same timing. So if one goal rigid is
+linked both to a known type and to an outer rigid, the known type wins,
+whatever the variables are called.
+
+```prolog
+:- chr_constraint p(int), q(T, T), out(int).
+p(X), count((q(X, Y), ? Y > 0), N) ==> out(N).
+```
+
+The link of `X` is made right after `q(X, Y)` and pins the goal's
+`T₁ := int`, so `? Y > 0` checks at `int`.
+
+```prolog
+:- chr_constraint p(T), q(T, T), out(int).
+p(X), count((q(X, Y), ? integer(Y), ? Y + 1 > 0), N) ==> out(N).
+```
+
+Here the link of `X` is to the rule's rigid `T₀`, so it waits for the
+end of the goal. `? integer(Y)` pins `T₁ := int` first, and `Y + 1`
+checks. Linking first would merge `T₁` into `T₀`, which the goal's
+guard cannot pin.
+
+Since merges come last, a call in the goal may need one. With
+`:- chr_constraint p(T) requiring '<'(T, T) -> bool.`, the rule
+`p(X), count((q(X, Y), ? Y < X), N)` checks `Y < X` at `T₁`, and only
+the merge into `T₀` brings in `p`'s bound. So inside an aggregate goal,
+a call that no signature fits (`NoMatchingOverload`) or a bound that
+none satisfies (`BoundUnsatisfied`) is reported only after the links of
+the outermost aggregate it is in. Not later: the next aggregate, and
+the `Result` test, run after this one's goal. Other errors are
+reported where they occur.
 
 ```prolog
 :- chr_constraint p(T), q(T, T), out(T, list(T)).
@@ -1586,8 +1618,9 @@ A rule's constraints are gathered in the order the rule runs:
 1. the head occurrences;
 2. the HNF guards of the head;
 3. the aggregates, left to right; for each: `Agg`, the goal's conjuncts
-   left to right (a nested aggregate at its place), the shared-variable
-   links, `Element`, and the `Result` tests;
+   left to right (a nested aggregate at its place), each followed by
+   the links to known types of the shared variables it matches first,
+   then the other links, `Element`, and the `Result` tests;
 4. the user's guards;
 5. the body.
 
