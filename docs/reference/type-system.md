@@ -487,10 +487,10 @@ Constraints come in two tiers:
   modify the substitution, so for them "firing" is merely the
   existence check of §Use-site checking.
 
-Solving is order-independent in this precise sense: the set of
-accepted programs and the final type assignment do not depend on the
-order constraints are gathered or pending checks examined in; only
-error attribution (which check reports first) may vary. The reason is
+Solving is order-independent in this precise sense: given the
+gathering order below, the set of accepted programs and the final type
+assignment do not depend on the order pending checks are examined in;
+only error attribution (which check reports first) may vary. The reason is
 monotonicity: solving only adds information, so a candidate set only
 shrinks and never grows back from one candidate to several; the
 signature a check fires on is therefore uniquely determined whenever
@@ -499,11 +499,10 @@ eliminated, every examination order rejects the program — early firing
 surfaces the contradiction through the propagated types, late
 examination through an empty candidate set.
 
-"Gathered" is not free in one respect: which evidence a check may use
-depends on where it sits, as for guards read left to right
-(§Guard-Derived Type Evidence). A rule's constraints are gathered in
-the order the rule runs (§Aggregates §Gathering order). The claim above
-is relative to that order.
+The gathering order matters because which evidence a check may use
+depends on where it sits (§Guard-Derived Type Evidence). A rule's
+constraints are gathered in the order the rule runs (§Aggregates
+§Gathering order).
 
 One unit-level rule sits above the per-check discipline: a unit whose
 evidence facts contradict a known type is *inaccessible*
@@ -520,8 +519,8 @@ At a use site (a call, a body tell, a goal) the checker instantiates
 the declared type with fresh flexible unification variables: if
 `member(A, list(A))` is called twice in a rule, each use gets
 independent fresh variables (`a₁, list(a₁)` and `a₂, list(a₂)`).
-Implementation sites — function equations and rule-head occurrences —
-instead allocate *rigid* variables (below).
+Implementation sites — function equations, rule-head occurrences and
+aggregate goal conjuncts — instead allocate *rigid* variables (below).
 
 Type variables unify by substitution under the meet table of §Type
 states: a type variable that meets `any` is **not bound**, so `any`
@@ -761,7 +760,7 @@ information can be revived by one.
 
 | Form | Fact on success |
 |------|-----------------|
-| `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8) | `type(t₁)` and `type(t₂)` agree on their outermost type constructor; at a rigid variable the pin this induces is per §What evidence does |
+| `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8), and likewise in an aggregate's goal and `Result` (§Aggregates) | `type(t₁)` and `type(t₂)` agree on their outermost type constructor; at a rigid variable the pin this induces is per §What evidence does |
 | `GuardMatch x c/n`, where `c` is a declared constructor of `D(α₁, ..., αₖ)` | `type(x)` is an application of `D` (parameter instantiation per §What evidence does) |
 | A call `p(X)` on a bare variable, where `p` is declared `refining τ` | `type(X)` is `τ` (parameter instantiation per §What evidence does) |
 
@@ -825,7 +824,8 @@ argument has the refined type, and it is the author's to keep
 (§Soundness).
 
 Only a guard call of the form `p(X)`, on a *bare* variable, in a rule
-guard or a function-equation guard, contributes a fact. A call on a
+guard, a function-equation guard or a `?` guard of an aggregate goal
+(§Aggregates), contributes a fact. A call on a
 compound argument, a call in a body, and a call on the right of `is`
 contribute nothing.
 
@@ -1367,7 +1367,10 @@ Result  : R
   type `R` plus synthetic guards (§Sources of Type Information §8). A
   variable already bound becomes a `GuardEqual`, a compound a
   `GuardMatch` with its `GuardGetArg`s. The rule fires only if these
-  tests pass, so they are evidence at the enclosing level (§Levels).
+  tests pass, so they are evidence at the enclosing level (§Goal
+  occurrences and levels). With `:- chr_constraint p(T), q(T).`, the
+  rule `p(X), count(q(_), X) ==> ...` checks the body with `X : int`:
+  it fires only when `X` equals the count.
 
 A selection form (`argmin`, `argmax`, `takemin`, `takemax`) has no
 aggregator. Its key `K` must be comparable: `argmin` and `takemin` check
@@ -1382,8 +1385,8 @@ that two aggregates may use the same name for unrelated variables.
 Which names an aggregate shares and which it owns follows
 [aggregates.md §Variables](aggregates.md#variables):
 
-- a **shared** name is one the aggregate mentions that is already bound
-  where it is computed. It keeps its enclosing slot, except where the
+- a **shared** name is one aggregates.md §Variables lists as shared:
+  bound before the aggregate runs. It keeps its enclosing slot, except where the
   goal matches it (§Shared variables in a goal);
 - a **local** name gets a fresh slot in the aggregate's scope, hidden
   from the guard and body;
@@ -1425,7 +1428,8 @@ The checker enforces this with **levels**:
   checks its goal, its `Element` and the aggregates nested in it at
   level `L+1`.
 - Every rigid variable records the level it was made at.
-- Evidence at level `k` may pin or merge only rigids of level `k`. When
+- Evidence at level `k` may pin or merge only rigids of level exactly
+  `k`. When
   a level-`k` rigid meets a rigid of a lower level, the level-`k` one is
   merged into it.
 - Any other step is *blocked*: the fact is not used. That is not an
@@ -1434,7 +1438,9 @@ The checker enforces this with **levels**:
 
 The rule's own guards are evidence at level 0, so they cannot pin a
 goal's rigids either: a fact about one match says nothing about the
-rest.
+rest. With `:- chr_constraint p, q(T), use_int(int).`, the rule
+`p, collect(Y, q(Y), [A, B]) ==> integer(A) | use_int(B)` is rejected:
+`integer(A)` says nothing about `B`, which comes from another match.
 
 ### Shared variables in a goal
 
@@ -1447,11 +1453,12 @@ variable *one way*:
 
 - the inner side learns from the outer one; the outer side never learns
   from the inner one;
-- while the outer type is still flexible, the link waits;
+- where the outer side is still flexible, at any depth, the link waits;
 - once both sides are solid at the top, the link is evidence at the
   goal's level, so a goal rigid merges into the outer one;
-- inside a type constructor's parameters the link does nothing, as for
-  `GuardEqual`.
+- inside a constructor's parameters it pins and merges no rigid, as for
+  `GuardEqual`, but it still binds an inner flexible;
+- an outer side of type `any` gives nothing, as for all evidence.
 
 ```prolog
 :- chr_constraint p(T), q(T, T), out(T, list(T)).
@@ -1471,8 +1478,9 @@ Facts do not travel back out:
 p(X), count(q(X, wrap(_)), N) ==> seen(X).   % error
 ```
 
-The goal's `GuardMatch` would pin `T₀ := wrap` through the merge. It is
-blocked, `X` stays at `T₀`, and `seen(X)` is rejected. Accepting it
+The goal's `GuardMatch` pins the copy's `T₁ := wrap`. The link then
+meets `T₀` with `wrap`; pinning a level-0 rigid from level 1 is
+blocked, so `X` stays at `T₀` and `seen(X)` is rejected. Accepting it
 would be wrong: with `p(1)` and no `q` at all, the count is 0, the rule
 fires and tells `seen(1)`.
 
@@ -1486,7 +1494,8 @@ p(X), r(Y), count(q(X, Y), N) ==> pair(X, Y).   % error
 The first link merges `T₁` into `p`'s rigid, the second finds it merged
 into a different one. Picking either would make the verdict depend on
 link order, so this is an error, `AggregateLinkConflict` (YCHR-60015),
-whichever link comes second.
+whichever link comes second. Accepting either would be wrong: with
+`p(1)`, `r("a")` and no `q`, the rule fires and tells `pair(1, "a")`.
 
 ### Escaping types
 
@@ -1536,11 +1545,11 @@ start, argmin(K, q(K, V)) ==> best(V).   % error: '<' at a rigid
 ```
 
 `K` is a different instance in each match, so comparing two keys is not
-safe. With `:- chr_constraint q(int, U).` the rule checks, and `V` may
+safe: with `q(1, a)` and `q("x", b)` the rule would compare `1 < "x"`. With `:- chr_constraint q(int, U).` the rule checks, and `V` may
 be pinned by the rule's guards, since it comes from one match.
 
-The aggregates nested in a selection's goal are at the level above the
-selection.
+The aggregates nested in a selection's goal are at `L+1`, one level
+deeper than the selection's goal.
 
 ### Bounds
 
@@ -1564,14 +1573,27 @@ A rule's constraints are gathered in the order the rule runs:
 5. the body.
 
 Which evidence a check may use depends on its place in this order, as
-for guards (§Guard-Derived Type Evidence). Given the order, acceptance
+for guards (§Guard-Derived Type Evidence). For example, with
+`:- chr_constraint p(T), q(int), r(int).`:
+
+```prolog
+p(X), aggregate(aggregator(X, fun(W, Z) -> W + Z end,
+                           fun(W) -> just(W) end), Z, q(Z), X) ==> true.
+```
+
+is rejected: `W + Z` runs at `X : T₀` before the `Result` test could
+show that `X` is an `int`. Put `count(r(_), X)` before the aggregate
+and it checks: that `Result` test pins `T₀ := int` first, and at run
+time the second aggregate is only computed once the first one's test
+passed. Given the order, acceptance
 and the final types do not depend on the order in which the solver
 works (§Type Checking Procedure).
 
 ### Goals that can never match
 
-When a contradiction inside a goal (on a link, or in a goal's
-`GuardEqual` or `GuardMatch`) shows that the goal can never match, the
+When a contradiction inside a plain aggregate's goal (on a link, in a
+goal's `GuardEqual` or `GuardMatch`, or in a `?` guard) shows that the
+goal can never match, the
 aggregate always sees zero matches, but the rule still runs. That is not
 the inaccessible rule of YCHR-20104 but a separate warning,
 `AggregateGoalInaccessible` (YCHR-20106):
@@ -1582,7 +1604,9 @@ client(C), count(order(C, _), N) ==> report(C, N).   % warning: N is always 0
 ```
 
 Like YCHR-20104, it is dropped when the rule has errors, and `--Werror`
-promotes it.
+promotes it. A selection needs a match to fire, so a contradiction in a
+selection's own goal makes the rule dead: that is YCHR-20104. The
+second check of its goal (§Selection forms) reports no warning.
 
 ### Diagnostics
 

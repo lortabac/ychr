@@ -247,8 +247,8 @@ Goal, \+ (Goal', ? X' < X)
 
 (in notation, not YCHR syntax), where `Goal'` and `X'` are `Goal` and
 `X` with `Goal`'s fresh variables renamed apart. `X` is compared with
-the prelude's `<`, so it must be an `int`, a `float` or a `string`. On ties, the rule fires
-with the first minimal match in goal order.
+the prelude's `<`, so it must be an `int`, a `float` or a `string`.
+On ties, the rule fires with the first minimal match in goal order.
 
 The equivalence fixes which match is selected and which variables are
 visible, nothing else. `Goal` is still an aggregate goal:
