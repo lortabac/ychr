@@ -1431,8 +1431,8 @@ rule, or one aggregate's goal.
   aggregates are at two different levels, both inside `L`.
 - Every rigid variable records the level it was made at.
 - Evidence at level `k` may pin only rigids of level `k`. When a
-  level-`k` rigid meets a rigid of a level that encloses `k`, the
-  level-`k` one is merged into it.
+  level-`k` rigid meets another level-`k` rigid, or a rigid of a level
+  that encloses `k`, the level-`k` one is merged into it.
 - Any other step is *blocked*: the fact is not used. That is not an
   error. A blocked `GuardMatch` still types the extracted fields, at
   fresh level-`k` rigids.
@@ -1447,7 +1447,7 @@ A sibling aggregate's goal cannot pin them either. With
 `:- chr_constraint item(T), snap, q(int), use_int(int).`, the rule
 
 ```prolog
-snap, collect(Y, item(Y), [M]), count(q(M), N) ==> use_int(M).   % error
+snap, collect(Y, item(Y), [M]), count(q(M), _) ==> use_int(M).   % error
 ```
 
 is rejected: `M : T₁` from `item`'s match escapes (§Escaping types). The
@@ -1568,7 +1568,7 @@ safe: with `q(1, a)` and `q("x", b)` the rule would compare
 may be pinned by the rule's guards, since it comes from one match.
 
 An aggregate nested in a selection's goal gets a new level inside the
-selection's goal level, like any other nested aggregate.
+level of the check it is in, like any other nested aggregate.
 
 ### Bounds
 

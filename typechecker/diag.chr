@@ -102,7 +102,7 @@ bump_unit(unit(U)) -> unit(U + 1).
 % gets `[Id | L]`, with a fresh `Id`, where `L` is the level the
 % aggregate is computed at. Two sibling aggregates have different
 % levels. Evidence at level `L` may pin only rigids of level `L`, and
-% merge them only into rigids of an enclosing level. The level travels
+% merge them only into rigids of level `L` or an enclosing level. The level travels
 % here rather than in a store-global "current level" because a residual
 % check can fire long after the walk has left the aggregate it came
 % from.

@@ -1,0 +1,7 @@
+% Sibling aggregates one level down: the count's link does not pin the
+% collect's type.
+:- module(aggregates_typed_deep_sibling_link, []).
+:- use_module(library(aggregates)).
+:- chr_constraint go, r, item(T), q(int), out(list(int)).
+go, collect(M, (r, collect(Y, item(Y), [M]),
+                 count(q(M), _)), L) ==> out(L).
