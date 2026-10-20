@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+Aggregates are type-checked
+([docs/reference/type-system.md](docs/reference/type-system.md#aggregates)).
+
+- `Agg` is typed as `aggregator(W, E, R)`, `Element` as `E` and `Result`
+  as `R`. A selection's key must be comparable with `<` (`argmin`,
+  `takemin`) or `>` (`argmax`, `takemax`).
+- What a goal match proves stays inside its aggregate. A type chosen per
+  match that reaches the rule is an error (`AggregateTypeEscapes`,
+  YCHR-60014), and so is a goal that ties one type to two outer ones
+  (`AggregateLinkConflict`, YCHR-60015). A goal that can never match is
+  a warning (`AggregateGoalInaccessible`, YCHR-20106).
+- `library(aggregates)`: `count`, `collect`, `exists` and `\+` are
+  polymorphic, and `min`/`max` work on any type `<`/`>` covers. New
+  `fsum`, `fprod` and `favg` fold over floats; `sum`, `prod` and `avg`
+  stay int-only.
+- **Breaking:** a program whose aggregates are mistyped no longer
+  compiles unless `--no-check` is given. `min_spec`/`max_spec` and
+  `min_inc`/`max_inc` now carry a `requiring` bound.
+- **Breaking:** `YCHR.Internal.Desugared.Aggregate` has new `aggShared`,
+  `aggLocals`, `aggBinds` and `aggResult` fields, and
+  `YCHR.Internal.Compile.Aggregate` no longer exports
+  `aggregateGoalLocals`.
+
 `library(state)` is now a declaration macro plus a runner, and state
 values are typed.
 

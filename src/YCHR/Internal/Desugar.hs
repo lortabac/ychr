@@ -79,8 +79,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Desugar.AggregateScope (scopeAggregates)
-import YCHR.Internal.Desugar.Hnf
-import YCHR.Internal.Desugar.Vars
+import YCHR.Internal.Desugar.Hnf (HnfState (..), headTermToExpr, hnfState, normalizeArg)
+import YCHR.Internal.Desugar.Vars (exprVars, guardVars, headArgVars, sequenceFree)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
