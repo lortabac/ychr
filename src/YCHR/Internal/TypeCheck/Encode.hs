@@ -72,7 +72,8 @@ import YCHR.Internal.PExpr (PExpr)
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Types
-  ( BoundSig (..),
+  ( AggregateKind (..),
+    BoundSig (..),
     ConstraintKey (..),
     DataConstructor (..),
     HeadArg (..),
@@ -233,7 +234,45 @@ rule r = do
 
 ruleHead :: D.Head -> Term
 ruleHead h =
-  ast "rule_head" [listTerm (map headCon h.kept), listTerm (map headCon h.removed)]
+  ast
+    "rule_head"
+    [ listTerm (map headCon h.kept),
+      listTerm (map headCon h.removed),
+      listTerm (map aggregate h.aggregates)
+    ]
+
+-- | An aggregate, with the binder fields Desugar computed: the checker
+-- reads the scopes from them rather than working them out again.
+aggregate :: D.Aggregate -> Term
+aggregate a =
+  ast
+    "agg_e"
+    [ aggKind a.kind,
+      maybeTerm (expr <$> a.agg),
+      expr a.element,
+      listTerm (map aggConjunct a.goal),
+      names a.aggShared,
+      names a.aggLocals,
+      names a.aggBinds,
+      maybeTerm (resultTerm <$> a.aggResult)
+    ]
+  where
+    names = listTerm . map atomTerm
+
+aggKind :: AggregateKind -> Term
+aggKind AggPlain = ast "agg_plain" []
+aggKind AggArgmin = ast "agg_argmin" []
+aggKind AggArgmax = ast "agg_argmax" []
+aggKind AggTakemin = ast "agg_takemin" []
+aggKind AggTakemax = ast "agg_takemax" []
+
+aggConjunct :: D.AggregateConjunct -> Term
+aggConjunct (D.AggConstraint hc gs) = ast "agg_con" [headCon hc, listTerm (map guardTerm gs)]
+aggConjunct (D.AggNested n) = ast "agg_nested" [aggregate n]
+aggConjunct (D.AggGuard g) = ast "agg_guard" [guardTerm g]
+
+resultTerm :: D.AggregateResult -> Term
+resultTerm r = ast "agg_res" [atomTerm r.resultVar, listTerm (map guardTerm r.resultGuards)]
 
 headCon :: HeadConstraint -> Term
 headCon hc = ast "head_con" [qnameTerm hc.name, listTerm (map headArg hc.args)]

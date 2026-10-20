@@ -103,6 +103,14 @@ patterns`, `aggregate goal occurrences`, `selection aggregates` and
 
 ### Aggregator typing
 
+The checker side is done (M3 of the typing plan): `Encode.ruleHead`
+carries the aggregates, `walk.chr` checks them (`agg_check`), and the
+solver has levels on skolems, `link_unify` and `escape_check`. What is
+left is the library typing (`libraries/aggregates.chr` is still
+int-only, with `collect`, `exists` and `\+` over `any`) and the
+goldens, then deleting this file. The notes below are from before that
+work.
+
 `docs/reference/type-system.md` §Aggregates describes the intended
 rules. The two hook points are:
 

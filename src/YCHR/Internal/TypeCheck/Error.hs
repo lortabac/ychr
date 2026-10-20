@@ -42,6 +42,13 @@ data TypeCheckError
     -- name, the constructor name, the referenced type name, the
     -- use-site arity, and the declared arity.
     TypeRefArityMismatch Text Text Text Int Int
+  | -- | A type made per match inside an aggregate reaches the rule's
+    -- scope (its element, result or a name it binds). Carries the
+    -- rendered type that holds it.
+    AggregateTypeEscapes Text
+  | -- | An aggregate goal links one of its rigid types to two different
+    -- outer ones. Carries the two outer types, rendered.
+    AggregateLinkConflict Text Text
   deriving (Show, Eq)
 
 -- | Non-fatal diagnostics reported by the type-checker pass. A
@@ -59,6 +66,10 @@ data TypeCheckWarning
     -- type error, because a gradually-typed program can still reach
     -- the unit by flowing @any@-typed values into it.
     InaccessibleBranch Text Text
+  | -- | A plain aggregate's goal can never match, so the aggregate
+    -- always sees zero matches. The rule itself still fires. Carries
+    -- the two contradicting types, rendered.
+    AggregateGoalInaccessible Text Text
   deriving (Show, Eq)
 
 -- | What a type-check pass produces: the errors that must abort

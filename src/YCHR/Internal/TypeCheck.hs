@@ -190,7 +190,7 @@ decodeCtx :: IntMap PExpr -> Value -> Chr CtxInfo
 decodeCtx origins val = do
   val' <- deref val
   case val' of
-    VTerm f [_unit, originVal, labelVal, locVal] | f == diagAtom "ctx" -> do
+    VTerm f [_unit, originVal, labelVal, locVal, _level] | f == diagAtom "ctx" -> do
       o <- decodeOrigin origins originVal
       lbl <- decodeLabel labelVal
       l <- decodeLoc locVal
@@ -323,6 +323,14 @@ decodeError code detail = case code of
       | f == diagAtom "constructor_arity_d" ->
           ConstructorArityMismatch <$> name con <*> int useArity <*> int declared
     _ -> malformed "constructor_arity detail" detail
+  VAtom c | c == diagAtom "aggregate_type_escapes" -> case detail of
+    VTerm f [t]
+      | f == diagAtom "escaped_type" ->
+          AggregateTypeEscapes . showType <$> deepDerefType t
+    _ -> malformed "aggregate_type_escapes detail" detail
+  VAtom c
+    | c == diagAtom "aggregate_link_conflict" ->
+        uncurry AggregateLinkConflict <$> decodeTypePair detail
   _ -> malformed "error code" code
   where
     name v =
@@ -362,6 +370,9 @@ decodeWarning code detail = case code of
   VAtom c | c == diagAtom "inaccessible" -> do
     (t1text, t2text) <- decodeTypePair detail
     pure (InaccessibleBranch t1text t2text)
+  VAtom c
+    | c == diagAtom "goal_inaccessible" ->
+        uncurry AggregateGoalInaccessible <$> decodeTypePair detail
   _ -> malformed "warning code" code
 
 -- | Render a @tpair(T1, T2)@ detail as the two types' source syntax.

@@ -1460,6 +1460,11 @@ variable *one way*:
   `GuardEqual`, but it still binds an inner flexible;
 - an outer side of type `any` gives nothing, as for all evidence.
 
+When a goal has several links, the ones whose outer side is already a
+known type (not an unpinned rigid variable) come first. So if one goal
+rigid is linked both to a known type and to an outer rigid, the known
+type wins, whatever the variables are called.
+
 ```prolog
 :- chr_constraint p(T), q(T, T), out(T, list(T)).
 p(X), collect(Y, q(X, Y), L) ==> out(X, L).

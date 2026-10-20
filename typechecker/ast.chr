@@ -17,7 +17,7 @@
 % itself rather than surfacing as a spurious `no_matching_overload` —
 % see the attempt block in `walk.chr`.
 %
-% Three nodes are matched by CHR *rules* only — `rule_head/2`,
+% Three nodes are matched by CHR *rules* only — `rule_head/3`,
 % `con_key/2` and `fun_sig/2` — where a miss is a silent suspend, not
 % an error. What catches drift there is the corpus: the rule walk or
 % the equation walk stops firing, and a large part of `test/golden/`
@@ -60,6 +60,10 @@
     type(head_arg/0),
     type(head_con/0),
     type(rule_head/0),
+    type(agg_kind/0),
+    type(agg_e/0),
+    type(agg_conj/0),
+    type(agg_res/0),
     type(expr/0),
     type(guard/0),
     type(body_goal/0),
@@ -117,8 +121,34 @@
 :- chr_type head_con ---> head_con(any, list(head_arg)).
 
 % A desugared rule head, `YCHR.Internal.Desugared.Head`: the kept
-% occurrences first, then the removed ones.
-:- chr_type rule_head ---> rule_head(list(head_con), list(head_con)).
+% occurrences, the removed ones, and the aggregates.
+:- chr_type rule_head ---> rule_head(list(head_con), list(head_con), list(agg_e)).
+
+% Which aggregate form, `YCHR.Internal.Types.AggregateKind`.
+:- chr_type agg_kind ---> agg_plain
+                        ; agg_argmin
+                        ; agg_argmax
+                        ; agg_takemin
+                        ; agg_takemax.
+
+% An aggregate, `YCHR.Internal.Desugared.Aggregate`: kind, `Agg` (absent
+% for a selection), `Element` (the key, for a selection), the goal, and
+% the binder fields Desugar computed — the shared names, the locals, the
+% names it binds — and the result pattern in head normal form (absent
+% for a selection).
+:- chr_type agg_e ---> agg_e(agg_kind, maybe(expr), expr, list(agg_conj),
+                             list(any), list(any), list(any), maybe(agg_res)).
+
+% A goal conjunct, `YCHR.Internal.Desugared.AggregateConjunct`: a
+% constraint with its own HNF guards, a nested aggregate, or a `?` guard.
+:- chr_type agg_conj ---> agg_con(head_con, list(guard))
+                        ; agg_nested(agg_e)
+                        ; agg_guard(guard).
+
+% A result pattern in head normal form,
+% `YCHR.Internal.Desugared.AggregateResult`: the variable the payload is
+% bound to, and the guards that test it.
+:- chr_type agg_res ---> agg_res(any, list(guard)).
 
 % An expression, `YCHR.Internal.Resolved.Expr`. The resolver has
 % already decided, for every compound, whether it is a constructor

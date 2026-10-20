@@ -40,6 +40,9 @@
 % it. Suppression sees both lists, because a unit whose only error is a
 % constructor-arity mismatch still omits its warnings.
 %
+% `solving_done` releases the aggregate escape checks, which need the
+% final types, once the walk has quiesced.
+%
 % `rigid_supply(-1)` seeds the solver's own down-counting gensym for
 % the fresh parameters of a parametric evidence pin; the walker seeds
 % its up-counting declaration-site supply itself.
@@ -50,6 +53,7 @@ check_program(Program, Errors, Warnings) <=>
     Env is build_tc_env(Program),
     tell_decls(Env, Program, Facts),
     walk_program(Env, Program, Facts),
+    solving_done,
     collect(SolverErrors),
     collect_warnings(SolverWarnings),
     AllErrors is append(program_errors(env_cons(Env), Program), SolverErrors),
