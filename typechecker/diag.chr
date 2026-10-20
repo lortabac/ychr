@@ -33,6 +33,8 @@
     fun rule_label/1,
     fun bump_unit/1,
     fun ctx_level/1,
+    fun level_within/2,
+    fun level_inside/2,
     fun ctx_mode/1,
     fun ctx_at/3
 ]).
@@ -95,13 +97,16 @@ bump_unit(unit(U)) -> unit(U + 1).
 %     except the key comparison, which is made in the caller's mode.
 :- chr_type check_mode ---> mode_rule ; mode_goal ; mode_copy.
 
-% The evidence level a check runs at, and its mode. The rule is level 0;
-% a plain aggregate's goal is one level deeper than where the aggregate
-% is computed. Evidence at level `k` may pin or merge only rigids of
-% level `k`. The level travels here rather than in a store-global
-% "current level" because a residual check can fire long after the walk
-% has left the aggregate it came from.
-:- chr_type ev_level ---> lvl(int, check_mode).
+% The evidence level a check runs at, and its mode. A level is a scope
+% path, innermost first: `[]` is the rule, and a plain aggregate's goal
+% gets `[Id | L]`, with a fresh `Id`, where `L` is the level the
+% aggregate is computed at. Two sibling aggregates have different
+% levels. Evidence at level `L` may pin only rigids of level `L`, and
+% merge them only into rigids of an enclosing level. The level travels
+% here rather than in a store-global "current level" because a residual
+% check can fire long after the walk has left the aggregate it came
+% from.
+:- chr_type ev_level ---> lvl(list(int), check_mode).
 
 % Everything a diagnostic needs to know about where it came from:
 %
@@ -112,15 +117,26 @@ bump_unit(unit(U)) -> unit(U + 1).
 %   * the evidence level and check mode.
 :- chr_type ctx ---> ctx(unit_id, diag_origin, diag_label, loc, ev_level).
 
-:- function ctx_level(ctx) -> int.
+:- function ctx_level(ctx) -> list(int).
 ctx_level(ctx(_, _, _, _, lvl(L, _))) -> L.
 
 :- function ctx_mode(ctx) -> check_mode.
 ctx_mode(ctx(_, _, _, _, lvl(_, M))) -> M.
 
 % The same context at another level and mode.
-:- function ctx_at(ctx, int, check_mode) -> ctx.
+:- function ctx_at(ctx, list(int), check_mode) -> ctx.
 ctx_at(ctx(U, O, Lb, Loc, _), L, M) -> ctx(U, O, Lb, Loc, lvl(L, M)).
+
+% `level_within(K, L)`: `L` is `K` or a level inside it.
+:- function level_within(list(int), list(int)) -> bool.
+level_within(K, L) | K == L -> true.
+level_within(K, [_|L]) -> level_within(K, L).
+level_within(_, []) -> false.
+
+% `level_inside(K, L)`: `L` is a level strictly inside `K`.
+:- function level_inside(list(int), list(int)) -> bool.
+level_inside(K, [_|L]) -> level_within(K, L).
+level_inside(_, []) -> false.
 
 % An accumulated error: where it came from, which `TypeCheckError`
 % variant it is, and that variant's payload.

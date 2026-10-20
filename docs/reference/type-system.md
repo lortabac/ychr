@@ -1422,25 +1422,38 @@ match at all. So what a goal match proves holds inside the aggregate —
 in the later conjuncts of the goal, in `Element`, in nested aggregates —
 and nowhere else.
 
-The checker enforces this with **levels**:
+The checker enforces this with **levels**. A level is a scope: the
+rule, or one aggregate's goal.
 
-- The rule is at level 0. A plain aggregate computed at level `L`
-  checks its goal, its `Element` and the aggregates nested in it at
-  level `L+1`.
+- The rule has its own level. A plain aggregate computed at level `L`
+  checks its goal, its `Element` and the aggregates nested in it at a
+  new level *inside* `L`. Every aggregate gets its own: two sibling
+  aggregates are at two different levels, both inside `L`.
 - Every rigid variable records the level it was made at.
-- Evidence at level `k` may pin or merge only rigids of level exactly
-  `k`. When
-  a level-`k` rigid meets a rigid of a lower level, the level-`k` one is
-  merged into it.
+- Evidence at level `k` may pin only rigids of level `k`. When a
+  level-`k` rigid meets a rigid of a level that encloses `k`, the
+  level-`k` one is merged into it.
 - Any other step is *blocked*: the fact is not used. That is not an
   error. A blocked `GuardMatch` still types the extracted fields, at
   fresh level-`k` rigids.
 
-The rule's own guards are evidence at level 0, so they cannot pin a
-goal's rigids either: a fact about one match says nothing about the
-rest. With `:- chr_constraint p, q(T), use_int(int).`, the rule
+The rule's own guards are evidence at the rule's level, so they cannot
+pin a goal's rigids either: a fact about one match says nothing about
+the rest. With `:- chr_constraint p, q(T), use_int(int).`, the rule
 `p, collect(Y, q(Y), [A, B]) ==> integer(A) | use_int(B)` is rejected:
 `integer(A)` says nothing about `B`, which comes from another match.
+
+A sibling aggregate's goal cannot pin them either. With
+`:- chr_constraint item(T), snap, q(int), use_int(int).`, the rule
+
+```prolog
+snap, collect(Y, item(Y), [M]), count(q(M), N) ==> use_int(M).   % error
+```
+
+is rejected: `M : T₁` from `item`'s match escapes (§Escaping types). The
+`count` goal links `M` to `int`, but that holds only for the matches of
+`q`, and there may be none. With `item("x")` and no `q`, the rule tells
+`use_int("x")`.
 
 ### Shared variables in a goal
 
@@ -1470,8 +1483,8 @@ type wins, whatever the variables are called.
 p(X), collect(Y, q(X, Y), L) ==> out(X, L).
 ```
 
-The head gives `X : T₀` (level 0). The goal occurrence gives the copy of
-`X` and `Y` a level-1 `T₁`. The link merges `T₁` into `T₀`, so
+The head gives `X : T₀` at the rule's level. The goal occurrence gives
+the copy of `X` and `Y` a `T₁` at the goal's level. The link merges `T₁` into `T₀`, so
 `L : list(T₀)` and the body checks. That is right: every collected `Y`
 comes from a `q` whose first argument equals `X`.
 
@@ -1484,8 +1497,8 @@ p(X), count(q(X, wrap(_)), N) ==> seen(X).   % error
 ```
 
 The goal's `GuardMatch` pins the copy's `T₁ := wrap`. The link then
-meets `T₀` with `wrap`; pinning a level-0 rigid from level 1 is
-blocked, so `X` stays at `T₀` and `seen(X)` is rejected. Accepting it
+meets `T₀` with `wrap`; pinning a rule-level rigid from the goal's
+level is blocked, so `X` stays at `T₀` and `seen(X)` is rejected. Accepting it
 would be wrong: with `p(1)` and no `q` at all, the count is 0, the rule
 fires and tells `seen(1)`.
 
@@ -1540,9 +1553,9 @@ and the rule's guards may pin what it binds.
 
 The key comparison is different: it runs over every match, not only
 the selected one. So the goal is checked a second time, as a plain
-aggregate would check it (one level up, one-way links), and the key's
-`'<'` or `'>'` check is made there, with only the enclosing ambient
-signatures.
+aggregate would check it (at a new level inside, with one-way links),
+and the key's `'<'` or `'>'` check is made there, with only the
+enclosing ambient signatures.
 
 ```prolog
 :- chr_constraint start, q(T, U), best(U).
@@ -1550,11 +1563,12 @@ start, argmin(K, q(K, V)) ==> best(V).   % error: '<' at a rigid
 ```
 
 `K` is a different instance in each match, so comparing two keys is not
-safe: with `q(1, a)` and `q("x", b)` the rule would compare `1 < "x"`. With `:- chr_constraint q(int, U).` the rule checks, and `V` may
-be pinned by the rule's guards, since it comes from one match.
+safe: with `q(1, a)` and `q("x", b)` the rule would compare
+`1 < "x"`. With `:- chr_constraint q(int, U).` the rule checks, and `V`
+may be pinned by the rule's guards, since it comes from one match.
 
-The aggregates nested in a selection's goal are at `L+1`, one level
-deeper than the selection's goal.
+An aggregate nested in a selection's goal gets a new level inside the
+selection's goal level, like any other nested aggregate.
 
 ### Bounds
 

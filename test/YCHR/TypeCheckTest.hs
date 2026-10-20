@@ -252,5 +252,20 @@ tests =
                 ]
             )
         errs @?= []
-        ws @?= [AggregateGoalInaccessible "int" "string"]
+        ws @?= [AggregateGoalInaccessible "int" "string"],
+      testCase "a selection goal that can never match makes the rule dead" $ do
+        -- A selection fires only with a match, so this is YCHR-20104,
+        -- not YCHR-20106, and its second check reports nothing.
+        (errs, ws) <-
+          checkModule
+            ( T.unlines
+                [ ":- module(m, []).",
+                  ":- use_module(library(aggregates)).",
+                  ":- chr_type wrap ---> wrap(int).",
+                  ":- chr_constraint start, q(int, int), out(int).",
+                  "start, argmin(K, q(K, wrap(_))) ==> out(K)."
+                ]
+            )
+        errs @?= []
+        ws @?= [InaccessibleBranch "m:wrap" "int"]
     ]

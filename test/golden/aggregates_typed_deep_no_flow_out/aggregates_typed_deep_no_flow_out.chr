@@ -1,0 +1,7 @@
+% The same, two levels down.
+:- module(aggregates_typed_deep_no_flow_out, []).
+:- use_module(library(aggregates)).
+:- chr_type wrap ---> wrap(int).
+:- chr_constraint item(T), r(int), q(T, T), go, out(list(wrap)).
+go, collect(Y, (item(Y), count((r(_), count(q(Y, wrap(_)), _)), _)), L)
+  ==> out(L).

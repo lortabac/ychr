@@ -107,10 +107,11 @@
 % as the pinned type. One binding reaches every occurrence of the
 % skolem because all occurrences share the one term.
 %
-% `Level` is the evidence level the skolem was made at: 0 for a rule
-% head or a function, deeper for an aggregate goal's occurrences
-% (docs/reference/type-system.md §Aggregates §Goal occurrences and
-% levels). Only evidence of the same level may pin it.
+% `Level` is the evidence level the skolem was made at: `[]` for a rule
+% head or a function, the aggregate's own scope path for an aggregate
+% goal's occurrences (`ev_level` in `diag.chr`; docs/reference/
+% type-system.md §Aggregates §Goal occurrences and levels). Only
+% evidence of the same level may pin it.
 %
 % INVARIANT: never `copy_term` a structure containing a live unpinned
 % cell — a copy would get a *different* cell and silently stop
@@ -125,7 +126,7 @@
                   ; ty_any
                   ; tcon(any, list(ty))
                   ; fun(list(ty), ty)
-                  ; rigid(ty, int, int).
+                  ; rigid(ty, int, list(int)).
 
 % A function's signature: the types of its arguments and the type it
 % returns. Read with `sig_args` / `sig_ret`.
@@ -242,11 +243,11 @@ bc_decls(bc(_, Decls)) -> Decls.
     eq_unify_list(list(ty), list(ty), ev_depth, ctx),
     link_unify(ty, ty, ev_depth, ctx),
     link_unify_list(list(ty), list(ty), ev_depth, ctx),
-    escape_check(int, list(ty), ctx),
+    escape_check(list(int), list(ty), ctx),
     solving_done,
     rigid_supply(int),
-    make_fresh_rigid(int, ty),
-    make_fresh_rigids(int, list(ty), list(ty)),
+    make_fresh_rigid(list(int), ty),
+    make_fresh_rigids(list(int), list(ty), list(ty)),
     resolve_overload(any, list(cand), list(ty), ty, ctx),
     commit_candidate(list(cand), list(ty), ty, ctx),
     check_bound(any, list(fun_sig_t), list(fun_sig_t), list(ty), ty, ctx),
@@ -1251,16 +1252,17 @@ ev_unify_rigid_alias_right @
     var(C2), ty_occurs(C2, rigid(C1, N1, L1)) | true.
 
 % Levels (docs/reference/type-system.md §Aggregates §Goal occurrences
-% and levels): evidence at level `k` may only bind the cell of a level-`k`
-% skolem, and only to a skolem of level `k` or lower. So a goal's skolem
-% merges into the rule's, never the other way round.
+% and levels): evidence at level `L` may only bind the cell of a level-`L`
+% skolem, and only to a skolem of level `L` or an enclosing one. So a
+% goal's skolem merges into the rule's, never the other way round, and
+% never into a sibling aggregate's.
 ev_unify_rigid_merge_left @
     ev_unify(rigid(C1, _, L1), rigid(C2, N2, L2), ev_top, Ctx) <=>
-    var(C1), L1 == ctx_level(Ctx), L2 =< L1 | C1 = rigid(C2, N2, L2).
+    var(C1), L1 == ctx_level(Ctx), level_within(L2, L1) | C1 = rigid(C2, N2, L2).
 
 ev_unify_rigid_merge_right @
     ev_unify(rigid(C1, N1, L1), rigid(C2, _, L2), ev_top, Ctx) <=>
-    var(C2), L2 == ctx_level(Ctx), L1 =< L2 | C2 = rigid(C1, N1, L1).
+    var(C2), L2 == ctx_level(Ctx), level_within(L1, L2) | C2 = rigid(C1, N1, L1).
 
 % Two unpinned skolems the level does not let this evidence merge: the
 % fact is blocked, which is not an error.
@@ -1588,18 +1590,18 @@ ty_deref(T) -> T.
 % Whether linking the (dereferenced) outer type to the inner one ties a
 % goal skolem to a second outer skolem: the inner side is a skolem of
 % the goal's level that is already merged, and it and the outer side end
-% at two different unpinned skolems from outside the goal.
-:- function link_conflicts(ty, ty, int) -> bool.
+% at two different unpinned skolems of levels enclosing the goal.
+:- function link_conflicts(ty, ty, list(int)) -> bool.
 link_conflicts(_, I, _) | var(I) -> false.
 link_conflicts(O, rigid(C, _, L), K) | L == K, nonvar(C) ->
     distinct_outer_rigids(O, ty_deref(C), K).
 link_conflicts(_, _, _) -> false.
 
-:- function distinct_outer_rigids(ty, ty, int) -> bool.
+:- function distinct_outer_rigids(ty, ty, list(int)) -> bool.
 distinct_outer_rigids(A, _, _) | var(A) -> false.
 distinct_outer_rigids(_, B, _) | var(B) -> false.
 distinct_outer_rigids(rigid(C1, N1, L1), rigid(C2, N2, L2), K)
-    | var(C1), var(C2), L1 < K, L2 < K -> not(N1 == N2).
+    | var(C1), var(C2), level_inside(L1, K), level_inside(L2, K) -> not(N1 == N2).
 distinct_outer_rigids(_, _, _) -> false.
 
 % ==========================================================================
@@ -1607,7 +1609,7 @@ distinct_outer_rigids(_, _, _) -> false.
 % ==========================================================================
 %
 % `escape_check(L, Tys, Ctx)`: none of `Tys` may contain a skolem made
-% deeper than level `L` that is still unpinned (docs/reference/
+% at a level inside `L` that is still unpinned (docs/reference/
 % type-system.md §Aggregates §Escaping types). The check needs the
 % final types, so it waits for `solving_done`, which `main.chr` tells
 % once the walk has quiesced.
@@ -1619,17 +1621,17 @@ escape_found @
 escape_none @
     solving_done \ escape_check(_, _, _) <=> true.
 
-:- function escaping(int, list(ty)) -> list(ty).
+:- function escaping(list(int), list(ty)) -> list(ty).
 escaping(L, Tys) -> filter(fun(T) -> ty_escapes(L, T) end, Tys).
 
 :- function first_ty(list(ty)) -> ty.
 first_ty([T|_]) -> T.
 first_ty([]) -> ty_any.
 
-:- function ty_escapes(int, ty) -> bool.
+:- function ty_escapes(list(int), ty) -> bool.
 ty_escapes(_, T) | var(T) -> false.
 ty_escapes(L, rigid(C, _, _)) | nonvar(C) -> ty_escapes(L, C).
-ty_escapes(L, rigid(_, _, Lr)) -> Lr > L.
+ty_escapes(L, rigid(_, _, Lr)) -> level_inside(L, Lr).
 ty_escapes(L, tcon(_, Args)) -> any(fun(A) -> ty_escapes(L, A) end, Args).
 ty_escapes(L, fun(Args, _)) | any(fun(A) -> ty_escapes(L, A) end, Args) -> true.
 ty_escapes(L, fun(_, Ret)) -> ty_escapes(L, Ret).

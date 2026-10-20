@@ -2,7 +2,8 @@
 % §Aggregates, over typed, polymorphic constraints. Each goal sets up the
 % store, then asks for what the rule derived.
 :- module(aggregates_typed_ok,
-          [link/1, siblings/2, pinned/1, result_test/1, select/1, order/1]).
+          [link/1, siblings/2, pinned/1, result_test/1, select/1, order/1,
+           result_pin/1, select_goal_guard/1, deep/1]).
 :- use_module(library(aggregates)).
 :- use_module(library(maybe)).
 
@@ -54,3 +55,27 @@ u(X), count(z(_), X),
   ==> sum_out(S).
 sum_out(S) \ ask_order(A) <=> A = S.
 order(A) <=> z(0), z(0), w(5), w(7), u(1), u(2), ask_order(A).
+
+% The Result test pins X, and so the box's T, to int.
+:- chr_type box(T) ---> box(T).
+:- chr_constraint b(T, box(T)), c(T), boxed(int), ask_result_pin(any),
+                  result_pin(any).
+b(X, box(Z)), count(c(_), X) ==> boxed(Z).
+boxed(Z) \ ask_result_pin(A) <=> A = Z.
+result_pin(A) <=> c(0), b(1, box(7)), b(0, box(5)), ask_result_pin(A).
+
+% A guard in a selection's goal holds for every match, so the key
+% compares.
+:- chr_constraint pick, g(T), best_int(int), ask_select_goal_guard(any),
+                  select_goal_guard(any).
+pick, argmin(K, (g(K), ? integer(K))) ==> best_int(K).
+best_int(K) \ ask_select_goal_guard(A) <=> A = K.
+select_goal_guard(A) <=>
+    g("x"), g(3), g(2), pick, ask_select_goal_guard(A).
+
+% Two levels down, the goal's type still merges into the rule's X.
+:- chr_constraint d(T), e(int), f(T, T), nested(T, list(list(T))),
+                  ask_deep(any), deep(any).
+d(X), collect(L, (e(_), collect(Y, f(X, Y), L)), Ls) ==> nested(X, Ls).
+nested(_, Ls) \ ask_deep(A) <=> A = Ls.
+deep(A) <=> f(1, 1), f(1, 2), f(2, 3), e(0), e(1), d(1), ask_deep(A).

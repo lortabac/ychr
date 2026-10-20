@@ -80,7 +80,7 @@ scope_cons(S) -> env_cons(scope_env(S)).
 :- function scope_ctx(scope) -> ctx.
 scope_ctx(scope(_, _, _, C)) -> C.
 
-:- function scope_level(scope) -> int.
+:- function scope_level(scope) -> list(int).
 scope_level(S) -> ctx_level(scope_ctx(S)).
 
 :- function scope_vars(scope) -> list(pair(any, ty)).
@@ -196,10 +196,10 @@ tvar_slots(Vs, TVars) ->
 
 :- chr_constraint
     alloc_flex_tvars(list(string), list(pair(string, ty))),
-    alloc_rigid_tvars(int, list(string), list(pair(string, ty))),
+    alloc_rigid_tvars(list(int), list(string), list(pair(string, ty))),
     decl_rigid_supply(int),
-    make_decl_rigid(int, ty),
-    make_decl_rigids(int, int, list(ty)),
+    make_decl_rigid(list(int), ty),
+    make_decl_rigids(list(int), int, list(ty)),
     fresh_slots(int, list(ty)),
     encode_one_sig(fun_sig, fun_sig_t),
     encode_sigs(list(fun_sig), list(fun_sig_t)).
@@ -216,7 +216,8 @@ alloc_flex_tvars_cons @
 
 % Rigids are allocated head-first so the ids ascend with the (sorted)
 % name list. The first argument is the evidence level they belong to:
-% 0 for a rule head or a function equation, deeper for an aggregate goal.
+% `[]` for a rule head or a function equation, the aggregate's scope
+% path for an aggregate goal.
 alloc_rigid_tvars_nil @
     alloc_rigid_tvars(_, [], Out) <=> Out = [].
 
@@ -486,6 +487,7 @@ build_td_con_facts_cons @
 walk_program1 @
     walk_program(Env, P, Facts) <=>
     decl_rigid_supply(0),
+    scope_supply(0),
     walk_rules_from(Env, P, Facts, program_rules(P)).
 
 % The rule list is handed on rather than recomputed: there is no `let`,
@@ -528,8 +530,8 @@ walk_rule1 @
               Unit) <=>
     HeadCons is append(Kept, Removed),
     Label is rule_label(Name),
-    HeadCtx = ctx(unit(Unit), origin_ann(HAnn), Label, HLoc, lvl(0, mode_rule)),
-    GuardCtx = ctx(unit(Unit), origin_ann(GAnn), Label, GLoc, lvl(0, mode_rule)),
+    HeadCtx = ctx(unit(Unit), origin_ann(HAnn), Label, HLoc, lvl([], mode_rule)),
+    GuardCtx = ctx(unit(Unit), origin_ann(GAnn), Label, GLoc, lvl([], mode_rule)),
     alloc_var_types(collect_vars_rule(HeadCons, Guards, Body, Aggs),
                     head_var_skeletons(Env, append(HeadCons, aggs_skel_cons(Aggs)),
                                        append(Guards, aggs_skel_guards(Aggs))),
@@ -541,7 +543,7 @@ walk_rule1 @
     check_guards(scope(Env, VarTypes, Amb, GuardCtx), scope(Env, VarTypes, Amb, HeadCtx),
                  user_guards(Guards), []),
     check_body_goals(scope(Env, VarTypes, Amb,
-                           ctx(unit(Unit), origin_ann(BAnn), Label, BLoc, lvl(0, mode_rule))),
+                           ctx(unit(Unit), origin_ann(BAnn), Label, BLoc, lvl([], mode_rule))),
                      Body).
 
 % The HNF guards Desugar puts ahead of the user's, and the user's.
@@ -657,14 +659,16 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
 %
 %   * `Agg` in that scope, as an `aggregator(W, E, R)`;
 %   * its goal, `Element` and nested aggregates in a scope of its own,
-%     at level `L+1`. Its locals and the copies of the shared names its
+%     at a fresh level `[Id | L]` (`child_level`), so that no sibling
+%     aggregate shares it. Its locals and the copies of the shared names its
 %     goal matches get fresh slots there, which shadow the outer ones;
 %   * the copies linked one way to the outer names (`link_unify`);
 %   * the result pattern back in the enclosing scope, at level `L`.
 %
 % A selection has no aggregator. Its goal is checked twice: once like
 % extra heads, at level `L`, with its shared names linked both ways;
-% and once like a plain aggregate's, at `L+1`, where the key comparison
+% and once like a plain aggregate's, at a fresh child level, where the
+% key comparison
 % is made. That second check repeats what the first reported, so its
 % mode (`mode_copy`) reports nothing but the key comparison.
 %
@@ -676,7 +680,9 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
 :- chr_constraint
     aggs_check(scope, list(agg_e)),
     agg_check(scope, agg_e),
-    agg_scope(scope, int, check_mode, list(agg_conj), list(any), scope),
+    agg_scope(scope, list(int), check_mode, list(agg_conj), list(any), scope),
+    scope_supply(int),
+    child_level(list(int), list(int)),
     goal_conjs_check(scope, list(agg_conj), scope),
     link_copies(scope, scope, list(any), link_kind),
     agg_result_check(scope, any, list(guard), ty),
@@ -699,7 +705,8 @@ agg_check_plain @
                        just(agg_res(RV, RGuards)))) <=>
     type_of_expr(S, Agg, AggTy),
     agg_shape(AggTy, _, E, R, scope_ctx(S)),
-    agg_scope(S, scope_level(S) + 1, inner_mode(scope_ctx(S)), Goal,
+    child_level(scope_level(S), Level),
+    agg_scope(S, Level, inner_mode(scope_ctx(S)), Goal,
               append(Locals, goal_copies(Shared, Goal)), Inner),
     goal_conjs_check(Inner, Goal, InnerEnd),
     link_copies(S, Inner, goal_copies(Shared, Goal), link_one_way),
@@ -720,14 +727,16 @@ agg_check_select @
               append(Locals, goal_copies(Shared, Goal)), Head),
     goal_conjs_check(Head, Goal, _),
     link_copies(S, Head, goal_copies(Shared, Goal), link_two_way),
-    agg_scope(S, scope_level(S) + 1, mode_copy, Goal,
+    child_level(scope_level(S), CopyLevel),
+    agg_scope(S, CopyLevel, mode_copy, Goal,
               append(append(Locals, Binds), goal_copies(Shared, Goal)), Copy),
     goal_conjs_check(Copy, Goal, CopyEnd),
     link_copies(S, Copy, goal_copies(Shared, Goal), link_one_way),
     type_of_expr(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(CopyEnd),
-                       key_ctx(S)),
+                       key_ctx(S, CopyLevel)),
                  Key, KeyTy),
-    emit_function_call(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(S), key_ctx(S)),
+    emit_function_call(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(S),
+                             key_ctx(S, CopyLevel)),
                        key_comparison(Kind), [KeyTy, KeyTy], _).
 
 % `Agg : aggregator(W, E, R)`, at fresh flexible `W`, `E` and `R`.
@@ -737,8 +746,16 @@ agg_shape1 @
 
 % The key is typed only in the second check, so it reports there, in
 % the caller's mode, at the second check's level.
-:- function key_ctx(scope) -> ctx.
-key_ctx(S) -> ctx_at(scope_ctx(S), scope_level(S) + 1, ctx_mode(scope_ctx(S))).
+:- function key_ctx(scope, list(int)) -> ctx.
+key_ctx(S, L) -> ctx_at(scope_ctx(S), L, ctx_mode(scope_ctx(S))).
+
+% A fresh level inside `P`. The ids only need to differ, so one counter
+% per check is enough.
+child_level1 @
+    scope_supply(N), child_level(P, Out) <=>
+    N1 is N + 1,
+    Out = [N | P],
+    scope_supply(N1).
 
 % Where a contradiction inside a plain aggregate's goal is reported: as
 % a dead goal, unless this is already a selection's second check.
@@ -1515,14 +1532,14 @@ check_equation1 @
     alloc_var_types(collect_vars_eq(Eq),
                     param_var_skeletons(Env, eq_params(Eq), ArgTys, eq_guards(Eq)),
                     VarTypes),
-    alloc_rigid_tvars(0,
+    alloc_rigid_tvars([],
                       sort_unique_tvars(append(append(collect_ty_vars(ArgTys),
                                                       collect_ty_vars_expr(RetTy)),
                                                bound_sigs_vars(Bounds))),
                       TVars),
     check_equation_at(scope(Env, VarTypes, add_ambients([], Bounds, TVars),
                             ctx(unit(Unit), origin_ann(EAnn),
-                                label_function(FName), ELoc, lvl(0, mode_rule))),
+                                label_function(FName), ELoc, lvl([], mode_rule))),
                       TVars, fun_sig(ArgTys, RetTy), Bounds, Eq).
 
 :- function eq_params(fun_eq) -> list(head_arg).
@@ -1729,7 +1746,7 @@ class_eq_result_fitted @
 class_eq_result_none @
     class_eq_result(FName, EAnn, ELoc, false) <=>
     report_error(ctx(no_unit, origin_ann(EAnn), label_function(FName), ELoc,
-                     lvl(0, mode_rule)),
+                     lvl([], mode_rule)),
                  no_matching_overload, source_name(FName)).
 
 % Inside the search: declaration order, stop at the first fit. The
@@ -1777,6 +1794,7 @@ class_attempt1 @
     warnings([]),
     rigid_supply(-1),
     decl_rigid_supply(0),
+    scope_supply(0),
     retell_decls(Facts),
     check_equation(Env, FName, Sig, [], ann(EAnn, ELoc, Eq), 0),
     collect(Errs),
@@ -1834,6 +1852,7 @@ verdict_of(_, _) -> attempt_failed.
 walk_goals1 @
     walk_goals(Env, Goals, Loc, Label) <=>
     decl_rigid_supply(0),
+    scope_supply(0),
     alloc_var_types(collect_vars_goals(Goals), [], VarTypes),
     walk_goals_at(Env, Goals, Loc, Label, VarTypes, 0).
 
@@ -1843,6 +1862,6 @@ walk_goals_at_nil @
 walk_goals_at_cons @
     walk_goals_at(Env, [G|Gs], Loc, Label, VarTypes, Unit) <=>
     check_body_goal(scope(Env, VarTypes, [],
-                          ctx(unit(Unit), origin_none, Label, Loc, lvl(0, mode_rule))),
+                          ctx(unit(Unit), origin_none, Label, Loc, lvl([], mode_rule))),
                     G),
     walk_goals_at(Env, Gs, Loc, Label, VarTypes, Unit + 1).
