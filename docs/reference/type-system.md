@@ -453,6 +453,10 @@ Polymorphism). For each such unit, the checker:
 2. Solves the constraints together using unification and consistency.
 3. Reports all inconsistencies as type errors.
 
+A rule with aggregates is still one unit. Each aggregate opens a nested
+variable scope inside it, and the facts its goal proves stay inside the
+aggregate (§Aggregates).
+
 Constraints come in two tiers:
 
 - **Equational constraints** — unifications, `is` flows, and plain
@@ -494,6 +498,12 @@ it fires, and if the chosen candidate would later have been
 eliminated, every examination order rejects the program — early firing
 surfaces the contradiction through the propagated types, late
 examination through an empty candidate set.
+
+"Gathered" is not free in one respect: which evidence a check may use
+depends on where it sits, as for guards read left to right
+(§Guard-Derived Type Evidence). A rule's constraints are gathered in
+the order the rule runs (§Aggregates §Gathering order). The claim above
+is relative to that order.
 
 One unit-level rule sits above the per-check discipline: a unit whose
 evidence facts contradict a known type is *inaccessible*
@@ -579,6 +589,12 @@ agreeing; §What evidence does). Multi-head idioms like transitivity of
 a polymorphic `leq(T, T)` therefore still check; see the worked
 example in §Guard-Derived Type Evidence.
 
+A constraint conjunct of an aggregate goal is an implementation site
+too, with its own rigid variables. Since the aggregate folds over many
+matches, those rigids stand for one match's instance, and the checker
+keeps them inside the aggregate (§Aggregates §Goal occurrences and
+levels).
+
 Rigidity is local to the implementation-site check: every use site (a
 call, a body tell, a goal) allocates fresh *flexible* variables by
 `copy_term`-style refresh, so callers keep the gradual guarantee
@@ -599,7 +615,8 @@ A rule-head constraint constrains its argument variables: with
 `Y : int`. A *polymorphic* constraint's head occurrence types its
 variables through fresh per-occurrence rigid parameters (§Rigid and
 flexible type variables): with `leq(T, T)` declared, the same head
-gives `X : T` and `Y : T` at that occurrence's rigid `T`.
+gives `X : T` and `Y : T` at that occurrence's rigid `T`. A constraint
+in an aggregate goal types its variables the same way (§Aggregates).
 
 ### 2. Function equation parameters
 
@@ -724,6 +741,11 @@ can receive a non-integer — and the checker's verdicts differ in
 exactly the same way. HNF-synthetic guards (§8) represent head
 matching, which happens before any user guard runs, so their evidence
 is available to the whole guard sequence and body.
+
+Inside a plain aggregate the region ends with the aggregate: a guard in
+its goal, or a goal's own HNF guard, holds for each counted match, and
+the rule may fire with no match at all. The checker keeps such facts in
+by giving rigids a level (§Aggregates §Goal occurrences and levels).
 
 One consequence of order-independent solving: a check still *residual*
 when a later evidence fact is told sees that fact, since retries run
@@ -1054,6 +1076,11 @@ contradiction are properties of the gathered constraints, not of
 any examination order, so acceptance remains order-independent
 (§Type Checking Procedure).
 
+A contradiction inside an aggregate goal does not make the rule dead:
+it means the goal never matches, and the rule still fires. That case
+has its own warning, YCHR-20106 (§Aggregates §Goals that can never
+match).
+
 
 ## Expression Typing
 
@@ -1312,41 +1339,258 @@ The check is deliberately narrow:
 
 ## Aggregates
 
-Aggregates ([aggregates.md](aggregates.md)) are **not type-checked
-yet**. The encoded rule head drops the aggregate list
-(`YCHR.Internal.TypeCheck.Encode.ruleHead` sends only `kept` and
-`removed`), so the checker never sees an aggregate's positions: `Agg`,
-`Element`, `Goal` and `Result` impose no type on anything. A variable
-the guard or body also mentions — a shared variable, or a goal local
-the compiler already rejects as escaping — is collected from there by
-`collect_vars_rule` in `typechecker/skel.chr` and gets an ordinary
-flexible slot, narrowed by whatever its uses say. The aggregate itself
-contributes nothing to that slot, and it is not explicitly forced to
-`ty_any`.
+An aggregate ([aggregates.md](aggregates.md)) is checked as part of
+its rule: the rule stays one checking unit. This section says how its
+four positions are typed, which variables they see, and how far the
+facts an aggregate's goal establishes reach.
 
-The intended typing rules, for when this is implemented:
+### Types of the positions
 
 ```
-Agg    : aggregator(W, E, R)
-Element: E
-Result : R
+Agg     : aggregator(W, E, R)
+Element : E
+Result  : R
 ```
 
-- `Element` and `Result` are checked against the aggregator's `E` and
-  `R`, and `Agg` against `aggregator(W, E, R)`.
-- A **shared** variable of `Goal` and `Element` keeps the type its
-  occurrence outside the aggregate gives it: it is an input already in
-  scope, and matching the goal must agree with its value.
-- A **local** variable of `Goal` gets its type from the constraint
-  argument position it lands in, or from `Element` when the goal only
-  mentions it there. It is not visible to the rule's guard or body
-  (`AggregateLocalEscapes`, YCHR-40003).
-- `Final` returns `maybe(R)`, and `nothing` makes the rule
-  inapplicable, so `Result : R` is checked against the payload and the
-  undefined case is not a type error.
+`aggregator/3` is `library(aggregates)`'s type (aggregates.md §Typing).
+`W`, `E` and `R` are fresh flexible variables per aggregate.
 
-Until then, a program with aggregates checks as if the aggregates were
-not written, and the folds themselves are trusted.
+- `Agg` is evaluated once per match of the rule's regular heads, before
+  the goal is searched, so it is typed in the enclosing scope (the
+  rule's, or the enclosing goal's for a nested aggregate). Its bounds
+  are discharged there too.
+- `Element` is evaluated once per match of the goal, so it is typed in
+  the aggregate's own scope (§Scopes).
+- `Result` is matched against the payload of `just(R)`. `nothing`
+  means the rule does not apply, so it is not a type error. The pattern
+  is matched like a head argument: HNF turns it into a fresh variable of
+  type `R` plus synthetic guards (§Sources of Type Information §8). A
+  variable already bound becomes a `GuardEqual`, a compound a
+  `GuardMatch` with its `GuardGetArg`s. The rule fires only if these
+  tests pass, so they are evidence at the enclosing level (§Levels).
+
+A selection form (`argmin`, `argmax`, `takemin`, `takemax`) has no
+aggregator. Its key `K` must be comparable: `argmin` and `takemin` check
+`'<'(K, K)`, `argmax` and `takemax` check `'>'(K, K)`, as calls to the
+prelude classes. A key of any other type is `NoMatchingOverload`
+(YCHR-60006). See §Selection forms for where the check is made.
+
+### Scopes
+
+A rule has one variable scope. Each aggregate opens a nested one, so
+that two aggregates may use the same name for unrelated variables.
+Which names an aggregate shares and which it owns follows
+[aggregates.md §Variables](aggregates.md#variables):
+
+- a **shared** name is one the aggregate mentions that is already bound
+  where it is computed. It keeps its enclosing slot, except where the
+  goal matches it (§Shared variables in a goal);
+- a **local** name gets a fresh slot in the aggregate's scope, hidden
+  from the guard and body;
+- the names an aggregate **binds** — the new variables of a plain
+  form's `Result`, or of a selection's goal — are slots of the
+  enclosing scope.
+
+```prolog
+:- chr_constraint client(string), account(int, string, float),
+                  tag(string, string), report(string, list(float), int).
+
+client(C),
+  collect(B, account(_, C, B), Bs),   % local B : float
+  count(tag(C, B), N)                 % local B : string
+  ==> report(C, Bs, N).
+```
+
+`C` is shared by both aggregates. Each has its own local `B`, so the
+two `B`s do not clash. `Bs : list(float)` and `N : int` are bound in
+the rule's scope and checked against `report`.
+
+### Goal occurrences and levels
+
+A constraint conjunct of an aggregate goal is an *implementation site*,
+like a head occurrence: it allocates fresh rigid variables for its
+constraint's type parameters (§Rigid and flexible type variables), and
+its HNF guards are evidence forms.
+
+Unlike a head occurrence, it is not matched once. An aggregate folds
+over every match of its goal, each match may be a different instance of
+a polymorphic constraint, and the rule fires even when there is no
+match at all. So what a goal match proves holds inside the aggregate —
+in the later conjuncts of the goal, in `Element`, in nested aggregates —
+and nowhere else.
+
+The checker enforces this with **levels**:
+
+- The rule is at level 0. A plain aggregate computed at level `L`
+  checks its goal, its `Element` and the aggregates nested in it at
+  level `L+1`.
+- Every rigid variable records the level it was made at.
+- Evidence at level `k` may pin or merge only rigids of level `k`. When
+  a level-`k` rigid meets a rigid of a lower level, the level-`k` one is
+  merged into it.
+- Any other step is *blocked*: the fact is not used. That is not an
+  error. A blocked `GuardMatch` still types the extracted fields, at
+  fresh level-`k` rigids.
+
+The rule's own guards are evidence at level 0, so they cannot pin a
+goal's rigids either: a fact about one match says nothing about the
+rest.
+
+### Shared variables in a goal
+
+Desugaring does not turn a shared variable in a goal into a
+`GuardEqual`, as it does for a variable shared between two heads. The
+checker adds the link itself. Each place where a goal matches a shared
+variable gets an inner copy of the variable, which the rest of the
+aggregate sees instead of the outer one. The copy is linked to the outer
+variable *one way*:
+
+- the inner side learns from the outer one; the outer side never learns
+  from the inner one;
+- while the outer type is still flexible, the link waits;
+- once both sides are solid at the top, the link is evidence at the
+  goal's level, so a goal rigid merges into the outer one;
+- inside a type constructor's parameters the link does nothing, as for
+  `GuardEqual`.
+
+```prolog
+:- chr_constraint p(T), q(T, T), out(T, list(T)).
+p(X), collect(Y, q(X, Y), L) ==> out(X, L).
+```
+
+The head gives `X : T₀` (level 0). The goal occurrence gives the copy of
+`X` and `Y` a level-1 `T₁`. The link merges `T₁` into `T₀`, so
+`L : list(T₀)` and the body checks. That is right: every collected `Y`
+comes from a `q` whose first argument equals `X`.
+
+Facts do not travel back out:
+
+```prolog
+:- chr_type wrap ---> wrap(int).
+:- chr_constraint p(T), q(T, T), seen(wrap).
+p(X), count(q(X, wrap(_)), N) ==> seen(X).   % error
+```
+
+The goal's `GuardMatch` would pin `T₀ := wrap` through the merge. It is
+blocked, `X` stays at `T₀`, and `seen(X)` is rejected. Accepting it
+would be wrong: with `p(1)` and no `q` at all, the count is 0, the rule
+fires and tells `seen(1)`.
+
+A goal can also tie one inner rigid to two outer ones:
+
+```prolog
+:- chr_constraint p(T), r(T), q(T, T), pair(T, T).
+p(X), r(Y), count(q(X, Y), N) ==> pair(X, Y).   % error
+```
+
+The first link merges `T₁` into `p`'s rigid, the second finds it merged
+into a different one. Picking either would make the verdict depend on
+link order, so this is an error, `AggregateLinkConflict` (YCHR-60015),
+whichever link comes second.
+
+### Escaping types
+
+A rigid made inside an aggregate stands for "the instance of *this*
+match". It must not reach the rule's scope unless something has fixed
+it: a merge into an outer rigid, or a pin. After solving, the checker
+looks at `E`, at `R` and at the types of the names the aggregate binds.
+If one of them contains an inner rigid that is still free, that is
+`AggregateTypeEscapes` (YCHR-60014).
+
+```prolog
+:- chr_constraint item(T), snapshot, same(T, T).
+snapshot, collect(Y, item(Y), [A, B]) ==> same(A, B).   % error
+```
+
+The result would be `list(T₁)`, so `A` and `B` would share `T₁`. With
+`item(1), item("x")` in the store, the rule tells `same(1, "x")`, which
+fits no instance of `same(T, T)`. A guard that fixes the instance for
+every counted match makes it fine:
+
+```prolog
+snapshot, collect(Y, (item(Y), ? integer(Y)), L) ==> ...   % L : list(int)
+```
+
+`W` is not checked: it never leaves the aggregate. The check is
+conservative. A rigid pinned to a type that still has a free inner
+parameter (`list(β)`) escapes too, even when the body would only use it
+at `any`.
+
+### Selection forms
+
+A selection form fires only with a selected match, and its goal
+variables are visible to the rest of the rule. So its goal is checked
+like extra heads, at the enclosing level: its rigids are at that level,
+its shared variables are linked by a plain `GuardEqual` (both ways),
+and the rule's guards may pin what it binds.
+
+The key comparison is different: it runs over every match, not only
+the selected one. So the goal is checked a second time, as a plain
+aggregate would check it (one level up, one-way links), and the key's
+`'<'` or `'>'` check is made there, with only the enclosing ambient
+signatures.
+
+```prolog
+:- chr_constraint start, q(T, U), best(U).
+start, argmin(K, q(K, V)) ==> best(V).   % error: '<' at a rigid
+```
+
+`K` is a different instance in each match, so comparing two keys is not
+safe. With `:- chr_constraint q(int, U).` the rule checks, and `V` may
+be pinned by the rule's guards, since it comes from one match.
+
+The aggregates nested in a selection's goal are at the level above the
+selection.
+
+### Bounds
+
+A bounded constraint in an aggregate goal assumes its bound inside the
+aggregate only: its required signatures are ambient there, not in the
+rule. `Agg`'s own bounds are discharged in the enclosing scope. So
+`min(Y, q(Y), M)` over a polymorphic `q(T)` is `BoundUnsatisfied`
+(YCHR-60012): the matches may be of different instances, and `min`
+would compare them.
+
+### Gathering order
+
+A rule's constraints are gathered in the order the rule runs:
+
+1. the head occurrences;
+2. the HNF guards of the head;
+3. the aggregates, left to right; for each: `Agg`, the goal's conjuncts
+   left to right (a nested aggregate at its place), the shared-variable
+   links, `Element`, and the `Result` tests;
+4. the user's guards;
+5. the body.
+
+Which evidence a check may use depends on its place in this order, as
+for guards (§Guard-Derived Type Evidence). Given the order, acceptance
+and the final types do not depend on the order in which the solver
+works (§Type Checking Procedure).
+
+### Goals that can never match
+
+When a contradiction inside a goal (on a link, or in a goal's
+`GuardEqual` or `GuardMatch`) shows that the goal can never match, the
+aggregate always sees zero matches, but the rule still runs. That is not
+the inaccessible rule of YCHR-20104 but a separate warning,
+`AggregateGoalInaccessible` (YCHR-20106):
+
+```prolog
+:- chr_constraint client(string), order(int, int), report(string, int).
+client(C), count(order(C, _), N) ==> report(C, N).   % warning: N is always 0
+```
+
+Like YCHR-20104, it is dropped when the rule has errors, and `--Werror`
+promotes it.
+
+### Diagnostics
+
+| Code | Name | Condition |
+|---|---|---|
+| YCHR-60014 | `AggregateTypeEscapes` | A per-match type reaches the rule's scope (§Escaping types). |
+| YCHR-60015 | `AggregateLinkConflict` | A goal links one rigid to two outer rigids (§Shared variables in a goal). |
+| YCHR-20106 | `AggregateGoalInaccessible` | An aggregate goal can never match (warning). |
 
 
 ## Host Calls
@@ -1904,6 +2148,8 @@ as ambient and the body tell discharges it.
 Type checking operates on the desugared AST, where every rule has the
 shape `kept + removed + guards + body`. "Head" means `kept ∪ removed`;
 both contribute their bounds as ambient, guards and body goals do not.
+A constraint in an aggregate goal contributes its bounds inside that
+aggregate only (§Aggregates §Bounds).
 
 A rule body is entitled to *assume* the bound, exactly as a function
 equation is. Consider the recursive rule of a polymorphic `sorted`:
@@ -2188,6 +2434,9 @@ bound within that position's type, however many units and
 reactivations it passed through. A term still free at the end is not a
 violation — that is the mode axis below, whose discipline the
 generator observes.
+
+The generator makes no aggregates, so the levels and the escape check of
+§Aggregates are covered by the claim but not by these tests.
 
 ### Bounded polymorphism
 
