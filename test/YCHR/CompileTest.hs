@@ -12,12 +12,11 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCase, (@?=))
-import YCHR.Embedded (stdlib)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM qualified as VM
-import YCHR.Run (compileModules)
+import YCHR.TestHelpers (compileOrFail)
 
 -- | The VM code 'YCHR.Internal.Compile.compile' emits for representative CHR programs.
 tests :: TestTree
@@ -40,13 +39,6 @@ tests =
 -- ---------------------------------------------------------------------------
 -- Shared helpers
 -- ---------------------------------------------------------------------------
-
--- | Compile the given modules (prelude plus their imports), failing
--- the test on error.
-compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules stdlib False inputs of
-  Left err -> assertFailure $ show err
-  Right (cp, _) -> pure cp
 
 -- | Find the (single) Foreach statement reachable from a list of
 -- statements. All compiler-generated occurrence procedures contain at

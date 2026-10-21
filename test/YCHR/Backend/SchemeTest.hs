@@ -14,12 +14,11 @@ module YCHR.Backend.SchemeTest (tests) where
 import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
-import YCHR.Embedded (stdlib)
+import Test.Tasty.HUnit (assertBool, testCase)
 import YCHR.Internal.Backend.Scheme (generateScheme)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.VM.SExpr (VMProgram (..))
-import YCHR.Run (compileModules)
+import YCHR.TestHelpers (compileOrFail)
 
 -- | Scheme-backend control-flow codegen: when a 'Return' needs a @call\/cc@ escape.
 tests :: TestTree
@@ -73,13 +72,6 @@ tests =
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
-
--- | Compile the given modules (prelude plus their imports), failing
--- the test on error.
-compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules stdlib False inputs of
-  Left err -> assertFailure $ show err
-  Right (cp, _) -> pure cp
 
 -- | Compile a source program and render its Scheme library.
 schemeFor :: Text -> IO Text
