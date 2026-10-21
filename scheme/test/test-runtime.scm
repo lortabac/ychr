@@ -25,11 +25,11 @@
 ;;; --------------------------------------------------------------------------
 
 (test-group "%unify failure raises"
-  (test-error "int mismatch"
+  (test-error "int mismatch" #t
               (%unify (fresh-session) 1 2))
-  (test-error "atom mismatch"
+  (test-error "atom mismatch" #t
               (%unify (fresh-session) 'foo 'bar))
-  (test-error "list length mismatch"
+  (test-error "list length mismatch" #t
               (let* ((s (fresh-session))
                      (x (make-var s))
                      (y (make-var s))
