@@ -21,7 +21,7 @@
 -- constructor becomes an atom. Record field names are ignored, so a
 -- derived instance agrees with a hand-written positional one.
 --
--- Needs "GHC.Generics", which MicroHS cannot compile, so this module is
+-- Needs "GHC.Generics", which MicroHs cannot compile, so this module is
 -- built only under GHC (@if impl(ghc)@ in @ychr.cabal@).
 module YCHR.Convert.Generic
   ( genericToTerm,
