@@ -1476,8 +1476,8 @@ variable *one way*:
 **When the links are made.** A link whose outer side is already a known
 type (not an unpinned rigid variable, and not flexible) is made right
 after the first conjunct that matches the variable, so the rest of the
-goal sees that type. The other links are made after all of the goal's
-conjuncts, so that the goal's own facts can pin its rigids first. A
+goal sees that type. Whether the type is known is decided there, once.
+The other links are made after all of the goal's conjuncts, so that the goal's own facts can pin its rigids first. A
 selection's links follow the same timing. So if one goal rigid is
 linked both to a known type and to an outer rigid, the known type wins,
 whatever the variables are called.
