@@ -18,6 +18,9 @@ module YCHR.TypeSoundness.Types
     isSkTy,
     CtorDef (..),
     AdtDef (..),
+    determiningCon,
+    determinedG,
+    determinedS,
 
     -- * Skolems
     SkolemEnv (..),
@@ -177,6 +180,37 @@ data AdtDef = AdtDef
   }
   deriving (Eq, Show)
 
+-- | Does every value of this type constructor fix its parameters? The
+-- checker's @determining_types@ (§Determined types): every constructor
+-- keeps every parameter in a field, directly or under another
+-- determining type. Generated types only mention earlier ones, so plain
+-- recursion is the fixpoint. A constructor with no parameters counts as
+-- determining, vacuously.
+determiningCon :: TyCon -> Bool
+determiningCon c = case c of
+  CInt -> True
+  CBool -> True
+  CList -> False
+  CAdt d ->
+    all
+      (\ctor -> all (\p -> any (witnesses p) ctor.ctorFields) d.adtParams)
+      (NE.toList d.adtCtors)
+  where
+    witnesses p t = case t of
+      DVar q -> p == q
+      DCon e as -> determiningCon e && any (witnesses p) as
+
+-- | A type a constraint's parameter may be instantiated at.
+determinedG :: GTy -> Bool
+determinedG (GTy c as) = determiningCon c && all determinedG as
+
+-- | The same for an implementation-site type, through the runtime view.
+-- A skolem stands for an instance, which is determined.
+determinedS :: SkolemEnv -> STy -> Bool
+determinedS env t = case resolveRt env t of
+  SSk _ -> True
+  SCon c as -> determiningCon c && all (determinedS env) as
+
 -- ---------------------------------------------------------------------------
 -- Skolems
 -- ---------------------------------------------------------------------------
@@ -192,7 +226,7 @@ separable:
     top level" (§Evidence forms), so `list(T1)` merging with `list(T2)`
     has to merge `T1` with `T2`;
   * later (stage 4) pin a skolem to a constructor application whose
-    parameters are themselves *fresh skolems* — `T := list(beta)` —
+    parameters are themselves *fresh skolems* — `T := box(beta)` —
     which is what a `GuardMatch` at a rigid scrutinee does.
 
 The third is why a flat union-find plus a `Skolem -> GTy` map is the
@@ -236,7 +270,8 @@ data SkolemEnv = SkolemEnv
 data PinSource
   = -- | A literal at a rigid position: @c(X, 5)@ at @c(T, T)@.
     PinLit
-  | -- | A constructor or list pattern at a rigid scrutinee. Pins the
+  | -- | A constructor pattern of a determining type at a rigid
+    -- scrutinee. Pins the
     -- skolem to that type constructor applied at /fresh rigid/
     -- parameters, not flexible ones.
     PinMatch
@@ -311,7 +346,9 @@ mergeSTy a b env0 = go (resolveSTy env0 a) (resolveSTy env0 b) env0
 --     other);
 --   * skolem ~ non-parametric application: the exact pin;
 --   * skolem ~ parametric application: a pin to that constructor at
---     __fresh__ skolems, unrelated to the partner's parameters;
+--     __fresh__ skolems, unrelated to the partner's parameters — only
+--     for a determining constructor. At any other the checker reports
+--     the rule dead (§Determined types), so the pair is not offered;
 --   * inside a shared constructor: nothing — a parameter-erasing
 --     value may account for the equality.
 --
@@ -332,8 +369,12 @@ eqUnifySTy a b env0 =
       | otherwise -> bindStatic s (SSk s') env0
     (SSk s, t@(SCon _ [])) -> bindStatic s t env0
     (t@(SCon _ []), SSk s) -> bindStatic s t env0
-    (SSk s, SCon c as) -> pinParametric s c as env0
-    (SCon c as, SSk s) -> pinParametric s c as env0
+    (SSk s, SCon c as)
+      | determiningCon c -> pinParametric s c as env0
+      | otherwise -> Nothing
+    (SCon c as, SSk s)
+      | determiningCon c -> pinParametric s c as env0
+      | otherwise -> Nothing
     (x@(SCon c as), y@(SCon d bs))
       | c == d, length as == length bs -> forceSTy x y env0
       | otherwise -> Nothing
@@ -363,7 +404,8 @@ eqUnifySTy a b env0 =
 -- teaching the checker model anything. Resolves through both maps and
 -- writes new bindings into 'skForce'. Same contract as 'mergeSTy'
 -- otherwise (occurs-checked; 'Nothing' means the two instances cannot
--- agree).
+-- agree). A skolem's instance is a constraint's, so it is never forced
+-- to an undetermined type: no store could hold that instance.
 forceSTy :: STy -> STy -> SkolemEnv -> Maybe SkolemEnv
 forceSTy a b env0 = go (resolveRt env0 a) (resolveRt env0 b) env0
   where
@@ -376,6 +418,7 @@ forceSTy a b env0 = go (resolveRt env0 a) (resolveRt env0 b) env0
         | otherwise -> Nothing
     bind s t env
       | occursRt env s t = Nothing
+      | not (determinedS env t) = Nothing
       | otherwise = Just env {skForce = Map.insert s t env.skForce}
     foldForce [] [] env = Just env
     foldForce (x : xs) (y : ys) env =

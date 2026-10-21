@@ -2,14 +2,17 @@
 :- use_module(library(prelude)).
 
 % The accept side of typecheck_guard_equal_ctor_pin_beta_rigid: the
-% shared X pins T := list(B) with B rigid, and the body only moves
+% shared X pins T := box(B) with B rigid, and the body only moves
 % the value whole (keep is any-typed), assuming nothing about the
-% element type. The rule checks and fires.
+% field type. The rule checks and fires. `box` is determining, so
+% the pin is allowed at a constraint's T; at `list` the rule would be
+% dead (type-system.md §Determined types).
+:- chr_type box(A) ---> box(A).
 :- chr_constraint p(T, T).
-:- chr_constraint q(list(int)).
+:- chr_constraint q(box(int)).
 :- chr_constraint keep(any), go(any), gather(any).
 
 r @ p(X, Y), q(X) <=> keep(Y).
 
-seed @ go(R) <=> p([1], [2]), q([1]), gather(R).
+seed @ go(R) <=> p(box(1), box(2)), q(box(1)), gather(R).
 gth @ gather(R), keep(V) <=> R = V.

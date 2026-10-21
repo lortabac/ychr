@@ -36,6 +36,7 @@
     fun level_within/2,
     fun level_inside/2,
     fun ctx_mode/1,
+    fun ctx_in_function/1,
     fun ctx_at/3
 ]).
 
@@ -48,6 +49,10 @@
 % source name, `label_function` its target's mangled name;
 % `label_text` is a caller-supplied label (goal checking), and
 % `label_none` is an unlabelled diagnostic — an unnamed rule, say.
+%
+% The label is not only for rendering: the solver's merge and pin rules
+% read it, through `ctx_in_function`, to tell a function's rigids from a
+% constraint's (docs/reference/type-system.md §Determined types).
 :- chr_type diag_label ---> label_rule(string)
                           ; label_function(any)
                           ; label_text(string)
@@ -123,6 +128,12 @@ ctx_level(ctx(_, _, _, _, lvl(L, _))) -> L.
 :- function ctx_mode(ctx) -> check_mode.
 ctx_mode(ctx(_, _, _, _, lvl(_, M))) -> M.
 
+% Whether the check belongs to a function equation (or a class attempt).
+% Everything else is a rule, an aggregate goal inside one, or a goal.
+:- function ctx_in_function(ctx) -> bool.
+ctx_in_function(ctx(_, _, label_function(_), _, _)) -> true.
+ctx_in_function(_) -> false.
+
 % The same context at another level and mode.
 :- function ctx_at(ctx, list(int), check_mode) -> ctx.
 ctx_at(ctx(U, O, Lb, Loc, _), L, M) -> ctx(U, O, Lb, Loc, lvl(L, M)).
@@ -181,10 +192,9 @@ level_inside(_, []) -> false.
 
 % Atoms used as the `Code` field of `error/3`. Each one pairs with a
 % branch of `decodeError` in `src/YCHR/Internal/TypeCheck.hs` that
-% turns the `(code, detail)` pair into a `TypeCheckError`. Five of the
-% eight take an `error_detail` constructor named after them and
-% suffixed `_d`; the other three are `inconsistent` (a `tpair`),
-% `no_matching_overload` and `bound_unsatisfied` (a wrapped name).
+% turns the `(code, detail)` pair into a `TypeCheckError`. Most take an
+% `error_detail` constructor named after them and suffixed `_d`; the
+% rest take a `tpair`, a wrapped name or a wrapped type.
 :- chr_type error_code ---> inconsistent
                           ; no_matching_overload
                           ; bound_unsatisfied
@@ -194,7 +204,8 @@ level_inside(_, []) -> false.
                           ; duplicate_constructor
                           ; constructor_arity
                           ; aggregate_type_escapes
-                          ; aggregate_link_conflict.
+                          ; aggregate_link_conflict
+                          ; undetermined_instance.
 
 % Atoms used as the `Code` field of `warning/3`. `inaccessible` is the
 % inaccessible-branch warning YCHR-20104, `goal_inaccessible` the
@@ -229,7 +240,8 @@ level_inside(_, []) -> false.
                             ; type_ref_arity_d(any, any, any, int, int)
                             ; duplicate_constructor_d(any, list(pair(any, int)))
                             ; constructor_arity_d(any, int, int)
-                            ; escaped_type(any).
+                            ; escaped_type(any)
+                            ; undetermined_instance_d(any, any).
 
 % The label a rule's diagnostics are rendered with: its source name, or
 % none at all for an unnamed rule.

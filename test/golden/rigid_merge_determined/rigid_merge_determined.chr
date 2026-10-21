@@ -1,0 +1,25 @@
+:- module(rmd, [go/1, hold_all/1, hold/1]).
+:- use_module(library(prelude)).
+:- use_module(library(pairs)).
+
+% The twin of rigid_merge_undetermined at determined instances. An int
+% fixes its type, so the merge of task's and the r's skolems through
+% the shared A is sound, and the rule runs.
+:- class lt (int, int) -> bool.
+lt(X, Y) -> X < Y.
+:- chr_constraint task(int, T, T) requiring lt(T, T) -> bool.
+:- chr_constraint r(T, T), start, out(any), go(any).
+start, task(_, A, _), r(A, K), r(A, K2) ==> lt(K, K2) | out(K).
+out(K) \ go(X) <=> X = K.
+go(X) <=> task(1, 0, 5), r(0, 1), r(0, 2), start, go(X).
+
+% Instances at determining types are fine too: box and kv keep their
+% parameters in every constructor, and nel does so through its own
+% recursion.
+:- chr_type box(A) ---> box(A).
+:- chr_type nel(A) ---> one(A) ; more(A, nel(A)).
+:- chr_constraint hold(T), probe(T, any), hold_all(any).
+hold(X), probe(X, R) <=> R = 1.
+hold_all(R) <=>
+    hold(box(1)), hold(kv(1, "a")), hold(more(1, one(2))), hold(box(box(3))),
+    probe(more(1, one(2)), R).

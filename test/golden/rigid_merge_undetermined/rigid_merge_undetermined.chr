@@ -1,0 +1,18 @@
+:- module(rmu, []).
+:- use_module(library(prelude)).
+
+% The shared A merges the skolems of task's T and both r's T. That is
+% only sound if a value fixes its type, and `[]` does not: here task is
+% at list(int) and the r's at list(string), so the merged T would run
+% lt on mixed lists. A constraint's type parameter must be a determined
+% type, so the tells at a list are rejected (YCHR-60016). The twin
+% rigid_merge_determined runs the same rule at int.
+:- class lt (list(int), list(int)) -> bool.
+lt([X|_], [Y|_]) -> X + 1 < Y.
+lt([], _) -> true.
+lt(_, []) -> false.
+:- chr_constraint task(int, T, T) requiring lt(T, T) -> bool.
+:- chr_constraint r(T, T), start, out(any), go(any).
+start, task(_, A, _), r(A, K), r(A, K2) ==> lt(K, K2) | out(K).
+out(K) \ go(X) <=> X = K.
+go(X) <=> task(1, [], [1]), r([], ["a"]), r([], ["b"]), start, go(X).

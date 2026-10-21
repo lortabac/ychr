@@ -343,8 +343,11 @@ coverShape mode prog = do
   -- parametric pin's fresh betas, or two types meeting inside a shared
   -- constructor): the checker derives nothing there, so the instance
   -- generator carries the identification in 'skForce'. Measured at 17%
-  -- over 5000 programs.
-  cover 10 "an alias forced a parameter identification" anyForce
+  -- over 5000 programs, then at about 11% over 2700 once constraint
+  -- parameters had to be determined types: a skolem is no longer
+  -- forced to a list, and no list pattern pins one. Hence the lower
+  -- floor.
+  cover 5 "an alias forced a parameter identification" anyForce
   where
     rs = prog.rules
     sigList = NE.toList prog.sigs

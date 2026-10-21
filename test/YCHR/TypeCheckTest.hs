@@ -18,7 +18,8 @@ import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.TypeCheck (typeCheckProgram)
 import YCHR.Internal.TypeCheck.Error
-  ( TypeCheckResult (..),
+  ( TypeCheckError (..),
+    TypeCheckResult (..),
     TypeCheckWarning (..),
   )
 import YCHR.Run (Error, compileModules)
@@ -48,6 +49,27 @@ mod_ rules =
       ]
         ++ rules
     )
+
+-- | A module with a polymorphic constraint @c(T)@ told once, at the
+-- given expression, and types of every kind to tell it at.
+instModule :: Text -> Text
+instModule inst =
+  T.unlines
+    [ ":- module(m, []).",
+      ":- use_module(library(prelude)).",
+      ":- use_module(library(maybe)).",
+      ":- use_module(library(pairs)).",
+      ":- chr_type color ---> red ; green.",
+      ":- chr_type box(A) ---> box(A).",
+      ":- chr_type nel(A) ---> one(A) ; more(A, nel(A)).",
+      ":- chr_type tag(A) ---> t(int).",
+      ":- chr_type either(A, B) ---> left(A) ; right(B).",
+      ":- opaque_type handle(A).",
+      ":- function mk_handle(any) -> handle(int).",
+      "mk_handle(X) -> X.",
+      ":- chr_constraint c(T), go(any).",
+      "go(X) <=> c(" <> inst <> ")."
+    ]
 
 -- | Type-checker diagnostics the golden harness cannot observe, such as dropped warnings.
 tests :: TestTree
@@ -102,16 +124,16 @@ tests =
         errs @?= []
         ws @?= [],
       testCase "a parametric pin leaves the parameter rigid" $ do
-        -- A skolem shared with a `list(int)` position learns only
-        -- that it is a list — `T := list(beta)` with beta fresh and
-        -- rigid, unrelated to `int` — so using an element at `int`
-        -- is an error: the witnessing value may be `[]` at any
-        -- element type.
+        -- A function skolem shared with a `list(int)` position learns
+        -- only that it is a list — `T := list(beta)` with beta fresh
+        -- and rigid, unrelated to `int` — so using an element at `int`
+        -- is an error: the witnessing value may be `[]` at any element
+        -- type.
         (errs, ws) <-
           checkModule
             ( mod_
-                [ ":- chr_constraint p(T, T), q(prelude:list(int)), out(int).",
-                  "bad @ p(X, [H | _]), q(X) <=> out(H)."
+                [ ":- function f(T, T, prelude:list(int)) -> int.",
+                  "f(X, [H | _], X) -> H."
                 ]
             )
         case errs of
@@ -125,23 +147,96 @@ tests =
         -- so head order forces the two evidence orders: in `mf` the
         -- X-link (skolem merge) precedes the Y-link (parametric
         -- pin); in `pf` the Y-link (pin) precedes the X-link
-        -- (merge, now through the pin).
+        -- (merge, now through the pin). `box` is determining, so the
+        -- pin is allowed at a constraint's parameter.
+        let decls =
+              [ ":- chr_type box(A) ---> box(A).",
+                ":- chr_constraint a(T, T), b(T, box(T))."
+              ]
         (errsMergeFirst, wsMergeFirst) <-
-          checkModule
-            ( mod_
-                [ ":- chr_constraint a(T, T), b(T, prelude:list(T)).",
-                  "mf @ a(X, Y), b(X, Y) <=> true."
-                ]
-            )
+          checkModule (mod_ (decls ++ ["mf @ a(X, Y), b(X, Y) <=> true."]))
         (errsPinFirst, wsPinFirst) <-
-          checkModule
-            ( mod_
-                [ ":- chr_constraint a(T, T), b(T, prelude:list(T)).",
-                  "pf @ b(X, Y), a(Y, X) <=> true."
-                ]
-            )
+          checkModule (mod_ (decls ++ ["pf @ b(X, Y), a(Y, X) <=> true."]))
         (errsMergeFirst, wsMergeFirst) @?= ([], [])
         (errsPinFirst, wsPinFirst) @?= ([], []),
+      testCase "a constraint parameter rejects undetermined instances" $ do
+        -- One program per instance, so each one is shown to be
+        -- rejected on its own.
+        let rejected =
+              [ ("[1]", "prelude:list(int)"),
+                ("just(1)", "maybe:maybe(int)"),
+                ("t(1)", "m:tag(_)"),
+                ("left(1)", "m:either(int, _)"),
+                ("mk_handle(1)", "m:handle(int)"),
+                ("fun(X) -> X + 1 end", "fun(int) -> int"),
+                ("kv(1, [2])", "pairs:pair(int, prelude:list(int))"),
+                ("box([1])", "m:box(prelude:list(int))")
+              ]
+        mapM_
+          ( \(inst, ty) -> do
+              (errs, _) <- checkModule (instModule inst)
+              errs @?= [show (UndeterminedInstance "m:c" ty)]
+          )
+          rejected,
+      testCase "a constraint parameter accepts determined instances" $ do
+        let accepted =
+              [ "1",
+                "\"a\"",
+                "red",
+                "box(1)",
+                "kv(1, \"a\")",
+                "more(1, one(2))",
+                "box(box(red))",
+                "X"
+              ]
+        mapM_
+          ( \inst -> do
+              (errs, ws) <- checkModule (instModule inst)
+              (inst, errs, ws) @?= (inst, [], [])
+          )
+          accepted,
+      testCase "a list pattern at a constraint parameter is dead" $ do
+        -- T only holds determined types, and no list is one, so the
+        -- head can never match in the typed fragment.
+        (errs, ws) <-
+          checkModule
+            ( mod_
+                [ ":- chr_constraint item(T).",
+                  "dead @ item([_ | _]) <=> true."
+                ]
+            )
+        errs @?= []
+        case ws of
+          [InaccessibleBranch "prelude:list(_)" _] -> pure ()
+          _ -> assertFailure ("expected one list-pattern warning, got: " ++ show ws),
+      testCase "two function skolems do not merge" $ do
+        -- `f(X, X)` at `f(T, U)`: `[]` fits list(int) and
+        -- list(string) at once, so equal values say nothing about T
+        -- and U. The body's X stays at T, which is not U.
+        (errs, ws) <-
+          checkModule
+            ( mod_
+                [ ":- function f(T, U) -> U.",
+                  "f(X, X) -> X."
+                ]
+            )
+        case errs of
+          [e] | "InconsistentTypes" `T.isInfixOf` T.pack e -> pure ()
+          _ -> assertFailure ("expected one InconsistentTypes error, got: " ++ show errs)
+        ws @?= [],
+      testCase "a pin reaches a parked function fact, in either order" $ do
+        -- `X` links T and U, which do not merge. Once the list pattern
+        -- pins T to int, the parked fact pins U to int too, whichever
+        -- parameter comes first.
+        let check sig eqn = do
+              (errs, ws) <- checkModule (mod_ [sig, eqn])
+              (errs, ws) @?= ([], [])
+        check
+          ":- function f(T, U, prelude:list(int)) -> U."
+          "f(X, X, [X | _]) -> X."
+        check
+          ":- function g(T, prelude:list(int), U) -> U."
+          "g(X, [X | _], X) -> X.",
       testCase "a second predicate on a pinned skolem meets the pin" $ do
         -- Once evidence pins the skolem, it is no longer opaque: a
         -- second, contradicting predicate on the same variable meets

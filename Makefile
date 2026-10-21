@@ -54,6 +54,10 @@ EMSDK_VERSION ?= 6.0.10
 MHS ?= mhs
 # `mcabal`, the MicroHs build front end, used only by `make mhs-build`.
 MCABAL ?= mcabal
+# Heap for mhs itself while it compiles. The default runs out on the
+# generated type-checker module (generated/YCHR/Embedded/Generated/
+# TypeCheck.hs), so `make mhs-build` asks for more.
+MHS_HEAP ?= 200M
 # -sINVOKE_RUN=0: main never runs; JavaScript calls mhs_init() and then the
 # exported functions, which is the flow MicroHs's own tests/ForExp.hs uses.
 PLAYGROUND_EMCCFLAGS ?= \
@@ -145,7 +149,7 @@ mhs-install:
 # The documented MicroHs build order: regenerate, then compile. The
 # toolchain and package set come from `make mhs-install`.
 mhs-build: resources
-	$(MCABAL) build
+	$(MCABAL) "--options=+RTS -H$(MHS_HEAP) -RTS" build
 
 test:
 	$(MAKE) -j$(or $(JOBS),1) test-haskell test-scheme-runtime test-scheme test-repl \

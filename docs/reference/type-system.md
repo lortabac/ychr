@@ -581,12 +581,13 @@ instances to agree — a variable shared between head positions — the
 agreement is recovered as evidence: HNF desugars the shared variable
 into an explicit `GuardEqual` (§Sources of Type Information §8), an
 evidence form which, when the variable occupies two whole rigid
-positions, merges the two skolems (a variable shared only *inside* a
-parametric type, `list(T₁)` against `list(T₂)`, merges nothing — a
-parameter-erasing value satisfies that equality without the instances
-agreeing; §What evidence does). Multi-head idioms like transitivity of
-a polymorphic `leq(T, T)` therefore still check; see the worked
-example in §Guard-Derived Type Evidence.
+positions, merges the two skolems. That is sound because a constraint's
+parameters only take determined types (§Determined types). A variable
+shared only *inside* a parametric type, `list(T₁)` against `list(T₂)`,
+merges nothing — a parameter-erasing value satisfies that equality
+without the instances agreeing; §What evidence does. Multi-head idioms
+like transitivity of a polymorphic `leq(T, T)` therefore still check;
+see the worked example in §Guard-Derived Type Evidence.
 
 A constraint conjunct of an aggregate goal is an implementation site
 too, with its own rigid variables. Since the aggregate folds over many
@@ -600,6 +601,75 @@ call, a body tell, a goal) allocates fresh *flexible* variables by
 unchanged. Untyped and `any`-annotated declarations have no type
 parameters to make rigid — their argument positions stamp `any` (§Type
 states) — so unannotated programs never meet a rigid variable.
+
+#### Determined types
+
+A value can belong to more than one type: `[]` is a `list(int)` and a
+`list(string)`, and `nothing` is a `maybe(τ)` for every `τ`. A type is
+*determined* when none of its values belongs to another type:
+
+- `int`, `float` and `string`;
+- a type with no parameters, algebraic or opaque (`bool`,
+  `color ---> red ; green`), whatever its fields;
+- `D(τ₁, ..., τₙ)` where `D` is *determining* and every `τᵢ` is
+  determined.
+
+A parametric algebraic type `D` is *determining* when every
+constructor keeps every parameter: for each constructor and each
+parameter `A`, some field *witnesses* `A`. A field type witnesses `A`
+when it is `A`, or `E(τ₁, ..., τₘ)` with `E` determining and some `τᵢ`
+witnessing `A`. So `box(A) ---> box(A)` and `pair(K, V) ---> kv(K, V)`
+are determining, a field `pair(A, list(int))` witnesses `A`, and a
+field `list(A)` does not. The definition is read as a greatest
+fixpoint, so a recursive type qualifies too:
+`nel(A) ---> one(A) ; more(A, nel(A))`.
+
+Not determined: `list(τ)` (`[]`), `maybe(τ)` (`nothing`), an
+`either(A, B) ---> left(A) ; right(B)` (`left` drops `B`), a phantom
+parameter (`tag(A) ---> t(int)`), a parametric opaque type (it has no
+constructors to witness anything), every function type, and an
+application at an undetermined argument (`pair(int, list(int))`).
+`any` is exempt.
+
+**The rule.** The type parameters of a `:- chr_constraint` declaration
+range over determined types. A use site — a body tell or a goal — that
+instantiates one at an undetermined type is an error,
+`UndeterminedInstance` (YCHR-60016). A parameter still flexible when
+solving ends is accepted, like every residual check. The type
+parameters of functions are not restricted.
+
+```prolog
+:- use_module(library(pairs)).
+:- chr_constraint box(T), stack(list(T)).
+ok @ go(1) <=> box(1), box(kv(1, "a")), stack([1, 2]).
+bad @ go(2) <=> box([1, 2]).     % YCHR-60016: T at list(int)
+```
+
+To store a list, put the structure in the declaration: `stack(list(T))`
+rather than `stack(T)` used at a list.
+
+**Why.** It is what makes the skolem merge of a multi-head rule sound
+(§What evidence does). A merge is justified by a value two positions
+share, `v : τ₁` and `v : τ₂`, and that entails `τ₁ = τ₂` only when one
+of them is determined. Without the rule,
+
+```prolog
+:- chr_constraint leq(T, T).
+trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
+```
+
+told `leq([1], [])` and `leq([], ["a"])` would store `leq([1], ["a"])`,
+which fits no instance of `leq(T, T)`. With it, both tells are
+rejected. Every rigid variable of a rule is a constraint's parameter
+(YCHR-16008 keeps a bound's variables inside the primary signature,
+§Type-variable scoping, so a rule has no others), so every merge
+between them is sound. A function's parameters are not determined, so
+two function rigids never merge (§What evidence does).
+
+The same reading makes a constraint's parameter meeting a
+non-determining constructor a contradiction: with `item(T)`, a head
+`item([X | _])` can never fire in the typed fragment (§Inaccessible
+branches).
 
 
 ## Sources of Type Information
@@ -782,9 +852,11 @@ finite type satisfies it. At a flexible half the fact is dropped
 silently — such a pattern still matches an improper list at run time,
 and the checker does not move in the rejecting direction on code it
 was told nothing about. At a rigid half no cycle arises: the evidence
-pin never copies the other side's parameters (§What evidence does), so
-`T` against `list(T)` pins `T := list(β)` with a fresh rigid `β` —
-satisfiable by `p([[] | []])`, so nothing is reported.
+pin never copies the other side's parameters (§What evidence does). In
+a function, `f(X, X)` at `f(T, list(T))` pins `T := list(β)` with a
+fresh rigid `β` — satisfiable by `f([], [])`, so nothing is reported.
+At a constraint's parameter a list is a contradiction instead
+(§Determined types), so `p([X | X])` at `p(T)` is a dead rule.
 
 Justifications. Ask-equality (`==`) succeeds only on structurally
 identical terms — the *same* still-unbound variable on both sides
@@ -795,7 +867,12 @@ to determine them — `[]` inhabits `list(τ)` for every `τ`, `empty`
 inhabits `box(τ)` for every `τ` — so two structurally identical values
 may be typed at different instantiations, and an equality between them
 proves nothing about the parameters (the observation that also
-excludes `atom(X)` as an evidence form, §Non-forms). Identical
+excludes `atom(X)` as an evidence form, §Non-forms). A constraint's
+parameters are the exception: they only take determined types
+(§Determined types), so for them equal *values* do entail equal
+instances, which is what the merge below relies on. A shared *unbound*
+variable is covered by the one static type a variable has in the
+fragment, and otherwise by §No mode checking. Identical
 variables denote the same future value, so any type describing one
 describes the other — again up to the outermost constructor. A
 successful `GuardMatch` proves the value was built by `c`, and within
@@ -898,7 +975,13 @@ scrutinizes:
   extent the underlying runtime fact determines a type. Three cases:
   - *Rigid meets rigid, whole types*: `type(X) = type(Y)` at `X : T₁`,
     `Y : T₂` merges `T₁` and `T₂` — the multi-head idiom (§Worked
-    example: multi-head rules).
+    example: multi-head rules). This is sound because a constraint's
+    rigid is determined (§Determined types). Two *function* rigids are
+    not, so they never merge: `f(X, X) -> X` at `f(T, U) -> U` is an
+    `InconsistentTypes` error, since `X` keeps the first position's `T`.
+    The fact is kept, though, and once evidence pins one side it pins
+    the other the same way, so the verdict does not depend on which
+    came first.
   - *Rigid meets a non-parametric type* (a base type or a nullary
     constructor application): the fact pins the skolem —
     `type(X) = int` at `X : T` binds `T := int`. Such a type is
@@ -911,7 +994,13 @@ scrutinizes:
     `GuardMatch` at a rigid scrutinee (below): the values witnessing
     the equality need not determine the parameters (`[]` inhabits
     every `list(τ)`), so nothing downstream may assume more than the
-    constructor.
+    constructor. That is a function's rigid. A constraint's rigid is
+    determined, so it pins only at a *determining* constructor
+    (`T := box(β)`, whose `β` is then determined too); at any other
+    constructor (`list`, `maybe`) or a function type the fact is a
+    contradiction, and the rule is dead (§Inaccessible branches). The
+    test looks at the constructor name only, so the verdict does not
+    depend on how the partner's parameters are solved.
 
   Inside a shared constructor — the parameter positions of a
   `GuardEqual` whose two sides are applications of the same constructor,
@@ -952,7 +1041,12 @@ the same states. At a rigid scrutinee `x : T`, the match binds
 `T := D(β₁, ..., βₖ)` with fresh **rigid** `βᵢ` — the matched value's
 field types are store-chosen, and nothing downstream may assume more
 about them than the match proved; `GuardGetArg` types the extracted
-fields at those `βᵢ`. At a scrutinee whose type is already known —
+fields at those `βᵢ`. At a constraint's rigid this needs `D` to be
+non-parametric or determining, as above. Otherwise the branch is dead,
+and the fields are still typed at the fresh `βᵢ`, so a body that
+misuses them keeps its error (and the error then suppresses the
+warning). A refinement predicate pins the same way: `is_list(X)` at a
+constraint's `X : T` is a dead branch. At a scrutinee whose type is already known —
 concrete, or a constructor application such as the `list(T)` argument
 of a polymorphic `sorted` — the fact reduces to constructor
 *membership*: `c` must belong to that type (otherwise the branch is
@@ -994,7 +1088,8 @@ the synthetic guard `GuardEqual(Y, Y1)` (§8). Checking:
 Without the evidence step the two skolems would stay distinct and the
 body tell would fail. The evidence recovers exactly the agreement
 runtime matching guarantees: both occurrences matched the same value
-for `Y`, so their instantiations coincide. Contrast a rule whose head
+for `Y`, and since `T` only takes determined types (§Determined types)
+that value has one type, so their instantiations coincide. Contrast a rule whose head
 occurrences share nothing:
 
 ```prolog
@@ -1075,6 +1170,21 @@ dropped. Both the unit's error set and the presence of a
 contradiction are properties of the gathered constraints, not of
 any examination order, so acceptance remains order-independent
 (§Type Checking Procedure).
+
+A constraint's parameter meeting a list, a `maybe`, a function type or
+any other non-determining constructor is dead code in the same way,
+because the parameter only takes determined types (§Determined types):
+
+```prolog
+:- use_module(library(lists)).
+:- chr_constraint item(T), q(list(int)).
+dead1 @ item([_ | _]) <=> true.            % YCHR-20104
+dead2 @ item(X) <=> is_list(X) | true.     % YCHR-20104
+dead3 @ item(X), q(X) <=> true.            % YCHR-20104
+```
+
+A determining constructor is fine: with `box(A) ---> box(A)`,
+`item(box(V))` pins `T := box(β)` and the rule can fire.
 
 A contradiction inside an aggregate goal does not make the rule dead:
 it means the goal never matches, and the rule still fires. That case
@@ -1586,8 +1696,9 @@ element is the only way a goal's types get into `Agg`'s type, and `Agg`
 may read rule variables. The check is conservative:
 
 - A rigid pinned to a type that still has a free inner parameter
-  (`list(β)`) escapes too, even when the body would only use it at
-  `any`.
+  (`box(β)`) escapes too, even when the body would only use it at
+  `any`. (A goal's rigids are constraint parameters, so they only pin
+  at determining constructors, §Determined types.)
 - An aggregator that ignores its element is rejected when the element
   is per-match:
 
@@ -2481,9 +2592,12 @@ correctness properties:
    instead. The *`any`-introduction forms* — an `any`-annotated or
    untyped declaration position, a host call, an unknown constructor,
    an evaluable-headed term in structural position (§Expression
-   Typing) — delimit exactly where the guarantee stops: a program that
-   binds a symbolic `1 + 1` with `=`, calls the host, or forges an
-   unknown constructor has left the fragment at that expression.
+   Typing), a goal handed over as data (a dynamic tell `tell/N` or
+   `tell_list/N`, a quoted goal for `solve/1`, `findall/2` or
+   `run_chr_session/1`), whose constraint meets no declaration — delimit exactly where the guarantee stops: a
+   program that binds a symbolic `1 + 1` with `=`, calls the host, or
+   forges an unknown constructor has left the fragment at that
+   expression.
 
    A `refining` clause is a second trusted boundary, alongside a host
    call's declared signature (§Refinement predicates). The checker
@@ -2517,7 +2631,9 @@ a `requiring` clause or an evidence guard covers the operation.
 Multi-head idioms relying on cross-occurrence agreement (transitivity
 of a polymorphic `leq(T, T)`) stay accepted through `GuardEqual`
 evidence, which assumes exactly the agreement runtime matching
-guarantees. Rigidity does not constrain unannotated programs: without
+guarantees — given that a constraint's parameters only take
+determined types (§Determined types), without which a value like `[]`
+would match at two instances. Rigidity does not constrain unannotated programs: without
 type annotations the enclosing declaration has no type variables to
 make rigid, so the gradual guarantee still holds.
 
