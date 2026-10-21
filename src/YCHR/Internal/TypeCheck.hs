@@ -23,9 +23,12 @@
 -- entails a typing fact tells that fact, and may pin a rigid type
 -- variable — in @typechecker\/solver.chr@.
 module YCHR.Internal.TypeCheck
-  ( TypeCheckError (..),
+  ( -- * Results
+    TypeCheckError (..),
     TypeCheckWarning (..),
     TypeCheckResult (..),
+
+    -- * Checking
     typeCheckProgram,
     typeCheckGoals,
   )

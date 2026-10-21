@@ -2,10 +2,12 @@
 
 -- | Pretty-printing utilities for CHR terms and binding maps.
 module YCHR.Internal.Pretty
-  ( -- * Pretty-printing functions
+  ( -- * Runtime values
     prettyTerm,
     prettyBindings,
     prettyQueryResult,
+
+    -- * Source text
     prettyTermSrc,
     prettyConstraintSrc,
     prettyHeadSrc,
@@ -14,7 +16,7 @@ module YCHR.Internal.Pretty
     renderAtom,
     termToPExpr,
 
-    -- * Declaration pretty-printers
+    -- * Declarations (REPL @:info@)
     DeclKind (..),
     prettyQualifiedName,
     prettyConstraintDecl,
@@ -44,6 +46,7 @@ import YCHR.Internal.Types
     TypeDefinition (..),
     TypeExpr (..),
     TypeKind (..),
+    unqualifiedText,
   )
 -- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
 import Prelude hiding (head)
@@ -52,9 +55,8 @@ import Prelude hiding (head)
 -- Operator table for source pretty-printing
 -- ---------------------------------------------------------------------------
 
--- | Operator table for source pretty-printing.
--- Extends 'builtinOps' with the standard arithmetic\/comparison operators
--- from the builtins library.
+-- | Operator table for source pretty-printing: 'builtinOps' plus the
+-- prelude's arithmetic and comparison operators.
 prettyOps :: PE.OpTable
 prettyOps = case PE.mergeOps builtinOps stdArithOps of
   Right t -> t
@@ -114,10 +116,9 @@ constraintToPExpr (Constraint (Qualified m name) args) =
 
 -- | Convert a parsed 'P.Head' to a 'PE.PExpr'.
 --
--- The aggregates are not rendered: this is the source-fragment printer
--- used for diagnostics, and a head reaching it has been through the
--- renamer only in the tests that exercise it. An aggregate's spelling
--- there is its expansion, not the macro the user wrote.
+-- Aggregates are not rendered. After the renamer an aggregate is its
+-- expanded form, not the macro the user wrote, so printing it would
+-- not echo the source anyway.
 headToPExpr :: P.Head -> PE.PExpr
 headToPExpr (P.Simplification cs _) = commaSepPExpr (map constraintToPExpr cs)
 headToPExpr (P.Propagation cs _) = commaSepPExpr (map constraintToPExpr cs)
@@ -305,13 +306,9 @@ typeExprToPExpr :: TypeExpr -> PE.PExpr
 typeExprToPExpr (TypeVar v) = PE.Var v
 typeExprToPExpr (TypeCon (Unqualified ".") args) =
   PE.Compound "." (map (noAnn . typeExprToPExpr) args)
-typeExprToPExpr (TypeCon name []) = PE.Atom (typeConBaseName name)
+typeExprToPExpr (TypeCon name []) = PE.Atom (unqualifiedText name)
 typeExprToPExpr (TypeCon name args) =
-  PE.Compound (typeConBaseName name) (map (noAnn . typeExprToPExpr) args)
-
-typeConBaseName :: Name -> Text
-typeConBaseName (Unqualified n) = n
-typeConBaseName (Qualified _ n) = n
+  PE.Compound (unqualifiedText name) (map (noAnn . typeExprToPExpr) args)
 
 -- | Render a 'TypeExpr' as valid surface-language source text.
 prettyTypeExpr :: TypeExpr -> String
@@ -338,11 +335,7 @@ prettyFunSig name argTys retTy =
 -- the bound's base name (qualified-name module is dropped to match
 -- the surface @requiring@ form).
 prettyBoundSig :: BoundSig -> String
-prettyBoundSig b =
-  let baseName = case b.name of
-        Unqualified n -> n
-        Qualified _ n -> n
-   in prettyFunSig baseName b.argTypes b.returnType
+prettyBoundSig b = prettyFunSig (unqualifiedText b.name) b.argTypes b.returnType
 
 -- | Render a list of bounds as the @requiring B1, B2, ..., Bn@ trailer
 -- (no leading space, no trailing period). Empty input renders as the
@@ -431,7 +424,7 @@ prettyFunctionDecl qn arity sigs bounds refined kind =
 -- @'.'(H, T)@.
 prettyTypeDecl :: TypeDefinition -> String
 prettyTypeDecl td =
-  let tname = renderAtom (typeConBaseName td.name)
+  let tname = renderAtom (unqualifiedText td.name)
       head_ = case td.typeVars of
         [] -> tname
         vs -> tname ++ "(" ++ intercalate ", " (map T.unpack vs) ++ ")"
@@ -446,9 +439,7 @@ prettyTypeDecl td =
 
 ctorToString :: DataConstructor -> String
 ctorToString c =
-  let baseName = case c.conName of
-        Unqualified n -> n
-        Qualified _ n -> n
+  let baseName = unqualifiedText c.conName
       pexpr = case c.conArgs of
         [] -> PE.Atom baseName
         args -> PE.Compound baseName (map (noAnn . typeExprToPExpr) args)

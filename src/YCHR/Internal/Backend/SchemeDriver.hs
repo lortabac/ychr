@@ -142,13 +142,7 @@ exprToScheme (R.CtorExpr (Types.Unqualified n) []) =
 exprToScheme (R.CtorExpr name@(Types.Qualified _ _) []) =
   printSExpr (compileSymbol (vmName name).unName)
 exprToScheme (R.CtorExpr name args) =
-  let flat = (vmName name).unName
-      argExprs = map exprToScheme args
-   in "(make-term "
-        <> printSExpr (compileSymbol flat)
-        <> " (vector "
-        <> T.intercalate " " argExprs
-        <> "))"
+  makeTerm (vmName name).unName (map exprToScheme args)
 exprToScheme (R.CallExpr qn args) =
   let funcName = funcProcName (Types.qualifiedToName qn) (length args)
       argExprs = map exprToScheme args
@@ -173,13 +167,7 @@ exprToScheme (R.FunRefExpr qn arity) =
   -- is what the callables table is keyed on. Encoding it with 'vmName'
   -- instead would mint `module__name`, an identity nothing matches.
   let flat = flattenName (Types.qualifiedToName qn)
-   in "(make-term "
-        <> printSExpr (compileSymbol "/")
-        <> " (vector "
-        <> printSExpr (compileSymbol flat)
-        <> " "
-        <> T.pack (show arity)
-        <> "))"
+   in makeTerm "/" [printSExpr (compileSymbol flat), T.pack (show arity)]
 -- 'generateDriver' rejects a goal containing a lambda with
 -- 'LambdasInSchemeDriver' before any of it reaches here, so this arm
 -- is an internal invariant, not a user-facing gap. It is the same
@@ -226,21 +214,19 @@ termToScheme Wildcard = "(make-var %s)"
 termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
   "(%cons " <> termToScheme h <> " " <> termToScheme t <> ")"
 termToScheme (CompoundTerm name@(Types.Qualified _ _) ts) =
-  let flat = (vmName name).unName
-      argExprs = map termToScheme ts
-   in "(make-term "
-        <> printSExpr (compileSymbol flat)
-        <> " (vector "
-        <> T.intercalate " " argExprs
-        <> "))"
+  makeTerm (vmName name).unName (map termToScheme ts)
 termToScheme (CompoundTerm (Types.Unqualified n) ts) =
-  let symExpr = compileSymbol n
-      argExprs = map termToScheme ts
-   in "(make-term "
-        <> printSExpr symExpr
-        <> " (vector "
-        <> T.intercalate " " argExprs
-        <> "))"
+  makeTerm n (map termToScheme ts)
+
+-- | A @make-term@ call building a compound with the given functor and
+-- already-compiled arguments.
+makeTerm :: Text -> [Text] -> Text
+makeTerm functor args =
+  "(make-term "
+    <> printSExpr (compileSymbol functor)
+    <> " (vector "
+    <> T.intercalate " " args
+    <> "))"
 
 -- | Collect every variable name mentioned anywhere in an expression
 -- tree, so each can be declared as a logical variable in the

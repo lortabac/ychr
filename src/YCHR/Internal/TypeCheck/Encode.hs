@@ -2,10 +2,9 @@
 
 -- | Encoding of the desugared AST as a ground CHR term.
 --
--- The all-CHR type-checker (@typechecker\/@) receives the whole
--- program as one value and does every check itself, so this module is
--- the entire Haskell side of the input boundary: no walking, no
--- per-node constraint emission, no live handle table.
+-- The type checker (@typechecker\/@) is a CHR program. It receives the
+-- whole program as one value and does every check itself, so all this
+-- module does is build that value.
 --
 -- The shape of the encoding is declared, one constructor per Haskell
 -- constructor, in @typechecker\/ast.chr@. That file and this one
@@ -36,12 +35,11 @@
 -- consistently per position, so no comparison ever straddles them.
 --
 -- /Type-parameter/ names are the exception among the source spellings:
--- they are encoded as strings rather than atoms. The checker has to
--- allocate one solver variable per distinct type parameter of a
--- declaration, in the order @Set.toList . Set.fromList@ produces —
--- ascending by name — because a rigid variable's synthetic id is
--- user-visible (@T#0@) and the two checkers must agree on it. Atoms
--- have no ordering CHR-side; strings do.
+-- they are encoded as strings rather than atoms. The checker allocates
+-- one solver variable per distinct type parameter of a declaration, in
+-- ascending name order: a rigid variable's synthetic id is user-visible
+-- (@T#0@), so the order has to be fixed. Atoms have no ordering
+-- CHR-side; strings do.
 module YCHR.Internal.TypeCheck.Encode
   ( -- * Encoding
     Encoded (..),
@@ -267,12 +265,14 @@ aggKind AggTakemin = ast "agg_takemin" []
 aggKind AggTakemax = ast "agg_takemax" []
 
 aggConjunct :: D.AggregateConjunct -> Term
-aggConjunct (D.AggConstraint hc gs) = ast "agg_con" [headCon hc, listTerm (map guardTerm gs)]
+aggConjunct (D.AggConstraint hc gs) =
+  ast "agg_con" [headCon hc, listTerm (map guardTerm gs)]
 aggConjunct (D.AggNested n) = ast "agg_nested" [aggregate n]
 aggConjunct (D.AggGuard g) = ast "agg_guard" [guardTerm g]
 
 resultTerm :: D.AggregateResult -> Term
-resultTerm r = ast "agg_res" [atomTerm r.resultVar, listTerm (map guardTerm r.resultGuards)]
+resultTerm r =
+  ast "agg_res" [atomTerm r.resultVar, listTerm (map guardTerm r.resultGuards)]
 
 headCon :: HeadConstraint -> Term
 headCon hc = ast "head_con" [qnameTerm hc.name, listTerm (map headArg hc.args)]
@@ -383,17 +383,15 @@ expr (D.HostExpr f args) = ast "host_e" [atomTerm f, exprs args]
 
 -- | A source type expression. Function types are the one shape that is
 -- normalized rather than transcribed: @fun(A, B) -> C@ parses as
--- @TypeCon \"->\" [TypeCon \"fun\" [A, B], C]@, and every consumer has
--- to re-recognize that spelling before doing anything with it.
--- Recognizing it once,
--- here, means the CHR side never has to compare against the bare atoms
--- @'->'@ and @fun@: it matches a constructor instead, which is both
--- clearer and immune to a checker-internal declaration happening to
+-- @TypeCon \"->\" [TypeCon \"fun\" [A, B], C]@. Recognizing that
+-- spelling here means the CHR side never compares against the bare
+-- atoms @'->'@ and @fun@: it matches a constructor instead, which is
+-- clearer and safe from a checker-internal declaration that happens to
 -- share one of those names.
 --
 -- Only the exact two-level shape is a function type. Anything else
 -- headed by @->@ or @fun@ is an ordinary type reference and stays a
--- 'tconx', exactly as the Haskell consumers treat it.
+-- @tconx@.
 typeExpr :: TypeExpr -> Term
 typeExpr (TypeVar v) = ast "tvar" [TextTerm v]
 typeExpr (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") argTys, retTy]) =

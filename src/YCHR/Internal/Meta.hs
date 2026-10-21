@@ -1,15 +1,22 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Meta-level host call registry.
+-- | Meta-level host calls, and the bridge between runtime values and
+-- terms.
 --
--- Provides host functions that require access to modules outside the
--- interpreter, such as the pretty-printer and @read_term_from_string@.
+-- The host calls here need modules the interpreter does not import,
+-- such as the pretty-printer and the term parser
+-- (@read_term_from_string@).
 module YCHR.Internal.Meta
-  ( metaHostCallRegistry,
+  ( -- * Host calls
+    metaHostCallRegistry,
+
+    -- * Values and terms
     valueToTerm,
     termToValue,
     decodeName,
+
+    -- * Function references
     FunRefLookup (..),
     lookupFunRef,
     flatToName,
@@ -24,7 +31,7 @@ import Data.Char (chr)
 import Data.Foldable (toList)
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
-import Data.Text (Text, pack)
+import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'breakOn'; the shim supplies it
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
 import Data.Text.Shim qualified as T
@@ -187,7 +194,7 @@ metaHostCallRegistry =
         HostCallFn $ \case
           [arg] -> do
             s <- prettyValue arg
-            pure (VText (pack s))
+            pure (VText (T.pack s))
           _ -> runtimeErrorS "write_term_to_string: expected 1 argument"
       ),
       ( Name "read_term_from_string",
@@ -230,7 +237,9 @@ metaHostCallRegistry =
               VAtom a -> pure (VAtom (baseOfMangled a))
               VVar _ ->
                 instantiationErrorS
-                  "name_base: argument is not sufficiently instantiated (unbound variable)"
+                  ( "name_base: argument is not sufficiently instantiated"
+                      ++ " (unbound variable)"
+                  )
               _ -> runtimeErrorS "name_base: expected an atom"
           args ->
             runtimeErrorS $
@@ -283,12 +292,11 @@ metaHostCallRegistry =
 -- the synthetic @\<query\>@ module the renamer builds for top-level
 -- goals: a bare name matches any loaded module's function of that base
 -- and arity, and two matches are the same 'AmbiguousName' situation the
--- compiler reports. A qualified @module:name@ is accepted too (the
--- string reader is the only place that accepts one, since a source
--- @fun module:name\/arity@ is a separate pre-existing gap), which is
--- also the way to disambiguate. Both spellings let the reader name a
--- function the /calling/ module could not see; the reader has no module
--- context to narrow that with.
+-- compiler reports. A qualified @module:name@ is accepted too, and is
+-- the way to disambiguate. (A qualified @fun module:name\/arity@ in
+-- source is not supported yet; only the reader takes one.) Both
+-- spellings let the reader name a function the /calling/ module could
+-- not see; the reader has no module context to narrow that with.
 --
 -- The reader does not implement @quote\/1@, so @fun@ is resolved in
 -- every position, inside a @quote(\...)@ compound included. A
@@ -299,7 +307,7 @@ metaHostCallRegistry =
 -- into the canonical @'/'("module:name", arity)@ shape, which
 -- 'termToValue' then turns into a function-reference closure. Every
 -- other term — including a malformed @fun@ shape such as @fun X\/1@ — is
--- left as data, exactly as before.
+-- left as it is.
 resolveFunRefs :: Term -> Chr Term
 resolveFunRefs t = case funRefShape t of
   Just (name, refArity) -> do
@@ -419,9 +427,4 @@ baseOfFlat s = case T.breakOn ":" s of
 
 -- | The surface spelling of a function reference, for diagnostics.
 refLabel :: Types.Name -> Integer -> String
-refLabel name refArity = T.unpack (surfaceName name) ++ "/" ++ show refArity
-
--- | A name as the user wrote it: @foo@ or @module:foo@.
-surfaceName :: Types.Name -> Text
-surfaceName (Types.Unqualified b) = b
-surfaceName (Types.Qualified m b) = m <> ":" <> b
+refLabel name refArity = T.unpack (flattenName name) ++ "/" ++ show refArity
