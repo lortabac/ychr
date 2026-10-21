@@ -28,15 +28,19 @@ tests =
     "Rename.Macro"
     [matchTests, variantTests, instantiateTests, chainTests]
 
+-- | An unqualified atom.
 atom :: Text -> Term
 atom n = CompoundTerm (Unqualified n) []
 
+-- | A variable.
 var :: Text -> Term
 var = VarTerm
 
+-- | An unqualified compound.
 app :: Text -> [Term] -> Term
 app n = CompoundTerm (Unqualified n)
 
+-- | A proper list, built from @.@ cells.
 list :: [Term] -> Term
 list = foldr (\h t -> app "." [h, t]) (atom "[]")
 
@@ -93,6 +97,7 @@ variantTests =
 instantiate :: [Term] -> Either PrimitiveError [Term]
 instantiate body = instantiateClause 0 Map.empty (MacroClause [] body)
 
+-- | The integer 1.
 one :: Term
 one = IntTerm 1
 
@@ -115,7 +120,10 @@ instantiateTests =
           (Map.fromList [("F", atom "x"), ("X", IntTerm 1)])
           ( MacroClause
               [var "F", var "X"]
-              [app "$compound" [app "$atom" [list [atom "get_", var "F"]], list [var "X"]]]
+              [ app
+                  "$compound"
+                  [app "$atom" [list [atom "get_", var "F"]], list [var "X"]]
+              ]
           )
           @?= Right [app "get_x" [IntTerm 1]],
       testCase "an integer part contributes its decimal text" $
@@ -123,22 +131,32 @@ instantiateTests =
           @?= Right [atom "n-3"],
       testCase "a primitive arriving through an argument is not evaluated" $
         let prim = app "$atom" [list [atom "a"]]
-         in instantiateClause 0 (Map.fromList [("G", prim)]) (MacroClause [var "G"] [var "G"])
+         in instantiateClause
+              0
+              (Map.fromList [("G", prim)])
+              (MacroClause [var "G"] [var "G"])
               @?= Right [prim],
       testCase "a qualified functor builds a qualified compound" $
         instantiateClause
           0
           Map.empty
-          (MacroClause [] [app "$compound" [CompoundTerm (Qualified "m" "f") [], list [one]]])
+          ( MacroClause
+              []
+              [app "$compound" [CompoundTerm (Qualified "m" "f") [], list [one]]]
+          )
           @?= Right [CompoundTerm (Qualified "m" "f") [one]],
       testCase "'$atom' rejects a result containing '__'" $
         instantiate [app "$atom" [list [atom "a_", atom "_b"]]]
           @?= Left (PrimitiveError AtomResult (list [atom "a_", atom "_b"])),
       testCase "'$compound' rejects a non-atom functor" $
-        instantiateClause 0 Map.empty (MacroClause [] [app "$compound" [IntTerm 1, list []]])
+        instantiate [app "$compound" [IntTerm 1, list []]]
           @?= Left (PrimitiveError CompoundFunctor (IntTerm 1)),
       testCase "instantiateBody keeps a conjunction element whole" $
-        instantiateBody "_decl_" 3 Map.empty (MacroClause [] [app "," [atom "a", var "V"]])
+        instantiateBody
+          "_decl_"
+          3
+          Map.empty
+          (MacroClause [] [app "," [atom "a", var "V"]])
           @?= Right [app "," [atom "a", var "_decl_3_V"]]
     ]
 

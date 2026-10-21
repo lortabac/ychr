@@ -151,6 +151,7 @@ enumCodes f =
 enumCodesExcept :: forall e. (Data e) => [String] -> (e -> ErrorCode) -> [(String, Int)]
 enumCodesExcept skip f = [(c, n) | (c, n) <- enumCodes f, c `notElem` skip]
 
+-- | The codes of every enumerable error and warning constructor.
 constructorCodes :: [(String, Int)]
 constructorCodes =
   concat
@@ -182,6 +183,7 @@ standaloneCodes =
   where
     n (ErrorCode k) = k
 
+-- | Every error code, by name.
 allCodes :: [(String, Int)]
 allCodes = constructorCodes ++ standaloneCodes
 

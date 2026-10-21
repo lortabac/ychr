@@ -83,6 +83,7 @@ declErrors inputs = case compileModules stdlib False inputs of
   Left e -> assertFailure ("unexpected error:\n" ++ displayMsg e)
   Right _ -> assertFailure "expected a declaration-macro error"
 
+-- | The errors, without their locations.
 errNodes :: [Diagnostic DeclMacroError] -> [DeclMacroError]
 errNodes = map (\d -> d.annotation.node)
 
@@ -92,9 +93,11 @@ userModule cp = case [m | m <- cp.allModules, m.name == "m"] of
   (m : _) -> pure m
   [] -> assertFailure "module m not found"
 
+-- | A module's declared constraints as @(name, arity)@.
 constraintNames :: CollectedModule -> [(Text, Int)]
 constraintNames m = [(cd.name, cd.arity) | Ann (ConstraintDecl cd) _ <- m.decls]
 
+-- | Assert that @needle@ occurs in @hay@.
 assertContains :: String -> String -> Assertion
 assertContains needle hay =
   assertBool ("expected " ++ show needle ++ " in:\n" ++ hay) (needle `isInfixOf` hay)
@@ -318,7 +321,9 @@ diagnosticTests =
       testCase "a non-callable directive is malformed" $ do
         es <- declErrors [("m.chr", ":- module(m).\n:- 42.\n:- \"s\".\n")]
         errNodes es
-          @?= [DeclMacroParseError MalformedTopLevel, DeclMacroParseError MalformedTopLevel],
+          @?= [ DeclMacroParseError MalformedTopLevel,
+                DeclMacroParseError MalformedTopLevel
+              ],
       testCase "an import list hides a declaration macro" $ do
         let p1 =
               src
@@ -326,10 +331,14 @@ diagnosticTests =
                   ":- macro_decls d ---> [].",
                   ":- macro_decls e ---> []."
                 ]
-            user = src [":- module(m).", ":- use_module(p, [macro(e/0)]).", ":- d.", ":- p:d."]
+            user =
+              src
+                [":- module(m).", ":- use_module(p, [macro(e/0)]).", ":- d.", ":- p:d."]
         es <- declErrors [("p.chr", p1), ("m.chr", user)]
         errNodes es
-          @?= [UnknownDirective "d" 0, DeclMacroRenameError (NotExportedByModule "p" "d" 0)],
+          @?= [ UnknownDirective "d" 0,
+                DeclMacroRenameError (NotExportedByModule "p" "d" 0)
+              ],
       testCase "a goal and a declaration macro with one key, then used" $ do
         es <-
           declErrors

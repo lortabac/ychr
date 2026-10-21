@@ -59,6 +59,7 @@ tests =
 -- A generic-derived fixture type
 -- ---------------------------------------------------------------------------
 
+-- | A small sum type whose conversions are derived with "YCHR.Convert.Generic".
 data Shape = Dot | Circle Int | Rect Int Int
   deriving (Eq, Show, Generic)
 
@@ -76,18 +77,23 @@ decodeShape = fromTerm
 -- Generators
 -- ---------------------------------------------------------------------------
 
+-- | A small @Int@.
 genInt :: Gen Int
 genInt = Gen.int (Range.linearFrom 0 (-100000) 100000)
 
+-- | An integer, wider than 'genInt'.
 genInteger :: Gen Integer
 genInteger = Gen.integral (Range.linearFrom 0 (-1000000000) 1000000000)
 
+-- | A finite double.
 genDouble :: Gen Double
 genDouble = Gen.double (Range.linearFracFrom 0 (-1000000) 1000000)
 
+-- | Short Unicode text.
 genText :: Gen Text
 genText = Gen.text (Range.linear 0 12) Gen.unicode
 
+-- | Any 'Shape'.
 genShape :: Gen Shape
 genShape =
   Gen.choice
@@ -100,6 +106,7 @@ genShape =
 -- Round-trip properties
 -- ---------------------------------------------------------------------------
 
+-- | Decoding an encoded value gives it back.
 roundTrip :: (ToTerm a, FromTerm a, Eq a, Show a) => Gen a -> Property
 roundTrip gen = property $ do
   x <- forAll gen
@@ -349,6 +356,7 @@ canonSource =
       "total([X | Xs], R) <=> total(Xs, Rest), R is X + Rest."
     ]
 
+-- | Compile 'canonSource', type-checked.
 canonProgram :: IO CompiledProgram
 canonProgram = case compileModules stdlib True [("canon.chr", canonSource)] of
   Left err -> assertFailure ("compile failed: " ++ show err)
@@ -539,6 +547,7 @@ hostRegistry =
     sumTerms :: [Term] -> Either ConvertError Term
     sumTerms ts = toTerm . sum <$> (traverse fromTerm ts :: Either ConvertError [Int])
 
+-- | Run a goal against @hostProgram@ and decode @R@.
 runHost :: (FromTerm a) => HostCallRegistry -> Term -> IO (Either ConvertError a)
 runHost reg goal =
   runQueryWithHostCallRegistry stdlib reg [hostProgram] goal (decodeVar "R")

@@ -1,6 +1,7 @@
 -- | Helpers shared across the test suite.
 module YCHR.TestHelpers
   ( strip,
+    compileOrFail,
     expectErrorContaining,
     countAliveByType,
     countAliveIn,
@@ -10,7 +11,10 @@ where
 import Control.Exception (SomeException, try)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
+import Data.Text (Text)
 import Test.Tasty.HUnit (assertBool, assertFailure)
+import YCHR.Embedded (stdlib)
+import YCHR.Internal.Compile.Pipeline (CompiledProgram, compileModules)
 import YCHR.Internal.Loc (Ann (..), noAnn)
 import YCHR.Internal.PExpr
 import YCHR.Internal.Runtime.Monad (Chr)
@@ -23,6 +27,13 @@ strip :: Ann PExpr -> PExpr
 strip (Ann t _) = case t of
   Compound f args -> Compound f (map (noAnn . strip) args)
   other -> other
+
+-- | Compile source files with the embedded stdlib, failing the test on
+-- errors. Warnings are dropped.
+compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
+compileOrFail inputs = case compileModules stdlib False inputs of
+  Left err -> assertFailure $ show err
+  Right (cp, _) -> pure cp
 
 -- | Assert that forcing the given action throws an exception whose
 -- message contains the given substring.

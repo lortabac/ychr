@@ -64,6 +64,7 @@ tests =
           mods -> fail $ "expected 2 modules, got " ++ show (length mods)
     ]
 
+-- | An empty module @user@ with the given imports.
 userMod :: [AnnP Import] -> Module
 userMod imps =
   Module
@@ -83,6 +84,7 @@ userMod imps =
       exports = Nothing
     }
 
+-- | An empty module with the given name and no imports.
 libMod :: Text -> Module
 libMod name =
   Module
@@ -102,6 +104,7 @@ libMod name =
       exports = Nothing
     }
 
+-- | Is this a 'CircularLibraryImport'?
 isCircularError :: Diagnostic CollectError -> Bool
 isCircularError (Diagnostic _ (AnnP (CircularLibraryImport _) _ _) _) = True
 isCircularError _ = False

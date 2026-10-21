@@ -575,7 +575,9 @@ headTypeTests =
                 `defining` [[term "leq" [var "X", var "Y"]] ==> [atom "true"]]
         rule <- singleRule m
         rule.head.node
-          @?= Propagation [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]] [],
+          @?= Propagation
+            [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "Simpagation kept and removed both renamed" $ do
         let m =
               module' "M"
@@ -761,7 +763,9 @@ exportTests =
                 `defining` [[term "gt" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule modA
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]] [],
+          @?= Simplification
+            [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "no module directive exports all constraints" $ do
         -- A has modExports = Nothing (no directive); B can see all of A's constraints
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -905,10 +909,10 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
       testCase "no warning inside quote(...) quoting in body position" $ do
-        -- Regression for the BUGS.md case 'store(quote(plus(X, 3)))': the
-        -- quote/1 quoting form should keep its argument opaque, so neither
-        -- 'quote' itself nor any undeclared functor inside should produce
-        -- an 'UndeclaredDataConstructor' warning.
+        -- 'store(quote(plus(X, 3)))': the quote/1 quoting form keeps its
+        -- argument opaque, so neither 'quote' itself nor any undeclared
+        -- functor inside should produce an 'UndeclaredDataConstructor'
+        -- warning.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -962,13 +966,11 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [],
       testCase "lambda passed directly as a tell-side constraint argument is not warned" $ do
-        -- Regression for BUGS.md "Spurious 'Undeclared data constructor'
-        -- warnings for 'fun' and '->'". A lambda is a first-class value;
-        -- its synthetic '->' and 'fun' functors are surface syntax, not
-        -- data constructors, so they must not reach
-        -- 'warnUnknownDataCon'. The lambda body is a bare variable so the
-        -- test isolates the surface-syntax bug without pulling in prelude
-        -- functions that this minimal DSL module doesn't import.
+        -- A lambda is a first-class value: its synthetic '->' and 'fun'
+        -- functors are surface syntax, not data constructors, so they must
+        -- not reach 'warnUnknownDataCon'. The lambda body is a bare
+        -- variable so the test needs no prelude functions, which this
+        -- minimal DSL module doesn't import.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -979,9 +981,8 @@ warningTests =
         ws @?= [],
       testCase "lambda bound via '=' then passed is not warned" $ do
         -- The bind-then-pass form ('F = fun(...) -> ... end, c(F)')
-        -- must stay warning-free under the simplified pipeline: the
-        -- lambda arm fires in every non-quoted mode and '=' carries no
-        -- special workaround.
+        -- stays warning-free: the lambda arm fires in every non-quoted
+        -- mode, with no special case for '='.
         let m =
               module' "M"
                 `declaring` ["c" // 1]

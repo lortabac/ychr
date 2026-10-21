@@ -38,12 +38,12 @@ tests =
     ]
 
 -- | Parse a source string with no filename.
-p :: Text -> Either (ParseError) Module
+p :: Text -> Either ParseError Module
 p src = fst <$> parseModule "" src
 
 -- | Parse and return only the validation errors, with each error's
 -- variant extracted (location/origin discarded).
-pErrs :: Text -> Either (ParseError) [ParseValidationError]
+pErrs :: Text -> Either ParseError [ParseValidationError]
 pErrs src = map (.node) . snd <$> parseModule "" src
 
 -- | A module's macros as @(name, arity, [(params, body)])@, with the
@@ -1010,6 +1010,7 @@ moduleTests =
           Left e -> assertFailure (show e)
     ]
 
+-- | The classic @leq@ handler, as a parser fixture.
 leqSource :: Text
 leqSource =
   Text.unlines
@@ -1097,11 +1098,11 @@ errorTests =
 -- ---------------------------------------------------------------------------
 
 -- | Helper: collect operators from a module header.
-ops :: Text -> Either (ParseError) [OpDecl]
+ops :: Text -> Either ParseError [OpDecl]
 ops src = (.exportOps) <$> collectModuleHeader "" src
 
 -- | Helper: collect imports from a module header.
-hdrImports :: Text -> Either (ParseError) [Import]
+hdrImports :: Text -> Either ParseError [Import]
 hdrImports src = map (.node) . (.headerImports) <$> collectModuleHeader "" src
 
 firstPassTests :: TestTree
@@ -1162,6 +1163,7 @@ withFirstRule extract m = case m.rules of
   [] -> assertFailure "expected at least one rule, got none"
   (r : _) -> pure (extract r)
 
+-- | The type definitions of a parsed module, locations stripped.
 typeDefsOf :: Text -> IO [TypeDefinition]
 typeDefsOf src = parseAndExtract p extract src
   where
@@ -1183,6 +1185,7 @@ normalizeTypeDefLoc td =
       loc = dummyLoc
     }
 
+-- | The body of the module's first rule.
 bodyOf :: Text -> IO [Term]
 bodyOf src = parseAndExtract p (withFirstRule (.body.node)) src
 
@@ -1204,8 +1207,10 @@ bodyOfWithBackslashEq src = case mergeOps builtinOps [OpDecl 700 Xfx "\\=="] of
   Right table ->
     parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src
 
+-- | The head of the module's first rule.
 headOf :: Text -> IO Head
 headOf src = parseAndExtract p (withFirstRule (.head.node)) src
 
+-- | The guard of the module's first rule.
 guardOf :: Text -> IO [Term]
 guardOf src = parseAndExtract p (withFirstRule (.guard.node)) src

@@ -29,6 +29,7 @@ import YCHR.Internal.Types
     symbolTableSize,
   )
 
+-- | Drop the annotation.
 getNode :: AnnP a -> a
 getNode (AnnP n _ _) = n
 
@@ -49,11 +50,13 @@ tests =
       aggregateTests
     ]
 
+-- | Resolve the modules, failing the test on errors.
 resolve :: [Module] -> IO R.Program
 resolve mods = case resolveProgram (rewriteImports mods) of
   Right p -> return p
   Left errs -> assertFailure $ "unexpected resolve errors: " ++ show errs
 
+-- | Resolve and desugar the modules, failing the test on errors.
 desugar :: [Module] -> IO D.Program
 desugar mods = do
   rprog <- resolve mods
@@ -61,6 +64,7 @@ desugar mods = do
     Right p -> return p
     Left errs -> assertFailure $ "unexpected errors: " ++ show errs
 
+-- | The only rule of the desugared program.
 singleRule :: [Module] -> IO D.Rule
 singleRule mods = do
   prog <- desugar mods
@@ -76,9 +80,11 @@ singleRule mods = do
 qcon :: Text -> Text -> [Term] -> Constraint
 qcon m n args = Constraint (Qualified m n) args
 
+-- | @M:leq(X, Y)@.
 leqQual :: Constraint
 leqQual = qcon "M" "leq" [var "X", var "Y"]
 
+-- | @M:leq(A, B)@.
 leqQual2 :: Constraint
 leqQual2 = qcon "M" "leq" [var "A", var "B"]
 
@@ -96,9 +102,11 @@ hc (Constraint (Qualified m n) args) =
     toHeadArg t = error ("hc: non-head-arg in test fixture: " ++ show t)
 hc c = error ("hc: expected Qualified constraint, got " ++ show c)
 
+-- | An unnamed rule with the given head, no guard and body @true@.
 mod1rule :: Head -> Rule
 mod1rule h = Rule Nothing (noAnnP h) (noAnnP []) (noAnnP [atom "true"]) []
 
+-- | Module @M@ with one 'mod1rule'.
 simpleModule :: Head -> Module
 simpleModule h = module' "M" `defining` [mod1rule h]
 
@@ -560,8 +568,8 @@ symbolTableTests =
   testGroup
     "symbol-table"
     [ testCase "empty program yields empty table" $
-        extractSymbolTable (D.Program [] [] Map.empty Map.empty Map.empty Map.empty [])
-          @?= mkSymbolTable [],
+        let empty = D.Program [] [] Map.empty Map.empty Map.empty Map.empty []
+         in extractSymbolTable empty @?= mkSymbolTable [],
       testCase "one qualified constraint in head gets id 0" $ do
         let prog =
               D.Program
@@ -1006,7 +1014,8 @@ aggregateTests =
         rule <- singleRule [simpleModule (Propagation [leqQual] [a])]
         -- The goal's N is a per-match local; the result's N is a new
         -- variable of the rule. Same name, two slots.
-        binders (onlyAggregate rule) @?= ([], ["N"], ["N"], Just (D.AggregateResult "N" [])),
+        binders (onlyAggregate rule)
+          @?= ([], ["N"], ["N"], Just (D.AggregateResult "N" [])),
       testCase "binders: a name bound by is inside a lambda is not shared" $ do
         let body =
               CompoundTerm
@@ -1015,7 +1024,8 @@ aggregateTests =
             a = aggOver "c" [var "V"] (aggLambda [var "Z"] body) (var "S")
         rule <- singleRule [simpleModule (Propagation [qcon "M" "p" [var "W"]] [a])]
         -- The lambda's W is its own, so the head's W is not an input.
-        binders (onlyAggregate rule) @?= ([], ["V"], ["S"], Just (D.AggregateResult "S" [])),
+        binders (onlyAggregate rule)
+          @?= ([], ["V"], ["S"], Just (D.AggregateResult "S" [])),
       testCase "binders: a plain goal's $hnf names and ? guard names are locals" $ do
         let a =
               (aggOver "c" [] (var "A") (var "N"))

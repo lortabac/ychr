@@ -68,6 +68,7 @@ inlinedProgram src = do
     diagMsg :: (Display (Diagnostic e)) => Diagnostic e -> String
     diagMsg = displayMsg
 
+-- | A name in module @m@.
 qn :: Text -> QualifiedName
 qn = QualifiedName "m"
 
