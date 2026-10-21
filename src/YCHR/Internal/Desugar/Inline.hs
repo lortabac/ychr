@@ -338,10 +338,10 @@ trySubstitute cand args
 -- | A value expression whose evaluation has no effect of its own, so it
 -- may be duplicated or dropped freely: a variable reference, a
 -- literal, the anonymous variable, a function reference, or a nullary
--- (atom-like) constructor. Everything else — a call, a dynamic dispatch, a host
--- call, or a non-nullary constructor (which may itself contain one of
--- those) — is evaluated exactly once by an ordinary call and must stay
--- that way.
+-- (atom-like) constructor. Everything else — a call, a dynamic
+-- dispatch, a host call, or a non-nullary constructor (which may
+-- itself contain one of those) — is evaluated exactly once by an
+-- ordinary call and must stay that way.
 isTrivial :: R.Expr -> Bool
 isTrivial e = case e of
   R.VarExpr _ -> True
