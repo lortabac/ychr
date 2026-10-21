@@ -10,9 +10,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
-import YCHR.Embedded (stdlib, typeCheckerProgram)
+import YCHR.Embedded (typeCheckerProgram)
 import YCHR.Internal.Compile.Names (vmName)
-import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
 import YCHR.Internal.PExpr (OpTable, OpType (..))
@@ -30,7 +29,8 @@ import YCHR.Internal.Runtime.Var (deref, equal)
 import YCHR.Internal.Types (Term (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (CallableKey (..), Name (..), funRefFunctor, lambdaClosureFunctor)
-import YCHR.Run (compileModules, runProgramWithQuery)
+import YCHR.Run (runProgramWithQuery)
+import YCHR.TestHelpers (compileOrFail)
 
 -- | Runtime meta: 'read_term_from_string' and function-reference resolution.
 tests :: TestTree
@@ -42,6 +42,7 @@ tests =
       vmNameRoundTripTests
     ]
 
+-- | The base host calls plus the meta ones.
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry
 
@@ -122,11 +123,6 @@ callableTable entries =
       )
     | (ident, arity) <- entries
     ]
-
-compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules stdlib False inputs of
-  Left err -> assertFailure $ show err
-  Right (cp, _) -> pure cp
 
 readTermTests :: TestTree
 readTermTests =

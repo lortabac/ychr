@@ -642,6 +642,7 @@ postfixOps =
       (200, [(Yf, "++")])
     ]
 
+-- | Parse with 'postfixOps'.
 pPostfix :: Text -> Either ParseError [Ann PExpr]
 pPostfix = parseTerms postfixOps ""
 
@@ -688,6 +689,7 @@ prefixChainOps =
       (500, [(Fx, "neg")])
     ]
 
+-- | Parse with 'prefixChainOps'.
 pPrefixChain :: Text -> Either ParseError [Ann PExpr]
 pPrefixChain = parseTerms prefixChainOps ""
 
@@ -806,6 +808,7 @@ greedyOps =
       (200, [(Yfx, "++")])
     ]
 
+-- | Parse with 'greedyOps'.
 pGreedy :: Text -> Either ParseError [Ann PExpr]
 pGreedy = parseTerms greedyOps ""
 

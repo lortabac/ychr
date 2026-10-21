@@ -104,21 +104,26 @@ expectsWarnings =
       "write_term_test"
     ]
 
+-- | One case of a golden test directory. The 'String' is the case name.
 data Case
-  = Positive String FilePath FilePath
-  | Negative String FilePath
+  = -- | A @.goal@ / @.expected@ pair: the goal's bindings must match.
+    Positive String FilePath FilePath
+  | -- | A bare @.error@: compilation or type checking must fail.
+    Negative String FilePath
   | -- | Compilation and program-level type-checking succeed, but running
-    -- the goal must throw an error whose displayed message contains the
-    -- given error code. Encoded by colocating @<basename>.goal@ and
-    -- @<basename>.error@ in the same test directory.
+    -- the goal must throw an error whose message contains every non-empty
+    -- line of the @.error@ file. Encoded by colocating @<basename>.goal@
+    -- and @<basename>.error@ in the same test directory.
     GoalNegative String FilePath FilePath
 
+-- | A validated golden test directory.
 data TestSpec = TestSpec
   { testName :: String,
     chrFiles :: [FilePath],
     cases :: [Case]
   }
 
+-- | One test group per directory under @test/golden@.
 tests :: IO TestTree
 tests = do
   let root = "test/golden"
@@ -127,6 +132,8 @@ tests = do
   trees <- mapM (makeGoldenTest root) dirs
   pure (testGroup "Golden" trees)
 
+-- | Build the test tree for one directory, or a failing test when the
+-- directory's files do not follow the discovery rules.
 makeGoldenTest :: FilePath -> String -> IO TestTree
 makeGoldenTest root name = do
   let dir = root </> name
@@ -139,6 +146,8 @@ makeGoldenTest root name = do
     Left msg -> testCase name (assertFailure msg)
     Right spec -> testGroup spec.testName (map (makeCase spec) spec.cases)
 
+-- | Check the discovery rules (see PROJECT.md, "Golden Tests") and pair
+-- up the case files.
 validate ::
   FilePath ->
   String ->
@@ -221,6 +230,7 @@ validate dir name chrs goals expecteds errors
                 ++ concatMap (("\n  missing .goal for " ++) . (<.> "expected")) es
             )
 
+-- | Sort cases by name.
 sortCases :: [Case] -> [Case]
 sortCases = sortOn caseName
   where
@@ -228,12 +238,15 @@ sortCases = sortOn caseName
     caseName (Negative n _) = n
     caseName (GoalNegative n _ _) = n
 
+-- | Turn a case into a tasty test.
 makeCase :: TestSpec -> Case -> TestTree
 makeCase spec c = case c of
   Positive cname gf ef -> testCase cname (runPositive spec gf ef)
   Negative cname ef -> testCase cname (runNegative spec ef)
   GoalNegative cname gf ef -> testCase cname (runGoalNegative spec gf ef)
 
+-- | Compile, type-check and run the goal; compare the printed bindings
+-- with the @.expected@ file.
 runPositive :: TestSpec -> FilePath -> FilePath -> IO ()
 runPositive spec goalFile expectedFile = do
   (prog, ws) <-
@@ -289,14 +302,7 @@ runGoalNegative spec goalFile errorFile = do
         )
     Left exc -> case fromException exc of
       Just (err :: Error) -> do
-        let msg = displayMsg err
-        traverse_
-          ( \sub ->
-              assertBool
-                ("Expected substring " ++ show sub ++ " in:\n" ++ msg)
-                (sub `isInfixOf` msg)
-          )
-          expectedSubstrings
+        assertAllPresent (displayMsg err) expectedSubstrings
       Nothing ->
         assertFailure
           ( "Expected an Error matching "
@@ -304,10 +310,9 @@ runGoalNegative spec goalFile errorFile = do
               ++ " but got: "
               ++ show exc
           )
-  where
-    trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
-    nonEmptyLines = filter (not . null) . map trim . lines
 
+-- | Compilation, or else type checking, must fail with a message that
+-- contains every non-empty line of the @.error@ file.
 runNegative :: TestSpec -> FilePath -> IO ()
 runNegative spec errorFile = do
   result <- compileFiles stdlib False spec.chrFiles
@@ -323,16 +328,22 @@ runNegative spec errorFile = do
         [] ->
           assertFailure "Expected compilation or type checking to fail, but it succeeded"
         _ -> assertAllPresent (unlines errs) expectedSubstrings
+
+-- | The trimmed, non-empty lines of an @.error@ file.
+nonEmptyLines :: String -> [String]
+nonEmptyLines = filter (not . null) . map trim . lines
   where
     trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
-    nonEmptyLines = filter (not . null) . map trim . lines
-    assertAllPresent msg =
-      traverse_
-        ( \sub ->
-            assertBool
-              ("Expected substring " ++ show sub ++ " in:\n" ++ msg)
-              (sub `isInfixOf` msg)
-        )
+
+-- | Assert that the message contains every given substring.
+assertAllPresent :: String -> [String] -> IO ()
+assertAllPresent msg =
+  traverse_
+    ( \sub ->
+        assertBool
+          ("Expected substring " ++ show sub ++ " in:\n" ++ msg)
+          (sub `isInfixOf` msg)
+    )
 
 -- | Type-check a positive test's program: any type error fails the
 -- test, and type-check warnings go through the same allowlist as

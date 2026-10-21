@@ -184,12 +184,14 @@ tests =
         ]
     ]
 
+-- | The generated stdlib and type-checker modules.
 emittedModules :: [GeneratedModule]
 emittedModules =
   [ emitStdLib defaultEmitOptions Embedded.stdlib,
     emitTypeChecker defaultEmitOptions Embedded.typeCheckerProgram
   ]
 
+-- | Assert that no binding body is longer than the budget.
 checkBudget :: Int -> GeneratedModule -> Assertion
 checkBudget budget emitted =
   assertBool
@@ -211,6 +213,7 @@ bindingBodyLengths :: String -> [Int]
 bindingBodyLengths source =
   [length line - 2 | line <- lines source, "  " `isPrefixOf` line]
 
+-- | Assert that every referenced @generated_N@ name is defined.
 checkDangling :: GeneratedModule -> Assertion
 checkDangling emitted = do
   let definitions = definedNames emitted.source
@@ -243,12 +246,14 @@ generatedNamesIn source
             else ("generated_" ++ digits) : generatedNamesIn rest
   | otherwise = generatedNamesIn (drop 1 source)
 
+-- | Is this exactly @generated_@ followed by digits?
 isGeneratedName :: String -> Bool
 isGeneratedName name =
   "generated_" `isPrefixOf` name
     && let digits = drop (length ("generated_" :: String)) name
         in not (null digits) && all isDigit digits
 
+-- | Assert that the generated source contains @needle@.
 assertContains :: String -> String -> IO ()
 assertContains haystack needle =
   assertBool

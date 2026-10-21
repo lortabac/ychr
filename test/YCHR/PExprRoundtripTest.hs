@@ -224,6 +224,7 @@ genPExprFull =
 -- Properties
 -- ---------------------------------------------------------------------------
 
+-- | Pretty-printing a term and parsing it back gives the same term.
 prop_roundtrip :: OpTable -> Gen PExpr -> Property
 prop_roundtrip ops gen = property $ do
   expr <- forAll gen
@@ -238,7 +239,8 @@ prop_roundtrip ops gen = property $ do
 -- Test tree
 -- ---------------------------------------------------------------------------
 
--- | Hedgehog round-trips: parsing then pretty-printing 'PExpr' with and without operators.
+-- | Hedgehog round-trips: pretty-print a 'PExpr', then parse it back,
+-- with and without operators.
 tests :: TestTree
 tests =
   testGroup
