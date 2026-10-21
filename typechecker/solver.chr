@@ -43,6 +43,7 @@
     function_bounds/3,
     constraint_bounds/3,
     con_sig/2,
+    determining_type/1,
     check_constraint_use/5,
     check_function_use/6,
     check_function_use_with_ambient/7,
@@ -222,7 +223,11 @@ bc_decls(bc(_, Decls)) -> Decls.
     function_bounds(any, int, list(bound_named)),
     constraint_bounds(any, int, list(bound_named)),
     con_sig(any, con_sig_t),
+    determining_type(any),
     check_constraint_use(any, int, list(pair(any, bcand)), list(ty), ctx),
+    check_determined(ty, ty, any, ctx),
+    check_determined_params(list(ty), any, ctx),
+    check_determined_list(list(ty), ty, any, ctx),
     check_function_use(any, int, list(pair(any, bcand)), list(ty), ty, ctx),
     check_function_use_with_ambient(any, int, list(fun_sig_t),
                                     list(pair(any, bcand)), list(ty), ty, ctx),
@@ -239,6 +244,7 @@ bc_decls(bc(_, Decls)) -> Decls.
     tc_unify_list(list(ty), list(ty), ctx),
     ev_unify(ty, ty, ev_depth, ctx),
     ev_unify_list(list(ty), list(ty), ev_depth, ctx),
+    ev_wait(ty, ty, ty, ty, ctx),
     eq_unify(ty, ty, ev_depth, ctx),
     eq_unify_list(list(ty), list(ty), ev_depth, ctx),
     link_unify(ty, ty, ev_depth, ctx),
@@ -534,6 +540,7 @@ bounded_constraint_match @
     Fresh is copy_term(quote(kv(DeclTypes, Bounds))),
     FreshTypes is key(Fresh),
     FreshBounds is value(Fresh),
+    check_determined_params(term_variables(FreshTypes), Name, Ctx),
     check_arg_list(FreshTypes, ArgTypes, Ctx),
     emit_bounds(FreshBounds, BoundCands, Ctx).
 
@@ -544,11 +551,66 @@ bounded_constraint_match @
 % constraints each check against their own declaration, and the
 % renamer rejects any rule referencing an undeclared constraint — so
 % every check_constraint_use always has a matching constraint_sig.
+%
+% Each type parameter of the fresh copy must end up at a determined
+% type (docs/reference/type-system.md §Determined types). Its variables
+% are read before `check_arg_list` binds them.
 constraint_match @
     constraint_sig(Name, Arity, DeclTypes) \
         check_constraint_use(Name, Arity, _, ArgTypes, Ctx) <=>
     FreshTypes is copy_term(quote(DeclTypes)),
+    check_determined_params(term_variables(FreshTypes), Name, Ctx),
     check_arg_list(FreshTypes, ArgTypes, Ctx).
+
+% ==========================================================================
+% Determined instances
+% ==========================================================================
+%
+% `check_determined(Ty, Inst, Name, Ctx)`: `Ty`, a part of the instance
+% `Inst` of a type parameter of constraint `Name`, is a determined type
+% (docs/reference/type-system.md §Determined types). It waits while
+% `Ty` is flexible and takes it apart as it gets solved; one still
+% flexible at the end is accepted, like every residual check. A rigid
+% is a constraint parameter of the enclosing rule, so it is determined
+% already. The error shows the whole instance. `determining_type/1`
+% holds the program's determining types, told with the other
+% declaration facts.
+
+check_determined_params_nil @
+    check_determined_params([], _, _) <=> true.
+
+check_determined_params_cons @
+    check_determined_params([V|Vs], Name, Ctx) <=>
+    check_determined(V, V, Name, Ctx),
+    check_determined_params(Vs, Name, Ctx).
+
+check_determined_list_nil @
+    check_determined_list([], _, _, _) <=> true.
+
+check_determined_list_cons @
+    check_determined_list([T|Ts], Inst, Name, Ctx) <=>
+    check_determined(T, Inst, Name, Ctx),
+    check_determined_list(Ts, Inst, Name, Ctx).
+
+determined_any @
+    check_determined(T, _, _, _) <=> nonvar(T), T == ty_any | true.
+
+determined_base @
+    check_determined(T, _, _, _) <=> nonvar(T), base_type(T) | true.
+
+determined_rigid @
+    check_determined(rigid(_, _, _), _, _, _) <=> true.
+
+determined_nullary @
+    check_determined(tcon(_, []), _, _, _) <=> true.
+
+determined_con @
+    determining_type(D) \ check_determined(tcon(D, Args), Inst, Name, Ctx) <=>
+    check_determined_list(Args, Inst, Name, Ctx).
+
+undetermined @
+    check_determined(T, Inst, Name, Ctx) <=> nonvar(T) |
+    report_error(Ctx, undetermined_instance, undetermined_instance_d(Name, Inst)).
 
 % Bounded function usage: same shape as `function_match` plus a
 % bound-discharge phase. Listed before `function_match` for the same
@@ -865,19 +927,52 @@ tcon_args(tcon(_, Args)) -> Args.
 % total.
 tcon_args(_) -> [].
 
+% A function's skolem pins to any parent; a constraint's only to a
+% non-parametric one here (a determining one is `guard_match_rigid_determining`).
+:- function rigid_may_pin(ctx, ty) -> bool.
+rigid_may_pin(Ctx, _) | ctx_in_function(Ctx) -> true.
+rigid_may_pin(_, tcon(_, [])) -> true.
+rigid_may_pin(_, _) -> false.
+
 guard_match_pinned @
     check_guard_match(rigid(C, _, _), Con, Betas, Slots, Ctx) <=> nonvar(C) |
     check_guard_match(C, Con, Betas, Slots, Ctx).
 
+% Outside a function the scrutinee is a constraint's skolem, which is
+% determined (§Determined types): it pins only to a non-parametric or a
+% determining parent. Any other parent makes the branch dead, but the
+% fields are still typed, at the fresh skolems, as in the blocked case
+% below, so a body that misuses them keeps its error. Those skolems
+% stand for a match that never happens, so they are determined
+% vacuously.
 guard_match_rigid @
     con_sig(Con, Sig) \
         check_guard_match(rigid(C, _, L), Con, Betas, Slots, Ctx) <=>
-        var(C), L == ctx_level(Ctx) |
+        var(C), L == ctx_level(Ctx), rigid_may_pin(Ctx, sig_parent(Sig)) |
     Fresh is copy_term(quote(Sig)),
     FreshParent is sig_parent(Fresh),
     tc_unify_list(tcon_args(FreshParent), Betas, Ctx),
     C = FreshParent,
     tc_unify_list(Slots, sig_fields(Fresh), Ctx).
+
+guard_match_rigid_determining @
+    con_sig(Con, csig(tcon(D, Ps), Fs)), determining_type(D) \
+        check_guard_match(rigid(C, _, L), Con, Betas, Slots, Ctx) <=>
+        var(C), L == ctx_level(Ctx) |
+    Fresh is copy_term(quote(csig(tcon(D, Ps), Fs))),
+    FreshParent is sig_parent(Fresh),
+    tc_unify_list(tcon_args(FreshParent), Betas, Ctx),
+    C = FreshParent,
+    tc_unify_list(Slots, sig_fields(Fresh), Ctx).
+
+guard_match_rigid_dead @
+    con_sig(Con, Sig) \
+        check_guard_match(rigid(C, N, L), Con, Betas, Slots, Ctx) <=>
+        var(C), L == ctx_level(Ctx) |
+    Fresh is copy_term(quote(Sig)),
+    tc_unify_list(tcon_args(sig_parent(Fresh)), Betas, Ctx),
+    tc_unify_list(Slots, sig_fields(Fresh), Ctx),
+    report_dead(Ctx, tpair(sig_parent(copy_term(quote(Sig))), rigid(C, N, L))).
 
 % A skolem of another level: the pin is blocked (docs/reference/
 % type-system.md §Aggregates), but the fields are still typed, at the
@@ -1256,16 +1351,33 @@ ev_unify_rigid_alias_right @
 % skolem, and only to a skolem of level `L` or an enclosing one. So a
 % goal's skolem merges into the rule's, never the other way round, and
 % never into a sibling aggregate's.
+%
+% Only a constraint's skolems merge. Its parameters are determined
+% (docs/reference/type-system.md §Determined types), so a value the two
+% positions share has one type, and the two instances are equal. A
+% function's parameters are not restricted: `[]` can sit at `list(int)`
+% and `list(string)` at once, so two function skolems merge nothing.
 ev_unify_rigid_merge_left @
     ev_unify(rigid(C1, _, L1), rigid(C2, N2, L2), ev_top, Ctx) <=>
-    var(C1), L1 == ctx_level(Ctx), level_within(L2, L1) | C1 = rigid(C2, N2, L2).
+    var(C1), not(ctx_in_function(Ctx)), L1 == ctx_level(Ctx), level_within(L2, L1) |
+    C1 = rigid(C2, N2, L2).
 
 ev_unify_rigid_merge_right @
     ev_unify(rigid(C1, N1, L1), rigid(C2, _, L2), ev_top, Ctx) <=>
-    var(C2), L2 == ctx_level(Ctx), level_within(L1, L2) | C2 = rigid(C1, N1, L1).
+    var(C2), not(ctx_in_function(Ctx)), L2 == ctx_level(Ctx), level_within(L1, L2) |
+    C2 = rigid(C1, N1, L1).
+
+% Two unpinned skolems of a function: no merge, but the fact is kept
+% until one of them is pinned, when it meets the pin like any other
+% fact. Dropping it at once would make the verdict depend on whether
+% the pin came first.
+ev_unify_rigid_wait @
+    ev_unify(rigid(C1, N1, L1), rigid(C2, N2, L2), ev_top, Ctx) <=>
+    var(C1), var(C2), ctx_in_function(Ctx) |
+    ev_wait(C1, C2, rigid(C1, N1, L1), rigid(C2, N2, L2), Ctx).
 
 % Two unpinned skolems the level does not let this evidence merge: the
-% fact is blocked, which is not an error.
+% fact is dropped, which is not an error.
 ev_unify_rigid_blocked @
     ev_unify(rigid(C1, _, _), rigid(C2, _, _), ev_top, _) <=>
     var(C1), var(C2) | true.
@@ -1308,31 +1420,72 @@ ev_unify_pin_nullary_right @
 % `ev_param`, where nothing is derived, so it is a no-op by
 % construction. Every pinned value is rigid-free or built from fresh
 % skolems, so no occurs check is needed on these rules.
+%
+% A constraint's skolem is determined (§Determined types), so outside
+% a function it pins only at a determining constructor, whose fresh
+% parameters are then determined too. At any other constructor, or a
+% function type, the fact contradicts the skolem: dead code. The test
+% is on the constructor name alone, so the verdict does not depend on
+% what the partner's parameters are solved to.
+ev_unify_pin_determining_left @
+    determining_type(Ctor) \
+        ev_unify(rigid(C, _, L), tcon(Ctor, [A | As]), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    make_fresh_rigids(L, [A | As], Betas),
+    C = tcon(Ctor, Betas).
+
+ev_unify_pin_determining_right @
+    determining_type(Ctor) \
+        ev_unify(tcon(Ctor, [A | As]), rigid(C, _, L), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    make_fresh_rigids(L, [A | As], Betas),
+    C = tcon(Ctor, Betas).
+
 ev_unify_pin_parametric_left @
     ev_unify(rigid(C, _, L), tcon(Ctor, [A | As]), ev_top, Ctx) <=>
-    var(C), L == ctx_level(Ctx) |
+    var(C), ctx_in_function(Ctx), L == ctx_level(Ctx) |
     make_fresh_rigids(L, [A | As], Betas),
     C = tcon(Ctor, Betas).
 
 ev_unify_pin_parametric_right @
     ev_unify(tcon(Ctor, [A | As]), rigid(C, _, L), ev_top, Ctx) <=>
-    var(C), L == ctx_level(Ctx) |
+    var(C), ctx_in_function(Ctx), L == ctx_level(Ctx) |
     make_fresh_rigids(L, [A | As], Betas),
     C = tcon(Ctor, Betas).
 
 ev_unify_pin_fun_left @
     ev_unify(rigid(C, _, L), fun(Args, _), ev_top, Ctx) <=>
-    var(C), L == ctx_level(Ctx) |
+    var(C), ctx_in_function(Ctx), L == ctx_level(Ctx) |
     make_fresh_rigids(L, Args, ArgBetas),
     make_fresh_rigid(L, RetBeta),
     C = fun(ArgBetas, RetBeta).
 
 ev_unify_pin_fun_right @
     ev_unify(fun(Args, _), rigid(C, _, L), ev_top, Ctx) <=>
-    var(C), L == ctx_level(Ctx) |
+    var(C), ctx_in_function(Ctx), L == ctx_level(Ctx) |
     make_fresh_rigids(L, Args, ArgBetas),
     make_fresh_rigid(L, RetBeta),
     C = fun(ArgBetas, RetBeta).
+
+ev_unify_dead_parametric_left @
+    ev_unify(rigid(C, N, L), tcon(Ctor, [A | As]), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    report_dead(Ctx, tpair(rigid(C, N, L), tcon(Ctor, [A | As]))).
+
+ev_unify_dead_parametric_right @
+    ev_unify(tcon(Ctor, [A | As]), rigid(C, N, L), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    report_dead(Ctx, tpair(tcon(Ctor, [A | As]), rigid(C, N, L))).
+
+ev_unify_dead_fun_left @
+    ev_unify(rigid(C, N, L), fun(Args, R), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    report_dead(Ctx, tpair(rigid(C, N, L), fun(Args, R))).
+
+ev_unify_dead_fun_right @
+    ev_unify(fun(Args, R), rigid(C, N, L), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    report_dead(Ctx, tpair(fun(Args, R), rigid(C, N, L))).
 
 % An unpinned skolem of another level meeting a solid type: blocked.
 ev_unify_pin_blocked_left @
@@ -1340,6 +1493,14 @@ ev_unify_pin_blocked_left @
 
 ev_unify_pin_blocked_right @
     ev_unify(T1, rigid(C, _, _), ev_top, _) <=> var(C), nonvar(T1) | true.
+
+% A parked function fact wakes when either cell is pinned. One still
+% parked when solving ends was inert.
+ev_wait_left @
+    ev_wait(C1, _, T1, T2, Ctx) <=> nonvar(C1) | ev_unify(T1, T2, ev_top, Ctx).
+
+ev_wait_right @
+    ev_wait(_, C2, T1, T2, Ctx) <=> nonvar(C2) | ev_unify(T1, T2, ev_top, Ctx).
 
 ev_unify_int @
     ev_unify(ty_int, ty_int, _, _) <=> true.

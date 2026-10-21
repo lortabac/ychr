@@ -435,6 +435,7 @@ typeCheckErrorCode (BoundUnsatisfied _) = ErrorCode 60012
 typeCheckErrorCode (TypeRefArityMismatch _ _ _ _ _) = ErrorCode 60013
 typeCheckErrorCode (AggregateTypeEscapes _) = ErrorCode 60014
 typeCheckErrorCode (AggregateLinkConflict _ _) = ErrorCode 60015
+typeCheckErrorCode (UndeterminedInstance _ _) = ErrorCode 60016
 
 -- | 5xxxx — top-level errors.
 --
@@ -1727,6 +1728,18 @@ typeCheckErrorMsg (AggregateLinkConflict t1 t2) =
         ++ "'"
     )
     "the goal can match when the two differ; make them the same type in the rule"
+typeCheckErrorMsg (UndeterminedInstance con ty) =
+  withHint
+    ( "Constraint '"
+        ++ T.unpack con
+        ++ "' has a type parameter used at '"
+        ++ T.unpack ty
+        ++ "', a type whose values can also belong to other types"
+    )
+    ( "a constraint's type parameters cannot be lists, maybes, functions and"
+        ++ " the like; put the structure in the declaration instead, e.g."
+        ++ " 'c(list(T))' rather than 'c(T)' used at a list"
+    )
 
 instance Display (Diagnostic TypeCheckWarning) where
   displayMsg (Diagnostic lbl (AnnP warn loc origin) ctx) =

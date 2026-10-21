@@ -227,7 +227,7 @@ pickTarget ctx =
 -- so this can never come up empty.
 boundedTargets :: Ctx -> [BoundSig] -> TvName -> [STy]
 boundedTargets ctx bounds v = case [b | b <- bounds, b.bsTv == v] of
-  [] -> instantiationTargets ctx
+  [] -> filter (determinedS ctx.ctxSk) (instantiationTargets ctx)
   bs ->
     [ t
     | t <- instantiationTargets ctx,
@@ -794,8 +794,9 @@ genHead adts cls sigList hIx sk = do
 -- pins nothing.
 --
 -- At a /bare rigid/ target they are evidence. A literal pins the
--- skolem to that literal's type; a constructor or list pattern pins it
--- to that type constructor applied at __fresh rigid__ parameters. The
+-- skolem to that literal's type; a pattern of a determining type pins
+-- it to that type constructor applied at __fresh rigid__ parameters (a
+-- list pattern there is dead code, so it is never drawn). The
 -- freshness and the rigidity are both load-bearing: @typecheck_match_beta_rigid@
 -- pins that the parameters a @GuardMatch@ introduces are rigid, not
 -- flexible, so a body may not then treat the field as a concrete type.
@@ -855,11 +856,15 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
         ++ [ pinTo PinLit s (SCon CBool []) (PLit . LBool <$> Gen.bool)
            | allowed s (SCon CBool [])
            ]
-        ++ [pinList s | allowed s (SCon CList [SSk (Skolem (-1))])]
         ++ [ pinCtor s def
            | def <- adtsInScope,
+             determiningCon (CAdt def),
              allowed s (SCon (CAdt def) (map (const (SSk (Skolem (-1)))) def.adtParams))
            ]
+    -- A skolem is a constraint's parameter, which is a determined type
+    -- (§Determined types), so a list or other non-determining pattern
+    -- at one is dead code: only determining constructors are offered.
+    --
     -- The placeholder skolem above only stands in for "some
     -- application of this constructor"; a class instance is
     -- non-parametric, so an application with arguments never matches
@@ -868,19 +873,6 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
     pinTo src s t g = do
       p <- g
       pure (p, pinOrKeep src s t sk)
-    pinList s = do
-      let (betas, sk1) = freshSkolems 1 sk
-          beta = case betas of
-            (b : _) -> b
-            [] -> error "genPat: freshSkolems 1 returned none"
-          sk2 = pinOrKeep PinMatch s (SCon CList [SSk beta]) sk1
-      Gen.choice
-        [ pure (PNil, sk2),
-          do
-            (h, sk3) <- genPat adts cls bnd sk2 (d - 1) (0 : path) (SSk beta)
-            (t, sk4) <- genPat adts cls bnd sk3 (d - 1) (1 : path) (SCon CList [SSk beta])
-            pure (PCons h t, sk4)
-        ]
     pinCtor s def = do
       let (betas, sk1) = freshSkolems (length def.adtParams) sk
           args = map SSk betas
@@ -1801,7 +1793,7 @@ genGoal univ adts cls sigList rs = do
     -- 'boundedTargets') — so it fails loudly rather than quietly
     -- emitting a goal the query type-check rejects (YCHR-60012).
     goalTargets s v = case [b | b <- s.sigBounds, b.bsTv == v] of
-      [] -> univ
+      [] -> filter determinedG univ
       bs -> case foldr (intersectBy) univ (map instancesOf bs) of
         [] ->
           error
@@ -1914,7 +1906,7 @@ genRuleInstance univ cls r = do
     -- a generator bug (see 'boundedTargets'), so it fails loudly
     -- rather than quietly building that rejected goal.
     targetsFor sk = case [c | (s', c) <- boundedSkolems, s' == sk] of
-      [] -> univ
+      [] -> filter determinedG univ
       names -> case [t | t <- univ, all (isInstance t) names] of
         [] ->
           error

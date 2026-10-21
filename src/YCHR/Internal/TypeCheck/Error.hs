@@ -49,6 +49,10 @@ data TypeCheckError
   | -- | An aggregate goal links one of its rigid types to two different
     -- outer ones. Carries the two outer types, rendered.
     AggregateLinkConflict Text Text
+  | -- | A constraint's type parameter is instantiated at a type whose
+    -- values do not fix it, like a list. Carries the constraint's name
+    -- and the rendered type.
+    UndeterminedInstance Text Text
   deriving (Show, Eq)
 
 -- | Non-fatal diagnostics reported by the type-checker pass. A

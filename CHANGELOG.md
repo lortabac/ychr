@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+A constraint's type parameters only take *determined* types
+([docs/reference/type-system.md](docs/reference/type-system.md#determined-types)).
+This closes a hole in the multi-head merge: with `leq(T, T)`, the tells
+`leq([1], [])` and `leq([], ["a"])` used to be accepted, and transitivity
+then stored `leq([1], ["a"])`.
+
+- **Breaking:** telling a polymorphic constraint with a type parameter at
+  a list, a `maybe`, a function type or another type whose values fit
+  several instances is an error (`UndeterminedInstance`, YCHR-60016).
+  Put the structure in the declaration instead: `stack(list(T))` rather
+  than `stack(T)` used at a list. `box(int)`, `pair(int, int)` and other
+  types whose constructors keep their parameters are still fine.
+- A list pattern, an `is_list/1` guard or a list-typed partner at a
+  constraint's type parameter now makes the rule dead (YCHR-20104), since
+  the parameter can never be a list.
+- A variable shared between two type-parameter positions of a *function*
+  no longer ties the two parameters: `f(X, X) -> X` at `f(T, U) -> U` is
+  an `InconsistentTypes` error.
+
 Aggregates are type-checked
 ([docs/reference/type-system.md](docs/reference/type-system.md#aggregates)).
 

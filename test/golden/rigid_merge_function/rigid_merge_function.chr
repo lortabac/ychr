@@ -1,0 +1,15 @@
+:- module(rmf, []).
+:- use_module(library(prelude)).
+:- use_module(library(pairs)).
+
+% A function's type parameters are not restricted to determined types,
+% so a shared value does not tie two of them: `f(kv([], [1]),
+% kv([], ["a"]))` has T at list(int) and U at list(string). The shared
+% X must not merge T and U, so lt(K, K2) has no signature to use
+% (YCHR-60006).
+:- class lt (list(int), list(int)) -> bool.
+lt([X|_], [Y|_]) -> X + 1 < Y.
+lt([], _) -> true.
+lt(_, []) -> false.
+:- function f(pair(T, T), pair(U, U)) -> bool requiring lt(T, T) -> bool.
+f(kv(X, K), kv(X, K2)) -> lt(K, K2).

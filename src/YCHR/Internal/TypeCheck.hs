@@ -331,6 +331,11 @@ decodeError code detail = case code of
   VAtom c
     | c == diagAtom "aggregate_link_conflict" ->
         uncurry AggregateLinkConflict <$> decodeTypePair detail
+  VAtom c | c == diagAtom "undetermined_instance" -> case detail of
+    VTerm f [n, t]
+      | f == diagAtom "undetermined_instance_d" ->
+          UndeterminedInstance <$> name n <*> (showType <$> deepDerefType t)
+    _ -> malformed "undetermined_instance detail" detail
   _ -> malformed "error code" code
   where
     name v =

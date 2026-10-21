@@ -297,7 +297,8 @@ encode_sigs_cons @
                          ; df_function_sig(any, int, fun_sig_t)
                          ; df_function_sigs(any, int, list(fun_sig_t))
                          ; df_function_bounds(any, int, list(bound_named))
-                         ; df_con_sig(any, con_sig_t).
+                         ; df_con_sig(any, con_sig_t)
+                         ; df_determining(any).
 
 :- chr_constraint
     tell_decls(tc_env, program, list(decl_fact)),
@@ -318,7 +319,8 @@ tell_decls1 @
     build_constraint_facts(ConTypes, ConBounds, ConFacts),
     build_function_facts(Funs, FunFacts),
     build_con_facts(Tds, CtorFacts),
-    Facts is append(ConFacts, append(FunFacts, CtorFacts)),
+    DetFacts is maplist(fun(N) -> df_determining(N) end, determining_types(Tds)),
+    Facts is append(ConFacts, append(FunFacts, append(CtorFacts, DetFacts))),
     tell_facts(Facts),
     Out = Facts.
 
@@ -376,6 +378,9 @@ tell_fact_function_bounds @
 
 tell_fact_con_sig @
     tell_fact(df_con_sig(N, Sig)) <=> con_sig(N, Sig).
+
+tell_fact_determining @
+    tell_fact(df_determining(N)) <=> determining_type(N).
 
 build_constraint_facts_nil @
     build_constraint_facts([], _, Out) <=> Out = [].
