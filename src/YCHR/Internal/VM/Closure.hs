@@ -7,8 +7,8 @@
 -- 'Program.callables' and 'Program.tellables' dispatch tables. The
 -- compiler derives the procedure names, the call sites that name them,
 -- and the tables' targets from the same function and constraint lists,
--- so a dangling target is a
--- compiler bug rather than anything a user program can produce. The
+-- so a dangling target is a compiler bug rather than anything a user
+-- program can produce. The
 -- interpreter reports one at run time as @callProc: unknown procedure
 -- \@name@, on whichever path reaches it first; this module lets the
 -- compiler report it before the program runs.
@@ -70,8 +70,8 @@ procedureNames procs = Set.fromList [p.name | p <- procs]
 -- | Every call target a compiled program carries that its own procedure
 -- table does not define: the @CallExpr@ sites of every body, then the
 -- 'Program.evaluables', 'Program.callables', 'Program.tellables' and
--- 'Program.tellablesUnqualified' targets. In
--- first-appearance order, without duplicates. An empty list means the
+-- 'Program.tellablesUnqualified' targets. In first-appearance order,
+-- without duplicates. An empty list means the
 -- program is closed; 'closureFailure' turns a non-empty one into the
 -- message a caller reports.
 danglingTargets :: Program -> [Name]
@@ -155,12 +155,13 @@ danglingCalls known = dedup . concatMap procedureCalls
       IdVar _ -> []
       CreateConstraint _ es -> concatMap valCalls es
 
--- | The dispatch-table half of 'danglingTargets', split out for the
--- union check @Session.withCHRExtra@ runs over query-time callables.
+-- | The 'Program.evaluables' targets @known@ does not define.
 danglingEvaluables :: Set Name -> [(EvaluableKey, Name)] -> [Name]
 danglingEvaluables known entries = missingIn known (map snd entries)
 
--- | 'danglingEvaluables' over a program's callables table.
+-- | The 'Program.callables' targets @known@ does not define. Exported
+-- for the union check @Session.withCHRExtra@ runs over query-time
+-- callables.
 danglingCallables :: Set Name -> [(CallableKey, Name)] -> [Name]
 danglingCallables known entries = missingIn known (map snd entries)
 
@@ -181,6 +182,7 @@ danglingTellableResolutions known =
     resolutionTargets (UniqueTell procName) = [procName]
     resolutionTargets (AmbiguousTell _) = []
 
+-- | The names @known@ does not define, deduplicated.
 missingIn :: Set Name -> [Name] -> [Name]
 missingIn known = dedup . filter (`Set.notMember` known)
 

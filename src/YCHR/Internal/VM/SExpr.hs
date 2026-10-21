@@ -7,14 +7,20 @@
 -- external backends (Erlang, Python, Clojure, etc.) and as a
 -- compilation cache artifact.
 --
--- Example:
+-- Example (trimmed; @...@ marks left-out entries):
 --
 -- @
--- (program 1
---   (procedure "tell_leq" ("X" "Y")
---     (let-id "id" (create-constraint 0 (var "X") (var "Y")))
---     (store (id-var "id"))
---     (expr-stmt (call-expr "activate_leq" (arg-id (id-var "id"))))))
+-- (vm-program (version 3)
+--   (program 11 (type-names (qualified "leq" "leq") ...)
+--     20 (rule-names "__rule_0" ...)
+--     (evaluables ...) (callables ...) (tellables ...)
+--     (tellables-unqualified ...) (inert-types ...)
+--     (procedure "tell_leq__leq2" ("$X_0" "$X_1") (tell 0)
+--       (let-id "active" (create-constraint 0 (var "$X_0") (var "$X_1")))
+--       (expr-stmt (call-expr "activate_leq__leq2" (arg-id (id-var "active")))))
+--     ...)
+--   (exports ...)
+--   (symbol-table ...))
 -- @
 --
 -- A serialized unit opens with a @(version N)@ header naming the VM
@@ -54,8 +60,11 @@ import YCHR.Internal.VM.Types
 
 -- | A VM program bundled with metadata needed by external backends.
 data VMProgram = VMProgram
-  { program :: Program,
+  { -- | The program itself.
+    program :: Program,
+    -- | Every exported name, qualified.
     exportedSet :: Set Types.QualifiedIdentifier,
+    -- | The constraint-type indices the program uses.
     symbolTable :: Types.SymbolTable
   }
   deriving (Show, Eq)
@@ -294,11 +303,11 @@ stmtToSExpr (TellTerm sc g es) =
 stmtToSExpr (PushFrame frame) =
   SList
     [ SAtom "push-frame",
-      SString frame.frameLabel,
-      SInt (fromIntegral frame.frameSourceLoc.line),
-      SInt (fromIntegral frame.frameSourceLoc.col),
-      SString (T.pack frame.frameSourceLoc.file),
-      SString frame.frameSourceCode
+      SString frame.label,
+      SInt (fromIntegral frame.sourceLoc.line),
+      SInt (fromIntegral frame.sourceLoc.col),
+      SString (T.pack frame.sourceLoc.file),
+      SString frame.sourceCode
     ]
 
 valExprToSExpr :: ValExpr -> SExpr
@@ -584,12 +593,10 @@ programFromSExpr
     -- dispatch table, and an absent @inert-types@ is a hint no result
     -- depends on.
     --
-    -- This is not a general back-compatibility promise for older text.
-    -- A stale dump is fenced off before the reader gets here: the
+    -- This is not a back-compatibility promise for older text: the
     -- @(version N)@ header is checked first, so any unit not written in
-    -- 'vmVersion' — including one predating keyed @'$call'@ dispatch,
-    -- with its @(call-dispatch N)@ procedures and their gone proc-kind
-    -- — is rejected at the version gate, not at a construct.
+    -- 'vmVersion' is rejected at the version gate, not at some unknown
+    -- construct.
     let (clSexprs, rest') = case rest of
           SList (SAtom "callables" : cls) : rs -> (cls, rs)
           rs -> ([], rs)
@@ -645,7 +652,8 @@ callableEntryFromSExpr s = err ("expected callable entry, got: " <> printSExpr s
 -- | Parse a 'tellableEntryToSExpr' under @fromScope@, which turns the
 -- entry's scope field into a module name or 'Nothing'. The two tiers
 -- share one shape, so one parser serves both.
-tellableEntryFromSExprWith :: (SExpr -> Err (Maybe Text)) -> SExpr -> Err (TellableKey, Name)
+tellableEntryFromSExprWith ::
+  (SExpr -> Err (Maybe Text)) -> SExpr -> Err (TellableKey, Name)
 tellableEntryFromSExprWith fromScope (SList [scSexpr, fSexpr, SInt arity, pSexpr]) = do
   scope <- fromScope scSexpr
   functor <- nameFromSExpr fSexpr

@@ -11,8 +11,7 @@
 -- 'OccurrenceMap' that the rest of 'YCHR.Internal.Compile' consumes.
 --
 -- See Note [Occurrence numbering order] and Note [Anonymous rule names]
--- in "YCHR.Internal.Compile" for the rationale behind the ordering and
--- numbering choices.
+-- at the bottom of this file for the ordering and numbering choices.
 module YCHR.Internal.Compile.Occurrences
   ( collectOccurrences,
   )
@@ -28,7 +27,10 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Traversable (for)
-import YCHR.Internal.Compile.Aggregate (aggregateResultTypeDeclared, collectAggregatePlans)
+import YCHR.Internal.Compile.Aggregate
+  ( aggregateResultTypeDeclared,
+    collectAggregatePlans,
+  )
 import YCHR.Internal.Compile.Passive (markPassive)
 import YCHR.Internal.Compile.Types
 import YCHR.Internal.Desugared qualified as D
@@ -57,7 +59,7 @@ import Prelude hiding (head)
 -- The result also carries the per-rule display names, indexed by the
 -- rule's 'RuleId' (which mirrors its program-wide source index).
 --
--- See Note [Occurrence numbering order] in "YCHR.Internal.Compile".
+-- See Note [Occurrence numbering order].
 collectOccurrences ::
   SymbolTable ->
   D.Program ->
@@ -119,7 +121,7 @@ checkAggregateResultType prog =
 -- synthetic @__rule_N@ name whose index matches the rule's
 -- program-wide source position. The double-underscore prefix avoids
 -- clashes with user-defined names.
--- See Note [Anonymous rule names] in "YCHR.Internal.Compile".
+-- See Note [Anonymous rule names].
 ruleDisplayName :: Int -> D.Rule -> Text
 ruleDisplayName ruleIdx rule = case rule.name of
   Just n -> n
@@ -172,7 +174,16 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
   ordinary <-
     fmap catMaybes $
       for orderedOccurrences $ \(idx, con, isKept) ->
-        mkOccurrence symTab rule ruleId' display aggregates orderedOccurrences idx con isKept
+        mkOccurrence
+          symTab
+          rule
+          ruleId'
+          display
+          aggregates
+          orderedOccurrences
+          idx
+          con
+          isKept
   -- One goal occurrence per CHR constraint conjunct of a planned
   -- aggregate's goal, nested goals included. The plan is matched by its
   -- source index, since the planner drops unsupported forms and leaves
@@ -189,15 +200,15 @@ ruleOccurrences symTab aggregatePlans (ruleIdx, rule) = do
           orderedOccurrences
           hc
           GoalOccurrence
-            { goalIndex = plan.planIndex,
-              goalActiveIndex = j,
-              goalAll = goal,
-              goalEnclosing = enclosing,
-              goalLevelShared = levelShared
+            { aggregateIndex = plan.position,
+              activeIndex = j,
+              conjuncts = goal,
+              enclosing = enclosing,
+              levelShared = levelShared
             }
   pure (ordinary ++ goalOccurrences)
   where
-    planByIndex i = List.find (\p -> p.planIndex == i) (aggregatePlans !! ruleIdx)
+    planByIndex i = List.find (\p -> p.position == i) (aggregatePlans !! ruleIdx)
     goalConjuncts =
       [ (plan, level, j, hc)
       | (i, _) <- zip [0 :: Int ..] rule.head.node.aggregates,
@@ -216,10 +227,10 @@ aggregateGoals ::
   AggregatePlan ->
   [([D.AggregateConjunct], [[D.AggregateConjunct]], [[Text]])]
 aggregateGoals enclosing shared plan =
-  (plan.planGoal, enclosing, shared)
+  (plan.goal, enclosing, shared)
     : concat
-      [ aggregateGoals (plan.planGoal : enclosing) (n.planShared : shared) n
-      | (_, n) <- plan.planNested
+      [ aggregateGoals (plan.goal : enclosing) (n.shared : shared) n
+      | (_, n) <- plan.nested
       ]
 
 -- | Build a single 'Occurrence' record for the active head constraint
@@ -250,7 +261,7 @@ mkOccurrence
   activeIdx
   activeCon
   activeIsKept = do
-    let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
+    let partners' = [entry | entry@(idx, _, _) <- combined, idx /= activeIdx]
     partners <- resolvePartners symTab rule display partners'
     pure $ do
       resolvedPartners <- sequence partners
@@ -300,8 +311,9 @@ mkGoalOccurrence symTab rule ruleId' display plans heads activeCon goal = do
           -- Meaningless for a goal occurrence: the active constraint
           -- is not a head. See 'YCHR.Internal.Compile.Types.activeHeadPosition'.
           activeIdx = HeadPosition 0,
-          -- Firing never removes the active goal constraint; a
-          -- selection form's removal lands with its own phase.
+          -- Firing never removes the active goal constraint as a head;
+          -- a take form removes it in its own step
+          -- ('YCHR.Internal.Compile.genSelectStmts').
           isKept = True,
           activeArgs = activeCon.args,
           partners = resolvedPartners,
@@ -330,12 +342,7 @@ resolvePartners symTab rule display entries = do
         headLoc
         headPretty
         ruleLabel
-        ( Identifier
-            (qualifiedToName con.name)
-            ( length
-                con.args
-            )
-        )
+        (Identifier (qualifiedToName con.name) (length con.args))
     pure $ do
       cType <- ct
       pure
@@ -364,3 +371,30 @@ lookupCType symTab loc p label ident = case lookupSymbol ident symTab of
   Nothing -> do
     tell [Diagnostic label (AnnP (UnknownConstraintType ident.name) loc p) []]
     pure Nothing
+
+{- Note [Occurrence numbering order]
+
+'collectOccurrences' folds each rule's occurrences into the
+'OccurrenceMap' with 'occMapAppend', which is implemented on top of
+@Map.insertWith (++)@ and therefore prepends. Reversing the resulting
+list before 'assignNumbers' restores top-down rule order so that
+occurrence number 1 is the textually first occurrence of the
+constraint, matching the convention in the paper's Listings.
+
+Partner ordering inside 'ruleOccurrences' is "removed first,
+right-to-left": this is the ωr refined operational semantics from
+Duck et al. (2004) and the paper §2.2, Fig. 2. Removed occurrences are
+tried before kept ones so that simplifications fire eagerly, and within
+each group the rightmost head constraint gets the lowest occurrence
+number so that join order matches a left-to-right scan of the body when
+the rule is read as a Horn clause.
+-}
+
+{- Note [Anonymous rule names]
+
+Anonymous rules get a synthetic @__rule_N@ display name in
+'ruleDisplayName'. N is the rule's program-wide source position, the
+same number as its 'RuleId', so each anonymous rule gets its own name in
+diagnostics, stack frames and traces. The propagation history is keyed
+on the 'RuleId', not on the name.
+-}

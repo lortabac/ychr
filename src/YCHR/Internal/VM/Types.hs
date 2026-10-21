@@ -95,11 +95,11 @@ import YCHR.Internal.Types qualified as Types
 -- The interpreter maintains a stack of these for error reporting.
 data StackFrame = StackFrame
   { -- | Human-readable label (e.g. @"rule transitivity"@ or @"function factorial\/1"@).
-    frameLabel :: Text,
+    label :: Text,
     -- | Source file location.
-    frameSourceLoc :: SourceLoc,
+    sourceLoc :: SourceLoc,
     -- | Pretty-printed source code (from the parsed expression).
-    frameSourceCode :: Text
+    sourceCode :: Text
   }
   deriving (Show, Eq)
 
@@ -146,8 +146,7 @@ data Program = Program
     -- mangled name of the procedure that implements it in
     -- 'procedures'. One entry per user-defined function — every
     -- function reference a program can build — plus one per lifted
-    -- lambda. Consulted by 'ApplyClosure'; the runtime never scans a
-    -- chain of branches to resolve a callable.
+    -- lambda. Consulted by 'ApplyClosure'.
     callables :: ![(CallableKey, Name)],
     -- | Dispatch table for the dynamic @tell\/N@ construct 'TellTerm'.
     -- Maps a 'TellableKey' — the calling module, a goal term's functor
@@ -190,7 +189,9 @@ data Program = Program
 -- a direct map lookup with no need to invert
 -- 'YCHR.Internal.Compile.Names.encodeText'.
 data EvaluableKey = EvaluableKey
-  { functor :: !Name,
+  { -- | The VM-encoded functor.
+    functor :: !Name,
+    -- | The function's arity.
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
@@ -247,7 +248,9 @@ data TellableKey = TellableKey
   { -- | The module the rule body containing the tell was written in,
     -- or 'Nothing' for the origin-less tier.
     scope :: !(Maybe Text),
+    -- | The goal's VM-encoded functor.
     functor :: !Name,
+    -- | The total arity, appended arguments included.
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
@@ -286,7 +289,7 @@ lambdaClosureFunctor = Name (T.pack "__closure")
 -- Note: @reactivate_all@ (paper §5.1–5.2) is not generated.  YCHR
 -- implements the /Selective Constraint Reactivation/ optimization
 -- (paper §5.3, observer pattern): 'Store' registers constraints as
--- observers of their arguments, 'Unify' populates the reactivation
+-- observers of their arguments, 'BUnify' populates the reactivation
 -- queue for affected constraints, and 'DrainReactivationQueue'
 -- processes only those constraints.
 data Procedure = Procedure
@@ -296,10 +299,10 @@ data Procedure = Procedure
     params :: [Name],
     -- | Body statements
     body :: [Stmt],
-    -- | Structural classification of the procedure. The compiler sets
-    -- this at the (single) construction site; the interpreter reads it
-    -- to label trace events without re-parsing the mangled name.
-    -- Backends that don't care about tracing simply ignore the field.
+    -- | Structural classification of the procedure, set by the compiler
+    -- when it builds the procedure. The interpreter reads it to label
+    -- trace events without re-parsing the mangled name. Backends that
+    -- don't trace ignore it.
     procKind :: !ProcKind
   }
   deriving (Show, Eq)
@@ -352,10 +355,10 @@ data Stmt
     --
     -- Iterates over all stored constraints of the given type that
     -- satisfy the index conditions. Each condition @(i, expr)@ requires
-    -- that argument @i@ of the constraint is 'Equal' to @expr@.
+    -- that argument @i@ of the constraint is 'BEqual' to @expr@.
     --
     -- The current constraint suspension is bound to @suspVar@ in each
-    -- iteration; references it via 'IdVar' inside the body, and use
+    -- iteration; reference it via 'IdVar' inside the body, and use
     -- 'FieldArg'/'FieldType' to access its fields.
     --
     -- The iterator must satisfy the robustness, correctness,
@@ -395,7 +398,7 @@ data Stmt
     -- @DrainReactivationQueue suspVar body@
     --
     -- Iterates over the reactivation queue (populated as a side
-    -- effect of 'Unify'), binding each pending constraint suspension
+    -- effect of 'BUnify'), binding each pending constraint suspension
     -- to @suspVar@ (referenced via 'IdVar') and executing @body@.
     -- The body typically dispatches to the appropriate @activate_c@
     -- procedure based on constraint type.
@@ -456,8 +459,7 @@ data ValExpr
     -- closure's 'CallableKey' — and calls the procedure it maps to
     -- with any captured values the closure carries, followed by the
     -- arguments. @'$call'(F, A1, …, An)@ compiles to exactly this
-    -- lookup and call; no per-arity dispatcher scans a chain of
-    -- branches.
+    -- lookup and call.
     --
     -- An unbound closure is an instantiation error (so a rule guard
     -- soft-fails and retries after reactivation), and any other value
@@ -467,8 +469,9 @@ data ValExpr
   | -- | The @is@-with-variable-RHS case: evaluate the nested expression
     -- in deep-deref mode and then walk the resulting 'Value',
     -- evaluating any compound subterm whose @(functor, arity)@ names
-    -- a declared evaluable. Emitted only by 'compileBodyGoal' for
-    -- @D.BodyIs v expr@ when @expr@ is syntactically a variable; this
+    -- a declared evaluable. Emitted only for an @is@ (in a rule body or
+    -- a function body) whose right-hand side is syntactically a
+    -- variable; this
     -- is the marker that makes the walker fire for @R is X@ without
     -- affecting guards or other 'EvalDeep' use sites. See the
     -- "Variable RHS in @is@" subsection of the type-system reference.
@@ -555,12 +558,10 @@ data BoolExpr
 
 -- | Constraint-identifier-producing expressions.
 --
--- Constraint identifiers are produced in only three ways: by
--- 'CreateConstraint', by referencing an id-bound variable
+-- Constraint identifiers are produced in only two ways: by
+-- 'CreateConstraint', or by referencing an id-bound variable
 -- ('IdVar' — populated by the parameter list, 'Foreach',
--- 'DrainReactivationQueue', or a 'LetId' binding), or by
--- a procedure that returns one (currently no such procedure
--- is generated, but the constructor is reserved).
+-- 'DrainReactivationQueue', or a 'LetId' binding).
 data IdExpr
   = -- | Reference to an id-bound variable (local or parameter).
     IdVar Name
