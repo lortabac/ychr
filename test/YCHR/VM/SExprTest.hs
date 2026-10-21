@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Tests for the VM's s-expression format ("YCHR.Internal.VM.SExpr").
 module YCHR.VM.SExprTest (tests) where
 
 import Data.Map.Strict qualified as Map
@@ -454,13 +455,12 @@ formatTests =
             Right vmp' -> vmp' @?= vmp
   ]
 
+-- | Serialize a program with empty exports and symbol table.
 serializeProg :: Program -> Text
 serializeProg = serialize . mkVMProg
 
 -- | The @(version N)@ header gates deserialization: this binary writes
--- and accepts only version 3, and a unit with no header is version 0 —
--- the pre-versioning format, which only a binary predating VM version
--- numbers could read.
+-- and accepts only version 3, and a unit with no header is version 0.
 versionTests :: [TestTree]
 versionTests =
   [ testCase "a version-3 program without the optional tables loads" $
@@ -527,12 +527,14 @@ versionTests =
         "duplicate (version N) header"
   ]
 
+-- | A minimal version-3 unit with one procedure.
 versionedProgramText :: Text
 versionedProgramText =
   "(vm-program (version 3) (program 0 (type-names) 0 (rule-names) (evaluables) "
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
 
+-- | 'versionedProgramText' without its version header.
 versionlessProgramText :: Text
 versionlessProgramText =
   "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables) "
@@ -552,7 +554,11 @@ countTests :: [TestTree]
 countTests =
   [ testCase "a declared type count that disagrees with (type-names) is rejected" $
       assertRejected
-        (T.replace "(program 0 (type-names)" "(program 1 (type-names)" versionedProgramText)
+        ( T.replace
+            "(program 0 (type-names)"
+            "(program 1 (type-names)"
+            versionedProgramText
+        )
         "declared type count 1 does not match the 0 entries in (type-names)",
     testCase "a declared rule count that disagrees with (rule-names) is rejected" $
       assertRejected
@@ -571,11 +577,10 @@ countTests =
 -- Non-negative slots
 -- ---------------------------------------------------------------------------
 
--- | The three IR slots the task moved to 'Word' (@GetArg@ index,
--- @FieldArg@'s @ArgIndex@, @BMatchTerm@ arity) plus the @Foreach@
--- condition index all previously decoded with a bare @fromInteger@,
--- which wraps a negative input to a large positive one. The checked
--- boundary must reject each of them by name.
+-- | The @Word@ slots of the IR (@GetArg@ index, @FieldArg@'s
+-- @ArgIndex@, @BMatchTerm@ arity, and the @Foreach@ condition index).
+-- A bare @fromInteger@ would wrap a negative input to a large positive
+-- one, so the reader must reject each of them by name.
 nonNegativeSlotTests :: [TestTree]
 nonNegativeSlotTests =
   [ testCase "a negative get-arg index is rejected" $
@@ -648,18 +653,23 @@ genCodecText =
           ]
       )
 
+-- | A name, possibly with characters that need escaping.
 genName :: Gen Name
 genName = Name <$> genCodecText
 
+-- | A loop label.
 genLabel :: Gen Label
 genLabel = Label <$> genCodecText
 
+-- | A rule id, negative ones included.
 genRuleId :: Gen RuleId
 genRuleId = RuleId <$> Gen.int (Range.linear (-3) 5)
 
+-- | A small constraint type.
 genConstraintType :: Gen ConstraintType
 genConstraintType = ConstraintType <$> Gen.int (Range.linear 0 4)
 
+-- | An argument index.
 genArgIndex :: Gen ArgIndex
 genArgIndex = ArgIndex <$> genWord
 
@@ -674,6 +684,7 @@ genWord = Gen.word (Range.linear 0 5)
 genHistoryIds :: Gen HistoryIds
 genHistoryIds = histIds <$> Gen.list (Range.linear 0 3) genIdExpr
 
+-- | Any literal.
 genLiteral :: Gen Literal
 genLiteral =
   Gen.choice
@@ -684,6 +695,7 @@ genLiteral =
       BoolLit <$> Gen.bool
     ]
 
+-- | A stack frame with arbitrary text fields.
 genStackFrame :: Gen StackFrame
 genStackFrame = do
   label <- genCodecText
@@ -751,6 +763,7 @@ genBoolExpr =
       BSoftGuard <$> Gen.small genBoolExpr
     ]
 
+-- | A value or id call argument.
 genCallArg :: Gen CallArg
 genCallArg =
   Gen.choice
@@ -847,6 +860,7 @@ mkVMProg prog =
       symbolTable = Types.mkSymbolTable []
     }
 
+-- | Assert that the first text contains the second.
 assertContains :: Text -> Text -> IO ()
 assertContains haystack needle =
   assertBool

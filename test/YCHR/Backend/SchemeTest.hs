@@ -74,6 +74,8 @@ tests =
 -- Helpers
 -- ---------------------------------------------------------------------------
 
+-- | Compile the given modules (prelude plus their imports), failing
+-- the test on error.
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules stdlib False inputs of
   Left err -> assertFailure $ show err
@@ -94,12 +96,14 @@ schemeFor src = do
         }
       cp.opTable
 
+-- | Assert that the generated code contains a fragment.
 assertInfix :: Text -> Text -> IO ()
 assertInfix needle haystack =
   assertBool
     ("expected " ++ show needle ++ " in generated Scheme")
     (needle `T.isInfixOf` haystack)
 
+-- | Assert that the generated code does not contain a fragment.
 assertNotInfix :: Text -> Text -> IO ()
 assertNotInfix needle haystack =
   assertBool

@@ -51,7 +51,7 @@ prepare = instrument . pruneTells
 -- | Weave the observation points into every rule, and build the table
 -- the observer looks them up in.
 --
--- Three kinds of point, each answering a different question:
+-- Four kinds of point, each answering a different question:
 --
 --   [Head, in /guard/ position] @host:ts_obs(c, V…)@ as the first
 --     guard conjunct, over every pattern-bound head variable. This is
@@ -220,6 +220,7 @@ instrumentRule code0 r =
       BUnify w t _ -> Just (w, t)
       _ -> Nothing
 
+-- | Is this the check for a rigid-typed position?
 isRigidCheck :: PosCheck -> Bool
 isRigidCheck c = case c of
   MustBeBound _ -> True

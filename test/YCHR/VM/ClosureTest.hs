@@ -47,6 +47,7 @@ import YCHR.Internal.VM.Closure
     procedureNames,
   )
 
+-- | Closure checks: dangling calls and dispatch-table entries.
 tests :: TestTree
 tests =
   testGroup
@@ -62,6 +63,7 @@ tests =
 -- Fixtures
 -- ---------------------------------------------------------------------------
 
+-- | A parameterless procedure with the given name and body.
 mkProc :: Name -> [Stmt] -> Procedure
 mkProc n body =
   Procedure
@@ -71,6 +73,7 @@ mkProc n body =
       procKind = PKReactivateDispatch
     }
 
+-- | A program with the given procedures and dispatch tables.
 programWith ::
   [Procedure] ->
   [(EvaluableKey, Name)] ->
@@ -188,7 +191,11 @@ danglingTests =
           @?= ["ghost1", "ghost2"],
       testCase "a call in an ApplyClosure operand is found" $
         danglingTargets
-          (programWith [mkProc "a" [ExprStmt (ApplyClosure (CallExpr "ghost" []) [])]] [] [])
+          ( programWith
+              [mkProc "a" [ExprStmt (ApplyClosure (CallExpr "ghost" []) [])]]
+              []
+              []
+          )
           @?= ["ghost"],
       testCase "duplicates collapse and the first appearance wins" $
         danglingTargets

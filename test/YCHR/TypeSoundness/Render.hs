@@ -26,15 +26,18 @@ import Data.Text qualified as T
 import YCHR.TypeSoundness.Preamble
 import YCHR.TypeSoundness.Types
 
+-- | A constraint argument's declared type, @any@ if erased.
 renderArg :: ArgSpec -> Text
 renderArg a = if a.argErased then "any" else renderDTy a.argTy
 
+-- | A literal in source syntax.
 renderLit :: Lit -> Text
 renderLit l = case l of
   LInt n -> tshow n
   LBool True -> "true"
   LBool False -> "false"
 
+-- | A parenthesized, comma-separated argument list.
 args_ :: [Text] -> Text
 args_ ts = "(" <> T.intercalate ", " ts <> ")"
 
@@ -44,6 +47,8 @@ applied :: Text -> [Text] -> Text
 applied f [] = f
 applied f as = f <> args_ as
 
+-- | The whole @gen@ module: types, preamble, classes, constraint
+-- declarations and rules.
 renderModule :: Program -> Text
 renderModule prog =
   T.unlines
@@ -144,6 +149,7 @@ renderConstraintDecl s =
       let TvName v = b.bsTv
        in b.bsClass <> "(" <> v <> ") -> bool"
 
+-- | One rule, named.
 renderRule :: Rule -> Text
 renderRule r =
   r.ruleName
@@ -167,9 +173,11 @@ renderRule r =
       | null r.body = "true"
       | otherwise = T.intercalate ", " (map renderBodyItem r.body)
 
+-- | One head occurrence.
 renderHeadC :: HeadC -> Text
 renderHeadC h = h.headSig.sigName <> args_ (map renderPat (NE.toList h.pats))
 
+-- | A head pattern.
 renderPat :: Pat -> Text
 renderPat p = case p of
   PVar n _ -> n
@@ -196,6 +204,7 @@ renderListLike hd tl tailIsNil
       "[" <> hd <> ", " <> body <> "]"
   | otherwise = "[" <> hd <> " | " <> tl <> "]"
 
+-- | An expression. Operator applications are fully parenthesized.
 renderExpr :: Expr -> Text
 renderExpr e = case e of
   ELit l -> renderLit l
@@ -231,6 +240,7 @@ renderExpr e = case e of
       CGe -> ">="
       CLe -> "=<"
 
+-- | The right-hand side of @=@.
 renderSTerm :: STerm -> Text
 renderSTerm t = case t of
   SLit l -> renderLit l
@@ -239,6 +249,7 @@ renderSTerm t = case t of
   SCons h tl -> renderListLike (renderSTerm h) (renderSTerm tl) (tl == SNil)
   SCtor c ts -> applied c (map renderSTerm ts)
 
+-- | One body goal.
 renderBodyItem :: BodyItem -> Text
 renderBodyItem it = case it of
   BTell s _ es -> s.sigName <> args_ (map renderExpr es)

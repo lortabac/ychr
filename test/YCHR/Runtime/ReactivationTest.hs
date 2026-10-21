@@ -3,7 +3,7 @@
 module YCHR.Runtime.ReactivationTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
-import Data.IORef
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -28,6 +28,7 @@ tests =
       miscTests
     ]
 
+-- | Run an action in a fresh, empty session.
 runReactEnv :: Chr a -> IO a
 runReactEnv action = do
   env <-

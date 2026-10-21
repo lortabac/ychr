@@ -6,7 +6,8 @@
 -- The source text and the Haskell-side tables that describe it live
 -- together here because they have to agree; see 'preamble'.
 module YCHR.TypeSoundness.Preamble
-  ( colorDef,
+  ( -- * Fixed types
+    colorDef,
     shapeDef,
     fixedAdts,
     baseTys,
@@ -14,6 +15,8 @@ module YCHR.TypeSoundness.Preamble
     gBool,
     gList,
     gAdt,
+
+    -- * Predicate library
     libFnSig,
     libFnName,
     preamble,
@@ -47,18 +50,23 @@ shapeDef =
           :| [CtorDef "rect" [DCon CInt [], DCon CInt []]]
     }
 
+-- | The algebraic types every module defines.
 fixedAdts :: [AdtDef]
 fixedAdts = [colorDef, shapeDef]
 
+-- | @int@.
 gInt :: GTy
 gInt = GTy CInt []
 
+-- | @bool@.
 gBool :: GTy
 gBool = GTy CBool []
 
+-- | @list(T)@.
 gList :: GTy -> GTy
 gList t = GTy CList [t]
 
+-- | An algebraic type applied to its arguments.
 gAdt :: AdtDef -> [GTy] -> GTy
 gAdt def args = GTy (CAdt def) args
 
@@ -81,6 +89,7 @@ libFnSig fn = case fn of
   FnIsRed -> ([gAdt colorDef []], gBool)
   FnArea -> ([gAdt shapeDef []], gInt)
 
+-- | The source name of each library predicate.
 libFnName :: LibFn -> Text
 libFnName fn = case fn of
   FnLt -> "lt"

@@ -175,6 +175,7 @@ stripRuleAnn r =
 -- Properties
 -- ---------------------------------------------------------------------------
 
+-- | A pretty-printed term parses back to itself.
 prop_termRoundtrip :: Property
 prop_termRoundtrip = property $ do
   t <- forAll genTerm
@@ -183,6 +184,7 @@ prop_termRoundtrip = property $ do
     Left err -> annotate (show err) >> failure
     Right t' -> t' === t
 
+-- | A pretty-printed constraint parses back to itself.
 prop_constraintRoundtrip :: Property
 prop_constraintRoundtrip = property $ do
   c <- forAll genConstraint
@@ -192,6 +194,7 @@ prop_constraintRoundtrip = property $ do
     Right (Left validErr) -> annotate (show validErr) >> failure
     Right (Right c') -> c' === c
 
+-- | A pretty-printed rule parses back to itself.
 prop_ruleRoundtrip :: Property
 prop_ruleRoundtrip = property $ do
   r <- forAll genRule
@@ -267,6 +270,7 @@ lookupHostCall name = case Map.lookup name baseHostCallRegistry of
   Just hc -> hc
   Nothing -> error $ "host call not found: " ++ show name
 
+-- | Run an action in a fresh, empty session.
 runChrEmpty :: Chr a -> IO a
 runChrEmpty action = do
   env <-
@@ -286,6 +290,7 @@ runChrEmpty action = do
       Set.empty
   runChr action env
 
+-- | @list_to_compound@ undoes @compound_to_list@.
 prop_compoundToListRoundtrip :: Property
 prop_compoundToListRoundtrip = property $ do
   term <- forAllWith showGroundValue genCompoundValue
@@ -297,6 +302,7 @@ prop_compoundToListRoundtrip = property $ do
   annotate (showGroundValue term')
   assert (groundEq term term')
 
+-- | @compound_to_list@ undoes @list_to_compound@.
 prop_listToCompoundRoundtrip :: Property
 prop_listToCompoundRoundtrip = property $ do
   f <- forAll genSafeAtom
@@ -326,7 +332,7 @@ prop_listToCompoundRoundtrip = property $ do
 -- Arithmetic and comparison operators come from @library(prelude)@,
 -- not 'builtinOps', so 'parseRule' can't re-ingest @+@/@<@/@==@ in
 -- isolation. Pretty-printing of those is covered indirectly by the
--- ~120 golden tests that print arithmetic and comparison results.
+-- golden tests that print arithmetic and comparison results.
 --
 -- The check is: parse → pretty → parse, and assert (a) both parses
 -- succeed without parse-validation errors and (b) the pretty output
@@ -334,6 +340,7 @@ prop_listToCompoundRoundtrip = property $ do
 -- pins both the pretty-printer being a valid inverse of the parser
 -- and the rendering being canonical for these shapes.
 
+-- | Parse, pretty-print and re-parse a rule; the two prints must agree.
 assertRuleRoundtrips :: Text -> IO ()
 assertRuleRoundtrips src = case parseRule "<roundtrip>" src of
   Left err ->

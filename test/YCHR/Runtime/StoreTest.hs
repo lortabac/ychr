@@ -53,8 +53,8 @@ runStoreEnv action = do
       Set.empty
   runChr action env
 
--- | Run an action and pair the result with the observer IDs accumulated
--- by the final 'unify' (or an empty list if no 'unify' happened).
+-- | 'runStoreEnv' for an action that returns the observer ids a
+-- 'unify' reported.
 runStoreObservers :: Chr [SuspensionId] -> IO [SuspensionId]
 runStoreObservers = runStoreEnv
 

@@ -127,7 +127,8 @@ data Ctx = Ctx
     -- predicate, or a bare argument at another 'MayBeUnbound'
     -- position. Everything else evaluates, and evaluation of a free
     -- variable is a runtime error the oracle would have to tolerate —
-    -- see @Note [Which failures are benign now]@.
+    -- see @Note [Why benign failures are impossible]@ in
+    -- "YCHR.TypeSoundness.Oracle".
     ctxTainted :: Set Text
   }
 
@@ -197,14 +198,13 @@ rigidTargets ctx =
     allUntainted =
       concat [varsAt ctx t | (_, t) <- scopeTys ctx]
 
--- | A type to instantiate a callee's parameter at, biased towards the
--- rigid ones.
+-- | A target type for a body binding ('genBind') or an ask-equality
+-- ('richAlts'), biased towards the rigid ones.
 --
 -- Drawn uniformly, a rigid target is picked a few percent of the time:
 -- the ground universe has dozens of members and a rule holds one or
--- two rigid types. That left "a body tell instantiates a parameter at
--- a rigid type" at 4%, which is the shape the polymorphic fragment
--- exists to exercise, so the draw is weighted instead.
+-- two rigid types, so the draw is weighted instead. Body tells pick
+-- their instantiations through 'pickBounded'.
 pickTarget :: Ctx -> Gen STy
 pickTarget ctx =
   Gen.frequency
@@ -241,18 +241,19 @@ boundedTargets ctx bounds v = case [b | b <- bounds, b.bsTv == v] of
       SSk sk -> (b.bsClass, SSk sk) `elem` strippedAmbients ctx
       g -> case classNamed ctx b.bsClass of
         Nothing -> False
-        Just c -> gToS `map` classInstances c & elem g
-    (&) x f = f x
+        Just c -> g `elem` map gToS (classInstances c)
 
 -- | Every ground and rigid type a parameter could be instantiated at
 -- here, whether or not a bound allows it.
 instantiationTargets :: Ctx -> [STy]
 instantiationTargets ctx = map gToS ctx.ctxUniv ++ rigidTargets ctx
 
+-- | The ambient signatures, with their types fully resolved.
 strippedAmbients :: Ctx -> [(Text, STy)]
 strippedAmbients ctx =
   [(n, stripSTy ctx.ctxSk t) | (n, t) <- ctx.ctxAmbients]
 
+-- | Look up a class of this program by name.
 classNamed :: Ctx -> Text -> Maybe ClassFn
 classNamed ctx n = List.find (\c -> c.cfName == n) ctx.ctxClasses
 
@@ -285,9 +286,11 @@ pickFrom cands ctx =
     (rigid, ground) = List.partition isRigid cands
     isRigid t = isSkTy (stripSTy ctx.ctxSk t)
 
+-- | A ground type as an implementation-site type.
 gToS :: GTy -> STy
 gToS (GTy c as) = SCon c (map gToS as)
 
+-- | A ground type as a declaration type.
 gToD :: GTy -> DTy
 gToD (GTy c as) = DCon c (map gToD as)
 
@@ -306,6 +309,7 @@ gToD (GTy c as) = DCon c (map gToD as)
 genProgram :: Gen Program
 genProgram = genProgramWith Closed
 
+-- | 'genProgram' for the given regime.
 genProgramWith :: Mode -> Gen Program
 genProgramWith mode = do
   defs <- genAdts
@@ -393,11 +397,14 @@ genAdts = do
               }
       go (k - 1) (tyIx + 1) ctorIx' (def : acc)
 
+-- | Does the type mention this parameter?
 mentionsTv :: TvName -> DTy -> Bool
 mentionsTv v t = case t of
   DVar w -> v == w
   DCon _ as -> any (mentionsTv v) as
 
+-- | 1–3 constructors, named from the given index on. Returns the next
+-- free index.
 genCtors :: [AdtDef] -> [TvName] -> Int -> Gen (NonEmpty CtorDef, Int)
 genCtors earlier params start = do
   extra <- Gen.int (Range.constant 0 2)
@@ -405,6 +412,7 @@ genCtors earlier params start = do
   rest <- traverse (genCtor earlier params) [start + 1 .. start + extra]
   pure (c0 :| rest, start + extra + 1)
 
+-- | One constructor with 0–2 fields.
 genCtor :: [AdtDef] -> [TvName] -> Int -> Gen CtorDef
 genCtor earlier params ix = do
   fs <- Gen.list (Range.constant 0 2) (genFieldTy earlier params)
@@ -424,6 +432,8 @@ genFieldTy earlier params =
         ++ [(2, genAdtApp earlier params) | not (null earlier)]
     )
 
+-- | A type with no nested applications: a base type, a parameter, or a
+-- non-parametric earlier definition.
 genLeafTy :: [AdtDef] -> [TvName] -> Gen DTy
 genLeafTy earlier params =
   Gen.frequency
@@ -435,6 +445,7 @@ genLeafTy earlier params =
            ]
     )
 
+-- | An earlier definition applied at leaf types.
 genAdtApp :: [AdtDef] -> [TvName] -> Gen DTy
 genAdtApp earlier params = do
   d <- Gen.element earlier
@@ -513,6 +524,7 @@ pinOk cls bounded sk t =
       Nothing -> True
       Just c -> t `elem` map gToS (classInstances c)
 
+-- | Is this a type constructor without parameters?
 nonParametricCon :: TyCon -> Bool
 nonParametricCon c = case c of
   CInt -> True
@@ -591,6 +603,7 @@ genSig mode univ adts cls ix = do
     genBoundness = Gen.frequency [(2, pure Ground), (1, pure MayBeUnbound)]
     mkArg t b = ArgSpec {argTy = t, argErased = False, argBound = b}
 
+-- | A constraint argument's declared type.
 genArgDTy :: [GTy] -> [AdtDef] -> [TvName] -> Gen DTy
 genArgDTy univ adts tvs =
   Gen.frequency
@@ -620,6 +633,7 @@ genParamAdtApp parametric tvs = do
 -- Rules
 -- ---------------------------------------------------------------------------
 
+-- | 1–6 rules.
 genRules :: [GTy] -> [AdtDef] -> [ClassFn] -> NonEmpty Sig -> Gen [Rule]
 genRules univ adts cls sigList = do
   n <- Gen.int (Range.linear 1 6)
@@ -628,6 +642,7 @@ genRules univ adts cls sigList = do
 -- | Which of the three CHR rule shapes to generate.
 data RuleKind = KSimplify | KPropagate | KSimpagate
 
+-- | One rule. The index names it.
 genRule :: [GTy] -> [AdtDef] -> [ClassFn] -> NonEmpty Sig -> Int -> Gen Rule
 genRule univ adts cls sigList ix = do
   kind <- Gen.element [KSimplify, KPropagate, KSimpagate]
@@ -641,9 +656,9 @@ genRule univ adts cls sigList ix = do
       -- First occurrence wins for a repeated (aliased) variable: HNF
       -- renames the later occurrences away and keeps the first, so
       -- the checker types the surviving name at its first position.
-      -- The occurrences' types need not resolve equal any more — a
-      -- pair meeting inside a shared constructor teaches the checker
-      -- nothing — so which one the scope records is load-bearing.
+      -- The occurrences' types may resolve differently — a pair
+      -- meeting inside a shared constructor teaches the checker
+      -- nothing — so which one the scope records matters.
       scope0 =
         Map.fromListWith
           (\_ old -> old)
@@ -800,7 +815,7 @@ genHead adts cls sigList hIx sk = do
 -- freshness and the rigidity are both load-bearing: @typecheck_match_beta_rigid@
 -- pins that the parameters a @GuardMatch@ introduces are rigid, not
 -- flexible, so a body may not then treat the field as a concrete type.
--- Getting that wrong here is the drift this stage exists to catch, so
+-- Getting that wrong here is the drift this test exists to catch, so
 -- the generator does exactly what the spec says and lets the checker
 -- disagree if it will.
 --
@@ -892,6 +907,7 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
     pinOrKeep src s t env = fromMaybe env (pinSkolem src s t env)
     adtsInScope = adts
 
+-- | A variable name from a position path, e.g. @V0_1_0@.
 varName :: [Int] -> Text
 varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
 
@@ -1028,6 +1044,7 @@ notePins before after =
     concreteBindings =
       Map.filter (not . isSkTy) (Map.difference after.skBind before.skBind)
 
+-- | Rename one pattern variable throughout a head occurrence.
 renameHead :: Text -> Text -> HeadC -> HeadC
 renameHead from to h = h {pats = fmap go h.pats}
   where
@@ -1204,6 +1221,7 @@ genGuard ctx
     -- inhabited without it. Checking only the bare-rigid case is not
     -- enough: @t0(T)@ and @list(T)@ are just as uninhabited once the
     -- one variable carrying @T@ is gone.
+    --
     -- Usable /without/ a second value of its own type when an
     -- overloaded predicate applies to it directly: every other test
     -- needs an opposite operand, a unary class call does not.
@@ -1230,6 +1248,7 @@ genGuard ctx
                ]
         || not (null (classesAt ctx t))
 
+-- | The context with one variable out of scope.
 withoutVar :: Ctx -> Text -> Ctx
 withoutVar ctx n = ctx {ctxScope = Map.delete n ctx.ctxScope}
 
@@ -1563,6 +1582,7 @@ freqOr ctx who ty alts
 genExprRoot :: Ctx -> STy -> Gen Expr
 genExprRoot ctx ty = genNonVarAt ctx 2 ty
 
+-- | 'genExprRoot' at a given depth.
 genNonVarAt :: Ctx -> Int -> STy -> Gen Expr
 genNonVarAt ctx d ty =
   freqOr
@@ -1596,8 +1616,8 @@ structAlts ctx d ty = case stripSTy ctx.ctxSk ty of
       all (inhabited ctx) (ctorFieldTys def args c)
     ]
   SCon _ _ -> []
-  where
 
+-- | A constructor application with generated fields.
 genCtorExpr :: Ctx -> Int -> AdtDef -> [STy] -> CtorDef -> Gen Expr
 genCtorExpr ctx d def args c =
   ECtor c.ctorName
@@ -1671,6 +1691,7 @@ richAlts ctx d ty
         not (null (classesAt ctx t))
       ]
 
+-- | A well-typed right-hand side for @=@.
 genSTermAt :: Ctx -> Int -> STy -> Gen STerm
 genSTermAt ctx d ty = freqOr ctx "genSTermAt" ty (varAlt ++ structs)
   where

@@ -49,7 +49,7 @@ module YCHR.TypeSoundness.Observe
 where
 
 import Control.Monad.IO.Class (liftIO)
-import Data.IORef
+import Data.IORef (IORef, modifyIORef')
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
@@ -84,6 +84,7 @@ data Snap
   | SnUnbound Int
   deriving (Eq, Show)
 
+-- | Freeze a value, dereferencing all the way down.
 snapshot :: Value -> Chr Snap
 snapshot v = do
   d <- deref v
@@ -184,6 +185,7 @@ baseName n
       (pre, post) | not (T.null pre), not (T.null post) -> post
       _ -> t
 
+-- | A short description of a snapshot for a mismatch message.
 describe :: Snap -> Text
 describe s = case s of
   SnInt n -> "int " <> tshow n
@@ -207,6 +209,7 @@ data Bad = Bad
   }
   deriving (Eq, Show)
 
+-- | Everything the observer recorded during one run.
 data ObsLog = ObsLog
   { -- | Hits per site code. This is what makes runtime facts —
     -- \"this rule fired\" — assertable with @cover@.
@@ -223,6 +226,7 @@ data ObsLog = ObsLog
   }
   deriving (Eq, Show)
 
+-- | The log before the run starts.
 emptyLog :: ObsLog
 emptyLog =
   ObsLog
