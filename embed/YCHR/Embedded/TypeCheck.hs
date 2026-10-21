@@ -4,7 +4,7 @@
 --
 -- The @typechecker\/*.chr@ modules are read by GHC at build time and
 -- spliced into @YCHR.Embedded@. The resulting binary is self-contained:
--- no env var, no cwd-relative path.
+-- no @YCHR_LIB_DIR@ env var, no cwd-relative path.
 --
 -- This module lives in the shared @embed\/@ source directory, compiled
 -- into the components that want that self-containment — the @ychr@

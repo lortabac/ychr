@@ -115,12 +115,14 @@ data ReplOptions = ReplOptions
     -- unchecked.
     typeChecker :: Maybe SessionInput,
     hostCalls :: HostCallRegistry,
-    -- | @--quiet@: no prompts, no compile warnings.
+    -- | @--quiet@: no prompts; skip warnings (unless fatal), the
+    -- startup type-check report and the history notice.
     quiet :: Bool,
     -- | @--Werror@: warnings during the initial load abort startup;
     -- during @:recompile@ they keep the previous program loaded.
     werror :: Bool,
-    -- | @--dump-splices@: print the declaration-macro splices on load.
+    -- | @--dump-splices@: print the declaration-macro splices to stderr
+    -- on load and on @:recompile@.
     dumpSplices :: Bool,
     -- | The files to compile; empty means an empty program.
     files :: [FilePath]
