@@ -17,6 +17,17 @@ Internal record fields drop their type prefixes.
 - **Breaking:** `YCHR.Internal.Compile.Pipeline.ModuleSplices` has
   fields `moduleName`, `file` and `items` instead of `spliceModule`,
   `spliceFile` and `spliceItems`.
+- **Breaking:** `YCHR.Internal.Diagnostic.Diagnostic` has fields
+  `label`, `annotation` and `context` instead of `diagLabel`,
+  `diagAnnotation` and `diagContext`.
+- **Breaking:** `YCHR.Internal.Runtime.Trace.TraceEvent` (what a
+  `withTraceHandler` handler gets) has positional constructors and no
+  field names. The fields were partial.
+- **Breaking:** `YCHR.Internal.Runtime.Index.PosIndex` has fields
+  `buckets` and `rest`, and `YCHR.Internal.Constructors.ConEnv` has
+  `constructors` and `aliases`.
+- **Breaking:** `YCHR.Internal.Repl.runRepl` takes one `ReplOptions`
+  record instead of positional arguments.
 
 A constraint's type parameters only take *determined* types
 ([docs/reference/type-system.md](docs/reference/type-system.md#determined-types)).
