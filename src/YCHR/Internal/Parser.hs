@@ -69,6 +69,8 @@ import Data.Either (partitionEithers)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
+import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'last'; the shim supplies it
@@ -809,8 +811,10 @@ withExpansion [] item = item
 withExpansion chain item = case item of
   ItemRule r -> ItemRule (setRule r)
   ItemEquation e -> ItemEquation (setEq <$> e)
-  ItemDirective (DirExtendFunctionEqn e) -> ItemDirective (DirExtendFunctionEqn (setEq <$> e))
-  ItemDirective (DirExtendClassEqn e) -> ItemDirective (DirExtendClassEqn (setEq <$> e))
+  ItemDirective (DirExtendFunctionEqn e) ->
+    ItemDirective (DirExtendFunctionEqn (setEq <$> e))
+  ItemDirective (DirExtendClassEqn e) ->
+    ItemDirective (DirExtendClassEqn (setEq <$> e))
   _ -> item
   where
     -- Positional: a record update of 'expansion' would be ambiguous
@@ -821,7 +825,8 @@ withExpansion chain item = case item of
 -- | Read just the name, exports, imports and macros of a module from
 -- its terms. Errors are ignored here; full conversion reports them.
 scanModuleTerms :: Text -> [Ann PExpr] -> Module
-scanModuleTerms defaultName terms = fst (convertModule defaultName (filter relevant terms))
+scanModuleTerms defaultName terms =
+  fst (convertModule defaultName (filter relevant terms))
   where
     relevant t = case t.node of
       Compound ":-" [Ann body _] -> case body of
@@ -832,7 +837,7 @@ scanModuleTerms defaultName terms = fst (convertModule defaultName (filter relev
 
 -- | Built-in directives (name, arity). Any other directive is a
 -- declaration-macro use. Declaration macros can't use these keys.
-builtinDirectives :: Set.Set (Text, Int)
+builtinDirectives :: Set (Text, Int)
 builtinDirectives =
   Set.fromList
     [ ("module", 1),
@@ -953,7 +958,7 @@ groupMacroClauses items =
 -- | Check that equations for non-open functions are contiguous.
 -- Returns an error for each function whose equations are separated by
 -- other items.
-checkContiguity :: Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+checkContiguity :: Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
 checkContiguity openNames items =
   checkEquationContiguity openNames items
     ++ checkDeclContiguity openNames items
@@ -984,7 +989,7 @@ checkMacroClauseContiguity = go Set.empty Nothing
 -- | Equation contiguity: equations for the same non-open function name
 -- must be a contiguous block of module items.
 checkEquationContiguity ::
-  Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+  Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
 checkEquationContiguity openNames = go Set.empty Nothing
   where
     -- closed: function names whose equation block has ended.
@@ -1015,7 +1020,7 @@ checkEquationContiguity openNames = go Set.empty Nothing
 -- @:- function f\/1, g\/1.@) count as one block per function and do
 -- not close each other.
 checkDeclContiguity ::
-  Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+  Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
 checkDeclContiguity openNames = go Set.empty Set.empty
   where
     -- closed: function names whose decl block has ended.
@@ -1260,9 +1265,7 @@ requiringOnClassErrors ::
 requiringOnClassErrors loc origin decls =
   [ AnnP (RequiringOnClass fd.name) loc origin
   | Ann (FunctionDecl fd) _ <- decls,
-    case fd.requiring of
-      Just _ -> True
-      Nothing -> False
+    isJust fd.requiring
   ]
 
 -- | Convert an export item PExpr to a 'Declaration'. Items whose shape
@@ -1281,16 +1284,16 @@ convertExportItem (Ann pexpr loc) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
     ( Just
         ( FunctionDecl
-            ( FunctionDeclBody
-                name
-                (fromInteger arity)
-                Nothing
-                Nothing
-                False
-                DKFunction
-                Nothing
-                Nothing
-            )
+            FunctionDeclBody
+              { name,
+                arity = fromInteger arity,
+                argTypes = Nothing,
+                returnType = Nothing,
+                isOpen = False,
+                kind = DKFunction,
+                requiring = Nothing,
+                refining = Nothing
+              }
         ),
       []
     )
@@ -1681,7 +1684,7 @@ convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
 -- need to cover because the renamer never resolves a bare
 -- @,@\/@;@\/@\\@\/@|@ as a callable name. @:@ is included so that a
 -- qualified head @m:f(...)@ is rejected in one error.
-reservedMacroHeadNames :: Set.Set Text
+reservedMacroHeadNames :: Set Text
 reservedMacroHeadNames =
   Set.fromList
     [ ",",
@@ -1719,7 +1722,8 @@ convertMacroClause (Ann pexpr loc) = case pexpr of
     Just (mname, rawParams)
       | Set.notMember mname reservedMacroHeadNames ->
           case unfoldListStrict macroBody.node of
-            Nothing -> (Nothing, [AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node])
+            Nothing ->
+              (Nothing, [AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node])
             Just elems ->
               let clause = MacroClause (map convertTerm rawParams) (map convertTerm elems)
                in (Just (mname, AnnP clause loc pexpr), [])
@@ -1778,9 +1782,8 @@ convertHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
 convertHead (Ann pexpr loc) = case pexpr of
   Compound "\\" [kept, removed] ->
     let (keptErrs, keptOk) = partitionEithers (map convertConstraint (flattenComma kept))
-        ( removedErrs,
-          removedOk
-          ) = partitionEithers (map convertConstraint (flattenComma removed))
+        (removedErrs, removedOk) =
+          partitionEithers (map convertConstraint (flattenComma removed))
      in (AnnP (Simpagation keptOk removedOk []) loc pexpr, keptErrs ++ removedErrs)
   _ ->
     let constraints = flattenComma (Ann pexpr loc)
@@ -1814,47 +1817,21 @@ splitGuardBody expr = case expr.node of
 convertFunctionEquation ::
   Ann PExpr -> (Maybe (AnnP FunctionEquation), [AnnP ParseValidationError])
 convertFunctionEquation (Ann pexpr loc) = case pexpr of
-  Compound "->" [lhs, rhs] -> case lhs.node of
-    -- Guarded: lhs_pattern | guard -> rhs
-    Compound "|" [pat, guard_] -> case extractFunNameArgs pat of
-      Just (name, args) ->
-        ( Just
-            ( AnnP
-                ( FunctionEquation
-                    (Unqualified name)
-                    args
-                    ( AnnP
-                        (map convertTerm (flattenComma guard_))
-                        guard_.sourceLoc
-                        guard_.node
-                    )
-                    (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
-                    []
-                )
-                loc
-                pexpr
-            ),
-          []
-        )
-      Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
-    -- Unguarded: lhs_pattern -> rhs
-    _ -> case extractFunNameArgs lhs of
-      Just (name, args) ->
-        ( Just
-            ( AnnP
-                ( FunctionEquation
-                    (Unqualified name)
-                    args
-                    (noAnnPAt lhs.sourceLoc [])
-                    (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
-                    []
-                )
-                loc
-                pexpr
-            ),
-          []
-        )
-      Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
+  Compound "->" [lhs, rhs] ->
+    let (pat, guardAnn) = case lhs.node of
+          -- Guarded: lhs_pattern | guard -> rhs
+          Compound "|" [p, guard_] ->
+            ( p,
+              AnnP (map convertTerm (flattenComma guard_)) guard_.sourceLoc guard_.node
+            )
+          -- Unguarded: lhs_pattern -> rhs
+          _ -> (lhs, noAnnPAt lhs.sourceLoc [])
+     in case extractFunNameArgs pat of
+          Just (name, args) ->
+            let rhsAnn = AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node
+                eqn = FunctionEquation (Unqualified name) args guardAnn rhsAnn []
+             in (Just (AnnP eqn loc pexpr), [])
+          Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
   _ -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
 
 -- | Flatten a function-equation RHS (or lambda body) on the top-level

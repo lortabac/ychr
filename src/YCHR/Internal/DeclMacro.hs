@@ -249,13 +249,14 @@ expandAndConvert env scope terms =
           expansionErrors =
             defErrs
               ++ expErrs
-              ++ [ Diagnostic Nothing (DeclMacroParseError <$> e) (renderExpansionChain chain)
-                 | (e, chain@(_ : _)) <- convErrs
+              ++ [ Diagnostic Nothing (DeclMacroParseError <$> e) (renderExpansionChain c)
+                 | (e, c@(_ : _)) <- convErrs
                  ],
           splices = [si | si <- items, not (null si.expansion)]
         }
   where
-    initialState = ExpState {nextSeed = 0, remaining = macroExpansionBudget, abandoned = False}
+    initialState =
+      ExpState {nextSeed = 0, remaining = macroExpansionBudget, abandoned = False}
 
 -- | Expand a module's top-level terms. Each top-level use gets a fresh
 -- budget. A failed use adds no clauses, so its partial output doesn't
@@ -372,7 +373,12 @@ expandUse env scope loc chain body prov n useArgs = do
     use =
       Use
         { step =
-            ExpansionStep {macroModule = prov, macroName = n, macroArity = arity, site = loc},
+            ExpansionStep
+              { macroModule = prov,
+                macroName = n,
+                macroArity = arity,
+                site = loc
+              },
           arguments = useArgs,
           argumentsSize = useSize,
           depth = useDepth
@@ -459,19 +465,16 @@ mixedKeys :: MacroScope -> Set (Text, Int)
 mixedKeys scope =
   Set.intersection (keysOf GoalMacro) (keysOf DeclMacro)
   where
-    keysOf k = Set.fromList [(d.node.name, d.node.arity) | d <- scope.macros, d.node.kind == k]
+    keysOf k =
+      Set.fromList
+        [(d.node.name, d.node.arity) | d <- scope.macros, d.node.kind == k]
 
 -- | Report an error at the outermost directive, with the chain.
 emit :: SourceLoc -> PExpr -> [Use] -> DeclMacroError -> Expand ()
 emit loc origin chain err =
-  lift
-    ( tell
-        [ Diagnostic
-            Nothing
-            (AnnP err loc origin)
-            (renderExpansionChain (map (.step) chain))
-        ]
-    )
+  lift (tell [Diagnostic Nothing (AnnP err loc origin) chainLines])
+  where
+    chainLines = renderExpansionChain (map (.step) chain)
 
 -- | Give every node of a term the same location.
 relocate :: SourceLoc -> PExpr -> Ann PExpr

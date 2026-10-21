@@ -65,7 +65,7 @@ moduleNamed n cp = case [m | m <- cp.allModules, m.name == n] of
 -- | Compile modules, expecting rename errors.
 renameErrors :: [(FilePath, Text)] -> IO [RenameError]
 renameErrors inputs = case compileModules stdlib False inputs of
-  Left (RenameErrors es) -> pure [d.diagAnnotation.node | d <- es]
+  Left (RenameErrors es) -> pure [d.annotation.node | d <- es]
   Left e -> assertFailure ("unexpected error:\n" ++ displayMsg e)
   Right _ -> assertFailure "expected a rename error"
 
@@ -84,7 +84,7 @@ declErrors inputs = case compileModules stdlib False inputs of
   Right _ -> assertFailure "expected a declaration-macro error"
 
 errNodes :: [Diagnostic DeclMacroError] -> [DeclMacroError]
-errNodes = map (\d -> d.diagAnnotation.node)
+errNodes = map (\d -> d.annotation.node)
 
 -- | The user module @m@ of a compiled program.
 userModule :: CompiledProgram -> IO CollectedModule
@@ -260,7 +260,7 @@ expansionTests =
         (_, ws) <-
           compileAllOk
             [("m.chr", ":- module(m).\n:- macro_decls d(X) ---> [].\n:- d(1).\n")]
-        [w.diagAnnotation.node | RenameWarnings rws <- ws, w <- rws]
+        [w.annotation.node | RenameWarnings rws <- ws, w <- rws]
           @?= [UnusedMacroParameter (QualifiedName "m" "d") "X"],
       testCase "a qualified use of an imported macro" $ do
         let provider =
@@ -358,8 +358,8 @@ diagnosticTests =
             ]
         case es of
           [d] -> do
-            d.diagAnnotation.node @?= MacroDeclsForbiddenClause "use_module"
-            let chain = concatMap T.unpack d.diagContext
+            d.annotation.node @?= MacroDeclsForbiddenClause "use_module"
+            let chain = concatMap T.unpack d.context
             assertContains "m:inner/1" chain
             assertContains "m:outer/0" chain
           other -> assertFailure (show (errNodes other)),
@@ -520,7 +520,7 @@ diagnosticTests =
           Right _ -> assertFailure "expected a kind mismatch",
       testCase "a goal macro and a declaration macro with one key are duplicates" $ do
         es <-
-          map (.diagAnnotation.node)
+          map (.annotation.node)
             <$> declErrors
               [ ( "m.chr",
                   src
@@ -621,8 +621,8 @@ diagnosticTests =
             [("m.chr", ":- module(m).\n:- macro_decls bad ---> [not_a_clause].\n:- bad.\n")]
         case es of
           [d] -> do
-            d.diagAnnotation.node @?= DeclMacroParseError MalformedTopLevel
-            assertContains "in the expansion of m:bad/0" (concatMap T.unpack d.diagContext)
+            d.annotation.node @?= DeclMacroParseError MalformedTopLevel
+            assertContains "in the expansion of m:bad/0" (concatMap T.unpack d.context)
           other -> assertFailure (show (errNodes other)),
       testCase "a renaming error in a generated rule shows the chain" $
         case compileModules

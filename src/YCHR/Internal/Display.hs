@@ -169,7 +169,7 @@ severityColor SevStackTrace = Cyan
 -- ast_node
 -- @
 --
--- The macro-expansion chain ('ctxLines', from 'Diagnostic.diagContext')
+-- The macro-expansion chain ('ctxLines', from 'Diagnostic.context')
 -- is empty for every diagnostic except a 'RenameError'\/'RenameWarning'
 -- raised inside a @:- macro@ expansion; every other 'Display' instance
 -- always passes @[]@. See docs/reference/macros.md §Diagnostics.

@@ -15,6 +15,9 @@
 --     into the single 'CollectedImport' so everything downstream sees
 --     only one kind of import.
 --
+--   * 'selfNamedLibraryImports' reports a module that imports the
+--     library of its own name.
+--
 --   * 'addLibraryPrelude' prepends a @prelude@ import to each library
 --     module (except the prelude itself).
 module YCHR.Internal.Collect
@@ -37,9 +40,13 @@ import YCHR.Internal.Parsed
 
 -- | Why import collection failed.
 data CollectError
-  = UnknownLibrary Text
-  | CircularLibraryImport [Text]
-  | SelfNamedLibraryImport Text
+  = -- | No bundled library has this name.
+    UnknownLibrary Text
+  | -- | Library import cycle: the import path, ending with the library
+    -- that closes it.
+    CircularLibraryImport [Text]
+  | -- | A module imports the library of its own name.
+    SelfNamedLibraryImport Text
   | -- | Two user modules declare the same name. Carries the name and
     -- the file paths that declare it, in input order.
     DuplicateModuleName Text [FilePath]
