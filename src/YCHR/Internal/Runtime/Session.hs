@@ -107,11 +107,11 @@ data SessionInput = SessionInput
     -- deriving them walks every procedure of the program, prelude
     -- included, and a session is created per goal.
     indexPositions :: IntMap IntSet,
-    -- | Resolves an unqualified constraint name and arity to the
-    -- qualified constraint that is exported under it, or to the
-    -- modules that make it ambiguous.
+    -- | Resolves an unqualified constraint or function name and arity
+    -- to the qualified name exported under it, or to the modules that
+    -- make it ambiguous.
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
-    -- | Every qualified constraint the program exports.
+    -- | Every qualified constraint or function the program exports.
     exportedSet :: Set Types.QualifiedIdentifier,
     -- | The program's operator table, carried for the runtime reader
     -- (@read_term_from_string@). Taken from the 'CompiledProgram' by

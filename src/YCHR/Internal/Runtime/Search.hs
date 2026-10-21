@@ -337,10 +337,9 @@ data Choice = Choice
 --
 -- 'AltDone' means 'onSolution' ended the search, one way or the
 -- other. 'AltFailed' means this subtree yielded no such end, and
--- carries why — which the caller
--- reports and a nesting caller propagates, so the reason a trace shows
--- is the one that actually happened at the bottom rather than a
--- summary invented on the way up.
+-- carries why — which the caller reports and a nesting caller
+-- propagates, so the reason a trace shows is the one that actually
+-- happened at the bottom rather than a summary invented on the way up.
 searchFrom :: SearchCtx -> StoreSlot -> Chr AltOutcome
 searchFrom ctx cursor =
   findChoice ctx cursor >>= \case

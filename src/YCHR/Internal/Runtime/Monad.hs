@@ -170,7 +170,8 @@ data SessionEnv = SessionEnv
     -- drained by 'DrainReactivationQueue').
     reactQueue :: !(IORef (Seq SuspensionId)),
     -- | Interpreter call stack (newest first). Not capped here: it is
-    -- cut to 'YCHR.Internal.Runtime.Error.maxCallStackDepth' when read.
+    -- cut to 'YCHR.Internal.Runtime.Error.maxCallStackDepth' when an
+    -- error reports it.
     callStack :: !(IORef CallStack),
     -- | All known procedures, lowered to the interpreter's slot phase.
     -- A ref only because a search fork copies the table into a fresh

@@ -18,9 +18,9 @@
 -- a subset. A suspension is therefore filed under a key only when its
 -- indexed argument was fully ground when it was stored
 -- ('GroundKey'), and every other suspension — an unbound variable, or
--- a compound term containing one — goes into that position's non-ground
--- fallback set (the @rest@ of a 'PosIndex'). A lookup for a ground key yields the
--- bucket's slots plus the whole fallback set.
+-- a compound term containing one — goes into that position's
+-- non-ground fallback set (the @rest@ of a 'PosIndex'). A lookup for a
+-- ground key yields the bucket's slots plus the whole fallback set.
 --
 -- Two properties make that superset exact enough to be worth having:
 --
