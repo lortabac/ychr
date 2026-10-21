@@ -42,8 +42,8 @@ import YCHR.Internal.Parsed
 data CollectError
   = -- | No bundled library has this name.
     UnknownLibrary Text
-  | -- | Library import cycle: the import path, ending with the library
-    -- that closes it.
+  | -- | Library import cycle: the libraries on the current path, in
+    -- sorted order (not import order), then the one that closes it.
     CircularLibraryImport [Text]
   | -- | A module imports the library of its own name.
     SelfNamedLibraryImport Text

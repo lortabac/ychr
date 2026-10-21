@@ -249,8 +249,11 @@ expandAndConvert env scope terms =
           expansionErrors =
             defErrs
               ++ expErrs
-              ++ [ Diagnostic Nothing (DeclMacroParseError <$> e) (renderExpansionChain c)
-                 | (e, c@(_ : _)) <- convErrs
+              ++ [ Diagnostic
+                     Nothing
+                     (DeclMacroParseError <$> e)
+                     (renderExpansionChain chain)
+                 | (e, chain@(_ : _)) <- convErrs
                  ],
           splices = [si | si <- items, not (null si.expansion)]
         }
