@@ -198,14 +198,13 @@ rigidTargets ctx =
     allUntainted =
       concat [varsAt ctx t | (_, t) <- scopeTys ctx]
 
--- | A type to instantiate a callee's parameter at, biased towards the
--- rigid ones.
+-- | A target type for a body binding ('genBind') or an ask-equality
+-- ('richAlts'), biased towards the rigid ones.
 --
 -- Drawn uniformly, a rigid target is picked a few percent of the time:
 -- the ground universe has dozens of members and a rule holds one or
--- two rigid types. That left "a body tell instantiates a parameter at
--- a rigid type" at 4%, which is the shape the polymorphic fragment
--- exists to exercise, so the draw is weighted instead.
+-- two rigid types, so the draw is weighted instead. Body tells pick
+-- their instantiations through 'pickBounded'.
 pickTarget :: Ctx -> Gen STy
 pickTarget ctx =
   Gen.frequency

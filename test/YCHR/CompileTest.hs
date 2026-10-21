@@ -41,8 +41,8 @@ tests =
 -- Shared helpers
 -- ---------------------------------------------------------------------------
 
--- | Compile the given modules with the standard library, failing the
--- test on error.
+-- | Compile the given modules (prelude plus their imports), failing
+-- the test on error.
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules stdlib False inputs of
   Left err -> assertFailure $ show err

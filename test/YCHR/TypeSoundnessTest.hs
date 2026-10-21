@@ -46,7 +46,9 @@
 --
 -- Because the generator models rigidity itself and the checker is the
 -- thing under test, a type error is a failure rather than a discard:
--- the two disagreeing is exactly what this test looks for.
+-- the two disagreeing is exactly what this test looks for. This once
+-- caught a real bug: unsound parameter pinning of @GuardEqual@
+-- evidence, now modelled by 'YCHR.TypeSoundness.Types.eqUnifySTy'.
 --
 -- Evidence is /positional/, and the instrumentation respects that: the
 -- head observation asserts only what matching alone guarantees, and a
@@ -343,7 +345,8 @@ coverShape mode prog = do
   -- generator carries the identification in 'skForce'. Measured at
   -- about 11% over 2700 programs. It is lowish because constraint
   -- parameters take determined types only: a skolem is never forced
-  -- to a list, and no list pattern pins one.
+  -- to a list, and no list pattern pins one. (It was 17% before
+  -- determined types; the floor was lowered for that.)
   cover 5 "an alias forced a parameter identification" anyForce
   where
     rs = prog.rules
