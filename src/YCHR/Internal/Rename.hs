@@ -1170,10 +1170,7 @@ checkMacroDefinitions ctx = do
             unless (selfDeclaresAndExports rn ra) $
               let err = MacroBodyNotExported macroName d.arity rn ra
                in emitErrorIn ctx (AnnP err loc origin)
-          primitiveInHead (pn, pa) =
-            emitErrorIn
-              ctx
-              (AnnP (MacroPrimitiveOutsideMacro (unqualifiedText pn) pa) loc origin)
+          primitiveInHead (pn, pa) = primitiveOutsideMacro ctx loc origin pn pa
       traverse_ warnUnused unused
       traverse_ checkRef (concatMap (qualifiedRefsIn self) clause.body)
       traverse_ primitiveInHead (concatMap primitivesIn clause.params)
@@ -2718,8 +2715,7 @@ expandQueryGoalWith (QueryRenameEnv ctx0) (Constraint cname0 cargs0) =
     go :: RenameCtx -> Name -> [Term] -> Rename [Term]
     go ctx cname cargs
       | isPrimitiveName cname (length cargs) = do
-          let err = MacroPrimitiveOutsideMacro (unqualifiedText cname) (length cargs)
-          emitErrorIn ctx (AnnP err queryTermLoc (Atom ""))
+          primitiveOutsideMacro ctx queryTermLoc (Atom "") cname (length cargs)
           pure []
       | otherwise = case classifyGoalName ctx cname (length cargs) of
           AmbiguousGoalName ms -> do
