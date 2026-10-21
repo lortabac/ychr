@@ -1,0 +1,5 @@
+% The same for takemax.
+:- module(aggregates_typed_take_key, []).
+:- use_module(library(aggregates)).
+:- chr_constraint start, q(T), out(int).
+start, takemax(K, q(K)) ==> out(1).

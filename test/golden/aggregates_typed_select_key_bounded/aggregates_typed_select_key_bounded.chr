@@ -1,0 +1,7 @@
+% The goal constraint's own bound holds per match, so it does not make
+% keys from two different matches comparable.
+:- module(aggregates_typed_select_key_bounded, []).
+:- use_module(library(aggregates)).
+:- chr_constraint q(T) requiring '<'(T, T) -> bool.
+:- chr_constraint start, out(any).
+start, argmin(K, q(K)) ==> out(K).

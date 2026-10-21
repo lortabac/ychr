@@ -36,6 +36,7 @@
     type(bcand/0),
     fun bc_ambs/1,
     fun bc_decls/1,
+    fun ty_deref/1,
     constraint_sig/3,
     function_sig/3,
     function_sigs/3,
@@ -53,6 +54,9 @@
     check_guard_getarg/5,
     ev_unify/4,
     eq_unify/4,
+    link_unify/4,
+    escape_check/3,
+    solving_done/0,
     rigid_supply/1,
     check_bound/6
 ]).
@@ -85,7 +89,7 @@
 % opaque data rather than as cross-module references subject to
 % value-level visibility checks. See language.md §The `quote/1`
 % quoting form.
-% `rigid(Cell, N)` is a *rigid* type variable: a fresh identity `N`
+% `rigid(Cell, N, Level)` is a *rigid* type variable: a fresh identity `N`
 % allocated by the walker while checking a polymorphic declaration's
 % own equations or rule bodies. Unlike unbound CHR variables (which
 % are *flexible* and consistent with every declared type per the
@@ -103,6 +107,12 @@
 % as the pinned type. One binding reaches every occurrence of the
 % skolem because all occurrences share the one term.
 %
+% `Level` is the evidence level the skolem was made at: `[]` for a rule
+% head or a function, the aggregate's own scope path for an aggregate
+% goal's occurrences (`ev_level` in `diag.chr`; docs/reference/
+% type-system.md §Aggregates §Goal occurrences and levels). Only
+% evidence of the same level may pin it.
+%
 % INVARIANT: never `copy_term` a structure containing a live unpinned
 % cell — a copy would get a *different* cell and silently stop
 % tracking the pin. This holds today because the only structures the
@@ -116,7 +126,7 @@
                   ; ty_any
                   ; tcon(any, list(ty))
                   ; fun(list(ty), ty)
-                  ; rigid(ty, int).
+                  ; rigid(ty, int, list(int)).
 
 % A function's signature: the types of its arguments and the type it
 % returns. Read with `sig_args` / `sig_ret`.
@@ -231,9 +241,13 @@ bc_decls(bc(_, Decls)) -> Decls.
     ev_unify_list(list(ty), list(ty), ev_depth, ctx),
     eq_unify(ty, ty, ev_depth, ctx),
     eq_unify_list(list(ty), list(ty), ev_depth, ctx),
+    link_unify(ty, ty, ev_depth, ctx),
+    link_unify_list(list(ty), list(ty), ev_depth, ctx),
+    escape_check(list(int), list(ty), ctx),
+    solving_done,
     rigid_supply(int),
-    make_fresh_rigid(ty),
-    make_fresh_rigids(list(ty), list(ty)),
+    make_fresh_rigid(list(int), ty),
+    make_fresh_rigids(list(int), list(ty), list(ty)),
     resolve_overload(any, list(cand), list(ty), ty, ctx),
     commit_candidate(list(cand), list(ty), ty, ctx),
     check_bound(any, list(fun_sig_t), list(fun_sig_t), list(ty), ty, ctx),
@@ -345,9 +359,9 @@ match_ty(ty_float, ty_float, S) -> S.
 match_ty(ty_string, ty_string, S) -> S.
 % A rigid tvar is consistent with itself; a pinned one is consistent
 % with whatever its cell holds.
-match_ty(rigid(C, N), rigid(C, N), S) -> S.
-match_ty(rigid(C, _), A, S) | nonvar(C) -> match_ty(C, A, S).
-match_ty(D, rigid(C, _), S) | nonvar(C) -> match_ty(D, C, S).
+match_ty(rigid(C, N, _), rigid(C, N, _), S) -> S.
+match_ty(rigid(C, _, _), A, S) | nonvar(C) -> match_ty(C, A, S).
+match_ty(D, rigid(C, _, _), S) | nonvar(C) -> match_ty(D, C, S).
 % [C-Con] and [C-Fun].
 match_ty(tcon(C, A1), tcon(C, A2), S) -> match_ty_list(A1, A2, S).
 match_ty(fun(A1, R1), fun(A2, R2), S) -> match_ty(R1, R2, match_ty_list(A1, A2, S)).
@@ -405,9 +419,9 @@ ty_consistent(ty_string, ty_string) -> true.
 % candidate that doesn't share the call site's rigid σ. A *pinned*
 % rigid (evidence bound its cell) is consistent with whatever its cell
 % holds.
-ty_consistent(rigid(C, N), rigid(C, N)) -> true.
-ty_consistent(rigid(C, _), T) | nonvar(C) -> ty_consistent(C, T).
-ty_consistent(T, rigid(C, _)) | nonvar(C) -> ty_consistent(T, C).
+ty_consistent(rigid(C, N, _), rigid(C, N, _)) -> true.
+ty_consistent(rigid(C, _, _), T) | nonvar(C) -> ty_consistent(C, T).
+ty_consistent(T, rigid(C, _, _)) | nonvar(C) -> ty_consistent(T, C).
 ty_consistent(tcon(C, A1), tcon(C, A2)) -> all2(fun ty_consistent/2, A1, A2).
 ty_consistent(fun(A1, R1), fun(A2, R2))
     | all2(fun ty_consistent/2, A1, A2) -> ty_consistent(R1, R2).
@@ -495,8 +509,8 @@ ty_concrete(fun(Args, Ret)) | all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
 % this, `check_bound` at a rigid σ would stay residual forever and
 % its ambient-candidate discharge would never fire. A pinned rigid is
 % as concrete as the type its cell holds.
-ty_concrete(rigid(C, _)) | nonvar(C) -> ty_concrete(C).
-ty_concrete(rigid(_, _)) -> true.
+ty_concrete(rigid(C, _, _)) | nonvar(C) -> ty_concrete(C).
+ty_concrete(rigid(_, _, _)) -> true.
 ty_concrete(_) -> false.
 
 % ==========================================================================
@@ -852,16 +866,27 @@ tcon_args(tcon(_, Args)) -> Args.
 tcon_args(_) -> [].
 
 guard_match_pinned @
-    check_guard_match(rigid(C, _), Con, Betas, Slots, Ctx) <=> nonvar(C) |
+    check_guard_match(rigid(C, _, _), Con, Betas, Slots, Ctx) <=> nonvar(C) |
     check_guard_match(C, Con, Betas, Slots, Ctx).
 
 guard_match_rigid @
     con_sig(Con, Sig) \
-        check_guard_match(rigid(C, _), Con, Betas, Slots, Ctx) <=> var(C) |
+        check_guard_match(rigid(C, _, L), Con, Betas, Slots, Ctx) <=>
+        var(C), L == ctx_level(Ctx) |
     Fresh is copy_term(quote(Sig)),
     FreshParent is sig_parent(Fresh),
     tc_unify_list(tcon_args(FreshParent), Betas, Ctx),
     C = FreshParent,
+    tc_unify_list(Slots, sig_fields(Fresh), Ctx).
+
+% A skolem of another level: the pin is blocked (docs/reference/
+% type-system.md §Aggregates), but the fields are still typed, at the
+% fresh skolems of this level.
+guard_match_rigid_blocked @
+    con_sig(Con, Sig) \
+        check_guard_match(rigid(C, _, _), Con, Betas, Slots, Ctx) <=> var(C) |
+    Fresh is copy_term(quote(Sig)),
+    tc_unify_list(tcon_args(sig_parent(Fresh)), Betas, Ctx),
     tc_unify_list(Slots, sig_fields(Fresh), Ctx).
 
 guard_match_any @
@@ -882,7 +907,7 @@ guard_match_inaccessible @
     con_sig(Con, Sig) \
         check_guard_match(T, Con, _, _, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
-    report_warning(Ctx, inaccessible, tpair(sig_parent(Fresh), T)).
+    report_dead(Ctx, tpair(sig_parent(Fresh), T)).
 
 % Defensive fallback: a constructor with no `con_sig`. `walk.chr`
 % gates the emission on the constructor being declared (with a
@@ -932,9 +957,9 @@ unknown_guard_getarg @
 
 ty_occurs(C, T) | var(T), C == T -> true.
 ty_occurs(_, T) | var(T) -> false.
-ty_occurs(C, rigid(C2, _)) | C == C2 -> true.
-ty_occurs(C, rigid(C2, _)) | nonvar(C2) -> ty_occurs(C, C2).
-ty_occurs(_, rigid(_, _)) -> false.
+ty_occurs(C, rigid(C2, _, _)) | C == C2 -> true.
+ty_occurs(C, rigid(C2, _, _)) | nonvar(C2) -> ty_occurs(C, C2).
+ty_occurs(_, rigid(_, _, _)) -> false.
 ty_occurs(C, tcon(_, Args)) -> any(fun(T) -> ty_occurs(C, T) end, Args).
 ty_occurs(C, fun(Args, _)) | any(fun(T) -> ty_occurs(C, T) end, Args) -> true.
 ty_occurs(C, fun(_, Ret)) -> ty_occurs(C, Ret).
@@ -1036,13 +1061,13 @@ tc_unify_fun_arity @
 % rows and only `ev_unify` performs it.
 
 tc_unify_rigid @
-    tc_unify(rigid(C, N), rigid(C, N), _) <=> true.
+    tc_unify(rigid(C, N, _), rigid(C, N, _), _) <=> true.
 
 tc_unify_rigid_pinned_left @
-    tc_unify(rigid(C, _), T2, Ctx) <=> nonvar(C) | tc_unify(C, T2, Ctx).
+    tc_unify(rigid(C, _, _), T2, Ctx) <=> nonvar(C) | tc_unify(C, T2, Ctx).
 
 tc_unify_rigid_pinned_right @
-    tc_unify(T1, rigid(C, _), Ctx) <=> nonvar(C) | tc_unify(T1, C, Ctx).
+    tc_unify(T1, rigid(C, _, _), Ctx) <=> nonvar(C) | tc_unify(T1, C, Ctx).
 
 % --- var rules ---
 %
@@ -1107,23 +1132,24 @@ tc_unify_list_cons @
 %
 % The pin cell of the freshly built skolem is `Cell`, a body-only
 % variable — which is exactly a fresh unbound logical variable, so the
-% pin rules can fill it in later.
+% pin rules can fill it in later. The level is the one of the evidence
+% that made the skolem.
 
 make_fresh_rigid1 @
-    rigid_supply(N), make_fresh_rigid(Out) <=>
+    rigid_supply(N), make_fresh_rigid(L, Out) <=>
     N1 is N - 1,
-    Out = rigid(Cell, N),
+    Out = rigid(Cell, N, L),
     rigid_supply(N1).
 
 % One fresh rigid per element of the input list (only the length is
 % used; the elements are never inspected).
 make_fresh_rigids_nil @
-    make_fresh_rigids([], Out) <=> Out = [].
+    make_fresh_rigids(_, [], Out) <=> Out = [].
 
 make_fresh_rigids_cons @
-    make_fresh_rigids([_ | Rest], Out) <=>
-    make_fresh_rigid(B),
-    make_fresh_rigids(Rest, Tail),
+    make_fresh_rigids(L, [_ | Rest], Out) <=>
+    make_fresh_rigid(L, B),
+    make_fresh_rigids(L, Rest, Tail),
     Out = [B | Tail].
 
 % True for the base types, which are fully determined by their
@@ -1180,11 +1206,16 @@ base_type(_) -> false.
 %    anything but flexible;
 %  - a contradiction between two whole types is a *warning*, not an
 %    error: the guard can never succeed within the typed fragment,
-%    so the enclosing rule or equation is dead code (YCHR-20104).
+%    so the enclosing rule or equation is dead code (YCHR-20104), or,
+%    inside a plain aggregate's goal, the goal never matches
+%    (YCHR-20106); `report_dead` picks one by the context's mode.
 %    The contradicting fact binds nothing and checking continues
 %    with the declared types. A mismatch confined to `ev_param`
 %    positions is NOT a contradiction — `box(int)` and `box(bool)`
-%    positions can share the value `empty` — and derives nothing.
+%    positions can share the value `empty` — and derives nothing;
+%  - it may only bind the cell of a skolem of its own level, the one in
+%    its context (§Aggregates §Goal occurrences and levels). Any other
+%    pin or merge is blocked: the fact is dropped, without a warning.
 
 ev_unify_any_left @
     ev_unify(T1, _, _, _) <=> nonvar(T1), T1 == ty_any | true.
@@ -1193,16 +1224,16 @@ ev_unify_any_right @
     ev_unify(_, T2, _, _) <=> nonvar(T2), T2 == ty_any | true.
 
 ev_unify_same_rigid @
-    ev_unify(rigid(C, N), rigid(C, N), _, _) <=> true.
+    ev_unify(rigid(C, N, _), rigid(C, N, _), _, _) <=> true.
 
 % Parameter depth: an unpinned skolem on either side means the fact
 % is vacuous — drop it. (A *pinned* skolem is no longer opaque and
 % falls through to the deref rules below.)
 ev_unify_param_rigid_left @
-    ev_unify(rigid(C, _), _, ev_param, _) <=> var(C) | true.
+    ev_unify(rigid(C, _, _), _, ev_param, _) <=> var(C) | true.
 
 ev_unify_param_rigid_right @
-    ev_unify(_, rigid(C, _), ev_param, _) <=> var(C) | true.
+    ev_unify(_, rigid(C, _, _), ev_param, _) <=> var(C) | true.
 
 % Top level, rigid ~ rigid: merge the two skolems by pinning the
 % unpinned cell to the other side's term (the multi-head idiom of a
@@ -1213,49 +1244,61 @@ ev_unify_param_rigid_right @
 % already reachable from the other side's alias/pin chain is the same
 % skolem and the fact is spent.
 ev_unify_rigid_alias_left @
-    ev_unify(rigid(C1, _), rigid(C2, N2), ev_top, _) <=>
-    var(C1), ty_occurs(C1, rigid(C2, N2)) | true.
+    ev_unify(rigid(C1, _, _), rigid(C2, N2, L2), ev_top, _) <=>
+    var(C1), ty_occurs(C1, rigid(C2, N2, L2)) | true.
 
 ev_unify_rigid_alias_right @
-    ev_unify(rigid(C1, N1), rigid(C2, _), ev_top, _) <=>
-    var(C2), ty_occurs(C2, rigid(C1, N1)) | true.
+    ev_unify(rigid(C1, N1, L1), rigid(C2, _, _), ev_top, _) <=>
+    var(C2), ty_occurs(C2, rigid(C1, N1, L1)) | true.
 
+% Levels (docs/reference/type-system.md §Aggregates §Goal occurrences
+% and levels): evidence at level `L` may only bind the cell of a level-`L`
+% skolem, and only to a skolem of level `L` or an enclosing one. So a
+% goal's skolem merges into the rule's, never the other way round, and
+% never into a sibling aggregate's.
 ev_unify_rigid_merge_left @
-    ev_unify(rigid(C1, _), rigid(C2, N2), ev_top, _) <=>
-    var(C1) | C1 = rigid(C2, N2).
+    ev_unify(rigid(C1, _, L1), rigid(C2, N2, L2), ev_top, Ctx) <=>
+    var(C1), L1 == ctx_level(Ctx), level_within(L2, L1) | C1 = rigid(C2, N2, L2).
 
 ev_unify_rigid_merge_right @
-    ev_unify(rigid(C1, N1), rigid(C2, _), ev_top, _) <=>
-    var(C2) | C2 = rigid(C1, N1).
+    ev_unify(rigid(C1, N1, L1), rigid(C2, _, L2), ev_top, Ctx) <=>
+    var(C2), L2 == ctx_level(Ctx), level_within(L1, L2) | C2 = rigid(C1, N1, L1).
+
+% Two unpinned skolems the level does not let this evidence merge: the
+% fact is blocked, which is not an error.
+ev_unify_rigid_blocked @
+    ev_unify(rigid(C1, _, _), rigid(C2, _, _), ev_top, _) <=>
+    var(C1), var(C2) | true.
 
 % A pinned skolem is no longer opaque: the fact meets whatever the
 % cell holds (so a second, contradicting predicate on the same
 % variable reports 20104 rather than silently re-pinning).
 ev_unify_pinned_left @
-    ev_unify(rigid(C, _), T2, D, Ctx) <=> nonvar(C) | ev_unify(C, T2, D, Ctx).
+    ev_unify(rigid(C, _, _), T2, D, Ctx) <=> nonvar(C) | ev_unify(C, T2, D, Ctx).
 
 ev_unify_pinned_right @
-    ev_unify(T1, rigid(C, _), D, Ctx) <=> nonvar(C) | ev_unify(T1, C, D, Ctx).
+    ev_unify(T1, rigid(C, _, _), D, Ctx) <=> nonvar(C) | ev_unify(T1, C, D, Ctx).
 
-% Top-level pinning, by the shape of the solid partner. A base type
-% or a nullary constructor application is determined by its values,
-% so the pin copies it exactly. A still-flexible partner leaves the
-% fact residual (no rule fires), and `any` was disposed of already.
+% Top-level pinning, by the shape of the solid partner, of a skolem of
+% the evidence's own level. A base type or a nullary constructor
+% application is determined by its values, so the pin copies it
+% exactly. A still-flexible partner leaves the fact residual (no rule
+% fires), and `any` was disposed of already.
 ev_unify_pin_base_left @
-    ev_unify(rigid(C, _), T2, ev_top, _) <=>
-    var(C), nonvar(T2), base_type(T2) | C = T2.
+    ev_unify(rigid(C, _, L), T2, ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx), nonvar(T2), base_type(T2) | C = T2.
 
 ev_unify_pin_base_right @
-    ev_unify(T1, rigid(C, _), ev_top, _) <=>
-    var(C), nonvar(T1), base_type(T1) | C = T1.
+    ev_unify(T1, rigid(C, _, L), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx), nonvar(T1), base_type(T1) | C = T1.
 
 ev_unify_pin_nullary_left @
-    ev_unify(rigid(C, _), tcon(Ctor, []), ev_top, _) <=>
-    var(C) | C = tcon(Ctor, []).
+    ev_unify(rigid(C, _, L), tcon(Ctor, []), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) | C = tcon(Ctor, []).
 
 ev_unify_pin_nullary_right @
-    ev_unify(tcon(Ctor, []), rigid(C, _), ev_top, _) <=>
-    var(C) | C = tcon(Ctor, []).
+    ev_unify(tcon(Ctor, []), rigid(C, _, L), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) | C = tcon(Ctor, []).
 
 % A parametric application or function type is NOT determined by its
 % values, so the pin commits to the outermost constructor only, at
@@ -1266,30 +1309,37 @@ ev_unify_pin_nullary_right @
 % construction. Every pinned value is rigid-free or built from fresh
 % skolems, so no occurs check is needed on these rules.
 ev_unify_pin_parametric_left @
-    ev_unify(rigid(C, _), tcon(Ctor, [A | As]), ev_top, _) <=>
-    var(C) |
-    make_fresh_rigids([A | As], Betas),
+    ev_unify(rigid(C, _, L), tcon(Ctor, [A | As]), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    make_fresh_rigids(L, [A | As], Betas),
     C = tcon(Ctor, Betas).
 
 ev_unify_pin_parametric_right @
-    ev_unify(tcon(Ctor, [A | As]), rigid(C, _), ev_top, _) <=>
-    var(C) |
-    make_fresh_rigids([A | As], Betas),
+    ev_unify(tcon(Ctor, [A | As]), rigid(C, _, L), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    make_fresh_rigids(L, [A | As], Betas),
     C = tcon(Ctor, Betas).
 
 ev_unify_pin_fun_left @
-    ev_unify(rigid(C, _), fun(Args, _), ev_top, _) <=>
-    var(C) |
-    make_fresh_rigids(Args, ArgBetas),
-    make_fresh_rigid(RetBeta),
+    ev_unify(rigid(C, _, L), fun(Args, _), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    make_fresh_rigids(L, Args, ArgBetas),
+    make_fresh_rigid(L, RetBeta),
     C = fun(ArgBetas, RetBeta).
 
 ev_unify_pin_fun_right @
-    ev_unify(fun(Args, _), rigid(C, _), ev_top, _) <=>
-    var(C) |
-    make_fresh_rigids(Args, ArgBetas),
-    make_fresh_rigid(RetBeta),
+    ev_unify(fun(Args, _), rigid(C, _, L), ev_top, Ctx) <=>
+    var(C), L == ctx_level(Ctx) |
+    make_fresh_rigids(L, Args, ArgBetas),
+    make_fresh_rigid(L, RetBeta),
     C = fun(ArgBetas, RetBeta).
+
+% An unpinned skolem of another level meeting a solid type: blocked.
+ev_unify_pin_blocked_left @
+    ev_unify(rigid(C, _, _), T2, ev_top, _) <=> var(C), nonvar(T2) | true.
+
+ev_unify_pin_blocked_right @
+    ev_unify(T1, rigid(C, _, _), ev_top, _) <=> var(C), nonvar(T1) | true.
 
 ev_unify_int @
     ev_unify(ty_int, ty_int, _, _) <=> true.
@@ -1317,7 +1367,7 @@ ev_unify_fun @
 
 ev_unify_contradiction @
     ev_unify(T1, T2, ev_top, Ctx) <=> nonvar(T1), nonvar(T2) |
-    report_warning(Ctx, inaccessible, tpair(T1, T2)).
+    report_dead(Ctx, tpair(T1, T2)).
 
 % Parameter-position mismatch: satisfiable via a parameter-erasing
 % value, so it neither warns nor binds.
@@ -1420,17 +1470,17 @@ eq_unify_var_var @
 % same shared structure. Dereferencing first would instead re-pin the
 % unpinned side at fresh parameters, losing the sharing.
 eq_unify_rigid_pair @
-    eq_unify(rigid(C1, N1), rigid(C2, N2), D, Ctx) <=>
-    ev_unify(rigid(C1, N1), rigid(C2, N2), D, Ctx).
+    eq_unify(rigid(C1, N1, L1), rigid(C2, N2, L2), D, Ctx) <=>
+    ev_unify(rigid(C1, N1, L1), rigid(C2, N2, L2), D, Ctx).
 
 % Below the binding rules, so that a flexible slot meeting a skolem
 % still binds to the skolem term itself (rigidity travels through
 % flexibles) rather than to what the skolem is pinned to.
 eq_unify_pinned_left @
-    eq_unify(rigid(C, _), T2, D, Ctx) <=> nonvar(C) | eq_unify(C, T2, D, Ctx).
+    eq_unify(rigid(C, _, _), T2, D, Ctx) <=> nonvar(C) | eq_unify(C, T2, D, Ctx).
 
 eq_unify_pinned_right @
-    eq_unify(T1, rigid(C, _), D, Ctx) <=> nonvar(C) | eq_unify(T1, C, D, Ctx).
+    eq_unify(T1, rigid(C, _, _), D, Ctx) <=> nonvar(C) | eq_unify(T1, C, D, Ctx).
 
 % Descent into a shared constructor switches to `ev_param` (see the
 % block comment).
@@ -1457,6 +1507,135 @@ eq_unify_list_cons @
     eq_unify_list([H1|T1], [H2|T2], D, Ctx) <=>
     eq_unify(H1, H2, D, Ctx),
     eq_unify_list(T1, T2, D, Ctx).
+
+% ==========================================================================
+% link_unify (a shared variable matched by an aggregate goal)
+% ==========================================================================
+%
+% `link_unify(Outer, Inner, D, Ctx)` relates the enclosing type of a
+% shared variable to the inner copy the goal matched it with
+% (docs/reference/type-system.md §Aggregates §Shared variables in a
+% goal). It is one-way: the inner side learns from the outer one, never
+% the reverse.
+%
+%  - it waits while the outer side is still flexible, at any depth: no
+%    rule fires on a variable outer side, so it stays residual;
+%  - it binds an inner flexible to the outer type, at any depth;
+%  - it never binds the outer side;
+%  - where both sides are solid at the top it is evidence at the goal's
+%    level (`ev_unify`), so a goal skolem merges into the outer one;
+%  - at parameter depth that evidence derives nothing;
+%  - an inner skolem already merged into one outer skolem and now linked
+%    to a different one is `aggregate_link_conflict`: picking either
+%    would make the verdict depend on link order.
+
+link_any_outer @
+    link_unify(O, _, _, _) <=> nonvar(O), O == ty_any | true.
+
+link_any_inner @
+    link_unify(O, I, _, _) <=> nonvar(O), nonvar(I), I == ty_any | true.
+
+link_occurs @
+    link_unify(O, I, _, _) <=> nonvar(O), var(I), ty_occurs(I, O) | true.
+
+link_bind @
+    link_unify(O, I, _, _) <=> nonvar(O), var(I) | I = O.
+
+link_conflict @
+    link_unify(O, I, ev_top, Ctx) <=>
+    nonvar(O), nonvar(I), link_conflicts(ty_deref(O), I, ctx_level(Ctx)) |
+    report_error(Ctx, aggregate_link_conflict, tpair(ty_deref(O), ty_deref(I))).
+
+% Both wrappers stay on, so a merge reaches through a pin (see
+% `eq_unify_rigid_pair`).
+link_rigid_pair @
+    link_unify(rigid(C1, N1, L1), rigid(C2, N2, L2), D, Ctx) <=>
+    ev_unify(rigid(C2, N2, L2), rigid(C1, N1, L1), D, Ctx).
+
+link_pinned_outer @
+    link_unify(rigid(C, _, _), I, D, Ctx) <=> nonvar(C) | link_unify(C, I, D, Ctx).
+
+link_pinned_inner @
+    link_unify(O, rigid(C, _, _), D, Ctx) <=> nonvar(O), nonvar(C) |
+    link_unify(O, C, D, Ctx).
+
+link_tcon @
+    link_unify(tcon(C, A1), tcon(C, A2), _, Ctx) <=> same_length(A1, A2) |
+    link_unify_list(A1, A2, ev_param, Ctx).
+
+link_fun @
+    link_unify(fun(A1, R1), fun(A2, R2), _, Ctx) <=> same_length(A1, A2) |
+    link_unify_list(A1, A2, ev_param, Ctx),
+    link_unify(R1, R2, ev_param, Ctx).
+
+% Leaves and mismatches. The goal match is the fact, the outer type the
+% position: the order the warning reads them in.
+link_evidence @
+    link_unify(O, I, D, Ctx) <=> nonvar(O), nonvar(I) | ev_unify(I, O, D, Ctx).
+
+link_unify_list_nil @
+    link_unify_list([], [], _, _) <=> true.
+
+link_unify_list_cons @
+    link_unify_list([O|Os], [I|Is], D, Ctx) <=>
+    link_unify(O, I, D, Ctx),
+    link_unify_list(Os, Is, D, Ctx).
+
+% A type with its pinned and merged skolems followed.
+:- function ty_deref(ty) -> ty.
+ty_deref(T) | var(T) -> T.
+ty_deref(rigid(C, _, _)) | nonvar(C) -> ty_deref(C).
+ty_deref(T) -> T.
+
+% Whether linking the (dereferenced) outer type to the inner one ties a
+% goal skolem to a second outer skolem: the inner side is a skolem of
+% the goal's level that is already merged, and it and the outer side end
+% at two different unpinned skolems of levels enclosing the goal.
+:- function link_conflicts(ty, ty, list(int)) -> bool.
+link_conflicts(_, I, _) | var(I) -> false.
+link_conflicts(O, rigid(C, _, L), K) | L == K, nonvar(C) ->
+    distinct_outer_rigids(O, ty_deref(C), K).
+link_conflicts(_, _, _) -> false.
+
+:- function distinct_outer_rigids(ty, ty, list(int)) -> bool.
+distinct_outer_rigids(A, _, _) | var(A) -> false.
+distinct_outer_rigids(_, B, _) | var(B) -> false.
+distinct_outer_rigids(rigid(C1, N1, L1), rigid(C2, N2, L2), K)
+    | var(C1), var(C2), level_inside(L1, K), level_inside(L2, K) -> not(N1 == N2).
+distinct_outer_rigids(_, _, _) -> false.
+
+% ==========================================================================
+% Escaping types
+% ==========================================================================
+%
+% `escape_check(L, Tys, Ctx)`: none of `Tys` may contain a skolem made
+% at a level inside `L` that is still unpinned (docs/reference/
+% type-system.md §Aggregates §Escaping types). The check needs the
+% final types, so it waits for `solving_done`, which `main.chr` tells
+% once the walk has quiesced.
+
+escape_found @
+    solving_done \ escape_check(L, Tys, Ctx) <=> escaping(L, Tys) \== [] |
+    report_error(Ctx, aggregate_type_escapes, escaped_type(first_ty(escaping(L, Tys)))).
+
+escape_none @
+    solving_done \ escape_check(_, _, _) <=> true.
+
+:- function escaping(list(int), list(ty)) -> list(ty).
+escaping(L, Tys) -> filter(fun(T) -> ty_escapes(L, T) end, Tys).
+
+:- function first_ty(list(ty)) -> ty.
+first_ty([T|_]) -> T.
+first_ty([]) -> ty_any.
+
+:- function ty_escapes(list(int), ty) -> bool.
+ty_escapes(_, T) | var(T) -> false.
+ty_escapes(L, rigid(C, _, _)) | nonvar(C) -> ty_escapes(L, C).
+ty_escapes(L, rigid(_, _, Lr)) -> level_inside(L, Lr).
+ty_escapes(L, tcon(_, Args)) -> any(fun(A) -> ty_escapes(L, A) end, Args).
+ty_escapes(L, fun(Args, _)) | any(fun(A) -> ty_escapes(L, A) end, Args) -> true.
+ty_escapes(L, fun(_, Ret)) -> ty_escapes(L, Ret).
+ty_escapes(_, _) -> false.
 
 % ==========================================================================
 % Overload resolution

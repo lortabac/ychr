@@ -1,0 +1,32 @@
+% When a goal's links are made (type-system.md §Aggregates §Shared
+% variables in a goal): a link to a known type right after the conjunct
+% that matches the variable, a merge after the whole goal.
+:- module(aggregates_typed_links, [known/1, pin_first/1, bound/1, select/1]).
+:- use_module(library(aggregates)).
+
+% The link to int is made right after q, so Y + 1 checks.
+:- chr_constraint p(int), q(T, T), out(int), ask_known(any), known(any).
+p(X), count((q(X, Y), ? Y + 1 > 2), N) ==> out(N).
+out(N) \ ask_known(A) <=> A = N.
+known(A) <=> q(1, 1), q(1, 5), q(2, 2), p(1), ask_known(A).
+
+% The merge into the rule's T waits, so the goal's own guard pins Y first.
+:- chr_constraint r(T), s(T, T), out_pin(int), ask_pin(any), pin_first(any).
+r(X), count((s(X, Y), ? integer(Y), ? Y + 1 > 2), N) ==> out_pin(N).
+out_pin(N) \ ask_pin(A) <=> A = N.
+pin_first(A) <=> s(3, 3), s("a", "a"), r(3), ask_pin(A).
+
+% The merge comes too late for u's bound, so v needs its own bound for
+% Y < X to check.
+:- chr_constraint u(T) requiring '<'(T, T) -> bool.
+:- chr_constraint v(T, T) requiring '<'(T, T) -> bool.
+:- chr_constraint out_bound(int), ask_bound(any), bound(any).
+u(X), count((v(X, Y), ? Y < X), N) ==> out_bound(N).
+out_bound(N) \ ask_bound(A) <=> A = N.
+bound(A) <=> v(5, 1), v(5, 7), v(5, 2), u(5), ask_bound(A).
+
+% The same timing for a selection's links.
+:- chr_constraint w(int), z(T, T), best(int), ask_select(any), select(any).
+w(X), argmin(K, (z(X, K), ? K + 1 > 2)) ==> best(K).
+best(K) \ ask_select(A) <=> A = K.
+select(A) <=> z(4, 1), z(4, 6), z(4, 3), w(4), ask_select(A).

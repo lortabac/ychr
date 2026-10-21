@@ -239,7 +239,11 @@
         ;; Scheme booleans are the atoms `true`/`false` at the Term
         ;; level (`valueToTerm`).
         ((boolean? d) (vector 'atom (if d "true" "false")))
-        ((and (integer? d) (exact? d)) (vector 'int d))
+        ;; `number?` and `exact?` come before `integer?`: Guile 3.0.11 (and
+        ;; maybe 3.0.10) miscompiles `(and (integer? d) (exact? d))` followed by
+        ;; `inexact?`, treating a non-integer float as not a number, so
+        ;; -2.5 printed as an opaque value.
+        ((and (number? d) (exact? d) (integer? d)) (vector 'int d))
         ((and (number? d) (inexact? d)) (vector 'float d))
         ((string? d) (vector 'text d))
         ((symbol? d) (atom->pexpr d))

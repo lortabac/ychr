@@ -134,7 +134,8 @@ is_base_type(N) ->
 % warnings, and the source echo is the enclosing type's own name.
 :- function decl_error(type_def, error_code, error_detail) -> error.
 decl_error(Td, Code, Detail) ->
-    error(ctx(no_unit, origin_atom(type_def_name(Td)), label_none, type_def_loc(Td)),
+    error(ctx(no_unit, origin_atom(type_def_name(Td)), label_none, type_def_loc(Td),
+              lvl([], mode_rule)),
           Code, Detail).
 
 % ---------------------------------------------------------------------
@@ -189,7 +190,7 @@ dup_errors(Groups) ->
 dup_error_for(_, []) -> [].
 dup_error_for(_, [_]) -> [].
 dup_error_for(N, [con_decl(TName, A, L), D2|Ds]) ->
-    [error(ctx(no_unit, origin_atom(TName), label_none, L),
+    [error(ctx(no_unit, origin_atom(TName), label_none, L, lvl([], mode_rule)),
            duplicate_constructor,
            duplicate_constructor_d(N,
              maplist(fun decl_pair/1, [con_decl(TName, A, L), D2|Ds])))].
@@ -241,17 +242,46 @@ rules_arity_errors(Env, [R|Rs], Unit) ->
     append(rule_arity_errors(Env, R, unit(Unit)),
            rules_arity_errors(Env, Rs, Unit + 1)).
 
-% The head contributes nothing: after HNF every head argument is a
-% variable or a wildcard, so a pattern's constructors have already
-% become `guard_match` conjuncts and are found there.
+% The head constraints contribute nothing: after HNF every head
+% argument is a variable or a wildcard, so a pattern's constructors have
+% already become `guard_match` conjuncts and are found there. The
+% aggregates do contribute, attributed to the head they are written in.
 :- function rule_arity_errors(con_env, rule, unit_id) -> list(error).
 rule_arity_errors(Env,
-                  rule(Name, ann(_, _, _), ann(GAnn, GLoc, Guards), ann(BAnn, BLoc, Body)),
+                  rule(Name, ann(HAnn, HLoc, rule_head(_, _, Aggs)),
+                       ann(GAnn, GLoc, Guards), ann(BAnn, BLoc, Body)),
                   Unit) ->
-    append(arity_diags(Unit, rule_label(Name), origin_ann(GAnn), GLoc,
-                       guards_arity(Env, Guards)),
-           arity_diags(Unit, rule_label(Name), origin_ann(BAnn), BLoc,
-                       body_goals_arity(Env, Body))).
+    concat([arity_diags(Unit, rule_label(Name), origin_ann(HAnn), HLoc,
+                        aggs_arity(Env, Aggs)),
+            arity_diags(Unit, rule_label(Name), origin_ann(GAnn), GLoc,
+                        guards_arity(Env, Guards)),
+            arity_diags(Unit, rule_label(Name), origin_ann(BAnn), BLoc,
+                        body_goals_arity(Env, Body))]).
+
+% Every position of an aggregate: `Agg`, `Element`, the goal's HNF and
+% `?` guards, nested aggregates, and the result pattern's guards.
+:- function aggs_arity(con_env, list(agg_e)) -> list(arity_use).
+aggs_arity(Env, Aggs) -> concat_map(fun(A) -> agg_arity(Env, A) end, Aggs).
+
+:- function agg_arity(con_env, agg_e) -> list(arity_use).
+agg_arity(Env, agg_e(_, Agg, Elem, Goal, _, _, _, Res)) ->
+    concat([maybe_arity(Env, Agg),
+            expr_arity(Env, Elem),
+            concat_map(fun(C) -> agg_conj_arity(Env, C) end, Goal),
+            res_arity(Env, Res)]).
+
+:- function maybe_arity(con_env, maybe(expr)) -> list(arity_use).
+maybe_arity(_, nothing) -> [].
+maybe_arity(Env, just(E)) -> expr_arity(Env, E).
+
+:- function agg_conj_arity(con_env, agg_conj) -> list(arity_use).
+agg_conj_arity(Env, agg_con(_, Guards)) -> guards_arity(Env, Guards).
+agg_conj_arity(Env, agg_nested(A)) -> agg_arity(Env, A).
+agg_conj_arity(Env, agg_guard(G)) -> guard_arity(Env, G).
+
+:- function res_arity(con_env, maybe(agg_res)) -> list(arity_use).
+res_arity(_, nothing) -> [].
+res_arity(Env, just(agg_res(_, Guards))) -> guards_arity(Env, Guards).
 
 % A class function's equations are checked in throwaway per-signature
 % search branches whose diagnostics are discarded, so their arity
@@ -302,7 +332,7 @@ eq_arity(Env, fun_eq(_, Guards, _, Rhs)) ->
 % helper's parameter.
 :- function arity_diags(unit_id, diag_label, diag_origin, loc, list(arity_use))
        -> list(error).
-arity_diags(U, L, O, Loc, Uses) -> arity_diags_at(ctx(U, O, L, Loc), Uses).
+arity_diags(U, L, O, Loc, Uses) -> arity_diags_at(ctx(U, O, L, Loc, lvl([], mode_rule)), Uses).
 
 :- function arity_diags_at(ctx, list(arity_use)) -> list(error).
 arity_diags_at(Ctx, Uses) -> maplist(fun(Use) -> arity_diag(Ctx, Use) end, Uses).

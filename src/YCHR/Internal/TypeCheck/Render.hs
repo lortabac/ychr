@@ -90,7 +90,7 @@ showType (VTerm functor [a, b])
 -- was pinned to — that is the type the reader's guard established.
 -- (Callers deep-dereference first, so a bound cell arrives here as a
 -- concrete type rather than a variable.)
-showType (VTerm functor [cell, VInt n])
+showType (VTerm functor [cell, VInt n, _level])
   | functor == typeAtom "rigid" = case cell of
       VVar _ -> "T#" <> T.pack (show n)
       pinned -> showType pinned

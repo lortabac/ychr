@@ -1,0 +1,8 @@
+% The Inc closure returns the string element as the next int working
+% value.
+:- module(aggregates_typed_bad_inc, []).
+:- use_module(library(aggregates)).
+:- use_module(library(maybe)).
+:- chr_constraint item(string), start, out(int).
+start, aggregate(aggregator(0, fun(W, X) -> X end, fun(W) -> just(W) end),
+                 Y, item(Y), N) ==> out(N).

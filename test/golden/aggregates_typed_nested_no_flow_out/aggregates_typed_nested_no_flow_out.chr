@@ -1,0 +1,7 @@
+% The nested count's goal pins its copy of Y to wrap, but that holds
+% only for its own matches, so L's element type escapes.
+:- module(aggregates_typed_nested_no_flow_out, []).
+:- use_module(library(aggregates)).
+:- chr_type wrap ---> wrap(int).
+:- chr_constraint item(T), q(T, T), go, out(list(wrap)).
+go, collect(Y, (item(Y), count(q(Y, wrap(_)), _)), L) ==> out(L).

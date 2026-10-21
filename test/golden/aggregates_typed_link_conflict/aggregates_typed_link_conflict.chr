@@ -1,0 +1,6 @@
+% The goal ties one type to both X's and Y's. With p(1), r("a") and no
+% q, the rule would tell pair(1, "a").
+:- module(aggregates_typed_link_conflict, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p(T), r(T), q(T, T), pair(T, T).
+p(X), r(Y), count(q(X, Y), _) ==> pair(X, Y).

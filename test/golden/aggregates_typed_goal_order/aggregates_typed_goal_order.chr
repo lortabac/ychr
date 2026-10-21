@@ -1,0 +1,6 @@
+% Y + 1 runs before integer(Y), so the later guard cannot fix it: with
+% q("a", "a") and p("a") Y + 1 would add 1 to a string.
+:- module(aggregates_typed_goal_order, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p(T), q(T, T), out(int).
+p(X), count((q(X, Y), ? Y + 1 > 0, ? integer(Y)), N) ==> out(N).

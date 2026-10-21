@@ -1,0 +1,6 @@
+% The key is compared over every match, so the rule's guard, which is
+% about the selected match only, cannot fix its type.
+:- module(aggregates_typed_select_key_rule_guard, []).
+:- use_module(library(aggregates)).
+:- chr_constraint start, q(T), use_int(int).
+start, argmin(K, q(K)) ==> integer(K) | use_int(K).

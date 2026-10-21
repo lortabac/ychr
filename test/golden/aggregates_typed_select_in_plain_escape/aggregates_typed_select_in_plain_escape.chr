@@ -1,0 +1,6 @@
+% A selection inside a plain aggregate: V's type comes from one item
+% match and escapes through the element.
+:- module(aggregates_typed_select_in_plain_escape, []).
+:- use_module(library(aggregates)).
+:- chr_constraint go, r, item(int, T), out(list(int)).
+go, collect(V, (r, argmin(K, item(K, V))), L) ==> out(L).

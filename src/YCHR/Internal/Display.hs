@@ -395,6 +395,7 @@ exhaustivenessWarningCode (NonExhaustiveMatch _ _) = ErrorCode 20103
 -- every @--Werror@-eligible diagnostic carries a @2x1xx@ code.
 typeCheckWarningCode :: TypeCheckWarning -> ErrorCode
 typeCheckWarningCode (InaccessibleBranch _ _) = ErrorCode 20104
+typeCheckWarningCode (AggregateGoalInaccessible _ _) = ErrorCode 20106
 
 -- | 3xxxx — desugar phase
 desugarErrorCode :: DesugarError -> ErrorCode
@@ -432,6 +433,8 @@ typeCheckErrorCode (DuplicateConstructor _ _) = ErrorCode 60007
 typeCheckErrorCode (ConstructorArityMismatch _ _ _) = ErrorCode 60008
 typeCheckErrorCode (BoundUnsatisfied _) = ErrorCode 60012
 typeCheckErrorCode (TypeRefArityMismatch _ _ _ _ _) = ErrorCode 60013
+typeCheckErrorCode (AggregateTypeEscapes _) = ErrorCode 60014
+typeCheckErrorCode (AggregateLinkConflict _ _) = ErrorCode 60015
 
 -- | 5xxxx — top-level errors.
 --
@@ -1705,6 +1708,25 @@ typeCheckErrorMsg (TypeRefArityMismatch tyName conName refName usedArity declare
     ++ "' of type '"
     ++ T.unpack tyName
     ++ "'"
+typeCheckErrorMsg (AggregateTypeEscapes ty) =
+  withHint
+    ( "A type that is chosen per match of an aggregate goal reaches the"
+        ++ " rule: '"
+        ++ T.unpack ty
+        ++ "'"
+    )
+    ( "each match may be a different instance; fix the instance with a"
+        ++ " guard in the goal, or link it to a variable of the rule"
+    )
+typeCheckErrorMsg (AggregateLinkConflict t1 t2) =
+  withHint
+    ( "An aggregate goal ties one type to both '"
+        ++ T.unpack t1
+        ++ "' and '"
+        ++ T.unpack t2
+        ++ "'"
+    )
+    "the goal can match when the two differ; make them the same type in the rule"
 
 instance Display (Diagnostic TypeCheckWarning) where
   displayMsg (Diagnostic lbl (AnnP warn loc origin) ctx) =
@@ -1727,6 +1749,15 @@ typeCheckWarningMsg (InaccessibleBranch t1 t2) =
         ++ "'"
     )
     "remove the dead rule or equation, or fix the type it disagrees with"
+typeCheckWarningMsg (AggregateGoalInaccessible t1 t2) =
+  withHint
+    ( "This aggregate goal can never match: it requires '"
+        ++ T.unpack t1
+        ++ "' where the type is '"
+        ++ T.unpack t2
+        ++ "', so the aggregate always sees zero matches"
+    )
+    "fix the goal, or drop the aggregate if zero matches is what you want"
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n

@@ -1,10 +1,10 @@
 # YCHR Aggregates Specification
 
-**Status: implemented, except for typing.**
+**Status: implemented.**
 The core form, the predefined aggregates, the selection forms
 (`argmin`/`argmax`/`takemin`/`takemax`), nested aggregates, goal
-occurrences and the removal step run on both backends. Aggregates are
-not type-checked ([type-system.md](type-system.md#aggregates)).
+occurrences and the removal step run on both backends, and the type
+checker checks them ([type-system.md](type-system.md#aggregates)).
 
 An *aggregate* is a rule-head conjunct that summarizes an unbounded
 part of the constraint store: the sum, count, minimum, … of a value
@@ -74,9 +74,11 @@ type `E`, working values of type `W` and results of type `R`:
        aggregator(W, fun(W, E) -> W end, fun(W) -> maybe(R) end).
 ```
 
-`Element` has type `E` and `Result` type `R`. The full typing rules,
-including goal-local variables, go in
-[type-system.md](type-system.md) when this is implemented.
+`Agg` has type `aggregator(W, E, R)`, `Element` type `E` and `Result`
+type `R`. The selection key must be comparable with `<` (or `>` for
+`argmax`/`takemax`). The full rules — scopes, how far a goal's facts
+reach, and the errors — are in
+[type-system.md §Aggregates](type-system.md#aggregates).
 
 
 ## Aggregate goals
@@ -245,8 +247,8 @@ Goal, \+ (Goal', ? X' < X)
 
 (in notation, not YCHR syntax), where `Goal'` and `X'` are `Goal` and
 `X` with `Goal`'s fresh variables renamed apart. `X` is compared with
-the prelude's `<`, so it must be a number. On ties, the rule fires
-with the first minimal match in goal order.
+the prelude's `<`, so it must be an `int`, a `float` or a `string`.
+On ties, the rule fires with the first minimal match in goal order.
 
 The equivalence fixes which match is selected and which variables are
 visible, nothing else. `Goal` is still an aggregate goal:
@@ -428,16 +430,23 @@ need no library.)
 
 | Macro | Result |
 |---|---|
-| `count(G, N)` | the number of matches of `G` |
-| `sum(X, G, S)` | the sum of `X` over the matches |
-| `prod(X, G, P)` | the product of `X` over the matches |
-| `min(X, G, M)` | the minimum of `X`; undefined if there are no matches |
-| `max(X, G, M)` | the maximum of `X`; undefined if there are no matches |
-| `avg(X, G, A)` | the arithmetic mean of `X`; undefined if there are no matches |
-| `collect(X, G, L)` | the list of `X` over the matches, in goal order |
+| `count(G, N)` | the number of matches of `G` (`int`) |
+| `sum(X, G, S)` | the sum of `X` over the matches (`int`) |
+| `prod(X, G, P)` | the product of `X` over the matches (`int`) |
+| `avg(X, G, A)` | the mean of `X` (`int` elements, `float` result); undefined if there are no matches |
+| `fsum(X, G, S)` | `sum` over `float` |
+| `fprod(X, G, P)` | `prod` over `float` |
+| `favg(X, G, A)` | `avg` over `float` |
+| `min(X, G, M)` | the minimum of `X` (`int`, `float` or `string`); undefined if there are no matches |
+| `max(X, G, M)` | the maximum of `X` (`int`, `float` or `string`); undefined if there are no matches |
+| `collect(X, G, L)` | the list of `X` over the matches, in goal order (`list(T)` for `X : T`) |
 | `exists(G)` | holds if `G` has at least one match |
 | `\+ G` | holds if `G` has no match (negation as absence) |
 | `forall(G, C)` | holds if every match of `G` extends to a match of `C`; defined as `\+ (G, \+ C)` |
+
+The integer and float folds are separate macros because an empty fold
+returns its seed (`0`, `1`), and one aggregator cannot return `0` for
+`int` and `0.0` for `float`: YCHR has no dispatch on types.
 
 `exists` and `\+` are aggregates whose `Final` returns `nothing`
 when the condition fails, so they need no guard. The macro passes `_`
@@ -618,6 +627,9 @@ lowers an aggregate in the occurrence procedure itself:
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
 | YCHR-40004 | `AggregateNestedTake` | A `takemin`/`takemax` inside an aggregate goal. |
 | YCHR-40005 | `AggregateResultNotMaybe` | The program declares no `maybe:just/1`, so no aggregator can produce the protocol's result type. |
+| YCHR-60014 | `AggregateTypeEscapes` | A per-match type reaches the rule's scope ([type-system.md](type-system.md#escaping-types)). |
+| YCHR-60015 | `AggregateLinkConflict` | A goal links one rigid type variable to two outer ones ([type-system.md](type-system.md#shared-variables-in-a-goal)). |
+| YCHR-20106 | `AggregateGoalInaccessible` | Warning: an aggregate goal can never match ([type-system.md](type-system.md#goals-that-can-never-match)). |
 
 
 ## Not in this version
@@ -631,11 +643,6 @@ lowers an aggregate in the occurrence procedure itself:
 - **Aggregates in guards, bodies or function equations.**
 - **Nested `takemin`/`takemax`** (`YCHR-40004`). This one is not
   planned: see [Aggregate goals](#aggregate-goals).
-- **Typing.** The aggregate's positions are not type-checked; see
-  [type-system.md](type-system.md#aggregates). As a consequence the
-  integer folds (`sum`, `prod`, `min`, `max`, `avg`) are integer-typed
-  until the aggregator typing lands, so a float element needs
-  overloaded helpers.
 - **`stddev`, `variance`.** They are easy to define as user
   aggregators.
 

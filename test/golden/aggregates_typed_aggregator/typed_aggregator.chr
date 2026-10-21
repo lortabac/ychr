@@ -1,0 +1,30 @@
+% A user aggregator over typed, polymorphic constraints. The checker types
+% `Agg` against `aggregates:aggregator(W, E, R)` by its mangled name, so if
+% that name did not resolve, `out(X, L)` would not check. The goal's `T`
+% merges into the rule's through the shared `X`, so `L : list(T)`.
+:- module(aggregates_typed_aggregator, [setup/1]).
+:- use_module(library(aggregates)).
+:- use_module(library(lists)).
+:- use_module(library(maybe)).
+
+:- function gather() -> aggregator(list(A), A, list(A)).
+gather -> aggregator([], fun gather_inc/2, fun gather_final/1).
+
+:- function gather_inc(list(A), A) -> list(A).
+gather_inc(W, X) -> [X | W].
+
+:- function gather_final(list(A)) -> maybe(list(A)).
+gather_final(W) -> just(reverse(W)).
+
+:- chr_constraint p(T), q(T, T), out(T, list(T)), ask(any), setup(any).
+
+p(X), aggregate(gather, Y, q(X, Y), L) ==> out(X, L).
+
+out(_, L) \ ask(A) <=> A = L.
+
+setup(A) <=>
+    q(1, 1),
+    q(2, 5),
+    q(1, 1),
+    p(1),
+    ask(A).

@@ -1,0 +1,5 @@
+% A count is an int.
+:- module(aggregates_typed_result_misuse, []).
+:- use_module(library(aggregates)).
+:- chr_constraint item(int), start, out(string).
+start, count(item(_), N) ==> out(N).

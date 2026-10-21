@@ -14,6 +14,8 @@
     type(diag_label/0),
     type(diag_origin/0),
     type(unit_id/0),
+    type(check_mode/0),
+    type(ev_level/0),
     type(ctx/0),
     type(error/0),
     type(warning/0),
@@ -21,6 +23,7 @@
     type(warning_code/0),
     type(error_detail/0),
     report_error/3,
+    report_dead/2,
     errors/1,
     collect/1,
     report_warning/3,
@@ -28,7 +31,12 @@
     collect_warnings/1,
     fun suppress_warnings/2,
     fun rule_label/1,
-    fun bump_unit/1
+    fun bump_unit/1,
+    fun ctx_level/1,
+    fun level_within/2,
+    fun level_inside/2,
+    fun ctx_mode/1,
+    fun ctx_at/3
 ]).
 
 :- use_module('$tc_ast').
@@ -78,13 +86,57 @@
 bump_unit(no_unit) -> no_unit.
 bump_unit(unit(U)) -> unit(U + 1).
 
+% How a check reports what it finds (docs/reference/type-system.md
+% §Aggregates):
+%
+%   * `mode_rule` — a contradiction makes the unit dead (YCHR-20104);
+%   * `mode_goal` — inside a plain aggregate's goal: a contradiction only
+%     means the goal never matches (YCHR-20106);
+%   * `mode_copy` — the second check of a selection's goal. It repeats
+%     what the first check already reported, so it reports nothing,
+%     except the key comparison, which is made in the caller's mode.
+:- chr_type check_mode ---> mode_rule ; mode_goal ; mode_copy.
+
+% The evidence level a check runs at, and its mode. A level is a scope
+% path, innermost first: `[]` is the rule, and a plain aggregate's goal
+% gets `[Id | L]`, with a fresh `Id`, where `L` is the level the
+% aggregate is computed at. Two sibling aggregates have different
+% levels. Evidence at level `L` may pin only rigids of level `L`, and
+% merge them only into rigids of level `L` or an enclosing level. The level travels
+% here rather than in a store-global "current level" because a residual
+% check can fire long after the walk has left the aggregate it came
+% from.
+:- chr_type ev_level ---> lvl(list(int), check_mode).
+
 % Everything a diagnostic needs to know about where it came from:
 %
 %   * the checking unit it is attributed to;
 %   * where the message's source echo comes from;
 %   * the label to render;
-%   * the source position.
-:- chr_type ctx ---> ctx(unit_id, diag_origin, diag_label, loc).
+%   * the source position;
+%   * the evidence level and check mode.
+:- chr_type ctx ---> ctx(unit_id, diag_origin, diag_label, loc, ev_level).
+
+:- function ctx_level(ctx) -> list(int).
+ctx_level(ctx(_, _, _, _, lvl(L, _))) -> L.
+
+:- function ctx_mode(ctx) -> check_mode.
+ctx_mode(ctx(_, _, _, _, lvl(_, M))) -> M.
+
+% The same context at another level and mode.
+:- function ctx_at(ctx, list(int), check_mode) -> ctx.
+ctx_at(ctx(U, O, Lb, Loc, _), L, M) -> ctx(U, O, Lb, Loc, lvl(L, M)).
+
+% `level_within(K, L)`: `L` is `K` or a level inside it.
+:- function level_within(list(int), list(int)) -> bool.
+level_within(K, L) | K == L -> true.
+level_within(K, [_|L]) -> level_within(K, L).
+level_within(_, []) -> false.
+
+% `level_inside(K, L)`: `L` is a level strictly inside `K`.
+:- function level_inside(list(int), list(int)) -> bool.
+level_inside(K, [_|L]) -> level_within(K, L).
+level_inside(_, []) -> false.
 
 % An accumulated error: where it came from, which `TypeCheckError`
 % variant it is, and that variant's payload.
@@ -140,11 +192,14 @@ bump_unit(unit(U)) -> unit(U + 1).
                           ; unbound_type_var
                           ; type_ref_arity
                           ; duplicate_constructor
-                          ; constructor_arity.
+                          ; constructor_arity
+                          ; aggregate_type_escapes
+                          ; aggregate_link_conflict.
 
 % Atoms used as the `Code` field of `warning/3`. `inaccessible` is the
-% inaccessible-branch warning YCHR-20104.
-:- chr_type warning_code ---> inaccessible.
+% inaccessible-branch warning YCHR-20104, `goal_inaccessible` the
+% aggregate-goal one, YCHR-20106.
+:- chr_type warning_code ---> inaccessible ; goal_inaccessible.
 
 % Literal values used as the `Detail` field. `tpair` holds the two
 % contradicting types of an inconsistency or an inaccessible branch;
@@ -173,7 +228,8 @@ bump_unit(unit(U)) -> unit(U + 1).
                             ; unbound_type_var_d(any, any, string)
                             ; type_ref_arity_d(any, any, any, int, int)
                             ; duplicate_constructor_d(any, list(pair(any, int)))
-                            ; constructor_arity_d(any, int, int).
+                            ; constructor_arity_d(any, int, int)
+                            ; escaped_type(any).
 
 % The label a rule's diagnostics are rendered with: its source name, or
 % none at all for an unnamed rule.
@@ -197,6 +253,13 @@ rule_label(just(N)) -> label_rule(N).
     warnings(list(warning)),
     collect_warnings(list(warning)).
 
+% A selection's second goal check repeats the first; see `check_mode`.
+drop_copy_error @
+    report_error(ctx(_, _, _, _, lvl(_, mode_copy)), _, _) <=> true.
+
+drop_copy_warning @
+    report_warning(ctx(_, _, _, _, lvl(_, mode_copy)), _, _) <=> true.
+
 accumulate_error @
     report_error(Ctx, Code, Detail), errors(Es) <=>
     errors([error(Ctx, Code, Detail) | Es]).
@@ -210,6 +273,21 @@ accumulate_warning @
 
 collect_all_warnings @
     collect_warnings(W), warnings(Ws) <=> W = Ws.
+
+% A contradiction between two whole types: which warning it is depends
+% on where it was found.
+:- chr_constraint report_dead(ctx, error_detail).
+
+report_dead_rule @
+    report_dead(Ctx, D) <=> ctx_mode(Ctx) == mode_rule |
+    report_warning(Ctx, inaccessible, D).
+
+report_dead_goal @
+    report_dead(Ctx, D) <=> ctx_mode(Ctx) == mode_goal |
+    report_warning(Ctx, goal_inaccessible, D).
+
+report_dead_copy @
+    report_dead(_, _) <=> true.
 
 % ---------------------------------------------------------------------
 % Per-unit warning suppression
@@ -231,11 +309,11 @@ suppress_warnings(Errs, Ws) -> keep_warnings(error_units(Errs), Ws).
 
 :- function error_units(list(error)) -> list(unit_id).
 error_units([]) -> [].
-error_units([error(ctx(no_unit, _, _, _), _, _)|Es]) -> error_units(Es).
-error_units([error(ctx(U, _, _, _), _, _)|Es]) -> [U|error_units(Es)].
+error_units([error(ctx(no_unit, _, _, _, _), _, _)|Es]) -> error_units(Es).
+error_units([error(ctx(U, _, _, _, _), _, _)|Es]) -> [U|error_units(Es)].
 
 :- function keep_warnings(list(unit_id), list(warning)) -> list(warning).
 keep_warnings(_, []) -> [].
-keep_warnings(Us, [warning(ctx(U, _, _, _), _, _)|Ws]) | member(U, Us) ->
+keep_warnings(Us, [warning(ctx(U, _, _, _, _), _, _)|Ws]) | member(U, Us) ->
     keep_warnings(Us, Ws).
 keep_warnings(Us, [W|Ws]) -> [W|keep_warnings(Us, Ws)].

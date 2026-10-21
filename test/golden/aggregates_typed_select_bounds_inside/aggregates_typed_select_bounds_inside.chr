@@ -1,0 +1,8 @@
+% A selection's bounds hold after it only inside the enclosing goal. The
+% count can be 0, and the rule still fires: with p([1]) and no task,
+% V < V would compare two lists.
+:- module(aggregates_typed_select_bounds_inside, []).
+:- use_module(library(aggregates)).
+:- chr_constraint task(int, T, T) requiring '<'(T, T) -> bool.
+:- chr_constraint p(T), start, out(any).
+start, p(V), count(argmin(P, task(P, V, _)), _) ==> V < V | out(V).

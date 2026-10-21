@@ -44,7 +44,12 @@
 % (180.6 ms -> 195.3 ms, 2026-09-03).
 :- module('$tc_skel', [
     type(type_skeleton/0),
-    fun collect_vars_rule/3,
+    fun collect_vars_rule/4,
+    fun collect_vars_head_args/1,
+    fun aggs_skel_cons/1,
+    fun aggs_skel_guards/1,
+    fun goal_skel_cons/1,
+    fun goal_skel_guards/1,
     fun collect_vars_eq/1,
     fun collect_vars_goals/1,
     fun collect_vars_guards/1,
@@ -398,11 +403,55 @@ param_var_skeletons(Env, Params, DeclTys, Guards) ->
 % names, which become local bindings the checker types. Duplicates are
 % dropped so a name gets exactly one slot.
 
-:- function collect_vars_rule(list(head_con), list(guard), list(body_goal)) -> list(any).
-collect_vars_rule(Cons, Guards, Body) ->
+:- function collect_vars_rule(list(head_con), list(guard), list(body_goal), list(agg_e))
+    -> list(any).
+collect_vars_rule(Cons, Guards, Body, Aggs) ->
     distinct(concat([collect_vars_head_cons(Cons),
                      collect_vars_guards(Guards),
-                     collect_vars_body_goals(Body)])).
+                     collect_vars_body_goals(Body),
+                     concat_map(fun agg_binds/1, Aggs)])).
+
+% The names an aggregate binds in the rule's scope. Everything else it
+% mentions is either shared (already a rule variable) or its own, and
+% gets a slot of the aggregate's scope when the walk reaches it.
+:- function agg_binds(agg_e) -> list(any).
+agg_binds(agg_e(_, _, _, _, _, _, Binds, _)) -> Binds.
+
+% The declaration positions of a goal, for its slots' skeletons: its
+% constraint conjuncts, and those of the selections nested in it, whose
+% goal variables are visible in the goal's scope. A plain aggregate
+% nested in it keeps its goal to itself.
+:- function goal_skel_cons(list(agg_conj)) -> list(head_con).
+goal_skel_cons(Goal) -> concat_map(fun conj_skel_cons/1, Goal).
+
+:- function conj_skel_cons(agg_conj) -> list(head_con).
+conj_skel_cons(agg_con(HC, _)) -> [HC].
+conj_skel_cons(agg_nested(A)) -> aggs_skel_cons([A]).
+conj_skel_cons(agg_guard(_)) -> [].
+
+:- function goal_skel_guards(list(agg_conj)) -> list(guard).
+goal_skel_guards(Goal) -> concat_map(fun conj_skel_guards/1, Goal).
+
+:- function conj_skel_guards(agg_conj) -> list(guard).
+conj_skel_guards(agg_con(_, Guards)) -> Guards.
+conj_skel_guards(agg_nested(A)) -> aggs_skel_guards([A]).
+conj_skel_guards(agg_guard(_)) -> [].
+
+% The same for a list of aggregates in one scope: only the selections
+% contribute, since only their goal variables reach that scope.
+:- function aggs_skel_cons(list(agg_e)) -> list(head_con).
+aggs_skel_cons(Aggs) -> concat_map(fun agg_skel_cons/1, Aggs).
+
+:- function agg_skel_cons(agg_e) -> list(head_con).
+agg_skel_cons(agg_e(agg_plain, _, _, _, _, _, _, _)) -> [].
+agg_skel_cons(agg_e(_, _, _, Goal, _, _, _, _)) -> goal_skel_cons(Goal).
+
+:- function aggs_skel_guards(list(agg_e)) -> list(guard).
+aggs_skel_guards(Aggs) -> concat_map(fun agg_skel_guards/1, Aggs).
+
+:- function agg_skel_guards(agg_e) -> list(guard).
+agg_skel_guards(agg_e(agg_plain, _, _, _, _, _, _, _)) -> [].
+agg_skel_guards(agg_e(_, _, _, Goal, _, _, _, _)) -> goal_skel_guards(Goal).
 
 % The same for a query's goal list. The goals of one query share a
 % single variable scope, so a name mentioned by two of them gets one

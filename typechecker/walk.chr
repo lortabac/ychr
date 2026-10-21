@@ -80,6 +80,18 @@ scope_cons(S) -> env_cons(scope_env(S)).
 :- function scope_ctx(scope) -> ctx.
 scope_ctx(scope(_, _, _, C)) -> C.
 
+:- function scope_level(scope) -> list(int).
+scope_level(S) -> ctx_level(scope_ctx(S)).
+
+:- function scope_vars(scope) -> list(pair(any, ty)).
+scope_vars(scope(_, Vars, _, _)) -> Vars.
+
+:- function scope_ambs(scope) -> list(pair(amb_key, list(fun_sig_t))).
+scope_ambs(scope(_, _, Amb, _)) -> Amb.
+
+:- function scope_with_ambs(scope, list(pair(amb_key, list(fun_sig_t)))) -> scope.
+scope_with_ambs(scope(Env, Vars, _, C), Amb) -> scope(Env, Vars, Amb, C).
+
 % A source variable's pre-allocated type slot. `collect_vars_rule` walks
 % the same nodes this walk visits, so every variable has one; a miss
 % would be a collector bug, and typing the variable `any` is the
@@ -184,10 +196,10 @@ tvar_slots(Vs, TVars) ->
 
 :- chr_constraint
     alloc_flex_tvars(list(string), list(pair(string, ty))),
-    alloc_rigid_tvars(list(string), list(pair(string, ty))),
+    alloc_rigid_tvars(list(int), list(string), list(pair(string, ty))),
     decl_rigid_supply(int),
-    make_decl_rigid(ty),
-    make_decl_rigids(int, list(ty)),
+    make_decl_rigid(list(int), ty),
+    make_decl_rigids(list(int), int, list(ty)),
     fresh_slots(int, list(ty)),
     encode_one_sig(fun_sig, fun_sig_t),
     encode_sigs(list(fun_sig), list(fun_sig_t)).
@@ -203,14 +215,16 @@ alloc_flex_tvars_cons @
     Out = [kv(V, _Slot) | Rest].
 
 % Rigids are allocated head-first so the ids ascend with the (sorted)
-% name list.
+% name list. The first argument is the evidence level they belong to:
+% `[]` for a rule head or a function equation, the aggregate's scope
+% path for an aggregate goal.
 alloc_rigid_tvars_nil @
-    alloc_rigid_tvars([], Out) <=> Out = [].
+    alloc_rigid_tvars(_, [], Out) <=> Out = [].
 
 alloc_rigid_tvars_cons @
-    alloc_rigid_tvars([V|Vs], Out) <=>
-    make_decl_rigid(T),
-    alloc_rigid_tvars(Vs, Rest),
+    alloc_rigid_tvars(L, [V|Vs], Out) <=>
+    make_decl_rigid(L, T),
+    alloc_rigid_tvars(L, Vs, Rest),
     Out = [kv(V, T) | Rest].
 
 % The declaration-site rigid supply. It counts *up* from 0 while the
@@ -221,18 +235,18 @@ alloc_rigid_tvars_cons @
 % The pin cell is a body-only variable, i.e. a fresh unbound logical
 % variable, so guard-derived evidence can pin it later.
 make_decl_rigid1 @
-    decl_rigid_supply(N), make_decl_rigid(Out) <=>
+    decl_rigid_supply(N), make_decl_rigid(L, Out) <=>
     N1 is N + 1,
-    Out = rigid(_Cell, N),
+    Out = rigid(_Cell, N, L),
     decl_rigid_supply(N1).
 
 make_decl_rigids_done @
-    make_decl_rigids(N, Out) <=> N =< 0 | Out = [].
+    make_decl_rigids(_, N, Out) <=> N =< 0 | Out = [].
 
 make_decl_rigids_step @
-    make_decl_rigids(N, Out) <=>
-    make_decl_rigid(B),
-    make_decl_rigids(N - 1, Rest),
+    make_decl_rigids(L, N, Out) <=>
+    make_decl_rigid(L, B),
+    make_decl_rigids(L, N - 1, Rest),
     Out = [B | Rest].
 
 fresh_slots_done @
@@ -473,6 +487,7 @@ build_td_con_facts_cons @
 walk_program1 @
     walk_program(Env, P, Facts) <=>
     decl_rigid_supply(0),
+    scope_supply(0),
     walk_rules_from(Env, P, Facts, program_rules(P)).
 
 % The rule list is handed on rather than recomputed: there is no `let`,
@@ -501,27 +516,48 @@ walk_rules_cons @
 % HNF-synthetic guards are attributed to the *head*, where the patterns
 % they were derived from are written — a rule with no user guard has no
 % guard text at all.
+%
+% The sections are gathered in the order the rule runs
+% (docs/reference/type-system.md §Aggregates §Gathering order): the head
+% occurrences, the head's HNF guards, the aggregates, the user's guards,
+% the body. Desugar puts the HNF guards first, so the split is a prefix.
 walk_rule1 @
     walk_rule(Env,
               rule(Name,
-                   ann(HAnn, HLoc, rule_head(Kept, Removed)),
+                   ann(HAnn, HLoc, rule_head(Kept, Removed, Aggs)),
                    ann(GAnn, GLoc, Guards),
                    ann(BAnn, BLoc, Body)),
               Unit) <=>
     HeadCons is append(Kept, Removed),
     Label is rule_label(Name),
-    HeadCtx = ctx(unit(Unit), origin_ann(HAnn), Label, HLoc),
-    alloc_var_types(collect_vars_rule(HeadCons, Guards, Body),
-                    head_var_skeletons(Env, HeadCons, Guards),
+    HeadCtx = ctx(unit(Unit), origin_ann(HAnn), Label, HLoc, lvl([], mode_rule)),
+    GuardCtx = ctx(unit(Unit), origin_ann(GAnn), Label, GLoc, lvl([], mode_rule)),
+    alloc_var_types(collect_vars_rule(HeadCons, Guards, Body, Aggs),
+                    head_var_skeletons(Env, append(HeadCons, aggs_skel_cons(Aggs)),
+                                       append(Guards, aggs_skel_guards(Aggs))),
                     VarTypes),
     head_cons_check(scope(Env, VarTypes, [], HeadCtx), HeadCons, [], Amb),
-    check_guards(scope(Env, VarTypes, Amb,
-                       ctx(unit(Unit), origin_ann(GAnn), Label, GLoc)),
-                 scope(Env, VarTypes, Amb, HeadCtx),
-                 Guards, []),
-    check_body_goals(scope(Env, VarTypes, Amb,
-                           ctx(unit(Unit), origin_ann(BAnn), Label, BLoc)),
+    check_guards(scope(Env, VarTypes, Amb, GuardCtx), scope(Env, VarTypes, Amb, HeadCtx),
+                 hnf_guards(Guards), []),
+    aggs_check(scope(Env, VarTypes, Amb, HeadCtx), Aggs, AggsEnd),
+    check_guards(scope(Env, VarTypes, scope_ambs(AggsEnd), GuardCtx),
+                 scope(Env, VarTypes, scope_ambs(AggsEnd), HeadCtx),
+                 user_guards(Guards), []),
+    check_body_goals(scope(Env, VarTypes, scope_ambs(AggsEnd),
+                           ctx(unit(Unit), origin_ann(BAnn), Label, BLoc, lvl([], mode_rule))),
                      Body).
+
+% The HNF guards Desugar puts ahead of the user's, and the user's.
+% A user guard is always a `guard_expr`, and HNF never emits one.
+:- function hnf_guards(list(guard)) -> list(guard).
+hnf_guards([]) -> [].
+hnf_guards([guard_expr(_)|_]) -> [].
+hnf_guards([G|Gs]) -> [G|hnf_guards(Gs)].
+
+:- function user_guards(list(guard)) -> list(guard).
+user_guards([]) -> [].
+user_guards([guard_expr(E)|Gs]) -> [guard_expr(E)|Gs].
+user_guards([_|Gs]) -> user_guards(Gs).
 
 % --- Head occurrences -----------------------------------------------
 
@@ -556,7 +592,8 @@ head_con_check1 @
     head_con_check(S, head_con(N, Args), AmbIn, Out) <=>
     DeclTys is env_constraint_types(scope_env(S), con_key(N, length(Args))),
     Bounds is env_constraint_bounds(scope_env(S), con_key(N, length(Args))),
-    alloc_rigid_tvars(sort_unique_tvars(append(collect_ty_vars(DeclTys),
+    alloc_rigid_tvars(scope_level(S),
+                      sort_unique_tvars(append(collect_ty_vars(DeclTys),
                                                bound_sigs_vars(Bounds))),
                       TVars),
     type_of_head_args(S, Args, ArgTys),
@@ -613,6 +650,262 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
                    amb_key(N, length(Args)),
                    [fsig(encode_tys(TVars, Args), encode_ty(TVars, Ret))],
                    Acc).
+
+% ---------------------------------------------------------------------
+% Aggregates
+% ---------------------------------------------------------------------
+%
+% docs/reference/type-system.md §Aggregates. An aggregate computed at
+% level `L` (the scope it is checked in) types:
+%
+%   * `Agg` in that scope, as an `aggregator(W, E, R)`;
+%   * its goal, `Element` and nested aggregates in a scope of its own,
+%     at a fresh level `[Id | L]` (`child_level`), so that no sibling
+%     aggregate shares it. Its locals and the copies of the shared names its
+%     goal matches get fresh slots there, which shadow the outer ones;
+%   * the copies linked one way to the outer names (`link_unify`);
+%   * the result pattern back in the enclosing scope, at level `L`.
+%
+% A selection has no aggregator. Its goal is checked twice: once like
+% extra heads, at level `L`, with its shared names linked both ways;
+% and once like a plain aggregate's, at a fresh child level, where the
+% key comparison
+% is made. That second check repeats what the first reported, so its
+% mode (`mode_copy`) reports nothing but the key comparison.
+%
+% The scopes come from the binder fields Desugar computed, so the
+% checker agrees with the compiler on them by construction.
+
+:- chr_type link_kind ---> link_one_way ; link_two_way.
+
+% What `goal_conjs_check` needs to link a goal's copies as it goes: the
+% enclosing scope, the kind of link, and the copies no conjunct has
+% matched yet.
+:- chr_type goal_links ---> glinks(scope, link_kind, list(any)).
+
+:- chr_constraint
+    aggs_check(scope, list(agg_e), scope),
+    agg_check(scope, agg_e, scope),
+    agg_scope(scope, list(int), check_mode, list(agg_conj), list(any), scope),
+    scope_supply(int),
+    child_level(list(int), list(int)),
+    goal_conjs_check(scope, list(agg_conj), goal_links, scope, list(any)),
+    link_copies(scope, scope, list(any), link_kind),
+    agg_result_check(scope, any, list(guard), ty),
+    agg_shape(ty, ty, ty, ty, ctx),
+    scope_fresh(scope, list(any), scope).
+
+aggs_check_nil @
+    aggs_check(S, [], Out) <=> Out = S.
+
+aggs_check_cons @
+    aggs_check(S, [A|As], Out) <=>
+    agg_check(S, A, S1),
+    aggs_check(S1, As, Out).
+
+% A plain aggregate, in gathering order: `Agg`, the goal's conjuncts
+% with the links to known types, the other links, `Element`, the result
+% tests. The escape check waits for the end of solving. What its goal
+% proves stays inside, so the scope after it is the one before it.
+agg_check_plain @
+    agg_check(S, agg_e(agg_plain, just(Agg), Elem, Goal, Shared, Locals, Binds,
+                       just(agg_res(RV, RGuards))), Out) <=>
+    type_of_expr(S, Agg, AggTy),
+    agg_shape(AggTy, _, E, R, scope_ctx(S)),
+    child_level(scope_level(S), Level),
+    agg_scope(S, Level, inner_mode(scope_ctx(S)), Goal,
+              append(Locals, goal_copies(Shared, Goal)), Inner),
+    goal_conjs_check(Inner, Goal, glinks(S, link_one_way, goal_copies(Shared, Goal)),
+                     InnerEnd, Later),
+    link_copies(S, Inner, Later, link_one_way),
+    type_of_expr(InnerEnd, Elem, ElemTy),
+    check_unify(ElemTy, E, scope_ctx(Inner)),
+    agg_result_check(S, RV, RGuards, R),
+    escape_check(scope_level(S),
+                 [E, R | maplist(fun(B) -> scope_var_ty(S, B) end, Binds)],
+                 scope_ctx(S)),
+    Out = S.
+
+% A selection. The first check binds the names it shows to the rule;
+% the second one owns fresh copies of them, so a match's types stay
+% inside it. The key and its comparison are checked in the caller's
+% mode; the comparison sees only the enclosing ambient signatures. The
+% bounds of the first check's constraints are ambient after the
+% selection, as a head's are: it fires with one match.
+agg_check_select @
+    agg_check(S, agg_e(Kind, nothing, Key, Goal, Shared, Locals, Binds, nothing), Out) <=>
+    agg_scope(S, scope_level(S), ctx_mode(scope_ctx(S)), Goal,
+              append(Locals, goal_copies(Shared, Goal)), Head),
+    goal_conjs_check(Head, Goal, glinks(S, link_two_way, goal_copies(Shared, Goal)),
+                     HeadEnd, HeadLater),
+    link_copies(S, Head, HeadLater, link_two_way),
+    child_level(scope_level(S), CopyLevel),
+    agg_scope(S, CopyLevel, mode_copy, Goal,
+              append(append(Locals, Binds), goal_copies(Shared, Goal)), Copy),
+    goal_conjs_check(Copy, Goal, glinks(S, link_one_way, goal_copies(Shared, Goal)),
+                     CopyEnd, CopyLater),
+    link_copies(S, Copy, CopyLater, link_one_way),
+    type_of_expr(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(CopyEnd),
+                       key_ctx(S, CopyLevel)),
+                 Key, KeyTy),
+    emit_function_call(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(S),
+                             key_ctx(S, CopyLevel)),
+                       key_comparison(Kind), [KeyTy, KeyTy], _),
+    Out is scope_with_ambs(S, scope_ambs(HeadEnd)).
+
+% `Agg : aggregator(W, E, R)`, at fresh flexible `W`, `E` and `R`.
+agg_shape1 @
+    agg_shape(AggTy, W, E, R, Ctx) <=>
+    check_unify(AggTy, tcon(quote(aggregates:aggregator), [W, E, R]), Ctx).
+
+% The key is typed only in the second check, so it reports there, in
+% the caller's mode, at the second check's level.
+:- function key_ctx(scope, list(int)) -> ctx.
+key_ctx(S, L) -> ctx_at(scope_ctx(S), L, ctx_mode(scope_ctx(S))).
+
+% A fresh level inside `P`. The ids only need to differ, so one counter
+% per check is enough.
+child_level1 @
+    scope_supply(N), child_level(P, Out) <=>
+    N1 is N + 1,
+    Out = [N | P],
+    scope_supply(N1).
+
+% Where a contradiction inside a plain aggregate's goal is reported: as
+% a dead goal, unless this is already a selection's second check.
+:- function inner_mode(ctx) -> check_mode.
+inner_mode(C) | ctx_mode(C) == mode_copy -> mode_copy.
+inner_mode(_) -> mode_goal.
+
+:- function key_comparison(agg_kind) -> any.
+% A plain aggregate has no key, so it never gets here.
+key_comparison(agg_argmin) -> quote(prelude:'<').
+key_comparison(agg_takemin) -> quote(prelude:'<').
+key_comparison(_) -> quote(prelude:'>').
+
+% The shared names the goal matches itself, at this level: the
+% arguments of its constraint conjuncts and what their HNF guards
+% extract. Each gets an inner copy; a shared name the goal only reads
+% keeps its outer slot.
+:- function goal_copies(list(any), list(agg_conj)) -> list(any).
+goal_copies(Shared, Goal) ->
+    filter(fun(V) -> member(V, goal_bound_names(Goal)) end, Shared).
+
+:- function goal_bound_names(list(agg_conj)) -> list(any).
+goal_bound_names(Goal) -> concat_map(fun conj_bound_names/1, Goal).
+
+:- function conj_bound_names(agg_conj) -> list(any).
+conj_bound_names(agg_con(head_con(_, Args), Guards)) ->
+    append(collect_vars_head_args(Args), getarg_targets(Guards)).
+conj_bound_names(agg_nested(_)) -> [].
+conj_bound_names(agg_guard(_)) -> [].
+
+:- function getarg_targets(list(guard)) -> list(any).
+getarg_targets([]) -> [].
+getarg_targets([guard_getarg(V, _, _)|Gs]) -> [V|getarg_targets(Gs)].
+getarg_targets([_|Gs]) -> getarg_targets(Gs).
+
+% A scope for an aggregate's goal: fresh slots for `Names`, shaped by
+% the declarations of the goal's own constraints, in front of the
+% enclosing ones, at the given level and mode.
+agg_scope1 @
+    agg_scope(S, Level, Mode, Goal, Names, Out) <=>
+    alloc_var_types(Names,
+                    head_var_skeletons(scope_env(S), goal_skel_cons(Goal),
+                                       goal_skel_guards(Goal)),
+                    Slots),
+    Out is scope(scope_env(S), append(Slots, scope_vars(S)), scope_ambs(S),
+                 ctx_at(scope_ctx(S), Level, Mode)).
+
+% The goal's conjuncts, left to right. A constraint is checked like a
+% head occurrence, at the goal's level, and its bounds become ambient in
+% the rest of the aggregate only. Right after it, the copies it matches
+% first are linked if their outer type is known; the others are
+% returned, to be linked after the whole goal (type-system.md
+% §Aggregates §Shared variables in a goal). The split is made once,
+% before the rest of the goal can change an outer type.
+goal_conjs_nil @
+    goal_conjs_check(S, [], _, Out, Later) <=> Out = S, Later = [].
+
+goal_conjs_con @
+    goal_conjs_check(S, [agg_con(HC, Guards)|Cs], glinks(O, K, P), Out, Later) <=>
+    head_con_check(S, HC, scope_ambs(S), Amb),
+    check_guards(S, S, Guards, []),
+    Now is filter(fun(V) -> member(V, conj_bound_names(agg_con(HC, Guards))) end, P),
+    Wait is filter(fun(V) -> not(solid_outer(O, V)) end, Now),
+    link_copies(O, S, filter(fun(V) -> not(member(V, Wait)) end, Now), K),
+    goal_conjs_check(scope_with_ambs(S, Amb), Cs,
+                     glinks(O, K, filter(fun(V) -> not(member(V, Now)) end, P)),
+                     Out, Rest),
+    Later is append(Wait, Rest).
+
+goal_conjs_guard @
+    goal_conjs_check(S, [agg_guard(G)|Cs], L, Out, Later) <=>
+    check_guard(S, S, G, [], _),
+    goal_conjs_check(S, Cs, L, Out, Later).
+
+goal_conjs_nested @
+    goal_conjs_check(S, [agg_nested(A)|Cs], L, Out, Later) <=>
+    agg_check(S, A, S1),
+    goal_conjs_check(S1, Cs, L, Out, Later).
+
+% Outer type first, the copy second, at the goal's level.
+%
+% The links are told in a fixed order that does not depend on the
+% names: first those whose outer type is already known and is not an
+% unpinned skolem, then the rest. When one copy is linked both to a
+% known type and to an outer skolem, the known type wins, whatever the
+% variables are called.
+link_copies_ordered @
+    link_copies(Outer, Inner, Vs, K) <=> not(links_ordered(Outer, Vs)) |
+    link_copies(Outer, Inner, append(filter(fun(V) -> solid_outer(Outer, V) end, Vs),
+                                     filter(fun(V) -> not(solid_outer(Outer, V)) end, Vs)),
+                K).
+
+link_copies_nil @
+    link_copies(_, _, [], _) <=> true.
+
+link_copies_one_way @
+    link_copies(Outer, Inner, [V|Vs], link_one_way) <=>
+    link_unify(scope_var_ty(Outer, V), scope_var_ty(Inner, V), ev_top, scope_ctx(Inner)),
+    link_copies(Outer, Inner, Vs, link_one_way).
+
+link_copies_two_way @
+    link_copies(Outer, Inner, [V|Vs], link_two_way) <=>
+    eq_unify(scope_var_ty(Outer, V), scope_var_ty(Inner, V), ev_top, scope_ctx(Inner)),
+    link_copies(Outer, Inner, Vs, link_two_way).
+
+:- function solid_outer(scope, any) -> bool.
+solid_outer(S, V) -> solid_ty(ty_deref(scope_var_ty(S, V))).
+
+:- function solid_ty(ty) -> bool.
+solid_ty(T) | var(T) -> false.
+solid_ty(rigid(_, _, _)) -> false.
+solid_ty(_) -> true.
+
+% Whether the solid outer types already come first.
+:- function links_ordered(scope, list(any)) -> bool.
+links_ordered(_, []) -> true.
+links_ordered(S, [V|Vs]) | solid_outer(S, V) -> links_ordered(S, Vs).
+links_ordered(S, Vs) -> not(any(fun(V) -> solid_outer(S, V) end, Vs)).
+
+% The result pattern, in the enclosing scope: its variable has the
+% result type, and its HNF guards are tests the rule needs to pass.
+% Their `$res_N` names are new here, so they get fresh slots.
+agg_result_check1 @
+    agg_result_check(S, RV, RGuards, R) <=>
+    scope_fresh(S, unscoped(S, [RV | collect_vars_guards(RGuards)]), S2),
+    check_unify(scope_var_ty(S2, RV), R, scope_ctx(S2)),
+    check_guards(S2, S2, RGuards, []).
+
+scope_fresh1 @
+    scope_fresh(S, Names, Out) <=>
+    alloc_var_types(Names, [], Slots),
+    Out is scope_shadow(S, Slots).
+
+:- function unscoped(scope, list(any)) -> list(any).
+unscoped(S, Vs) ->
+    distinct(filter(fun(V) -> not(assoc_member(V, scope_vars(S))) end, Vs)).
 
 % ---------------------------------------------------------------------
 % Guards
@@ -695,7 +988,8 @@ check_match_known @
     known_con_with_arity(scope_cons(SynthS), Con, Arity) |
     type_of_expr(SynthS, Operand, OperandTy),
     fresh_slots(Arity, FieldSlots),
-    make_decl_rigids(parent_type_arity(scope_cons(SynthS), Con), Betas),
+    make_decl_rigids(scope_level(SynthS), parent_type_arity(scope_cons(SynthS), Con),
+                     Betas),
     check_guard_match(OperandTy, Con, Betas, FieldSlots, scope_ctx(SynthS)),
     MOut is record_match(guard_operand_var(Operand), match_state(Con, FieldSlots), M).
 
@@ -1262,13 +1556,14 @@ check_equation1 @
     alloc_var_types(collect_vars_eq(Eq),
                     param_var_skeletons(Env, eq_params(Eq), ArgTys, eq_guards(Eq)),
                     VarTypes),
-    alloc_rigid_tvars(sort_unique_tvars(append(append(collect_ty_vars(ArgTys),
+    alloc_rigid_tvars([],
+                      sort_unique_tvars(append(append(collect_ty_vars(ArgTys),
                                                       collect_ty_vars_expr(RetTy)),
                                                bound_sigs_vars(Bounds))),
                       TVars),
     check_equation_at(scope(Env, VarTypes, add_ambients([], Bounds, TVars),
                             ctx(unit(Unit), origin_ann(EAnn),
-                                label_function(FName), ELoc)),
+                                label_function(FName), ELoc, lvl([], mode_rule))),
                       TVars, fun_sig(ArgTys, RetTy), Bounds, Eq).
 
 :- function eq_params(fun_eq) -> list(head_arg).
@@ -1474,7 +1769,8 @@ class_eq_result_fitted @
 % `src/YCHR/Internal/TypeCheck.hs`.
 class_eq_result_none @
     class_eq_result(FName, EAnn, ELoc, false) <=>
-    report_error(ctx(no_unit, origin_ann(EAnn), label_function(FName), ELoc),
+    report_error(ctx(no_unit, origin_ann(EAnn), label_function(FName), ELoc,
+                     lvl([], mode_rule)),
                  no_matching_overload, source_name(FName)).
 
 % Inside the search: declaration order, stop at the first fit. The
@@ -1522,6 +1818,7 @@ class_attempt1 @
     warnings([]),
     rigid_supply(-1),
     decl_rigid_supply(0),
+    scope_supply(0),
     retell_decls(Facts),
     check_equation(Env, FName, Sig, [], ann(EAnn, ELoc, Eq), 0),
     collect(Errs),
@@ -1579,6 +1876,7 @@ verdict_of(_, _) -> attempt_failed.
 walk_goals1 @
     walk_goals(Env, Goals, Loc, Label) <=>
     decl_rigid_supply(0),
+    scope_supply(0),
     alloc_var_types(collect_vars_goals(Goals), [], VarTypes),
     walk_goals_at(Env, Goals, Loc, Label, VarTypes, 0).
 
@@ -1587,6 +1885,7 @@ walk_goals_at_nil @
 
 walk_goals_at_cons @
     walk_goals_at(Env, [G|Gs], Loc, Label, VarTypes, Unit) <=>
-    check_body_goal(scope(Env, VarTypes, [], ctx(unit(Unit), origin_none, Label, Loc)),
+    check_body_goal(scope(Env, VarTypes, [],
+                          ctx(unit(Unit), origin_none, Label, Loc, lvl([], mode_rule))),
                     G),
     walk_goals_at(Env, Gs, Loc, Label, VarTypes, Unit + 1).

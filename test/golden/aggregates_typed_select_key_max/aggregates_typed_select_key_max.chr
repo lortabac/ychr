@@ -1,0 +1,6 @@
+% argmax compares keys with >: a key that is a different instance of T
+% in each match cannot be compared.
+:- module(aggregates_typed_select_key_max, []).
+:- use_module(library(aggregates)).
+:- chr_constraint start, q(T, U), best(U).
+start, argmax(K, q(K, V)) ==> best(V).

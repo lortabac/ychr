@@ -1,0 +1,6 @@
+% Each match may be a different instance of q(T), and min would compare
+% them.
+:- module(aggregates_typed_min_poly, []).
+:- use_module(library(aggregates)).
+:- chr_constraint q(T), start, out(T).
+start, min(Y, q(Y), M) ==> out(M).

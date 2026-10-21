@@ -71,7 +71,6 @@ import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.Foldable (toList)
 import Data.List (mapAccumL)
-import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Sequence (Seq, (|>))
@@ -79,6 +78,9 @@ import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Internal.Desugar.AggregateScope (scopeAggregates)
+import YCHR.Internal.Desugar.Hnf (HnfState (..), headTermToExpr, hnfState, normalizeArg)
+import YCHR.Internal.Desugar.Vars (exprVars, guardVars, headArgVars, sequenceFree)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
@@ -135,16 +137,6 @@ data DesugarError
     InlineCycle [Text]
   deriving (Eq, Show)
 
--- | Prefix for fresh variables introduced by the Head Normal Form
--- transformation (see 'normalizeHead').
---
--- The leading @$@ keeps the name out of reach of source code: a source
--- variable is @[A-Z_][A-Za-z0-9_]*@, so it can never spell @$hnf_0@. A
--- bare @_hnf_0@ would be a legal source variable name and would shadow the
--- slot HNF created for a decomposed argument.
-hnfPrefix :: Text
-hnfPrefix = "$hnf_"
-
 -- | Prefix for fresh variables introduced when rewriting a non-variable
 -- @T is E@ form into @R is E, R = T@ (see 'desugarBodyGoal').
 isPrefix :: Text
@@ -196,19 +188,6 @@ quoteExpr e@(R.IntExpr _) = e
 quoteExpr e@(R.FloatExpr _) = e
 quoteExpr e@(R.TextExpr _) = e
 quoteExpr e@(R.FunRefExpr _ _) = e
-
--- | Convert a head-position 'Term' (always a pattern: variable, wildcard,
--- literal, or constructor compound) to its 'R.Expr' equivalent. HNF
--- emits guards whose operands are these patterns, so the conversion is
--- exhaustive over the pattern grammar.
-headTermToExpr :: Term -> R.Expr
-headTermToExpr (VarTerm v) = R.VarExpr v
-headTermToExpr Wildcard = R.WildcardExpr
-headTermToExpr (IntTerm n) = R.IntExpr n
-headTermToExpr (FloatTerm n) = R.FloatExpr n
-headTermToExpr (TextTerm s) = R.TextExpr s
-headTermToExpr (CompoundTerm n args) =
-  R.CtorExpr n (map headTermToExpr args)
 
 -- | The primary entry point: converts a resolved program to a desugared program.
 desugarProgram :: R.Program -> Either [Diagnostic DesugarError] D.Program
@@ -294,11 +273,16 @@ desugarRule r = do
     desugarBodyGoals r.moduleName ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc r.guard.parsed) r.guard.node
   let (rawKept, rawRemoved, rawAggs) = flattenHeadKind r.head.node
-      initState = HnfState 0 Set.empty Seq.empty
+      initState = hnfState
       (st1, kept', removed') = normalizeHeadConstraints initState rawKept rawRemoved
   (st2, aggs) <- desugarAggregates st1 headLoc headOrigin rawAggs
   let guards = toList st2.guards
-      normalizedHead = D.Head kept' removed' aggs
+      -- What is bound before the first aggregate: the regular heads, and
+      -- the variables their HNF guards extract from a compound argument.
+      headBound =
+        Set.fromList [v | hc <- kept' ++ removed', HeadVar v <- hc.args]
+          `Set.union` Set.fromList [v | D.GuardGetArg v _ _ <- guards]
+      normalizedHead = D.Head kept' removed' (scopeAggregates headBound aggs)
   pure
     D.Rule
       { name = fmap (.node) r.name,
@@ -353,7 +337,12 @@ desugarAggregate st0 loc origin a = do
           D.agg = a.agg,
           D.element = a.element,
           D.goal = goal',
-          D.result = a.result
+          D.result = a.result,
+          -- Filled by 'scopeAggregates' once the whole head is desugared.
+          D.aggShared = [],
+          D.aggLocals = [],
+          D.aggBinds = [],
+          D.aggResult = Nothing
         }
     )
 
@@ -406,21 +395,7 @@ flattenHeadKind h = case h of
 -- | In every head constraint, replace non-variable and duplicated-variable
 -- arguments with fresh variables and emit explicit 'D.GuardEqual',
 -- 'D.GuardMatch', and 'D.GuardGetArg' guards that recover the original
--- semantics.
-
--- | Threaded state for HNF: a fresh-variable counter, the set of
--- variable names already seen in the head so far (so that duplicates
--- can be detected), and the guards emitted so far.
---
--- The guards are a 'Seq' so that they accumulate in the order they
--- are emitted: a list would have to be prepended to and reversed
--- exactly once at each consumer, which is an invariant no type
--- enforces.
-data HnfState = HnfState
-  { counter :: !Int,
-    seen :: Set.Set Text,
-    guards :: Seq D.Guard
-  }
+-- semantics. The core of it lives in "YCHR.Internal.Desugar.Hnf".
 
 -- | Normalize the kept and removed constraints of a head. Kept is
 -- processed before removed so that variables first appearing in kept
@@ -465,99 +440,6 @@ normalizeConstraint st (QualifiedConstraint cname cargs) =
   let (st', args') = mapAccumL normalizeArg st cargs
    in (st', HeadConstraint cname args')
 
--- | Normalize one argument of a head constraint. Fresh variables are
--- only introduced for duplicates and non-variables; first-use variables
--- and wildcards pass through.
-normalizeArg :: HnfState -> Term -> (HnfState, HeadArg)
-normalizeArg HnfState {counter, seen, guards} (VarTerm v)
-  | Set.member v seen =
-      let fresh = hnfPrefix <> T.pack (show counter)
-       in ( HnfState
-              { counter = counter + 1,
-                seen,
-                guards = guards |> D.GuardEqual (R.VarExpr v) (R.VarExpr fresh)
-              },
-            HeadVar fresh
-          )
-  | otherwise =
-      ( HnfState {counter, seen = Set.insert v seen, guards},
-        HeadVar v
-      )
--- Wildcards pass through unchanged: they match anything, are never referenced,
--- and cannot duplicate, so no fresh variable or guard is needed.
-normalizeArg st Wildcard = (st, HeadWildcard)
-normalizeArg HnfState {counter, seen, guards} (CompoundTerm cname cargs) =
-  let fresh = hnfPrefix <> T.pack (show counter)
-      st' = HnfState {counter = counter + 1, seen, guards}
-      st'' = decomposeCompound st' fresh cname cargs
-   in (st'', HeadVar fresh)
-normalizeArg HnfState {counter, seen, guards} term =
-  let fresh = hnfPrefix <> T.pack (show counter)
-   in ( HnfState
-          { counter = counter + 1,
-            seen,
-            guards = guards |> D.GuardEqual (R.VarExpr fresh) (headTermToExpr term)
-          },
-        HeadVar fresh
-      )
-
--- | Decompose a compound term into match and extraction guards. Both
--- 'Qualified' and 'Unqualified' constructor functors are handled
--- uniformly: the renamer canonicalizes data constructors to their
--- 'Qualified' form, and the compiler emits both as a single flat-atom
--- compound (see 'YCHR.Internal.Compile.compileTerm') — so HNF can just emit one
--- 'GuardMatch' per compound regardless of where the name originated.
-decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
-decomposeCompound HnfState {counter, seen, guards} parentVar cname cargs =
-  -- 'length' is non-negative, so the conversion to 'Word' is safe.
-  let matchGuard = D.GuardMatch (R.VarExpr parentVar) cname (fromIntegral (length cargs))
-      st' = HnfState {counter, seen, guards = guards |> matchGuard}
-   in List.foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
-
--- | Decompose a single argument of a compound term.
-decomposeArg :: HnfState -> Text -> Word -> Term -> HnfState
-decomposeArg HnfState {counter, seen, guards} parentVar i (VarTerm v)
-  | Set.member v seen =
-      -- Duplicate variable: extract and check equality
-      let fresh = hnfPrefix <> T.pack (show counter)
-          getGuard = D.GuardGetArg fresh (R.VarExpr parentVar) i
-          eqGuard = D.GuardEqual (R.VarExpr v) (R.VarExpr fresh)
-       in HnfState
-            { counter = counter + 1,
-              seen,
-              guards = guards |> getGuard |> eqGuard
-            }
-  | otherwise =
-      -- First occurrence: extract and bind
-      let getGuard = D.GuardGetArg v (R.VarExpr parentVar) i
-       in HnfState
-            { counter,
-              seen = Set.insert v seen,
-              guards = guards |> getGuard
-            }
-decomposeArg st _ _ Wildcard = st
-decomposeArg HnfState {counter, seen, guards} parentVar i (CompoundTerm cname cargs) =
-  -- Nested compound: extract then recursively decompose
-  let fresh = hnfPrefix <> T.pack (show counter)
-      getGuard = D.GuardGetArg fresh (R.VarExpr parentVar) i
-      st' =
-        HnfState
-          { counter = counter + 1,
-            seen,
-            guards = guards |> getGuard
-          }
-   in decomposeCompound st' fresh cname cargs
-decomposeArg HnfState {counter, seen, guards} parentVar i term =
-  -- Ground term (atom, integer, string): extract and check equality
-  let fresh = hnfPrefix <> T.pack (show counter)
-      getGuard = D.GuardGetArg fresh (R.VarExpr parentVar) i
-      eqGuard = D.GuardEqual (R.VarExpr fresh) (headTermToExpr term)
-   in HnfState
-        { counter = counter + 1,
-          seen,
-          guards = guards |> getGuard |> eqGuard
-        }
-
 -- | Desugar a resolved function definition: HNF-normalize its equation
 -- patterns and produce a 'D.Function'.
 desugarFunctionDef :: R.FunctionDef -> Writer [Diagnostic DesugarError] D.Function
@@ -584,7 +466,7 @@ desugarResolvedEquation annEq = do
 
 desugarEquation' :: R.FunctionEquation -> Writer [Diagnostic DesugarError] D.Equation
 desugarEquation' eq = do
-  let initState = HnfState 0 Set.empty Seq.empty
+  let initState = hnfState
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
       guards = toList st.guards
   userGuards <- traverse (desugarGuard eq.guard.sourceLoc eq.guard.parsed) eq.guard.node
@@ -825,43 +707,6 @@ data LiftState = LiftState
     liftedFunctions :: Seq D.Function,
     liftErrors :: [Diagnostic DesugarError]
   }
-
--- | Collect all variable names referenced inside an expression.
-exprVars :: R.Expr -> Set.Set Text
-exprVars (R.VarExpr v) = Set.singleton v
-exprVars (R.CtorExpr _ args) = Set.unions (map exprVars args)
-exprVars (R.CallExpr _ args) = Set.unions (map exprVars args)
-exprVars (R.ApplyExpr f args) =
-  exprVars f `Set.union` Set.unions (map exprVars args)
-exprVars (R.HostExpr _ args) = Set.unions (map exprVars args)
-exprVars (R.LambdaExpr params body) =
-  sequenceFree (NE.toList body)
-    `Set.difference` Set.fromList [v | HeadVar v <- NE.toList params]
-exprVars (R.FunRefExpr _ _) = Set.empty
-exprVars (R.IntExpr _) = Set.empty
-exprVars (R.FloatExpr _) = Set.empty
-exprVars (R.TextExpr _) = Set.empty
-exprVars R.WildcardExpr = Set.empty
-
--- | Free variables of a sequenced expression list (lambda body or
--- top-level function body), treating an @X is E@ item as a binder for
--- X: uses of X /before/ the binding (and uses of X in @E@ itself, which
--- is evaluated /before/ the binding takes effect) still count, while
--- uses in /later/ items resolve to the local binding and do not escape.
-sequenceFree :: [R.Expr] -> Set.Set Text
-sequenceFree = go Set.empty
-  where
-    go _ [] = Set.empty
-    go bound (e : es) =
-      let usedHere = case e of
-            R.CtorExpr (Unqualified "is") [R.VarExpr _, rhs] -> exprVars rhs
-            _ -> exprVars e
-          contrib = usedHere `Set.difference` bound
-          bound' = case e of
-            R.CtorExpr (Unqualified "is") [R.VarExpr v, _] ->
-              Set.insert v bound
-            _ -> bound
-       in contrib `Set.union` go bound' es
 
 -- | Lift lambdas in a single expression. Each 'R.LambdaExpr' is
 -- replaced by a /self-describing closure/ of the form
@@ -1145,12 +990,6 @@ liftAnnEquation modName st (AnnP eq loc parsed) =
   let (st', eq') = liftEquation modName st eq
    in (st', AnnP eq' loc parsed)
 
--- | Variables introduced by a single 'HeadArg'. Wildcards contribute
--- nothing.
-headArgVars :: HeadArg -> Set.Set Text
-headArgVars (HeadVar v) = Set.singleton v
-headArgVars HeadWildcard = Set.empty
-
 -- | Extract all variables from a rule head (kept + removed constraints).
 ruleHeadVars :: D.Head -> Set.Set Text
 ruleHeadVars h =
@@ -1185,15 +1024,6 @@ bodyGoalVars = Set.unions . map goalVars
     goalVars (D.BodyOr branches) =
       Set.unions (map bodyGoalVars (NE.toList branches))
     goalVars D.BodyTrue = Set.empty
-
--- | Collect all variables from a list of guards.
-guardVars :: [D.Guard] -> Set.Set Text
-guardVars = Set.unions . map gVars
-  where
-    gVars (D.GuardExpr e) = exprVars e
-    gVars (D.GuardEqual e1 e2) = exprVars e1 `Set.union` exprVars e2
-    gVars (D.GuardGetArg v e _) = Set.insert v (exprVars e)
-    gVars (D.GuardMatch e _ _) = exprVars e
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body).
@@ -1353,10 +1183,13 @@ mathematically but would mean the canonical binding "moves" whenever a
 rule is rewritten from simpagation to simplification/propagation, which
 the paper's scheme avoids.
 
-Why there are three different fresh-variable prefixes:
+Why there are four different fresh-variable prefixes:
 
   * @$hnf_N@   — HNF-introduced variables for duplicated or non-variable
-                head arguments ('normalizeHead', 'decomposeCompound').
+                head arguments ("YCHR.Internal.Desugar.Hnf").
+  * @$res_N@   — the same for an aggregate's result pattern
+                ("YCHR.Internal.Desugar.AggregateScope"), with its own
+                counter.
   * @__is_N@   — fresh LHS variables for the non-variable @is@ form
                 (@T is E@ becomes @R is E, R = T@). Double-underscore so
                 they cannot collide with the HNF prefix or with any

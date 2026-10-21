@@ -13,14 +13,11 @@
 --
 -- This module owns the part that is a function of the rule alone:
 --
---   * which variables of an aggregate are /shared/ — the inputs the
---     procedure takes as parameters — and which are local to its goal, as
---     the spec defines it: a variable is shared when it also occurs in the
---     rule's regular heads or in an earlier aggregate's result (for a
---     nested aggregate: when the enclosing goal has bound it by then). The
---     partition therefore does not depend on which occurrence is active,
---     so one plan serves every occurrence of a rule and one procedure
---     serves every plan.
+--   * the inputs the procedure takes as parameters and the names it binds,
+--     read from 'D.aggShared' and 'D.aggBinds'
+--     ("YCHR.Internal.Desugar.AggregateScope" fills them). The partition
+--     does not depend on which occurrence is active, so one plan serves
+--     every occurrence of a rule and one procedure serves every plan.
 --
 --   * what the computed result is matched against, as a 'ResultMatch': the
 --     tests the pattern has to pass and the bindings that follow them.
@@ -51,7 +48,6 @@
 module YCHR.Internal.Compile.Aggregate
   ( -- * Planning
     collectAggregatePlans,
-    aggregateGoalLocals,
     aggregateResultTypeDeclared,
 
     -- * Result matching
@@ -60,23 +56,20 @@ module YCHR.Internal.Compile.Aggregate
 where
 
 import Control.Monad.Trans.Writer.CPS (Writer, tell)
-import Data.Foldable (toList)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Data.Text qualified as T
 import YCHR.Internal.Compile.Names
 import YCHR.Internal.Compile.Types
 import YCHR.Internal.Desugar (bodyGoalVars, guardVars)
+import YCHR.Internal.Desugar.AggregateScope (aggregateGoalLocals, aggregateMentionedVars)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Types
   ( AggregateKind (..),
     DataConstructor (..),
-    HeadArg (..),
     Term (..),
     TypeDefinition (..),
     typeConstructors,
@@ -103,45 +96,28 @@ collectAggregatePlans ::
   D.Rule ->
   Writer [Diagnostic CompileError] [AggregatePlan]
 collectAggregatePlans ruleIdx rule = do
-  plans <- go 0 headVars [] (rule.head.node.aggregates)
+  plans <- go 0 [] (rule.head.node.aggregates)
   checkLocalEscapes rule plans
   pure plans
   where
-    headVars =
-      Set.unions
-        [ argVars arg
-        | hc <- rule.head.node.kept ++ rule.head.node.removed,
-          arg <- hc.args
-        ]
-        `Set.union` hnfBoundVars
-    -- HNF decomposes a compound head argument into a fresh variable plus
-    -- 'GuardGetArg' guards, so a variable introduced that way —
-    -- @c(f(X)), count(d(X), N)@ — is a head variable too, not a goal
-    -- local. Only HNF emits 'GuardGetArg', so the rule's guards contain
-    -- no other binding form.
-    hnfBoundVars = Set.fromList [v | D.GuardGetArg v _ _ <- rule.guard.node]
-
-    go _ _ acc [] = pure (reverse acc)
-    go k bound acc (a : rest) = do
+    go _ acc [] = pure (reverse acc)
+    go k acc (a : rest) = do
       supported <- checkSupported rule a
       if not supported
-        then go (k + 1) bound acc rest
+        then go (k + 1) acc rest
         else do
-          plan <- planAggregate ruleIdx rule [k] bound a
-          go (k + 1) (boundAfter bound a) (plan : acc) rest
+          plan <- planAggregate ruleIdx rule [k] a
+          go (k + 1) (plan : acc) rest
 
--- | Plan one aggregate at @path@, given the variables in scope where it is
--- computed: the regular heads and the aggregates to its left for a
--- top-level one, the enclosing goal so far for a nested one.
+-- | Plan one aggregate at @path@.
 planAggregate ::
   Int ->
   D.Rule ->
   [Int] ->
-  Set Text ->
   D.Aggregate ->
   Writer [Diagnostic CompileError] AggregatePlan
-planAggregate ruleIdx rule path bound a = do
-  nested <- planNestedAggregates ruleIdx rule path (Set.fromList shared) a.goal
+planAggregate ruleIdx rule path a = do
+  nested <- planNestedAggregates ruleIdx rule path a.goal
   pure
     AggregatePlan
       { planIndex = case reverse path of
@@ -154,12 +130,12 @@ planAggregate ruleIdx rule path bound a = do
         planElement = a.element,
         planGoal = a.goal,
         planShared = shared,
-        planBind = aggregateBinds bound a,
+        planBind = a.aggBinds,
         planResultMatch = resultMatch,
         planNested = nested
       }
   where
-    shared = Set.toAscList (aggregateMentionedVars a `Set.intersection` bound)
+    shared = a.aggShared
     resolve v
       | Just i <- List.elemIndex v shared = Just (Var (aggregateSharedParam i))
       | otherwise = Nothing
@@ -167,33 +143,7 @@ planAggregate ruleIdx rule path bound a = do
       | a.kind /= AggPlain = mempty
       | otherwise = aggregateResultMatch (Var aggregatePayloadName) resolve a.result
 
--- | The variables an aggregate's procedure binds through its out-cells, in
--- the order of its out parameters. A selection binds the goal's own
--- variables: they are the selected match's values, visible to the rest of
--- the rule (or of the enclosing goal). The core form binds the variables
--- its result pattern introduces.
-aggregateBinds :: Set Text -> D.Aggregate -> [Text]
-aggregateBinds bound a
-  | a.kind /= AggPlain = Set.toAscList (selectionGoalVars a.goal `Set.difference` bound)
-  | otherwise =
-      map fst (aggregateResultMatch (Var aggregatePayloadName) resolve a.result).resultBinds
-  where
-    resolve v
-      | v `Set.member` bound = Just (Var (Name v))
-      | otherwise = Nothing
-
--- | What is in scope after an aggregate: its result, whether the pattern
--- bound it or checked it, or the goal variables of a selection.
-boundAfter :: Set Text -> D.Aggregate -> Set Text
-boundAfter bound a
-  | a.kind /= AggPlain = bound `Set.union` selectionGoalVars a.goal
-  | otherwise = bound `Set.union` termVars a.result
-
--- | Plan the aggregates nested in a goal. The walk follows the goal in goal
--- order and tracks what the fold has in scope at each position, the same
--- way 'YCHR.Internal.Compile.wrapGoalConjuncts' extends its variable map:
--- the arguments of a constraint conjunct, the variables its HNF guards
--- extract, and the variables an earlier nested aggregate binds.
+-- | Plan the aggregates nested in a goal, in goal order.
 --
 -- A variable of a nested aggregate that also occurs in a later conjunct of
 -- the enclosing goal is shared by the spec, but nothing has bound it yet
@@ -205,32 +155,26 @@ planNestedAggregates ::
   Int ->
   D.Rule ->
   [Int] ->
-  Set Text ->
   [D.AggregateConjunct] ->
   Writer [Diagnostic CompileError] [(Int, AggregatePlan)]
 planNestedAggregates ruleIdx rule path = go 0
   where
-    go _ _ [] = pure []
-    go j scope (c : rest) = case c of
-      D.AggConstraint hc guards ->
-        let scope' =
-              Set.unions (scope : map argVars hc.args)
-                `Set.union` Set.fromList [v | D.GuardGetArg v _ _ <- guards]
-         in go (j + 1) scope' rest
-      D.AggGuard _ -> go (j + 1) scope rest
+    go _ [] = pure []
+    go j (c : rest) = case c of
       D.AggNested n -> do
         let locals =
               aggregateMentionedVars n
-                `Set.difference` scope
-                `Set.difference` Set.fromList (aggregateBinds scope n)
+                `Set.difference` Set.fromList n.aggShared
+                `Set.difference` Set.fromList n.aggBinds
             tooEarly =
               locals `Set.intersection` aggregateGoalLocals [r | r <- rest, not (isNested r)]
         tell
           [ Diagnostic label (AnnP (UnboundVariable v) loc origin) []
           | v <- Set.toAscList tooEarly
           ]
-        plan <- planAggregate ruleIdx rule (path ++ [j]) scope n
-        ((j, plan) :) <$> go (j + 1) (boundAfter scope n) rest
+        plan <- planAggregate ruleIdx rule (path ++ [j]) n
+        ((j, plan) :) <$> go (j + 1) rest
+      _ -> go (j + 1) rest
 
     isNested (D.AggNested _) = True
     isNested _ = False
@@ -287,84 +231,6 @@ checkLocalEscapes rule plans = case Set.toAscList escaped of
     label = fmap ("rule " <>) rule.name
     loc = rule.head.sourceLoc
     origin = rule.head.parsed
-
--- | The variables a rule head constraint binds.
-argVars :: HeadArg -> Set Text
-argVars (HeadVar v) = Set.singleton v
-argVars HeadWildcard = Set.empty
-
--- | Every variable an aggregate mentions, in any of its four positions,
--- and in the four positions of every aggregate nested in its goal. A head
--- variable that only a nested @Element@ reads is still an input, so it has
--- to be passed down.
-aggregateMentionedVars :: D.Aggregate -> Set Text
-aggregateMentionedVars a =
-  Set.unions
-    [ maybe Set.empty exprVars a.agg,
-      exprVars a.element,
-      aggregateGoalLocals a.goal,
-      Set.unions [aggregateMentionedVars n | D.AggNested n <- a.goal],
-      termVars a.result
-    ]
-
--- | Variables a goal binds, so the procedure may read them as locals: the
--- arguments of its constraint conjuncts, the fresh variables their HNF
--- guards introduce, the variables a @?@ guard mentions, and — for a nested
--- aggregate — whatever its own goal and result pattern bind.
-aggregateGoalLocals :: [D.AggregateConjunct] -> Set Text
-aggregateGoalLocals = Set.unions . map conjunctVars
-  where
-    conjunctVars (D.AggConstraint hc guards) =
-      Set.unions (map argVars hc.args) `Set.union` guardVars guards
-    conjunctVars (D.AggGuard g) = guardVars [g]
-    conjunctVars (D.AggNested n) =
-      aggregateGoalLocals n.goal `Set.union` termVars n.result
-
--- | The variables a selection's goal makes visible to the rest of the
--- rule: the arguments of its constraint conjuncts, the variables their
--- HNF guards extract from a compound argument, and what a nested
--- aggregate binds. A @?@ guard binds nothing,
--- and HNF's own fresh names (@$hnf_N@) are not source variables, so
--- neither is included.
-selectionGoalVars :: [D.AggregateConjunct] -> Set Text
-selectionGoalVars = Set.filter (not . T.isPrefixOf "$") . Set.unions . map conjunctVars
-  where
-    conjunctVars (D.AggConstraint hc guards) =
-      Set.unions (map argVars hc.args)
-        `Set.union` Set.fromList [v | D.GuardGetArg v _ _ <- guards]
-    -- A nested aggregate shows what it binds and keeps its locals.
-    conjunctVars (D.AggNested n) = boundAfter Set.empty n
-    conjunctVars (D.AggGuard _) = Set.empty
-
--- | The variables an expression mentions. A lambda's parameters are
--- subtracted: the desugarer's lifter has already replaced every lambda with
--- a closure term by the time the compiler runs, so this arm exists only to
--- keep the walk total.
-exprVars :: D.Expr -> Set Text
-exprVars e = case e of
-  D.VarExpr v -> Set.singleton v
-  D.IntExpr _ -> Set.empty
-  D.FloatExpr _ -> Set.empty
-  D.TextExpr _ -> Set.empty
-  D.WildcardExpr -> Set.empty
-  D.FunRefExpr _ _ -> Set.empty
-  D.CtorExpr _ args -> Set.unions (map exprVars args)
-  D.CallExpr _ args -> Set.unions (map exprVars args)
-  D.ApplyExpr f args -> exprVars f `Set.union` Set.unions (map exprVars args)
-  D.HostExpr _ args -> Set.unions (map exprVars args)
-  D.LambdaExpr params body ->
-    Set.unions (map exprVars (toList body))
-      `Set.difference` Set.fromList [v | HeadVar v <- toList params]
-
--- | The variables a term mentions.
-termVars :: Term -> Set Text
-termVars t = case t of
-  VarTerm v -> Set.singleton v
-  Wildcard -> Set.empty
-  IntTerm _ -> Set.empty
-  FloatTerm _ -> Set.empty
-  TextTerm _ -> Set.empty
-  CompoundTerm _ args -> Set.unions (map termVars args)
 
 -- | Report a @takemin@\/@takemax@ nested anywhere in an aggregate's goal,
 -- which is not allowed, and say whether the aggregate can be planned.

@@ -238,5 +238,34 @@ tests =
                 ]
             )
         length errs @?= 1
-        ws @?= [InaccessibleBranch "int" "m:color"]
+        ws @?= [InaccessibleBranch "int" "m:color"],
+      testCase "an aggregate goal that can never match warns" $ do
+        -- The goal's link meets string with int, so the count is
+        -- always 0. The rule still fires, so this is not YCHR-20104.
+        (errs, ws) <-
+          checkModule
+            ( T.unlines
+                [ ":- module(m, []).",
+                  ":- use_module(library(aggregates)).",
+                  ":- chr_constraint client(string), order(int, int), report(string, int).",
+                  "client(C), count(order(C, _), N) ==> report(C, N)."
+                ]
+            )
+        errs @?= []
+        ws @?= [AggregateGoalInaccessible "int" "string"],
+      testCase "a selection goal that can never match makes the rule dead" $ do
+        -- A selection fires only with a match, so this is YCHR-20104,
+        -- not YCHR-20106, and its second check reports nothing.
+        (errs, ws) <-
+          checkModule
+            ( T.unlines
+                [ ":- module(m, []).",
+                  ":- use_module(library(aggregates)).",
+                  ":- chr_type wrap ---> wrap(int).",
+                  ":- chr_constraint start, q(int, int), out(int).",
+                  "start, argmin(K, q(K, wrap(_))) ==> out(K)."
+                ]
+            )
+        errs @?= []
+        ws @?= [InaccessibleBranch "m:wrap" "int"]
     ]
