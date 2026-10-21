@@ -4,18 +4,15 @@
 -- Module      : YCHR.Internal.Rename.Macro
 -- Description : Pure mechanics for macro expansion (@:- macro@).
 --
--- This module holds the parts of macro expansion that need no access
--- to the renamer's monad or its global visibility environments: match
--- the arguments of one use against a clause's head patterns, and
--- instantiate the selected clause's body (substituting, freshening and
--- evaluating the construction primitives in one pass); compare two uses
--- up to variable renaming, for the repeat check; split a term on
--- top-level @,@; decide whether a term in head position is a
--- constraint conjunct or something a head expansion may not contain. The decision of
--- /whether/ a name denotes a macro — which needs the renamer's
--- per-module visibility environments ('YCHR.Internal.Rename.RenameCtx')
--- — lives in "YCHR.Internal.Rename" itself, next to the ordinary
--- constraint\/function visibility logic it mirrors.
+-- The parts of macro expansion that need neither the renamer's monad
+-- nor its visibility environments: match a use's arguments against a
+-- clause's head patterns, instantiate the selected clause's body
+-- (substituting, freshening and evaluating the construction primitives
+-- in one pass), compare two uses up to variable renaming for the
+-- repeat check, split a term on top-level @,@, and decide whether a
+-- term in head position is a constraint conjunct. Deciding /whether/ a
+-- name is a macro needs the per-module visibility environments, so it
+-- lives in "YCHR.Internal.Rename".
 --
 -- See [the macro reference](../../../../docs/reference/macros.md) for
 -- the user-facing specification this module implements.
@@ -221,14 +218,13 @@ primitivesIn _ = []
 -- Each resulting element is then flattened on @,@, so an element that
 -- is itself a conjunction is spliced goal by goal.
 --
--- Freshness is derived from 'seed', a number distinct for every call
--- within one renaming run (see 'YCHR.Internal.Rename.freshMacroSeed')
--- — not from the use site's 'SourceLoc', which cannot do this job: two
--- sibling goals of one rule body, or two kept conjuncts of one rule
--- head, share a single 'SourceLoc' across the whole section, by
--- construction (see 'YCHR.Internal.Parsed.Rule'), and would then alias
--- their fresh variables.
-instantiateClause :: Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
+-- Fresh names come from 'seed', distinct for every call within one
+-- renaming run (see 'YCHR.Internal.Rename.freshMacroSeed'), not from
+-- the use site's 'SourceLoc': all goals of one rule section share one
+-- 'SourceLoc' (see 'YCHR.Internal.Parsed.Rule'), so two uses there
+-- would alias their fresh variables.
+instantiateClause ::
+  Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
 instantiateClause seed binds clause =
   concatMap flattenConj <$> instantiateBody "_macro_" seed binds clause
 
@@ -236,7 +232,8 @@ instantiateClause seed binds clause =
 -- conjunction is still one clause). Fresh variables are
 -- @\<prefix\>\<seed\>_\<name\>@. Each macro kind has its own prefix
 -- and seed counter, so they can't clash.
-instantiateBody :: Text -> Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
+instantiateBody ::
+  Text -> Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
 instantiateBody prefix seed binds clause = traverse go clause.body
   where
     seedKey = Text.pack (show seed)
