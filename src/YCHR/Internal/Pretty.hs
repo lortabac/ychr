@@ -116,9 +116,9 @@ constraintToPExpr (Constraint (Qualified m name) args) =
 
 -- | Convert a parsed 'P.Head' to a 'PE.PExpr'.
 --
--- Aggregates are not rendered. After the renamer an aggregate is its
--- expanded form, not the macro the user wrote, so printing it would
--- not echo the source anyway.
+-- This printer is for diagnostics on parsed heads. Aggregates are not
+-- rendered: after the renamer an aggregate is its expansion, not what
+-- the user wrote.
 headToPExpr :: P.Head -> PE.PExpr
 headToPExpr (P.Simplification cs _) = commaSepPExpr (map constraintToPExpr cs)
 headToPExpr (P.Propagation cs _) = commaSepPExpr (map constraintToPExpr cs)

@@ -3,8 +3,8 @@
 -- | Scheme code generation backend for CHR VM programs.
 --
 -- Translates a 'VMProgram' into an R6RS Scheme library that imports
--- the YCHR Scheme runtime (@(ychr runtime)@, which re-exports the
--- libraries under @scheme\/ychr\/@).
+-- the YCHR Scheme runtime (@(ychr runtime)@, which re-exports what
+-- generated code needs from the other libraries under @scheme\/ychr\/@).
 --
 -- A procedure whose @Return@s can only leave it from tail position
 -- compiles to a plain value-producing expression (see
@@ -1169,7 +1169,7 @@ hostCallMap =
       ("fail", "%fail"),
       ("findall", "%findall"),
       ("fold_solutions", "%fold-solutions"),
-      -- Takes the session too.
+      -- copy_term takes the session too.
       ("copy_term", "%copy-term")
     ]
 

@@ -39,7 +39,7 @@
 -- one solver variable per distinct type parameter of a declaration, in
 -- ascending name order: a rigid variable's synthetic id is user-visible
 -- (@T#0@), so the order has to be fixed. Atoms have no ordering
--- CHR-side; strings do.
+-- CHR-side; strings do. Pinned by @test\/golden\/typecheck_tvar_order@.
 module YCHR.Internal.TypeCheck.Encode
   ( -- * Encoding
     Encoded (..),
