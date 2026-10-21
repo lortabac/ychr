@@ -52,8 +52,7 @@ displayQualifiedAtom = T.replace "__" ":"
 -- spelling of the built-in types: the solver's module qualifier and
 -- the @ty_@ constructor prefix both come off, so @$typechecker__ty_int@
 -- renders as @int@. User-defined types stay module-qualified. This is
--- the only place a checker-internal atom becomes user-visible text, so
--- it is the only place that has to know about the prefix.
+-- the only place that knows about the @ty_@ prefix.
 displayTypeAtom :: Text -> Text
 displayTypeAtom t =
   let q = displayQualifiedAtom t

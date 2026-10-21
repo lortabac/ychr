@@ -84,7 +84,7 @@ newtype RuleId = RuleId {unRuleId :: Int}
 data Identifier = Identifier {name :: Name, arity :: Int}
   deriving (Show, Eq, Ord)
 
--- | An unqualified name with its arity.  Used in 'exportMap' where
+-- | An unqualified name with its arity. Used in @exportMap@, where
 -- names are looked up before qualification.
 data UnqualifiedIdentifier = UnqualifiedIdentifier
   { localName :: Text,
@@ -92,7 +92,7 @@ data UnqualifiedIdentifier = UnqualifiedIdentifier
   }
   deriving (Show, Eq, Ord)
 
--- | A fully-qualified name with its arity.  Used in 'exportedSet' where
+-- | A fully-qualified name with its arity. Used in @exportedSet@, where
 -- all names are guaranteed to be module-qualified.
 data QualifiedIdentifier = QualifiedIdentifier
   { moduleName :: Text,
@@ -145,9 +145,9 @@ data QualifiedName = QualifiedName
   deriving (Show, Eq, Ord)
 
 -- | Key of the per-constraint declaration maps (@constraintTypes@,
--- @constraintBounds@). Constraints are arity-overloadable, so the
--- name alone does not identify a declaration: keying by name let an
--- arity-overloaded constraint shadow its sibling's declared types.
+-- @constraintBounds@). Constraints can be overloaded on arity, so the
+-- name alone does not identify a declaration: keying by name would let
+-- one arity shadow the declared types of another.
 data ConstraintKey = ConstraintKey
   { name :: !QualifiedName,
     arity :: !Int
@@ -243,8 +243,8 @@ data Constraint = Constraint
   deriving (Show, Eq)
 
 -- | A CHR constraint occurrence with a qualified head name. Used in
--- 'YCHR.Internal.Resolved' and 'YCHR.Internal.Desugared' rule heads and bodies, where
--- the resolve phase has guaranteed every constraint name is
+-- "YCHR.Internal.Resolved" and "YCHR.Internal.Desugared" rule heads and
+-- bodies, where the resolve phase has made every constraint name
 -- module-qualified.
 data QualifiedConstraint = QualifiedConstraint
   { name :: QualifiedName,
@@ -252,12 +252,12 @@ data QualifiedConstraint = QualifiedConstraint
   }
   deriving (Show, Eq)
 
--- | A head argument after Head Normal Form. The desugarer guarantees
--- that every head argument is either a variable or a wildcard;
--- non-variable patterns are lifted into 'YCHR.Internal.Desugared.GuardMatch',
--- 'YCHR.Internal.Desugared.GuardGetArg', and 'YCHR.Internal.Desugared.GuardEqual' guards
--- and replaced with fresh variables in the head. This narrower type
--- enforces that invariant.
+-- | A head argument after Head Normal Form: a variable or a wildcard.
+-- The desugarer lifts every other pattern into
+-- 'YCHR.Internal.Desugared.GuardMatch',
+-- 'YCHR.Internal.Desugared.GuardGetArg' and
+-- 'YCHR.Internal.Desugared.GuardEqual' guards and puts a fresh variable
+-- in the head.
 data HeadArg
   = HeadVar Text
   | HeadWildcard
@@ -407,6 +407,7 @@ data BoundSig = BoundSig
 -- representation is asymmetric — zero-arity compounds become 'VAtom'
 -- for cheap allocation and comparison — but the AST keeps the
 -- compound form so pattern matching stays uniform.
+--
 -- The 'Ord' instance carries no semantic meaning — it exists so that a
 -- 'Term' can key a 'Data.Map.Map' or inhabit a 'Data.Set.Set'. Structural
 -- CHR equality on /runtime/ values is 'YCHR.Run.equal', not this instance.

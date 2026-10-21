@@ -135,7 +135,9 @@ renderSplices = intercalate "\n" . map renderModule
       chain ->
         let step = last chain
             originLine = ["% " ++ renderStep step | prev /= Just step]
-         in originLine ++ (prettyPExprSrc si.term.node ++ ".") : renderItems (Just step) rest
+         in originLine
+              ++ (prettyPExprSrc si.term.node ++ ".")
+              : renderItems (Just step) rest
     renderStep :: ExpansionStep -> String
     renderStep step =
       T.unpack step.macroModule
@@ -239,9 +241,9 @@ displayErrors = intercalate "\n"
 withHint :: String -> String -> String
 withHint msg hint = msg ++ "\n  Hint: " ++ hint
 
--- | Render a macro's qualified name as @mod:name@, for 'renameErrorMsg'.
-macroQn :: Types.QualifiedName -> String
-macroQn qn = T.unpack (Types.flattenName (Types.qualifiedToName qn))
+-- | Render a qualified name as @mod:name@.
+displayQualifiedName :: Types.QualifiedName -> String
+displayQualifiedName qn = T.unpack (Types.flattenName (Types.qualifiedToName qn))
 
 -- | Convert a parsec 'Text.Parsec.Pos.SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
@@ -1100,14 +1102,19 @@ renameErrorMsg (DuplicateMacro name arity) =
 renameErrorMsg (MacroKindMismatch qn arity kind) = case kind of
   P.GoalMacro ->
     withHint
-      ("Goal macro '" ++ macroQn qn ++ "/" ++ show arity ++ "' used as a directive")
+      ( "Goal macro '"
+          ++ displayQualifiedName qn
+          ++ "/"
+          ++ show arity
+          ++ "' used as a directive"
+      )
       ( "a goal macro (':- macro') is used in a goal position; a directive"
           ++ " can only use a declaration macro (':- macro_decls')"
       )
   P.DeclMacro ->
     withHint
       ( "Declaration macro '"
-          ++ macroQn qn
+          ++ displayQualifiedName qn
           ++ "/"
           ++ show arity
           ++ "' used in a goal position"
@@ -1120,7 +1127,7 @@ renameErrorMsg (MacroKindMismatch qn arity kind) = case kind of
 renameErrorMsg (MacroNameCollision qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' collides with a constraint or function of the same name"
@@ -1129,7 +1136,7 @@ renameErrorMsg (MacroNameCollision qn arity) =
 renameErrorMsg (MacroOutsideGoalPosition qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' used outside a goal position"
@@ -1164,7 +1171,7 @@ renameErrorMsg (UnsupportedTellArity arity) =
 renameErrorMsg (MacroCycle qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' expansion has no finite form"
@@ -1175,7 +1182,7 @@ renameErrorMsg (MacroCycle qn arity) =
 renameErrorMsg (NoMatchingMacroClause qn args) =
   withHint
     ( "No clause of macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show (length args)
         ++ "' matches the use '"
@@ -1188,7 +1195,7 @@ renameErrorMsg (NoMatchingMacroClause qn args) =
 renameErrorMsg (MacroExpansionTooDeep qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "': nested expansions exceed the depth limit of "
@@ -1211,7 +1218,7 @@ renameErrorMsg (MacroEmptyHead part) =
 renameErrorMsg (MacroExpansionTooLarge qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "': one use causes more than "
@@ -1286,7 +1293,7 @@ renameErrorMsg GuardOutsideAggregateGoal =
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint
     ( "Macro '"
-        ++ macroQn macroName
+        ++ displayQualifiedName macroName
         ++ "/"
         ++ show macroArity
         ++ "' refers to '"
@@ -1303,12 +1310,15 @@ renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
 renameErrorMsg (MacroInvalidInHead qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
-        ++ "' expands to something other than a conjunction of constraints in head position"
+        ++ "' expands to something other than a conjunction of constraints"
+        ++ " in head position"
     )
-    "a rule head is a conjunction of constraints; move the macro use into the body instead"
+    ( "a rule head is a conjunction of constraints;"
+        ++ " move the macro use into the body instead"
+    )
 renameErrorMsg (UnknownExportedConstructor modName tyName tyArity conName) =
   "Module '"
     ++ T.unpack modName
@@ -1443,7 +1453,7 @@ renameWarningMsg (UnusedMacroParameter qn param) =
     ( "Macro parameter '"
         ++ T.unpack param
         ++ "' of '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "' is not used"
     )
     ( "the corresponding argument is dropped; write '_' or prefix the"
@@ -1486,7 +1496,7 @@ constraintUseErrorMsg :: ConstraintUseError -> String
 constraintUseErrorMsg (ConstraintUseViolation qn arity use role) =
   withHint
     ( "'"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' is declared "
@@ -1562,16 +1572,18 @@ desugarErrorMsg (NonVariableIsInFunctionBody e) =
 desugarErrorMsg (InlineNotSingleEquation qn n) =
   withHint
     ( "':- inline' function '"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "' has "
         ++ show n
         ++ " equations"
     )
-    "an inline substitution has no way to try equations in order; it must have exactly one"
+    ( "an inline substitution has no way to try equations in order;"
+        ++ " it must have exactly one"
+    )
 desugarErrorMsg (InlineGuardedEquation qn) =
   withHint
     ( "':- inline' function '"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "' has a guarded equation"
     )
     ( "an inlined equation cannot have a guard, including one synthesized from a"
@@ -1581,7 +1593,7 @@ desugarErrorMsg (InlineGuardedEquation qn) =
 desugarErrorMsg (InlineStatefulEquation qn) =
   withHint
     ( "':- inline' function '"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "' has statements before its return value"
     )
     "an inlined equation's body must be a single expression"
@@ -1772,9 +1784,9 @@ typeCheckWarningMsg (AggregateGoalInaccessible t1 t2) =
     )
     "fix the goal, or drop the aggregate if zero matches is what you want"
 
+-- | Render a name as @name@ or @mod:name@.
 displayName :: Types.Name -> String
-displayName (Types.Unqualified n) = T.unpack n
-displayName (Types.Qualified m n) = T.unpack m ++ ":" ++ T.unpack n
+displayName = T.unpack . Types.flattenName
 
 -- | Display a single parse error using our 'displayMsgWithSrcLoc' format.
 displayParseError :: PE.ParseError -> String
@@ -1872,13 +1884,13 @@ instance Display Error where
                   ++ intercalate ", " (map T.unpack ms)
               ConstraintNotExported qn ->
                 "Goal '"
-                  ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+                  ++ displayQualifiedName qn
                   ++ "/"
                   ++ show (length c.args)
                   ++ "' is not exported by its module"
               NotAConstraintItem qn ->
                 "Goal '"
-                  ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+                  ++ displayQualifiedName qn
                   ++ "/"
                   ++ show (length c.args)
                   ++ "' names a function, not a constraint"
