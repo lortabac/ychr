@@ -19,7 +19,7 @@
 -- indexed argument was fully ground when it was stored
 -- ('GroundKey'), and every other suspension — an unbound variable, or
 -- a compound term containing one — goes into that position's non-ground
--- fallback set ('posRest'). A lookup for a ground key yields the
+-- fallback set (the @rest@ of a 'PosIndex'). A lookup for a ground key yields the
 -- bucket's slots plus the whole fallback set.
 --
 -- Two properties make that superset exact enough to be worth having:
@@ -140,8 +140,11 @@ floatKey x
 -- type: a bucket of store slots per ground key, plus the slots whose
 -- value at this position was not fully ground when they were stored.
 data PosIndex = PosIndex
-  { posBuckets :: !(Map GroundKey IntSet),
-    posRest :: !IntSet
+  { -- | Slots filed under each ground key.
+    buckets :: !(Map GroundKey IntSet),
+    -- | Slots whose argument was not fully ground. Every lookup gets
+    -- these too.
+    rest :: !IntSet
   }
   deriving (Show, Eq)
 
@@ -208,10 +211,10 @@ insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
     updateAt slot mkey p = case mkey of
       Just key ->
         p
-          { posBuckets =
-              Map.insertWith IntSet.union key (IntSet.singleton slot) p.posBuckets
+          { buckets =
+              Map.insertWith IntSet.union key (IntSet.singleton slot) p.buckets
           }
-      Nothing -> p {posRest = IntSet.insert slot p.posRest}
+      Nothing -> p {rest = IntSet.insert slot p.rest}
 
 -- | The store slots that may hold a suspension whose argument at
 -- @pos@ is 'equal' to a value with key @key@, in ascending (store)
@@ -222,6 +225,6 @@ insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
 candidateSlots :: ConstraintType -> Int -> GroundKey -> StoreIndex -> IntSet
 candidateSlots cType pos key si = case IntMap.lookup tidx si >>= IntMap.lookup pos of
   Nothing -> IntSet.empty
-  Just p -> IntSet.union (Map.findWithDefault IntSet.empty key p.posBuckets) p.posRest
+  Just p -> IntSet.union (Map.findWithDefault IntSet.empty key p.buckets) p.rest
   where
     ConstraintType tidx = cType

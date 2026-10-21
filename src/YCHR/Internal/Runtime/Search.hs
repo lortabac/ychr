@@ -64,11 +64,11 @@
 --
 -- Two mechanisms, split by what a session reference actually holds:
 --
---   * The store, the suspension map, the propagation history and the
---     reactivation queue are single references over /persistent/
---     structures, so a 'StoreSnapshot' is four pointer reads and
---     restoring it is four pointer writes, whatever the store
---     contains.
+--   * The store, its index, the suspension map, the propagation
+--     history and the reactivation queue are single references over
+--     /persistent/ structures, so a 'StoreSnapshot' is five pointer
+--     reads and restoring it is five pointer writes, whatever the
+--     store contains.
 --   * Variable cells and suspension flags are individual references,
 --     reachable only by walking and shared across forks besides.
 --     Those go on the trail ("YCHR.Internal.Runtime.Trail"), recorded
@@ -286,8 +286,8 @@ restoreBranchState st = do
 -- The scan cursor is deliberately /not/ in here: it is per branch, not
 -- per search, so it is a parameter of 'searchFrom' instead.
 data SearchCtx = SearchCtx
-  { -- | The store index holding @search:alt@ constraints. Resolved
-    -- once per search rather than per quiescence. 'Nothing' when the
+  { -- | The constraint type of @search:alt@. Resolved once per
+    -- search rather than per quiescence. 'Nothing' when the
     -- program never declares @alt\/1@, in which case the goal simply
     -- has no choice points and quiescence is a solution.
     altType :: !(Maybe ConstraintType),
@@ -336,8 +336,8 @@ data Choice = Choice
 -- points from @cursor@ onwards in the @alt@ type's store sequence.
 --
 -- 'AltDone' means 'onSolution' ended the search, one way or the
--- other. 'AltFailed' means
--- this subtree yielded no such end, and carries why — which the caller
+-- other. 'AltFailed' means this subtree yielded no such end, and
+-- carries why — which the caller
 -- reports and a nesting caller propagates, so the reason a trace shows
 -- is the one that actually happened at the bottom rather than a
 -- summary invented on the way up.
@@ -480,7 +480,7 @@ readChoice sid idx goalsVal =
       runtimeErrorS
         "alt/1: argument must be a proper list of alternative goals"
 
--- | Resolve the store index that holds choice points, by inverting the
+-- | Resolve the constraint type of choice points, by inverting the
 -- session's constraint-type names. 'Nothing' when the program never
 -- declares @alt\/1@.
 altTypeOf :: SessionEnv -> Maybe ConstraintType
@@ -687,11 +687,10 @@ hostRunChrSessionEp _ =
 -- base mark on every exit, so a failed sub-session leaves no half-made
 -- bindings behind.
 --
--- The cost of the one distinct behaviour is that @false@ does not
--- distinguish a bug in the goal from a deliberate failure. That was
--- already this call's contract, and it is bounded by the caller
--- getting a boolean it has to test — unlike search itself, where the
--- same conflation would silently turn a bug into a dead end.
+-- The price is that @false@ does not tell a bug in the goal from a
+-- deliberate failure. That is acceptable here because the caller gets a
+-- boolean it has to test — unlike search itself, where the same
+-- conflation would silently turn a bug into a dead end.
 --
 -- Only 'RuntimeErrorThrown' is caught. A 'SearchFailure' — from
 -- @search:fail\/0@ in the goal, or from an exhausted choice point —

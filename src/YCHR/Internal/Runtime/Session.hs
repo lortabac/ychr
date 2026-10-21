@@ -93,7 +93,8 @@ import YCHR.Internal.VM.Index (indexablePositions)
 -- A 'CompiledProgram' projects to one via 'toSessionInput'; the
 -- pre-compiled type-checker bundle is a 'SessionInput' directly.
 data SessionInput = SessionInput
-  { program :: Program,
+  { -- | The compiled VM program.
+    program :: Program,
     -- | 'program' in the interpreter's slot phase, taken from the
     -- 'CompiledProgram' rather than lowered here, so that every session
     -- run against one compiled program shares the table instead of
@@ -106,7 +107,11 @@ data SessionInput = SessionInput
     -- deriving them walks every procedure of the program, prelude
     -- included, and a session is created per goal.
     indexPositions :: IntMap IntSet,
+    -- | Resolves an unqualified constraint name and arity to the
+    -- qualified constraint that is exported under it, or to the
+    -- modules that make it ambiguous.
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
+    -- | Every qualified constraint the program exports.
     exportedSet :: Set Types.QualifiedIdentifier,
     -- | The program's operator table, carried for the runtime reader
     -- (@read_term_from_string@). Taken from the 'CompiledProgram' by
@@ -308,7 +313,7 @@ tellConstraint name args = do
   tellResolvedConstraint resolved args
 
 -- | 'tellConstraint' for a name that has already been resolved —
--- \"YCHR.Internal.Runtime.Goal\" resolves a goal in the calling
+-- "YCHR.Internal.Runtime.Goal" resolves a goal in the calling
 -- session, before the fork, and the search driver resolves a choice
 -- point's alternatives without the export check. Re-resolving here
 -- would undo both.
@@ -319,8 +324,7 @@ tellResolvedConstraint name args = do
   pm <- liftIO (readIORef procMap)
   unless (Map.member tellName pm) $
     runtimeErrorS ("Constraint not found: " ++ T.unpack tellName.unName)
-  _ <- callProc tellName (map CVal args)
-  pure ()
+  void (callProc tellName (map CVal args))
 
 -- | Name resolution against the export map and qualified-name set.
 -- Used by 'tellConstraint' to canonicalize an unqualified constraint

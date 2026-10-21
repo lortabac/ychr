@@ -384,8 +384,8 @@ isListFunctor f =
 
 -- | Build a Prolog-style list (@[H|T]@) from a Haskell list of values.
 --
--- The empty list is represented as the atom @[]@, and cons cells as
--- @.(H, T)@ compound terms.
+-- Uses the canonical spelling: the empty list is the atom
+-- @prelude__[]@ and a cons cell is a @prelude__.(H, T)@ compound.
 valueList :: [Value] -> Value
 valueList [] = VAtom "prelude__[]"
 valueList (x : xs) = VTerm "prelude__." [x, valueList xs]

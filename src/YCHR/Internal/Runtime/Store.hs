@@ -83,7 +83,8 @@ createConstraint cType cArgs = do
   aliveRef <- liftIO $ newIORef True
   storedRef <- liftIO $ newIORef False
   let susp = Suspension sid cType cArgs aliveRef storedRef
-  liftIO $ modifyIORef' storeById (IntMap.insert (let SuspensionId n = sid in n) susp)
+  let SuspensionId n = sid
+  liftIO $ modifyIORef' storeById (IntMap.insert n susp)
   pure sid
 
 -- | Add a constraint to the type-indexed store; unless its type is
@@ -112,8 +113,8 @@ createConstraint cType cArgs = do
 -- argument walk that registers observers is the same one that computes
 -- an indexed argument's ground key ('addObserverAndKey'), so a store
 -- pays one traversal per argument, not two — and only once the type's
--- bucket is big enough to be worth indexing at all ('indexThreshold'),
--- below which this is the pre-index path exactly.
+-- bucket is big enough to be worth indexing at all ('indexThreshold').
+-- Below that it only registers observers and appends.
 storeConstraint :: SuspensionId -> Chr Bool
 storeConstraint sid = do
   susp <- lookupSusp sid
@@ -142,8 +143,7 @@ storeConstraint sid = do
       if IntSet.null positions
         then do
           -- No position of this type is ever looked up through an
-          -- index, so this is the pre-index path exactly: the observer
-          -- registration, and nothing else.
+          -- index: register observers, append, done.
           registerObservers
           liftIO $ modifyIORef' storeByType append
           pure True
@@ -157,16 +157,16 @@ storeConstraint sid = do
               worthIndexing = slot + 1 >= indexThreshold || typeIndexed cType si
           if not worthIndexing
             then do
-              -- Too small to be worth indexing: still the pre-index
-              -- path, and the whole bucket is filed in one pass later
-              -- if it grows past the threshold.
+              -- Too small to be worth indexing: same as above. The
+              -- whole bucket is filed in one pass later if it grows
+              -- past the threshold.
               registerObservers
               liftIO $ modifyIORef' storeByType append
               pure True
             else do
-              -- One traversal per argument: register the observers
-              -- (what this did before the index existed), and at an
-              -- indexed position also build the argument's ground key.
+              -- One traversal per argument: register the observers, and
+              -- at an indexed position also build the argument's ground
+              -- key.
               let walk (j, arg)
                     | IntSet.member j positions =
                         if observe then addObserverAndKey sid arg else groundKey arg
@@ -275,7 +275,7 @@ indexedPositionsFor cType = do
 --
 -- A type the store has not indexed — no position of it is ever looked
 -- up, or its bucket has not reached 'indexThreshold' — is answered by
--- the whole bucket, which is the pre-index behaviour exactly. So is a
+-- the whole bucket, the same answer as 'getStoreSnapshot'. So is a
 -- candidate set that is not smaller than the bucket: the index has to
 -- prune to be worth the per-candidate bookkeeping it adds. Between them
 -- those two fallbacks keep the index a win-or-neutral change however

@@ -169,7 +169,8 @@ data SessionEnv = SessionEnv
     -- | Queue of constraint ids pending reactivation (filled by 'unify',
     -- drained by 'DrainReactivationQueue').
     reactQueue :: !(IORef (Seq SuspensionId)),
-    -- | Interpreter call stack (newest first), capped in length.
+    -- | Interpreter call stack (newest first). Not capped here: it is
+    -- cut to 'YCHR.Internal.Runtime.Error.maxCallStackDepth' when read.
     callStack :: !(IORef CallStack),
     -- | All known procedures, lowered to the interpreter's slot phase.
     -- A ref only because a search fork copies the table into a fresh
@@ -276,8 +277,20 @@ initSessionEnv ::
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl tl tlu expMap expSet =
-  do
+initSessionEnv
+  typeNames
+  rNames
+  inert
+  indexable
+  ops
+  slotProgram
+  hc
+  ev
+  cl
+  tl
+  tlu
+  expMap
+  expSet = do
     vc <- newIORef (VarId 0)
     let typeCount = List.length typeNames
         emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
@@ -338,9 +351,9 @@ data ForkStore
 -- its own store references (empty or copied from the caller's, by
 -- 'ForkStore'), an empty reactivation queue and call stack, and a
 -- trail guaranteed to be installed. The caller's pending reactivations
--- stay with the caller. The procedure map is copied
--- into a new 'IORef' — a defensive copy with no writer today, since the
--- one point that adds procedures is
+-- stay with the caller. The procedure map is copied into a new 'IORef'.
+-- The copy is defensive: nothing writes to it, since the one point that
+-- adds procedures is
 -- 'YCHR.Internal.Runtime.Session.withCHRExtra', which builds a fresh
 -- session before this one exists. The index-keyed table ('procEntries')
 -- is shared as it is for the same reason: nothing extends the table

@@ -1,11 +1,16 @@
 -- | Shared types for the CHR Haskell runtime.
 module YCHR.Internal.Runtime.Types
-  ( SuspensionId (..),
+  ( -- * Identifiers
+    SuspensionId (..),
     VarId (..),
+
+    -- * Values
     Var (..),
     VarState (..),
     Value (..),
     CallVal (..),
+
+    -- * Suspensions
     Suspension (..),
 
     -- * Search trail

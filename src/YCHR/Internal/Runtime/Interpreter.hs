@@ -193,8 +193,7 @@ data Cell
 -- The array is shared by everything that runs in the call — a nested
 -- 'execStmts', the body a loop runs per candidate, and the
 -- 'catchInstantiation' boundary behind 'BSoftGuard' — so a write made
--- before a guard failure is visible afterwards, exactly as the
--- 'IORef'-held environment it replaces was.
+-- before a guard failure is visible afterwards.
 type Env = IOArray Int Cell
 
 -- | Allocate a call's environment. Slot @i@ is drawn from
@@ -252,11 +251,10 @@ instance MonadIO InterpM where
 runInterpM :: InterpM a -> Env -> Chr a
 runInterpM (InterpM m) env = m env
 
--- | The local 'Env' an 'InterpM' action runs against. The flat
--- representation makes this the environment itself rather than a
--- 'Reader' lookup, which is the point of the change: a helper that
--- needs the environment pays a function application rather than a
--- dictionary selection.
+-- | The local 'Env' an 'InterpM' action runs against. Thanks to the flat
+-- representation this is the environment itself rather than a
+-- 'Reader' lookup: a helper that needs the environment pays a function
+-- application rather than a dictionary selection.
 interpEnv :: InterpM Env
 interpEnv = InterpM (\env -> pure env)
 
@@ -926,7 +924,7 @@ checkConditions :: Suspension -> [(ArgIndex, SlotValExpr)] -> InterpM Bool
 checkConditions _ [] = pure True
 checkConditions susp ((ArgIndex i, expr) : rest) = do
   v <- evalValExpr expr
-  -- Store's argument accessor is still 'Int'-indexed; 'i' is non-negative.
+  -- Store's argument accessor takes an 'Int'; 'i' is non-negative.
   let argVal = suspArg susp (fromIntegral i)
   eq <- liftChr (equal v argVal)
   if eq
@@ -967,7 +965,7 @@ evalValExpr (SGetArg expr idx) = do
   liftChr (getArg v idx)
 evalValExpr (SFieldArg expr (ArgIndex i)) = do
   sid <- evalIdExpr expr
-  -- Store's argument accessor is still 'Int'-indexed; 'i' is non-negative.
+  -- Store's argument accessor takes an 'Int'; 'i' is non-negative.
   liftChr (getConstraintArg sid (fromIntegral i))
 evalValExpr (SFieldType expr) = do
   sid <- evalIdExpr expr
@@ -1406,7 +1404,7 @@ evalCallArgDeep (SCallVal e) = CVal <$> evalValExprDeep e
 evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 
 -- ---------------------------------------------------------------------------
--- Closure application
+-- Dynamic tell
 -- ---------------------------------------------------------------------------
 
 -- | Tell a constraint chosen at run time: the whole of a dynamic
@@ -1440,10 +1438,8 @@ tellTerm scope goal extras = do
           arity = length allArgs
           scopedKey = TellableKey {scope = Just scope, functor = Name f, arity = arity}
           anywhereKey = scopedKey {scope = Nothing}
-          notVisible =
-            tellNotVisibleError
-              (T.unpack (displayFunctor f) <> "/" <> show arity)
-              (T.unpack scope)
+          nameArity = T.unpack (displayFunctor f) <> "/" <> show arity
+          notVisible = tellNotVisibleError nameArity (T.unpack scope)
       SessionEnv {tellables, tellablesUnqualified} <- ask
       case Map.lookup scopedKey tellables of
         Just procName -> void (callProc procName (map CVal allArgs))
@@ -1452,19 +1448,22 @@ tellTerm scope goal extras = do
               case Map.lookup anywhereKey tellablesUnqualified of
                 Just (UniqueTell procName) -> void (callProc procName (map CVal allArgs))
                 Just (AmbiguousTell candidates) ->
-                  tellAmbiguousError
-                    (T.unpack (displayFunctor f) <> "/" <> show arity)
-                    (map (T.unpack . Types.flattenName . Types.qualifiedToName) candidates)
+                  tellAmbiguousError nameArity (map qualifiedText candidates)
                 Nothing -> notVisible
           | otherwise -> notVisible
     -- The module whose rules may be handed a goal they cannot name. See
     -- the note above 'tellTerm'.
     preludeModule = "prelude"
+    qualifiedText = T.unpack . Types.flattenName . Types.qualifiedToName
     -- The functor as the user would write it: @m:foo@ for a mangled
     -- qualified name, the bare name otherwise.
     displayFunctor f = case decodeName f [] of
       CompoundTerm name _ -> Types.flattenName name
       _ -> f
+
+-- ---------------------------------------------------------------------------
+-- Closure application
+-- ---------------------------------------------------------------------------
 
 -- | Apply a first-class callable to arguments: the whole of
 -- @'$call'(F, A1, …, An)@.
@@ -1551,12 +1550,9 @@ dynamicFunRefKey n v = case v of
               }
         _ -> Nothing
 
--- | Read a closure's two header fields through their bindings.
---
--- The generated dispatchers compared those fields with @BEqual@, which
--- dereferences its operands, so a function-reference term whose name or
--- declared-arity field was a /bound variable/ still dispatched. Reading
--- them here keeps that behaviour. Only the header is read: the captures
+-- | Read a closure's two header fields through their bindings, so a
+-- function-reference term whose name or declared-arity field is a
+-- /bound variable/ still dispatches. Only the header is read: the captures
 -- are handed to the callee exactly as @GetArg@ handed them, so a
 -- capture that is an unbound variable stays the very cell the callee
 -- observes.
