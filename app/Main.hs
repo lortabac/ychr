@@ -56,7 +56,7 @@ data CompileOpts = CompileOpts
   }
 
 data GenDriverOpts = GenDriverOpts
-  { gdGoal :: T.Text,
+  { goal :: T.Text,
     werror :: Bool,
     noCheck :: Bool,
     dumpSplices :: Bool
@@ -238,13 +238,16 @@ main = do
   case cmd of
     Repl opts files ->
       Repl.runRepl
-        resources.stdlib
-        (if opts.noCheck then Nothing else Just resources.typeCheckerProgram)
-        hostCalls
-        opts.quiet
-        opts.werror
-        opts.dumpSplices
-        files
+        Repl.ReplOptions
+          { stdlib = resources.stdlib,
+            typeChecker =
+              if opts.noCheck then Nothing else Just resources.typeCheckerProgram,
+            hostCalls = hostCalls,
+            quiet = opts.quiet,
+            werror = opts.werror,
+            dumpSplices = opts.dumpSplices,
+            files = files
+          }
     Run opts files -> runGoal resources opts files
     Compile opts files -> runCompile resources opts files
     GenDriver opts files -> runGenDriver resources opts files
@@ -271,7 +274,7 @@ loadResourcesOrExit = do
 -- ---------------------------------------------------------------------------
 
 runGoal :: Resources -> RunOpts -> [FilePath] -> IO ()
-runGoal resources opts files = withCompiled resources False files $ \prog warnings -> do
+runGoal resources opts files = withCompiled resources files $ \prog warnings -> do
   dumpSplicesIf opts.dumpSplices prog
   printWarnings warnings
   typeWarnings <- typeCheckUnless opts.noCheck resources prog
@@ -302,7 +305,7 @@ runGoal resources opts files = withCompiled resources False files $ \prog warnin
 
 runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
 runCompile resources opts files =
-  withCompiled resources False files $ \prog warnings -> do
+  withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckUnless opts.noCheck resources prog
@@ -341,7 +344,7 @@ runCompile resources opts files =
 
 runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver resources opts files =
-  withCompiled resources False files $ \prog warnings -> do
+  withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckUnless opts.noCheck resources prog
@@ -349,7 +352,7 @@ runGenDriver resources opts files =
     -- data-constructor references in its arguments, so they reach the
     -- runtime in the same flat-functor form the compiled head patterns
     -- expect.
-    prepResult <- try @SomeException (prepareGoal prog opts.gdGoal)
+    prepResult <- try @SomeException (prepareGoal prog opts.goal)
     (constraint, goalWarnings) <- case prepResult of
       Left e -> reportGenErrorAndExit e
       Right pair -> pure pair
@@ -378,7 +381,7 @@ runGenDriver resources opts files =
 
 runCheck :: Resources -> CheckOpts -> [FilePath] -> IO ()
 runCheck resources opts files =
-  withCompiled resources False files $ \prog warnings -> do
+  withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckOrExit resources prog
@@ -409,16 +412,15 @@ schemeRuntimeNote =
 -- continuation. On compilation failure, print the diagnostic to
 -- stdout and exit non-zero — the continuation does not run.
 --
--- The 'Bool' is @includeStdlib@; 'resources' supplies the standard
--- library and the type-checker (see "YCHR.Embedded").
+-- The standard library is not compiled whole (@includeStdlib@ is
+-- 'False'): only the libraries the program imports are pulled in.
 withCompiled ::
   Resources ->
-  Bool ->
   [FilePath] ->
   (CompiledProgram -> [Warning] -> IO ()) ->
   IO ()
-withCompiled resources includeStdlib files k = do
-  result <- compileFiles resources.stdlib includeStdlib files
+withCompiled resources files k = do
+  result <- compileFiles resources.stdlib False files
   case result of
     Left err -> do
       putStr (displayMsg err)

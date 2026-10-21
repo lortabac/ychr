@@ -35,19 +35,19 @@ import YCHR.Internal.TypeCheck.Compiled (compileTypeCheckerModules)
 
 -- | Where to read from, where to write to, and how finely to split.
 data Options = Options
-  { optRoot :: FilePath,
-    optOut :: FilePath,
-    optCheck :: Bool,
-    optEmit :: EmitOptions
+  { root :: FilePath,
+    out :: FilePath,
+    check :: Bool,
+    emit :: EmitOptions
   }
 
 defaultOptions :: Options
 defaultOptions =
   Options
-    { optRoot = ".",
-      optOut = "generated",
-      optCheck = False,
-      optEmit = defaultEmitOptions
+    { root = ".",
+      out = "generated",
+      check = False,
+      emit = defaultEmitOptions
     }
 
 main :: IO ()
@@ -55,13 +55,13 @@ main = do
   args <- getArgs
   case parseArgs defaultOptions args of
     Left err -> usage err
-    Right (Left message) -> putStrLn message
-    Right (Right opts) -> run opts
+    Right ShowHelp -> putStrLn help
+    Right (Generate opts) -> run opts
 
 run :: Options -> IO ()
 run opts = do
-  let libraryDir = opts.optRoot </> "libraries"
-      typeCheckerDir = opts.optRoot </> "typechecker"
+  let libraryDir = opts.root </> "libraries"
+      typeCheckerDir = opts.root </> "typechecker"
   libraries <- readChrDir libraryDir
   typechecker <- readChrDir typeCheckerDir
   case loadBoth libraryDir typeCheckerDir libraries typechecker of
@@ -74,10 +74,10 @@ run opts = do
             Left err -> failWith ("cannot compile the type-checker: " ++ show err)
             Right session ->
               let modules =
-                    [ emitStdLib opts.optEmit stdlib,
-                      emitTypeChecker opts.optEmit session
+                    [ emitStdLib opts.emit stdlib,
+                      emitTypeChecker opts.emit session
                     ]
-               in if opts.optCheck
+               in if opts.check
                     then checkModules opts modules
                     else writeModules opts modules
 
@@ -139,17 +139,17 @@ writeModules :: Options -> [GeneratedModule] -> IO ()
 writeModules opts = mapM_ writeOne
   where
     writeOne m = do
-      let path = opts.optOut </> m.modulePath
+      let path = opts.out </> m.path
       createDirectoryIfMissing True (takeDirectory path)
       exists <- doesFileExist path
       same <-
         if exists
-          then (== m.moduleSource) <$> readStrict path
+          then (== m.source) <$> readStrict path
           else pure False
       if same
         then putStrLn ("unchanged " ++ path)
         else do
-          writeFile path m.moduleSource
+          writeFile path m.source
           putStrLn ("wrote " ++ path)
 
 -- | Report every module whose file is missing or differs from what the
@@ -165,35 +165,41 @@ checkModules opts modules = do
       exitFailure
   where
     checkOne m = do
-      let path = opts.optOut </> m.modulePath
+      let path = opts.out </> m.path
       exists <- doesFileExist path
       if not exists
         then pure ["missing: " ++ path]
         else do
           current <- readStrict path
-          pure ["stale: " ++ path | current /= m.moduleSource]
+          pure ["stale: " ++ path | current /= m.source]
 
 -- ---------------------------------------------------------------------------
 -- Command line
 -- ---------------------------------------------------------------------------
 
--- | Parse the arguments. @Left@ is a usage error, @Right (Left message)@
--- is @--help@ (a message to print and exit successfully).
-parseArgs :: Options -> [String] -> Either String (Either String Options)
-parseArgs opts [] = Right (Right opts)
+-- | What the command line asks for.
+data Action
+  = -- | Emit (or, with @--check@, compare) the modules.
+    Generate Options
+  | -- | Print 'help' and exit successfully.
+    ShowHelp
+
+-- | Parse the arguments. @Left@ is a usage error.
+parseArgs :: Options -> [String] -> Either String Action
+parseArgs opts [] = Right (Generate opts)
 parseArgs opts ("--root" : value : rest) =
-  parseArgs opts {optRoot = value} rest
+  parseArgs opts {root = value} rest
 parseArgs opts ("--out" : value : rest) =
-  parseArgs opts {optOut = value} rest
+  parseArgs opts {out = value} rest
 parseArgs opts ("--chunk" : value : rest) = do
   n <- positive "--chunk" value
-  parseArgs opts {optEmit = opts.optEmit {chunkSize = n}} rest
+  parseArgs opts {emit = opts.emit {chunkSize = n}} rest
 parseArgs opts ("--max-binding-bytes" : value : rest) = do
   n <- positive "--max-binding-bytes" value
-  parseArgs opts {optEmit = opts.optEmit {maxBindingBytes = n}} rest
-parseArgs opts ("--check" : rest) = parseArgs opts {optCheck = True} rest
-parseArgs _ ("--help" : _) = Right (Left help)
-parseArgs _ ("-h" : _) = Right (Left help)
+  parseArgs opts {emit = opts.emit {maxBindingBytes = n}} rest
+parseArgs opts ("--check" : rest) = parseArgs opts {check = True} rest
+parseArgs _ ("--help" : _) = Right ShowHelp
+parseArgs _ ("-h" : _) = Right ShowHelp
 parseArgs _ (arg : _) = Left ("unexpected argument: " ++ arg)
 
 positive :: String -> String -> Either String Int

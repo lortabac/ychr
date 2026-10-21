@@ -129,36 +129,36 @@ tests =
         [ testCase "the standard library module names every library" $ do
             let StdLib modules = Embedded.stdlib
                 emitted = emitStdLib defaultEmitOptions Embedded.stdlib
-            emitted.modulePath @?= "YCHR/Embedded/Generated/StdLib.hs"
+            emitted.path @?= "YCHR/Embedded/Generated/StdLib.hs"
             assertContains
-              (emitted.moduleSource)
+              (emitted.source)
               "module YCHR.Embedded.Generated.StdLib (stdlib) where"
-            assertContains (emitted.moduleSource) "stdlib :: StdLib"
+            assertContains (emitted.source) "stdlib :: StdLib"
             mapM_
               ( \name ->
                   assertContains
-                    (emitted.moduleSource)
+                    (emitted.source)
                     (renderCode (CString (T.unpack name)))
               )
               (Map.keys modules)
             assertBool
               "the module is substantial"
-              (length (emitted.moduleSource) > 100000),
+              (length (emitted.source) > 100000),
           testCase "the type-checker module rebuilds through mkSessionInput" $ do
             let emitted = emitTypeChecker defaultEmitOptions Embedded.typeCheckerProgram
-            emitted.modulePath @?= "YCHR/Embedded/Generated/TypeCheck.hs"
+            emitted.path @?= "YCHR/Embedded/Generated/TypeCheck.hs"
             assertContains
-              (emitted.moduleSource)
+              (emitted.source)
               "module YCHR.Embedded.Generated.TypeCheck (typeCheckerProgram) where"
-            assertContains (emitted.moduleSource) "typeCheckerProgram :: SessionInput"
-            assertContains (emitted.moduleSource) "Session.mkSessionInput"
-            assertContains (emitted.moduleSource) "VM.Program"
+            assertContains (emitted.source) "typeCheckerProgram :: SessionInput"
+            assertContains (emitted.source) "Session.mkSessionInput"
+            assertContains (emitted.source) "VM.Program"
             -- The operator table is not derivable from the VM program, so
             -- the module rebuilds it from an emitted mkOpTable literal.
-            assertContains (emitted.moduleSource) "PExpr.mkOpTable"
+            assertContains (emitted.source) "PExpr.mkOpTable"
             assertBool
               "the module is substantial"
-              (length (emitted.moduleSource) > 100000),
+              (length (emitted.source) > 100000),
           testCase "the emitted operator table parses like the table it came from" $ do
             let table = Embedded.typeCheckerProgram.opTable
                 rebuilt =
@@ -198,11 +198,11 @@ checkBudget budget emitted =
         ++ "-character budget: "
         ++ show (take 5 oversized)
         ++ " in "
-        ++ emitted.modulePath
+        ++ emitted.path
     )
     (null oversized)
   where
-    oversized = filter (> budget) (bindingBodyLengths emitted.moduleSource)
+    oversized = filter (> budget) (bindingBodyLengths emitted.source)
 
 -- | The rendered length of every top-level binding body, which
 -- 'YCHR.Embedded.Generate.Emit' writes as one line indented by two
@@ -213,8 +213,8 @@ bindingBodyLengths source =
 
 checkDangling :: GeneratedModule -> Assertion
 checkDangling emitted = do
-  let definitions = definedNames emitted.moduleSource
-      references = generatedNamesIn emitted.moduleSource
+  let definitions = definedNames emitted.source
+      references = generatedNamesIn emitted.source
       dangling = filter (`notElem` definitions) references
   assertBool
     ("referenced but never defined: " ++ show (take 5 dangling))

@@ -28,9 +28,9 @@ module Main (main) where
 import Control.Exception (SomeException, displayException, try)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
 import System.IO (hFlush, hPutStr, stdout)
+import YCHR.Internal.Resources (resourceRoot)
 import YCHR.Playground
   ( Playground,
     initPlayground,
@@ -43,7 +43,7 @@ import YCHR.Playground
 
 main :: IO ()
 main = do
-  root <- resolveRoot
+  root <- resourceRoot
   result <- initPlayground root
   case result of
     Left err -> do
@@ -51,15 +51,6 @@ main = do
       hFlush stdout
       exitFailure
     Right pg -> readCommand pg
-
--- | The resource root: @$YCHR_LIB_DIR@ when set, otherwise the current
--- directory — the same convention @YCHR.Internal.Resources@ uses.
-resolveRoot :: IO FilePath
-resolveRoot = do
-  env <- lookupEnv "YCHR_LIB_DIR"
-  pure $ case env of
-    Just dir | not (null dir) -> dir
-    _ -> "."
 
 -- | Read commands until @:quit@. The playground is threaded explicitly,
 -- so the loaded program survives a failed reload exactly as it does in
@@ -96,10 +87,9 @@ readCommand pg = do
 -- | Run an operation, print its response with the framing line the tests
 -- split on, and continue with the updated state.
 run :: IO (Playground, String) -> IO ()
-run act = do
-  (pg', out) <- act
-  emit (pg', out)
+run act = act >>= emit
 
+-- | Print a response and its framing line, then read the next command.
 emit :: (Playground, String) -> IO ()
 emit (pg, out) = do
   hPutStr stdout (out ++ "\n---\n")

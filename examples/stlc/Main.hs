@@ -7,9 +7,9 @@
 -- type inferencer written in CHR. This driver parses a small surface
 -- syntax (see "Parser"), encodes the resulting term into CHR data with the
 -- @ToTerm@ instance in "Syntax", runs the @typecheck/2@ goal with
--- 'runQueryCompiled', and
--- decodes the inferred type back into a Haskell 'Type' (or a type error)
--- with 'FromTerm' — the whole round trip goes through "YCHR.Convert".
+-- 'runQueryCompiled', and decodes the inferred type back into a Haskell
+-- 'Type' (or a type error) with 'FromTerm' — the whole round trip goes
+-- through "YCHR.Convert".
 --
 -- With no arguments it is a small type-inference REPL; @--demo@ prints a
 -- fixed table:
@@ -18,7 +18,7 @@
 -- > cabal run stlc-typechecker -- --demo  # demo table
 module Main (main) where
 
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, unless, when)
 import Data.Char (isSpace)
 import Data.List (intercalate)
 import Data.Text (Text)
@@ -153,7 +153,7 @@ runRepl cp = do
       | command `elem` [":q", ":quit"] = pure False
       | null command = pure True
       | otherwise = do
-          when (not interactive) (putStrLn ("stlc> " ++ line))
+          unless interactive (putStrLn ("stlc> " ++ line))
           inferLine cp line >>= putStrLn
           pure True
       where

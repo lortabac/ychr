@@ -72,20 +72,20 @@ defaultEmitOptions = EmitOptions {chunkSize = 32, maxBindingBytes = 8192}
 
 -- | One top-level definition of a generated module.
 data TopBinding = TopBinding
-  { topBindingName :: String,
+  { name :: String,
     -- | Written above the definition when present; used for the
     -- module's exported entry points, whose types are otherwise only
     -- visible through inference in a file nobody reads.
-    topBindingSignature :: Maybe String,
-    topBindingBody :: Code
+    signature :: Maybe String,
+    body :: Code
   }
 
 -- | A generated module, ready to be written.
 data GeneratedModule = GeneratedModule
   { -- | Path relative to the output directory, e.g.
     -- @YCHR\/Embedded\/Generated\/StdLib.hs@.
-    modulePath :: FilePath,
-    moduleSource :: String
+    path :: FilePath,
+    source :: String
   }
   deriving (Show, Eq)
 
@@ -109,9 +109,9 @@ emitStdLib opts (StdLib modules) =
       "import YCHR.Internal.StdLib (StdLib (..))"
     ]
     [ TopBinding
-        { topBindingName = "stdlib",
-          topBindingSignature = Just "StdLib",
-          topBindingBody = body
+        { name = "stdlib",
+          signature = Just "StdLib",
+          body = body
         }
     ]
     hoisted
@@ -142,9 +142,9 @@ emitTypeChecker opts (SessionInput program _ _ exportMap exportedSet ops) =
       "import YCHR.Internal.Runtime.Session (SessionInput)"
     ]
     [ TopBinding
-        { topBindingName = "typeCheckerProgram",
-          topBindingSignature = Just "SessionInput",
-          topBindingBody = body
+        { name = "typeCheckerProgram",
+          signature = Just "SessionInput",
+          body = body
         }
     ]
     hoisted
@@ -232,7 +232,7 @@ hoist opts root = (root', reverse bindings)
            in (CName (generatedName n1), n1 + 1, bind n1 body : acc1)
       | otherwise = (c, n, acc)
 
-    -- \| Lifting a node does not shrink it: a constructor application of
+    -- Lifting a node does not shrink it: a constructor application of
     -- a dozen large arguments is still over budget once its binding is
     -- written. Give its structured arguments bindings of their own, so
     -- that what remains is a head and a dozen names. Literal leaves are
@@ -324,8 +324,8 @@ buildModule ::
   GeneratedModule
 buildModule name exports prologue fixedImports entries hoisted =
   GeneratedModule
-    { modulePath = pathFromModule name,
-      moduleSource = unlines source
+    { path = pathFromModule name,
+      source = unlines sourceLines
     }
   where
     allBindings = entries ++ hoisted
@@ -335,7 +335,7 @@ buildModule name exports prologue fixedImports entries hoisted =
       | (m, a) <- aliasTable,
         a `elem` aliases
       ]
-    source =
+    sourceLines =
       [ "{-# LANGUAGE OverloadedStrings #-}",
         "",
         "-- | " ++ prologue,

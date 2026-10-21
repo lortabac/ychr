@@ -240,8 +240,7 @@ runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
   let (lifted, lambdas, liftErrs) =
         liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
   unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
-  let queryProcs = compileQueryLambdas lambdas
-      extraProcs = queryProcs
+  let extraProcs = compileQueryLambdas lambdas
       extraCallables = buildCallables lambdas
   withCHRExtra (toSessionInput cp) hostCalls extraProcs extraCallables $
     executePreparedQuery lifted
@@ -646,11 +645,10 @@ executeBodyGoal (D.BodyHostStmt f args) = do
       resT <- snapshotValue result
       pure (TECallHost f argTs resT)
 executeBodyGoal (D.BodyIs v expr) = do
-  -- Mirror 'evalValExpr (EvalDeep (Var _))' in the compiled interpreter:
-  -- when the RHS is syntactically a variable, walk the dereferenced
-  -- value so a bound compound with an evaluable functor gets evaluated
-  -- (@X = 1 + 1, R is X@ ⇒ @R = 2@). For all other RHS shapes the
-  -- result of the outer typed operation is already final.
+  -- Mirror the compiled 'EvalIs': when the RHS is syntactically a
+  -- variable, walk the dereferenced value so a bound compound with an
+  -- evaluable functor gets evaluated (@X = 1 + 1, R is X@ ⇒ @R = 2@).
+  -- For all other RHS shapes the result is already final.
   raw <- evalNestedExpr expr
   result <- case expr of
     R.VarExpr _ -> liftChr (deepEvalValue raw)
@@ -665,13 +663,11 @@ executeBodyGoal (D.BodyTell qn args) = do
 executeBodyGoal (D.BodyCall qn args) = do
   argVals <- traverse evalNestedExpr args
   let funcName = Types.qualifiedToName qn
-  _ <- liftChr (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
-  pure ()
+  void (liftChr (callProc (funcProcName funcName (length argVals)) (map CVal argVals)))
 executeBodyGoal (D.BodyApply f args) = do
   fVal <- evalNestedExpr f
   argVals <- traverse evalNestedExpr args
-  _ <- liftChr (applyClosure fVal argVals)
-  pure ()
+  void (liftChr (applyClosure fVal argVals))
 -- A query's scope is every module's exports, which is what
 -- 'tellGoalConstraint' resolves against, so the scope the desugarer
 -- recorded is not consulted.

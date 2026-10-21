@@ -131,8 +131,9 @@ them in:
 
 `YCHR.Run.prepareQueryUnchecked` is the checker-free companion of
 `prepareQuery` (the REPL's `--no-check` path uses it), and
-`YCHR.Internal.Repl.runRepl` takes the checker as a `Maybe`: `Nothing`
-skips the checker the way `--no-check` does.
+`YCHR.Internal.Repl.runRepl` takes the checker as a `Maybe` (the
+`typeChecker` field of its `ReplOptions`): `Nothing` skips the checker
+the way `--no-check` does.
 
 Each is built once, from the bundled sources, and reused. A minimal
 `Resources.hs` for a GHC embedder that wants a self-contained binary:

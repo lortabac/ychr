@@ -1,7 +1,7 @@
--- | Line-input backend for the REPL, MicroHS build.
+-- | Line-input backend for the REPL, MicroHs build.
 --
 -- Bare-'getLine' fallback: no history, no tab completion. The twin
--- module under @src\/ghc\/YCHR\/LineInput.hs@ provides the
+-- module under @src\/ghc\/YCHR\/Internal\/LineInput.hs@ provides the
 -- haskeline-backed implementation for GHC; the two are switched by
 -- @if impl(...)@ blocks in @ychr.cabal@.
 module YCHR.Internal.LineInput
