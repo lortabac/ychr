@@ -1,7 +1,6 @@
 % When a goal's links are made (type-system.md §Aggregates §Shared
 % variables in a goal): a link to a known type right after the conjunct
-% that matches the variable, a merge after the whole goal, and a failed
-% call in the goal reported only once the merges are in.
+% that matches the variable, a merge after the whole goal.
 :- module(aggregates_typed_links, [known/1, pin_first/1, bound/1, select/1]).
 :- use_module(library(aggregates)).
 
@@ -17,9 +16,11 @@ r(X), count((s(X, Y), ? integer(Y), ? Y + 1 > 2), N) ==> out_pin(N).
 out_pin(N) \ ask_pin(A) <=> A = N.
 pin_first(A) <=> s(3, 3), s("a", "a"), r(3), ask_pin(A).
 
-% Only the merge into u's T brings in its bound, so Y < X checks.
+% The merge comes too late for u's bound, so v needs its own bound for
+% Y < X to check.
 :- chr_constraint u(T) requiring '<'(T, T) -> bool.
-:- chr_constraint v(T, T), out_bound(int), ask_bound(any), bound(any).
+:- chr_constraint v(T, T) requiring '<'(T, T) -> bool.
+:- chr_constraint out_bound(int), ask_bound(any), bound(any).
 u(X), count((v(X, Y), ? Y < X), N) ==> out_bound(N).
 out_bound(N) \ ask_bound(A) <=> A = N.
 bound(A) <=> v(5, 1), v(5, 7), v(5, 2), u(5), ask_bound(A).

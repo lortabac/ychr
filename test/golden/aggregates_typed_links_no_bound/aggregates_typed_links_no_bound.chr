@@ -1,6 +1,0 @@
-% The failed call waits for the goal's links, but the merge into p's T
-% brings no bound, so it is still reported.
-:- module(aggregates_typed_links_no_bound, []).
-:- use_module(library(aggregates)).
-:- chr_constraint p(T), q(T, T), out(int).
-p(X), count((q(X, Y), ? Y < X), N) ==> out(N).

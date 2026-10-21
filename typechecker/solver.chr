@@ -57,7 +57,6 @@
     link_unify/4,
     escape_check/3,
     solving_done/0,
-    gate_open/1,
     rigid_supply/1,
     check_bound/6
 ]).
@@ -246,7 +245,6 @@ bc_decls(bc(_, Decls)) -> Decls.
     link_unify_list(list(ty), list(ty), ev_depth, ctx),
     escape_check(list(int), list(ty), ctx),
     solving_done,
-    gate_open(int),
     rigid_supply(int),
     make_fresh_rigid(list(int), ty),
     make_fresh_rigids(list(int), list(ty), list(ty)),
@@ -711,23 +709,8 @@ resolve_funref_fire @
     commit_candidate(filter_consistent_full(Cands, ArgTypes, RetTypeVar),
                      ArgTypes, RetTypeVar, Ctx).
 
-% Inside an aggregate goal the failure waits for the goal's gate
-% (`ev_level` in diag.chr), or for the end of solving, which is only a
-% backstop: every gate is opened during the walk.
 resolve_funref_none @
     resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx) <=>
-        ctx_gate(Ctx) == no_gate,
-        filter_consistent_full(Cands, ArgTypes, RetTypeVar) == [] |
-    report_error(Ctx, no_matching_overload, mangled_name(Name)).
-
-resolve_funref_none_gated @
-    gate_open(N) \ resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx) <=>
-        ctx_gate(Ctx) == gate(N),
-        filter_consistent_full(Cands, ArgTypes, RetTypeVar) == [] |
-    report_error(Ctx, no_matching_overload, mangled_name(Name)).
-
-resolve_funref_none_late @
-    solving_done \ resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx) <=>
         filter_consistent_full(Cands, ArgTypes, RetTypeVar) == [] |
     report_error(Ctx, no_matching_overload, mangled_name(Name)).
 
@@ -784,21 +767,8 @@ discharge_bound_ok_amb @
         sub_ground(SubArgs, SubRet),
         any_sig_stable_witness(AmbSigs, SubArgs, SubRet) | true.
 
-% Gated like `resolve_funref_none`.
 discharge_bound_fail @
     check_bound(GName, AmbSigs, DeclSigs, SubArgs, SubRet, Ctx) <=>
-        ctx_gate(Ctx) == no_gate,
-        bound_ruled_out(append(AmbSigs, DeclSigs), SubArgs, SubRet) |
-    report_error(Ctx, bound_unsatisfied, mangled_name(GName)).
-
-discharge_bound_fail_gated @
-    gate_open(N) \ check_bound(GName, AmbSigs, DeclSigs, SubArgs, SubRet, Ctx) <=>
-        ctx_gate(Ctx) == gate(N),
-        bound_ruled_out(append(AmbSigs, DeclSigs), SubArgs, SubRet) |
-    report_error(Ctx, bound_unsatisfied, mangled_name(GName)).
-
-discharge_bound_fail_late @
-    solving_done \ check_bound(GName, AmbSigs, DeclSigs, SubArgs, SubRet, Ctx) <=>
         bound_ruled_out(append(AmbSigs, DeclSigs), SubArgs, SubRet) |
     report_error(Ctx, bound_unsatisfied, mangled_name(GName)).
 
@@ -1700,19 +1670,8 @@ resolve_fire @
     commit_candidate(filter_consistent(Cands, ArgTypes),
                      ArgTypes, RetTypeVar, Ctx).
 
-% Gated like `resolve_funref_none`.
 resolve_none @
     resolve_overload(Name, Cands, ArgTypes, _, Ctx) <=>
-        ctx_gate(Ctx) == no_gate, filter_consistent(Cands, ArgTypes) == [] |
-    report_error(Ctx, no_matching_overload, mangled_name(Name)).
-
-resolve_none_gated @
-    gate_open(N) \ resolve_overload(Name, Cands, ArgTypes, _, Ctx) <=>
-        ctx_gate(Ctx) == gate(N), filter_consistent(Cands, ArgTypes) == [] |
-    report_error(Ctx, no_matching_overload, mangled_name(Name)).
-
-resolve_none_late @
-    solving_done \ resolve_overload(Name, Cands, ArgTypes, _, Ctx) <=>
         filter_consistent(Cands, ArgTypes) == [] |
     report_error(Ctx, no_matching_overload, mangled_name(Name)).
 

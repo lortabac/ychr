@@ -530,8 +530,8 @@ walk_rule1 @
               Unit) <=>
     HeadCons is append(Kept, Removed),
     Label is rule_label(Name),
-    HeadCtx = ctx(unit(Unit), origin_ann(HAnn), Label, HLoc, lvl([], mode_rule, no_gate)),
-    GuardCtx = ctx(unit(Unit), origin_ann(GAnn), Label, GLoc, lvl([], mode_rule, no_gate)),
+    HeadCtx = ctx(unit(Unit), origin_ann(HAnn), Label, HLoc, lvl([], mode_rule)),
+    GuardCtx = ctx(unit(Unit), origin_ann(GAnn), Label, GLoc, lvl([], mode_rule)),
     alloc_var_types(collect_vars_rule(HeadCons, Guards, Body, Aggs),
                     head_var_skeletons(Env, append(HeadCons, aggs_skel_cons(Aggs)),
                                        append(Guards, aggs_skel_guards(Aggs))),
@@ -543,7 +543,7 @@ walk_rule1 @
     check_guards(scope(Env, VarTypes, Amb, GuardCtx), scope(Env, VarTypes, Amb, HeadCtx),
                  user_guards(Guards), []),
     check_body_goals(scope(Env, VarTypes, Amb,
-                           ctx(unit(Unit), origin_ann(BAnn), Label, BLoc, lvl([], mode_rule, no_gate))),
+                           ctx(unit(Unit), origin_ann(BAnn), Label, BLoc, lvl([], mode_rule))),
                      Body).
 
 % The HNF guards Desugar puts ahead of the user's, and the user's.
@@ -685,11 +685,9 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
 :- chr_constraint
     aggs_check(scope, list(agg_e)),
     agg_check(scope, agg_e),
-    agg_scope(scope, list(int), check_mode, goal_gate, list(agg_conj), list(any), scope),
+    agg_scope(scope, list(int), check_mode, list(agg_conj), list(any), scope),
     scope_supply(int),
     child_level(list(int), list(int)),
-    agg_gate(ctx, goal_gate),
-    release_gate(ctx, goal_gate),
     goal_conjs_check(scope, list(agg_conj), goal_links, scope, list(any)),
     link_copies(scope, scope, list(any), link_kind),
     agg_result_check(scope, any, list(guard), ty),
@@ -713,13 +711,11 @@ agg_check_plain @
     type_of_expr(S, Agg, AggTy),
     agg_shape(AggTy, _, E, R, scope_ctx(S)),
     child_level(scope_level(S), Level),
-    agg_gate(scope_ctx(S), Gate),
-    agg_scope(S, Level, inner_mode(scope_ctx(S)), Gate, Goal,
+    agg_scope(S, Level, inner_mode(scope_ctx(S)), Goal,
               append(Locals, goal_copies(Shared, Goal)), Inner),
     goal_conjs_check(Inner, Goal, glinks(S, link_one_way, goal_copies(Shared, Goal)),
                      InnerEnd, Later),
     link_copies(S, Inner, Later, link_one_way),
-    release_gate(scope_ctx(S), Gate),
     type_of_expr(InnerEnd, Elem, ElemTy),
     check_unify(ElemTy, E, scope_ctx(Inner)),
     agg_result_check(S, RV, RGuards, R),
@@ -733,15 +729,13 @@ agg_check_plain @
 % mode; the comparison sees only the enclosing ambient signatures.
 agg_check_select @
     agg_check(S, agg_e(Kind, nothing, Key, Goal, Shared, Locals, Binds, nothing)) <=>
-    agg_gate(scope_ctx(S), Gate),
-    agg_scope(S, scope_level(S), ctx_mode(scope_ctx(S)), Gate, Goal,
+    agg_scope(S, scope_level(S), ctx_mode(scope_ctx(S)), Goal,
               append(Locals, goal_copies(Shared, Goal)), Head),
     goal_conjs_check(Head, Goal, glinks(S, link_two_way, goal_copies(Shared, Goal)),
                      _, HeadLater),
     link_copies(S, Head, HeadLater, link_two_way),
-    release_gate(scope_ctx(S), Gate),
     child_level(scope_level(S), CopyLevel),
-    agg_scope(S, CopyLevel, mode_copy, Gate, Goal,
+    agg_scope(S, CopyLevel, mode_copy, Goal,
               append(append(Locals, Binds), goal_copies(Shared, Goal)), Copy),
     goal_conjs_check(Copy, Goal, glinks(S, link_one_way, goal_copies(Shared, Goal)),
                      CopyEnd, CopyLater),
@@ -770,25 +764,6 @@ child_level1 @
     N1 is N + 1,
     Out = [N | P],
     scope_supply(N1).
-
-% The gate of an aggregate's goal checks: the enclosing goal's, or a
-% fresh one for an aggregate of the rule itself. Only the latter is
-% opened, once its links are in, so a nested goal waits for the links
-% of the outermost aggregate it is in.
-agg_gate_inherit @
-    agg_gate(C, Out) <=> ctx_gate(C) \== no_gate | Out is ctx_gate(C).
-
-agg_gate_fresh @
-    scope_supply(N), agg_gate(_, Out) <=>
-    N1 is N + 1,
-    Out = gate(N),
-    scope_supply(N1).
-
-release_gate_open @
-    release_gate(C, gate(N)) <=> ctx_gate(C) == no_gate | gate_open(N).
-
-release_gate_inherited @
-    release_gate(_, _) <=> true.
 
 % Where a contradiction inside a plain aggregate's goal is reported: as
 % a dead goal, unless this is already a selection's second check.
@@ -826,15 +801,15 @@ getarg_targets([_|Gs]) -> getarg_targets(Gs).
 
 % A scope for an aggregate's goal: fresh slots for `Names`, shaped by
 % the declarations of the goal's own constraints, in front of the
-% enclosing ones, at the given level, mode and gate.
+% enclosing ones, at the given level and mode.
 agg_scope1 @
-    agg_scope(S, Level, Mode, Gate, Goal, Names, Out) <=>
+    agg_scope(S, Level, Mode, Goal, Names, Out) <=>
     alloc_var_types(Names,
                     head_var_skeletons(scope_env(S), goal_skel_cons(Goal),
                                        goal_skel_guards(Goal)),
                     Slots),
     Out is scope(scope_env(S), append(Slots, scope_vars(S)), scope_ambs(S),
-                 ctx_with_gate(ctx_at(scope_ctx(S), Level, Mode), Gate)).
+                 ctx_at(scope_ctx(S), Level, Mode)).
 
 % The goal's conjuncts, left to right. A constraint is checked like a
 % head occurrence, at the goal's level, and its bounds become ambient in
@@ -1582,7 +1557,7 @@ check_equation1 @
                       TVars),
     check_equation_at(scope(Env, VarTypes, add_ambients([], Bounds, TVars),
                             ctx(unit(Unit), origin_ann(EAnn),
-                                label_function(FName), ELoc, lvl([], mode_rule, no_gate))),
+                                label_function(FName), ELoc, lvl([], mode_rule))),
                       TVars, fun_sig(ArgTys, RetTy), Bounds, Eq).
 
 :- function eq_params(fun_eq) -> list(head_arg).
@@ -1789,7 +1764,7 @@ class_eq_result_fitted @
 class_eq_result_none @
     class_eq_result(FName, EAnn, ELoc, false) <=>
     report_error(ctx(no_unit, origin_ann(EAnn), label_function(FName), ELoc,
-                     lvl([], mode_rule, no_gate)),
+                     lvl([], mode_rule)),
                  no_matching_overload, source_name(FName)).
 
 % Inside the search: declaration order, stop at the first fit. The
@@ -1905,6 +1880,6 @@ walk_goals_at_nil @
 walk_goals_at_cons @
     walk_goals_at(Env, [G|Gs], Loc, Label, VarTypes, Unit) <=>
     check_body_goal(scope(Env, VarTypes, [],
-                          ctx(unit(Unit), origin_none, Label, Loc, lvl([], mode_rule, no_gate))),
+                          ctx(unit(Unit), origin_none, Label, Loc, lvl([], mode_rule))),
                     G),
     walk_goals_at(Env, Gs, Loc, Label, VarTypes, Unit + 1).

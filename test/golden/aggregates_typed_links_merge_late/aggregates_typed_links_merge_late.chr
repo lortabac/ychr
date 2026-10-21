@@ -1,0 +1,7 @@
+% Y < X is checked at q's T, which has no bound. The merge into p's T,
+% which has one, is made only after the goal.
+:- module(aggregates_typed_links_merge_late, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p(T) requiring '<'(T, T) -> bool.
+:- chr_constraint q(T, T), out(int).
+p(X), count((q(X, Y), ? Y < X), N) ==> out(N).

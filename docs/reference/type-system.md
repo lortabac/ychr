@@ -1500,15 +1500,26 @@ end of the goal. `? integer(Y)` pins `T₁ := int` first, and `Y + 1`
 checks. Linking first would merge `T₁` into `T₀`, which the goal's
 guard cannot pin.
 
-Since merges come last, a call in the goal may need one. With
-`:- chr_constraint p(T) requiring '<'(T, T) -> bool.`, the rule
-`p(X), count((q(X, Y), ? Y < X), N)` checks `Y < X` at `T₁`, and only
-the merge into `T₀` brings in `p`'s bound. So inside an aggregate goal,
-a call that no signature fits (`NoMatchingOverload`) or a bound that
-none satisfies (`BoundUnsatisfied`) is reported only after the links of
-the outermost aggregate it is in. Not later: the next aggregate, and
-the `Result` test, run after this one's goal. Other errors are
-reported where they occur.
+Linking early to a known type can reject a goal that a late link would
+have let through as one that never matches. With `p(int)`, the goal
+`(q(X, Y), ? string(Y), ? Y == "a")` is a type error: `Y : int` from
+the link on, so `Y == "a"` compares an `int` with a string. The same
+rule without the aggregate is rejected the same way.
+
+Since merges come last, a call in the goal cannot use them. With
+`:- chr_constraint p(T) requiring '<'(T, T) -> bool.` and an unbounded
+`q(T, T)`, the rule
+
+```prolog
+p(X), count((q(X, Y), ? Y < X), N) ==> out(N).   % error
+```
+
+is rejected (`NoMatchingOverload`, YCHR-60006): `Y < X` is checked at
+`q`'s `T₁`, which has no `'<'` bound, before the merge into `p`'s `T₀`
+is made. Giving `q` the bound too
+(`:- chr_constraint q(T, T) requiring '<'(T, T) -> bool.`) makes it
+check, because a goal occurrence's own bounds are ambient in the rest
+of the goal (§Bounds).
 
 ```prolog
 :- chr_constraint p(T), q(T, T), out(T, list(T)).

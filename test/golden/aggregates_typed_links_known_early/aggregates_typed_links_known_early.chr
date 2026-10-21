@@ -1,0 +1,7 @@
+% The link to int is made right after q, so Y : int and Y == "a" is a
+% type error. A late link would have made this a goal that never matches
+% (a warning).
+:- module(aggregates_typed_links_known_early, []).
+:- use_module(library(aggregates)).
+:- chr_constraint p(int), q(T, T), out(int).
+p(X), count((q(X, Y), ? string(Y), ? Y == "a"), N) ==> out(N).
