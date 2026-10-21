@@ -1592,7 +1592,8 @@ A selection form fires only with a selected match, and its goal
 variables are visible to the rest of the rule. So its goal is checked
 like extra heads, at the enclosing level: its rigids are at that level,
 its shared variables are linked by a plain `GuardEqual` (both ways),
-and the rule's guards may pin what it binds.
+the rule's guards may pin what it binds, and the bounds of its
+constraints are ambient after it, as a head's are (§Bounds).
 
 The key comparison is different: it runs over every match, not only
 the selected one. So the goal is checked a second time, as a plain
@@ -1615,12 +1616,27 @@ level of the check it is in, like any other nested aggregate.
 
 ### Bounds
 
-A bounded constraint in an aggregate goal assumes its bound inside the
-aggregate only: its required signatures are ambient there, not in the
-rule. `Agg`'s own bounds are discharged in the enclosing scope. So
-`min(Y, q(Y), M)` over a polymorphic `q(T)` is rejected with
+A bounded constraint in a plain aggregate's goal assumes its bound
+inside the aggregate only: its required signatures are ambient there,
+not in the rule. `Agg`'s own bounds are discharged in the enclosing
+scope. So `min(Y, q(Y), M)` over a polymorphic `q(T)` is rejected with
 `BoundUnsatisfied` (YCHR-60012): the matches may be of different
 instances, and `min` would compare them.
+
+A selection fires with one match, so its goal's bounds hold after it,
+like a head's: in the aggregates to its right, the rule's guard and the
+body (inside an enclosing goal, in the rest of that goal). The key
+comparison still sees only the enclosing ambient signatures, since it
+runs over every match.
+
+```prolog
+:- chr_constraint task(int, T, T) requiring '<'(T, T) -> bool.
+:- chr_constraint start, ordered(any, any).
+start, argmin(P, task(P, A, B)) ==> A < B | ordered(A, B).
+```
+
+`A` and `B` come from the selected task, whose instance satisfies
+`'<'(T, T)`, so the guard checks.
 
 ### Gathering order
 

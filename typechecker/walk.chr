@@ -539,10 +539,11 @@ walk_rule1 @
     head_cons_check(scope(Env, VarTypes, [], HeadCtx), HeadCons, [], Amb),
     check_guards(scope(Env, VarTypes, Amb, GuardCtx), scope(Env, VarTypes, Amb, HeadCtx),
                  hnf_guards(Guards), []),
-    aggs_check(scope(Env, VarTypes, Amb, HeadCtx), Aggs),
-    check_guards(scope(Env, VarTypes, Amb, GuardCtx), scope(Env, VarTypes, Amb, HeadCtx),
+    aggs_check(scope(Env, VarTypes, Amb, HeadCtx), Aggs, AggsEnd),
+    check_guards(scope(Env, VarTypes, scope_ambs(AggsEnd), GuardCtx),
+                 scope(Env, VarTypes, scope_ambs(AggsEnd), HeadCtx),
                  user_guards(Guards), []),
-    check_body_goals(scope(Env, VarTypes, Amb,
+    check_body_goals(scope(Env, VarTypes, scope_ambs(AggsEnd),
                            ctx(unit(Unit), origin_ann(BAnn), Label, BLoc, lvl([], mode_rule))),
                      Body).
 
@@ -683,8 +684,8 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
 :- chr_type goal_links ---> glinks(scope, link_kind, list(any)).
 
 :- chr_constraint
-    aggs_check(scope, list(agg_e)),
-    agg_check(scope, agg_e),
+    aggs_check(scope, list(agg_e), scope),
+    agg_check(scope, agg_e, scope),
     agg_scope(scope, list(int), check_mode, list(agg_conj), list(any), scope),
     scope_supply(int),
     child_level(list(int), list(int)),
@@ -695,19 +696,20 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
     scope_fresh(scope, list(any), scope).
 
 aggs_check_nil @
-    aggs_check(_, []) <=> true.
+    aggs_check(S, [], Out) <=> Out = S.
 
 aggs_check_cons @
-    aggs_check(S, [A|As]) <=>
-    agg_check(S, A),
-    aggs_check(S, As).
+    aggs_check(S, [A|As], Out) <=>
+    agg_check(S, A, S1),
+    aggs_check(S1, As, Out).
 
 % A plain aggregate, in gathering order: `Agg`, the goal's conjuncts
 % with the links to known types, the other links, `Element`, the result
-% tests. The escape check waits for the end of solving.
+% tests. The escape check waits for the end of solving. What its goal
+% proves stays inside, so the scope after it is the one before it.
 agg_check_plain @
     agg_check(S, agg_e(agg_plain, just(Agg), Elem, Goal, Shared, Locals, Binds,
-                       just(agg_res(RV, RGuards)))) <=>
+                       just(agg_res(RV, RGuards))), Out) <=>
     type_of_expr(S, Agg, AggTy),
     agg_shape(AggTy, _, E, R, scope_ctx(S)),
     child_level(scope_level(S), Level),
@@ -721,18 +723,21 @@ agg_check_plain @
     agg_result_check(S, RV, RGuards, R),
     escape_check(scope_level(S),
                  [E, R | maplist(fun(B) -> scope_var_ty(S, B) end, Binds)],
-                 scope_ctx(S)).
+                 scope_ctx(S)),
+    Out = S.
 
 % A selection. The first check binds the names it shows to the rule;
 % the second one owns fresh copies of them, so a match's types stay
 % inside it. The key and its comparison are checked in the caller's
-% mode; the comparison sees only the enclosing ambient signatures.
+% mode; the comparison sees only the enclosing ambient signatures. The
+% bounds of the first check's constraints are ambient after the
+% selection, as a head's are: it fires with one match.
 agg_check_select @
-    agg_check(S, agg_e(Kind, nothing, Key, Goal, Shared, Locals, Binds, nothing)) <=>
+    agg_check(S, agg_e(Kind, nothing, Key, Goal, Shared, Locals, Binds, nothing), Out) <=>
     agg_scope(S, scope_level(S), ctx_mode(scope_ctx(S)), Goal,
               append(Locals, goal_copies(Shared, Goal)), Head),
     goal_conjs_check(Head, Goal, glinks(S, link_two_way, goal_copies(Shared, Goal)),
-                     _, HeadLater),
+                     HeadEnd, HeadLater),
     link_copies(S, Head, HeadLater, link_two_way),
     child_level(scope_level(S), CopyLevel),
     agg_scope(S, CopyLevel, mode_copy, Goal,
@@ -745,7 +750,8 @@ agg_check_select @
                  Key, KeyTy),
     emit_function_call(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(S),
                              key_ctx(S, CopyLevel)),
-                       key_comparison(Kind), [KeyTy, KeyTy], _).
+                       key_comparison(Kind), [KeyTy, KeyTy], _),
+    Out is scope_with_ambs(S, scope_ambs(HeadEnd)).
 
 % `Agg : aggregator(W, E, R)`, at fresh flexible `W`, `E` and `R`.
 agg_shape1 @
@@ -840,8 +846,8 @@ goal_conjs_guard @
 
 goal_conjs_nested @
     goal_conjs_check(S, [agg_nested(A)|Cs], L, Out, Later) <=>
-    agg_check(S, A),
-    goal_conjs_check(S, Cs, L, Out, Later).
+    agg_check(S, A, S1),
+    goal_conjs_check(S1, Cs, L, Out, Later).
 
 % Outer type first, the copy second, at the goal's level.
 %

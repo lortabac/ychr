@@ -1,0 +1,28 @@
+% A selection fires with one match, so the bounds of its goal's
+% constraints hold after it, like a head's (type-system.md §Aggregates
+% §Bounds).
+:- module(aggregates_typed_select_bounds, [guard/2, later/1, nested/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint task(int, T, T) requiring '<'(T, T) -> bool.
+
+% In the rule's guard.
+:- chr_constraint start, ordered(any, any), ask_guard(any, any), guard(any, any).
+start, argmin(P, task(P, A, B)) ==> A < B | ordered(A, B).
+ordered(A, B) \ ask_guard(X, Y) <=> X = A, Y = B.
+guard(X, Y) <=>
+    task(2, 5, 9), task(1, "a", "b"), task(3, 1, 2), start, ask_guard(X, Y).
+
+% In a later selection's key comparison: every r(A, K) has K of A's type.
+:- chr_constraint r(T, T), go_later, best(any), ask_later(any), later(any).
+go_later, argmin(P, task(P, A, _)), argmin(K, r(A, K)) ==> best(K).
+best(K) \ ask_later(X) <=> X = K.
+later(X) <=>
+    task(1, "m", "z"), r("m", "q"), r("m", "c"), r("x", "a"), go_later,
+    ask_later(X).
+
+% In the rest of an enclosing goal.
+:- chr_constraint g(int), go_nested, count_out(int), ask_nested(any), nested(any).
+go_nested, count((g(_), argmin(P, task(P, A, B)), ? A < B), N) ==> count_out(N).
+count_out(N) \ ask_nested(X) <=> X = N.
+nested(X) <=> task(1, 3, 4), g(1), g(2), go_nested, ask_nested(X).
