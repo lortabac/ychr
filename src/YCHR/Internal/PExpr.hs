@@ -452,10 +452,6 @@ numberP = lexeme $ do
       n <- L.decimal
       pure (Int (applySign n sign))
 
--- | Parse a decimal integer (optionally negative).
-intP :: Parser PExpr
-intP = numberP
-
 -- ---------------------------------------------------------------------------
 -- Operator tokens
 -- ---------------------------------------------------------------------------
@@ -549,7 +545,7 @@ atomicTermP table =
   withLoc $
     choice
       [ varOrWildcardP,
-        try intP,
+        try numberP,
         stringP,
         listTermP table,
         lambdaP table,
@@ -692,12 +688,7 @@ parseFirstTerm table =
   parse
     ( sc
         *> optionMaybe
-          ( try
-              ( withLoc (termP table maxPrec)
-                  <* symbol
-                    "."
-              )
-          )
+          (try (withLoc (termP table maxPrec) <* symbol "."))
         <* void (many anyChar)
     )
 
@@ -740,7 +731,7 @@ prettyPExpr :: OpTable -> PExpr -> String
 prettyPExpr table =
   prettyPrec table.infixByName table.prefixByName table.wordOpSet maxPrec
 
--- | Render a PExpr within a precedence context.
+-- | Render a 'PExpr' within a precedence context.
 --
 -- The @ctx@ parameter is the maximum fixity the expression may have without
 -- needing parentheses. An operator with fixity > ctx is wrapped in parens.
@@ -754,11 +745,7 @@ prettyPExpr table =
 -- For @xfy@: left gets F−1, right gets F. Etc.
 prettyPrec ::
   Map Text (Int, OpType) ->
-  Map
-    Text
-    ( Int,
-      OpType
-    ) ->
+  Map Text (Int, OpType) ->
   Set Text ->
   Int ->
   PExpr ->
@@ -842,13 +829,10 @@ prettyPrec iops pops wops _ (Compound f args) =
     ++ intercalate ", " [prettyPrec iops pops wops maxArgPrec a.node | a <- args]
     ++ ")"
 
+-- | Render the rest of a list after its first element.
 prettyListTail ::
   Map Text (Int, OpType) ->
-  Map
-    Text
-    ( Int,
-      OpType
-    ) ->
+  Map Text (Int, OpType) ->
   Set Text ->
   PExpr ->
   String

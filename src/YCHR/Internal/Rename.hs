@@ -421,13 +421,13 @@ emitError e = lift (lift (tell [noDiag e]))
 -- equation — i.e. everywhere macro-expanded code could be in scope.
 emitErrorIn :: RenameCtx -> AnnP RenameError -> Rename ()
 emitErrorIn ctx e =
-  lift (lift (tell [(noDiag e) {diagContext = renderMacroChain ctx}]))
+  lift (lift (tell [(noDiag e) {context = renderMacroChain ctx}]))
 
 -- | Emit a warning, attaching the current macro-expansion chain. See
 -- 'emitErrorIn'.
 emitWarningIn :: RenameCtx -> AnnP RenameWarning -> Rename ()
 emitWarningIn ctx w =
-  lift (tell [(noDiag w) {diagContext = renderMacroChain ctx}])
+  lift (tell [(noDiag w) {context = renderMacroChain ctx}])
 
 -- | One use in the chain of macro expansions currently in progress.
 data MacroUse = MacroUse

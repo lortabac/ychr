@@ -3,8 +3,8 @@
 
 -- | Lexer helpers shared by 'YCHR.Internal.SExpr' and 'YCHR.Internal.PExpr'.
 --
--- A small set of parsec combinators mirroring the
--- 'Text.Megaparsec.Char.Lexer' API: whitespace + line-comment consumer
+-- A small set of parsec combinators shaped like the
+-- @Text.Megaparsec.Char.Lexer@ API: whitespace + line-comment consumer
 -- ('space'), 'lexeme', 'symbol', integer 'decimal', and a permissive
 -- C-style 'charLiteral'.
 module YCHR.Internal.Parsing.Lexer
@@ -24,19 +24,20 @@ import Text.Parsec (ParsecT, Stream, (<|>))
 import Text.Parsec qualified as P
 import Text.Parsec.Char qualified as PC
 
--- | Whitespace + optional line-comment consumer. Mirrors
--- 'Text.Megaparsec.Char.Lexer.space'. The third argument (block
--- comments) is omitted because the YCHR grammars don't use them.
-space :: (Stream s m Char) => ParsecT s u m () -> ParsecT s u m () -> ParsecT s u m ()
+-- | Whitespace + optional line-comment consumer. Like megaparsec's
+-- @space@, minus the block-comment argument: the YCHR grammars have no
+-- block comments.
+space ::
+  (Stream s m Char) => ParsecT s u m () -> ParsecT s u m () -> ParsecT s u m ()
 space ws lineCmt = P.skipMany (ws <|> lineCmt)
 
--- | One or more whitespace characters. Replaces
--- 'Text.Megaparsec.Char.space1'.
+-- | One or more whitespace characters.
 space1 :: (Stream s m Char) => ParsecT s u m ()
 space1 = P.skipMany1 PC.space
 
 -- | Run @p@, then consume trailing whitespace with @sc@.
-lexeme :: (Stream s m Char) => ParsecT s u m () -> ParsecT s u m a -> ParsecT s u m a
+lexeme ::
+  (Stream s m Char) => ParsecT s u m () -> ParsecT s u m a -> ParsecT s u m a
 lexeme sc p = p <* sc
 
 -- | Parse a fixed text symbol and consume trailing whitespace.
@@ -48,7 +49,7 @@ decimal :: (Stream s m Char) => ParsecT s u m Integer
 decimal = read <$> P.many1 PC.digit
 
 -- | Skip everything from a literal prefix to (but not including) the
--- end-of-line. Mirrors 'Text.Megaparsec.Char.Lexer.skipLineComment'.
+-- end-of-line.
 skipLineComment :: (Stream s m Char) => Text -> ParsecT s u m ()
 skipLineComment prefix = do
   _ <- PC.string (T.unpack prefix)
