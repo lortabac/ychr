@@ -89,13 +89,12 @@
 -- one that read should see.
 --
 -- One reading is an assumption on emitted code rather than a consequence
--- of the walk: an 'If' arm's binders stay in scope for the *other* arm
--- and for the statements after the 'If' (the interpreter's environment
--- is one flat cell array per call, so that is where its bindings live).
--- No emitted 'If'
--- binds a name in its else arm — the then arm carries the rule body or
--- equation, and the else arm is either empty or the eq-dispatch
--- fallback, whose only statements are 'AssignVal's of a binder
+-- of the walk: an 'If' arm's binders stay in scope for the *other* arm and
+-- for the statements after the 'If' (the interpreter's environment is one
+-- flat cell array per call, so that is where its bindings live). No
+-- emitted 'If' binds a name in its else arm — the then arm carries the
+-- rule body or equation, and the else arm is either empty or the
+-- eq-dispatch fallback, whose only statements are 'AssignVal's of a binder
 -- introduced outside the 'If' — so no read can be resolved to one arm's
 -- slot while the other arm wrote a different one. A hand-built 'Program'
 -- that bound one name in both arms and read it afterwards would observe
@@ -104,12 +103,11 @@
 --
 -- The walk is deliberately total rather than failing on a name it cannot
 -- place. A reference or an assignment to a name with no binder in scope
--- gets a fresh slot that no earlier binder wrote; a reference then
--- reaches the interpreter's existing "unbound variable" runtime error
--- when it runs, exactly as it does today, instead of this pass turning a
--- recoverable error into a Haskell 'error'. (An assignment does give its
--- slot a place — the interpreter writes a cell on it — so what it lacks
--- is a prior value, not a place to put one.)
+-- gets a fresh slot that no earlier binder wrote; a reference then reaches
+-- the interpreter's "unbound variable" runtime error when it runs, instead
+-- of this pass turning a recoverable error into a Haskell 'error'. (An
+-- assignment does give its slot a place — the interpreter writes a cell on
+-- it — so what it lacks is a prior value, not a place to put one.)
 module YCHR.Internal.Interpreter.Slots
   ( -- * The phase
     Slot,
@@ -140,7 +138,8 @@ module YCHR.Internal.Interpreter.Slots
   )
 where
 
-import Data.Array (Array, bounds, elems, listArray)
+import Data.Array (Array)
+import Data.Array qualified as Array
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -286,6 +285,7 @@ data SlotProc = SlotProc
     -- a program — a compile-only invocation, a `repl` startup — never
     -- forces the program's procedures at all.
     slotProcSlots :: Int,
+    -- | The lowered body.
     slotProcBody :: [SlotStmt],
     -- | Structural classification, carried through unchanged so the
     -- tracer keeps labelling events off it.
@@ -398,7 +398,7 @@ lowerProgram prog =
    in SlotProgram
         { slotProcedures = procMap,
           slotProcEntries =
-            listArray
+            Array.listArray
               (0, length prog.procedures - 1)
               [proc | (_, _, proc) <- lowered]
         }
@@ -422,14 +422,14 @@ lowerProgram prog =
 -- resolved when it was lowered, so they keep pointing at the compiled
 -- procedure (see @dev-docs\/INVARIANTS.md@,
 -- "Session construction"). Query-time lambdas are lifted under fresh
--- @__lambda_N@ names, so the collision cannot occur today.
+-- @__lambda_N@ names, so the collision cannot occur.
 --
 -- The empty list returns the program unchanged, so a query that lifts
 -- no lambda pays nothing.
 addProcedures :: SlotProgram -> [Procedure] -> SlotProgram
 addProcedures sp [] = sp
 addProcedures sp extras =
-  let base = snd (bounds sp.slotProcEntries) + 1
+  let base = snd (Array.bounds sp.slotProcEntries) + 1
       lowered =
         [ (i, p.name, lowerProcedureWith (ProcIx i) (resolveCallIn merged) p)
         | (i, p) <- zip [base ..] extras
@@ -440,16 +440,16 @@ addProcedures sp extras =
    in SlotProgram
         { slotProcedures = merged,
           slotProcEntries =
-            listArray
+            Array.listArray
               (0, base + length extras - 1)
-              (elems sp.slotProcEntries ++ [proc | (_, _, proc) <- lowered])
+              (Array.elems sp.slotProcEntries ++ [proc | (_, _, proc) <- lowered])
         }
 
 -- | A program with no procedures: what a hand-built session (a unit
 -- test exercising primitives, which needs no compiled procedure) starts
 -- from.
 emptySlotProgram :: SlotProgram
-emptySlotProgram = SlotProgram Map.empty (listArray (0, -1) [])
+emptySlotProgram = SlotProgram Map.empty (Array.listArray (0, -1) [])
 
 -- | The resolver 'lowerProgram' and 'addProcedures' hand the walk: a
 -- name the table knows becomes the callee's index, and anything else

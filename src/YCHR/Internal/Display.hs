@@ -118,12 +118,12 @@ renderSplices = intercalate "\n" . map renderModule
     renderModule ms =
       unlines
         ( ( "% splices for "
-              ++ ms.spliceFile
+              ++ ms.file
               ++ " (module "
-              ++ T.unpack ms.spliceModule
+              ++ T.unpack ms.moduleName
               ++ ")"
           )
-            : renderItems Nothing ms.spliceItems
+            : renderItems Nothing ms.items
         )
     -- A nested use's clauses stay under the outermost use's comment, so
     -- the key is the chain's last step (chains are innermost first).
@@ -1936,16 +1936,16 @@ instance Display Error where
           runtimeErrorCode
           SevRuntimeError
           m
-          frame.frameSourceLoc
-          (Just (T.unpack frame.frameLabel))
-          (Just (T.unpack frame.frameSourceCode))
+          frame.sourceLoc
+          (Just (T.unpack frame.label))
+          (Just (T.unpack frame.sourceCode))
           []
       renderRest frame =
         displayMsgWithSrcLoc
           runtimeErrorCode
           SevStackTrace
           ""
-          frame.frameSourceLoc
-          (Just (T.unpack frame.frameLabel))
-          (Just (T.unpack frame.frameSourceCode))
+          frame.sourceLoc
+          (Just (T.unpack frame.label))
+          (Just (T.unpack frame.sourceCode))
           []

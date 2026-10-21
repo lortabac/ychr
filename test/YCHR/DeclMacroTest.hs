@@ -670,9 +670,9 @@ spliceTests =
             )
         case cp.splices of
           [ ModuleSplices
-              { spliceModule = modName,
-                spliceFile = file,
-                spliceItems = items
+              { moduleName = modName,
+                file = file,
+                items = items
               }
             ] -> do
               modName @?= "m"

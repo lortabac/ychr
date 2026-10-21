@@ -106,12 +106,12 @@ import Prelude hiding (head)
 -- label, extracted from an 'AnnP' wrapper.
 data SrcInfo = SrcInfo
   { -- | Source location attached to the originating 'AnnP'.
-    srcLoc :: P.SourceLoc,
+    loc :: P.SourceLoc,
     -- | Pretty-printable parsed form, used to render diagnostics.
-    srcParsed :: PExpr,
+    parsed :: PExpr,
     -- | Optional context label (e.g. @"rule foo"@ or
     -- @"function bar/2"@) prefixed onto diagnostic messages.
-    srcLabel :: Maybe Text
+    label :: Maybe Text
   }
 
 -- ---------------------------------------------------------------------------
@@ -137,15 +137,14 @@ compile prog symTab =
       (funProcs, funErrs) = runWriter $ do
         traverse compileFunctionDef prog.functions
       -- One procedure per aggregate, nested ones included, in rule order.
-      -- A rule without aggregates contributes nothing, so a program that
-      -- uses none emits exactly the procedures it emitted before.
+      -- A rule without aggregates contributes nothing.
       aggregateWork =
         [ (display, rule, plan)
         | (display, rule, plans) <-
             zip3 ruleDisplayNames prog.rules collected.aggregatePlans,
           plan <- concatMap planTree plans
         ]
-      planTree p = p : concatMap (planTree . snd) p.planNested
+      planTree p = p : concatMap (planTree . snd) p.nested
       (aggProcs, aggErrs) = runWriter $ do
         traverse
           (\(display, rule, plan) -> genAggregateProcedure symTab display (rule, plan))
@@ -342,7 +341,10 @@ buildTellablesUnqualified prog =
         -- renderer sorts the same spellings, so both runtimes print one
         -- order.
         AmbiguousTell
-          (sortOn (Types.flattenName . Types.qualifiedToName) [qn | (_, (_, qn)) <- entries])
+          ( sortOn
+              (Types.flattenName . Types.qualifiedToName)
+              [qn | (_, (_, qn)) <- entries]
+          )
 
 -- | The bare source name of a qualified constraint name, the text a
 -- goal's functor carries for an unqualified reference.
@@ -352,7 +354,8 @@ bareText (Types.QualifiedName _ n) = n
 -- | The modules in which some rule body contains a dynamic tell: the
 -- scopes the scoped 'tellables' tier carries entries for.
 tellScopes :: D.Program -> Set Text
-tellScopes prog = Set.fromList [sc | r <- prog.rules, sc <- concatMap goalScopes r.body.node]
+tellScopes prog =
+  Set.fromList [sc | r <- prog.rules, sc <- concatMap goalScopes r.body.node]
   where
     goalScopes (D.BodyTellDynamic sc _ _) = [sc]
     goalScopes (D.BodyOr branches) = concatMap (concatMap goalScopes) (NE.toList branches)
@@ -618,10 +621,10 @@ genGoalOccurrenceBody symTab cType goal condMap occ fire = do
   -- the fold takes from the whole goal and not from this match. Joining
   -- the outer goal on such a value could skip a combination the fold
   -- accepts.
-  let depth = length goal.goalEnclosing
+  let depth = length goal.enclosing
       outer =
         [ (depth - 1 - i, LocateGoal Nothing, g, shared)
-        | (i, g, shared) <- zip3 [0 ..] goal.goalEnclosing goal.goalLevelShared
+        | (i, g, shared) <- zip3 [0 ..] goal.enclosing goal.levelShared
         ]
       only shared vm = varMapFromList [(v, e) | v <- shared, Just e <- [lookupVar v vm]]
       nest [] _ = pure headLoops
@@ -629,7 +632,7 @@ genGoalOccurrenceBody symTab cType goal condMap occ fire = do
         wrapGoalConjuncts
           symTab
           si
-          (levelLoopNames goal.goalIndex level)
+          (levelLoopNames goal.aggregateIndex level)
           mode
           conjuncts
           (only shared vm)
@@ -637,9 +640,9 @@ genGoalOccurrenceBody symTab cType goal condMap occ fire = do
   wrapGoalConjuncts
     symTab
     si
-    (levelLoopNames goal.goalIndex depth)
-    (LocateGoal (Just (goal.goalActiveIndex, activeName, cType)))
-    goal.goalAll
+    (levelLoopNames goal.aggregateIndex depth)
+    (LocateGoal (Just (goal.activeIndex, activeName, cType)))
+    goal.conjuncts
     seed
     (nest outer)
 
@@ -702,7 +705,8 @@ genGuardedFire symTab occMap varMap occ = do
         | otherwise = [Store (IdVar activeName)]
       -- Both checks are pure, so their order is unobservable; putting the
       -- history in front keeps a combination that already fired from
-      -- refolding. A rule without aggregates keeps the shape it had.
+      -- refolding. Without aggregates the history check goes inside the
+      -- guard.
       body = case (null occ.aggregates, fire.history) of
         (True, Nothing) -> guarded fire.stmts
         (True, Just (rid, ids)) ->
@@ -731,23 +735,23 @@ genGuardedFire symTab occMap varMap occ = do
 -- firing needs to find that match again ('genSelectStmts').
 aggregateOutCellStmts :: AggregatePlan -> [Stmt]
 aggregateOutCellStmts plan =
-  [LetVal (aggregateOutCell plan.planIndex v) NewVar | v <- plan.planBind]
-    ++ [LetVal (selectionPosCell plan.planIndex) NewVar | isTakePlan plan]
+  [LetVal (aggregateOutCell plan.position v) NewVar | v <- plan.bind]
+    ++ [LetVal (selectionPosCell plan.position) NewVar | isTakePlan plan]
 
 -- | The out-cells a call passes, in parameter order.
 aggregateOutCellArgs :: AggregatePlan -> [CallArg]
 aggregateOutCellArgs plan =
-  [AVal (Var (aggregateOutCell plan.planIndex v)) | v <- plan.planBind]
-    ++ [AVal (Var (selectionPosCell plan.planIndex)) | isTakePlan plan]
+  [AVal (Var (aggregateOutCell plan.position v)) | v <- plan.bind]
+    ++ [AVal (Var (selectionPosCell plan.position)) | isTakePlan plan]
 
 -- | Extend a variable map with the cells one aggregate binds, so a later
 -- aggregate and the rule's guard read its result.
 aggregateOutCellVars :: VarMap -> AggregatePlan -> VarMap
 aggregateOutCellVars vm plan =
   List.foldl'
-    (\m v -> insertVar v (Var (aggregateOutCell plan.planIndex v)) m)
+    (\m v -> insertVar v (Var (aggregateOutCell plan.position v)) m)
     vm
-    plan.planBind
+    plan.bind
 
 -- | The guard conjunct that computes one aggregate: a call to its procedure
 -- inside 'BFromVal', so 'softenGuard' puts the whole fold under a soft
@@ -773,8 +777,8 @@ aggregateCall ::
   [CallArg] ->
   Writer [Diagnostic CompileError] BoolExpr
 aggregateCall si varMap plan cells = do
-  shared <- traverse sharedArg plan.planShared
-  pure (BFromVal (CallExpr plan.planProcName (cells ++ map AVal shared)))
+  shared <- traverse sharedArg plan.shared
+  pure (BFromVal (CallExpr plan.procName (cells ++ map AVal shared)))
   where
     -- A shared variable is in scope by construction (a head variable, or
     -- one the enclosing goal bound). A missing one is a compiler invariant
@@ -782,7 +786,7 @@ aggregateCall si varMap plan cells = do
     sharedArg v = case lookupVar v varMap of
       Just expr -> pure expr
       Nothing -> do
-        tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
+        tell [Diagnostic si.label (AnnP (UnboundVariable v) si.loc si.parsed) []]
         pure unreachableValue
 
 -- | Generate the procedure that computes one aggregate, top-level or
@@ -811,9 +815,9 @@ genAggregateProcedure symTab display (rule, plan) = do
   let outCount = length (aggregateOutCellArgs plan)
       outParams = [aggregateOutParam i | i <- [0 .. outCount - 1]]
       sharedParams =
-        [aggregateSharedParam i | i <- [0 .. length plan.planShared - 1]]
+        [aggregateSharedParam i | i <- [0 .. length plan.shared - 1]]
       params = outParams ++ sharedParams
-      sharedMap = varMapFromList (zip plan.planShared (map Var sharedParams))
+      sharedMap = varMapFromList (zip plan.shared (map Var sharedParams))
       ruleLabel = Just ("rule " <> display)
       si = SrcInfo rule.head.sourceLoc rule.head.parsed ruleLabel
   body <-
@@ -822,12 +826,12 @@ genAggregateProcedure symTab display (rule, plan) = do
       else genFoldBody symTab si sharedMap plan
   pure
     Procedure
-      { name = plan.planProcName,
+      { name = plan.procName,
         params = params,
         body = body,
         procKind =
           PKFunction
-            (Types.QualifiedName "$aggregate" plan.planProcName.unName)
+            (Types.QualifiedName "$aggregate" plan.procName.unName)
             (length params)
       }
 
@@ -842,17 +846,17 @@ genFoldBody ::
 genFoldBody symTab si sharedMap plan = do
   -- Only a malformed aggregate has no aggregator, and that is reported by
   -- the renamer, so the placeholder never runs.
-  aggExpr <- maybe (pure unreachableValue) (compileExpr sharedMap si) plan.planAgg
+  aggExpr <- maybe (pure unreachableValue) (compileExpr sharedMap si) plan.agg
   foldStmts <-
     wrapGoalConjuncts
       symTab
       si
-      (aggregateLoopNames plan.planIndex)
-      (FoldGoal plan.planNested)
-      plan.planGoal
+      (aggregateLoopNames plan.position)
+      (FoldGoal plan.nested)
+      plan.goal
       sharedMap
       $ \innermost -> do
-        elementExpr <- compileExpr innermost si plan.planElement
+        elementExpr <- compileExpr innermost si plan.element
         pure
           [ AssignVal
               aggregateAccName
@@ -883,7 +887,7 @@ genFoldBody symTab si sharedMap plan = do
         LetVal aggregateFinalName (GetArg (Var aggregateAggName) 2)
       ]
         ++ foldStmts
-        ++ maybeValueStmts plan.planResultMatch
+        ++ maybeValueStmts plan.resultMatch
     )
 
 -- | The body of a selection procedure: walk the goal's matches in goal
@@ -908,7 +912,7 @@ genSelectionBody ::
 genSelectionBody symTab si sharedMap plan = do
   let takes = isTakePlan plan
       cmp = Name (if selectsMax plan then ">" else "<")
-      vals = zip [0 ..] plan.planBind
+      vals = zip [0 ..] plan.bind
       falseLit = Lit (BoolLit False)
       initStmts =
         [ LetVal selectionFoundName falseLit,
@@ -928,13 +932,13 @@ genSelectionBody symTab si sharedMap plan = do
     wrapGoalConjuncts
       symTab
       si
-      (aggregateLoopNames plan.planIndex)
-      (FoldGoal plan.planNested)
-      plan.planGoal
+      (aggregateLoopNames plan.position)
+      (FoldGoal plan.nested)
+      plan.goal
       sharedMap
       $ \innermost -> do
-        key <- compileExpr innermost si plan.planElement
-        values <- traverse (goalValue innermost) plan.planBind
+        key <- compileExpr innermost si plan.element
+        values <- traverse (goalValue innermost) plan.bind
         let keep =
               [ AssignVal selectionFoundName (Lit (BoolLit True)),
                 AssignVal selectionBestName (Var selectionKeyName)
@@ -977,7 +981,7 @@ genSelectionBody symTab si sharedMap plan = do
     goalValue vm v = case lookupVar v vm of
       Just e -> pure e
       Nothing -> do
-        tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
+        tell [Diagnostic si.label (AnnP (UnboundVariable v) si.loc si.parsed) []]
         pure unreachableValue
 
 -- | @local + 1@, for a match counter.
@@ -1026,8 +1030,8 @@ maybeValueStmts resultMatch =
     -- extractions that depend on it.
     matchedStmts =
       let bindAll =
-            bindsStmts resultMatch.resultBinds ++ [Return (Lit (BoolLit True))]
-       in case resultMatch.resultTests of
+            bindsStmts resultMatch.binds ++ [Return (Lit (BoolLit True))]
+       in case resultMatch.tests of
             [] -> bindAll
             t : ts ->
               [ If
@@ -1155,7 +1159,7 @@ wrapGoalConjuncts symTab si names mode conjuncts varMap0 inner =
       D.AggNested _
         | FoldGoal nested <- mode,
           Just plan <- lookup j nested -> do
-            let cells = [(v, nestedOutCell plan.planPath v) | v <- plan.planBind]
+            let cells = [(v, nestedOutCell plan.path v) | v <- plan.bind]
                 vm' = List.foldl' (\m (v, c) -> insertVar v (Var c) m) vm cells
             call <- aggregateCall si vm plan [AVal (Var c) | (_, c) <- cells]
             restStmts <- go (j + 1) seen vm' rest
@@ -1212,7 +1216,8 @@ aggregateLoopNames k = GoalLoopNames (aggregateLabel k) aggregateSuspName Name
 -- variable map.
 levelLoopNames :: Int -> Int -> GoalLoopNames
 levelLoopNames k 0 = aggregateLoopNames k
-levelLoopNames k d = GoalLoopNames (aggregateLevelLabel k d) (aggregateLevelSuspName d) Name
+levelLoopNames k d =
+  GoalLoopNames (aggregateLevelLabel k d) (aggregateLevelSuspName d) Name
 
 -- | How 'wrapGoalConjuncts' treats the conjuncts that are not loops.
 data GoalMode
@@ -1265,8 +1270,8 @@ lookupGoalCType symTab si hcon =
     Nothing -> do
       tell
         [ Diagnostic
-            si.srcLabel
-            (AnnP (UnknownConstraintType ident.name) si.srcLoc si.srcParsed)
+            si.label
+            (AnnP (UnknownConstraintType ident.name) si.loc si.parsed)
             []
         ]
       pure Nothing
@@ -1524,8 +1529,8 @@ genSelectStmts symTab si varMap plan = case conjuncts of
         symTab
         si
         (selectionLoopNames k)
-        (FoldGoal plan.planNested)
-        plan.planGoal
+        (FoldGoal plan.nested)
+        plan.goal
         seed
         ( \_ ->
             pure
@@ -1562,18 +1567,18 @@ genSelectStmts symTab si varMap plan = case conjuncts of
              ]
       )
   where
-    k = plan.planIndex
+    k = plan.position
     count = selectionCountLocal k
     conjuncts = selectionConjuncts plan
     -- The guard's call already reported a shared variable it could not
     -- find, so a missing one is skipped here.
     seed =
       varMapFromList
-        [(v, e) | v <- plan.planShared, Just e <- [lookupVar v varMap]]
+        [(v, e) | v <- plan.shared, Just e <- [lookupVar v varMap]]
 
 -- | The positions of a selection's constraint conjuncts in its goal.
 selectionConjuncts :: AggregatePlan -> [Int]
-selectionConjuncts plan = [j | (j, D.AggConstraint _ _) <- zip [0 ..] plan.planGoal]
+selectionConjuncts plan = [j | (j, D.AggConstraint _ _) <- zip [0 ..] plan.goal]
 
 -- | What compiling one firing contributes: the propagation-history key the
 -- rule fires under, if it keeps one, and the statements of the firing
@@ -1627,9 +1632,9 @@ mkRuleFrame occ =
 mkFrame :: Text -> SourceLoc -> PExpr -> StackFrame
 mkFrame label loc pexpr =
   StackFrame
-    { frameLabel = label,
-      frameSourceLoc = loc,
-      frameSourceCode = T.pack (prettyPExprSrc pexpr)
+    { label = label,
+      sourceLoc = loc,
+      sourceCode = T.pack (prettyPExprSrc pexpr)
     }
 
 -- | Kill the constraint suspensions a firing removes: every removed
@@ -1650,7 +1655,7 @@ genKillStmts occ =
       -- Kill active if removed
       activeKill = [Kill (IdVar activeName) | not occ.isKept]
       selectionKills =
-        [ Kill (IdVar (selectionIdName p.planIndex j))
+        [ Kill (IdVar (selectionIdName p.position j))
         | p <- occ.aggregates,
           isTakePlan p,
           j <- selectionConjuncts p
@@ -1679,7 +1684,9 @@ genKillStmts occ =
 -- stored, and no fold can count it, since it is no longer in the store.
 genRemovalStmts :: OccurrenceMap -> Occurrence -> [Stmt]
 genRemovalStmts occMap occ =
-  concatMap oneHead (map dropPos (sortOn textualPos (removedHeads occ)) ++ selectionRemoved)
+  concatMap
+    oneHead
+    (map dropPos (sortOn textualPos (removedHeads occ)) ++ selectionRemoved)
   where
     headNode = occ.rule.head.node
 
@@ -1693,12 +1700,14 @@ genRemovalStmts occMap occ =
     selectionRemoved =
       [ ( Identifier (Types.qualifiedToName hc.name) (length hc.args),
           IdVar sel,
-          [FieldArg (IdVar sel) (ArgIndex (fromIntegral i)) | i <- [0 .. length hc.args - 1]]
+          [ FieldArg (IdVar sel) (ArgIndex (fromIntegral i))
+          | i <- [0 .. length hc.args - 1]
+          ]
         )
       | p <- occ.aggregates,
         isTakePlan p,
-        (j, D.AggConstraint hc _) <- zip [0 ..] p.planGoal,
-        let sel = selectionIdName p.planIndex j
+        (j, D.AggConstraint hc _) <- zip [0 ..] p.goal,
+        let sel = selectionIdName p.position j
       ]
 
     -- (textual position, constraint identifier, id expression, argument
@@ -1765,7 +1774,7 @@ compileTerm :: VarMap -> SrcInfo -> Term -> Writer [Diagnostic CompileError] Val
 compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
   Nothing -> do
-    tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
+    tell [Diagnostic si.label (AnnP (UnboundVariable v) si.loc si.parsed) []]
     pure unreachableValue
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
@@ -1825,7 +1834,7 @@ compileExpr varMap si e = case e of
   R.VarExpr v -> case lookupVar v varMap of
     Just expr -> pure expr
     Nothing -> do
-      tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
+      tell [Diagnostic si.label (AnnP (UnboundVariable v) si.loc si.parsed) []]
       pure unreachableValue
   R.IntExpr n -> pure (Lit (IntLit n))
   R.FloatExpr n -> pure (Lit (FloatLit n))
@@ -2079,9 +2088,8 @@ rootIndexOf _ _ = 0
 -- "optimize" this into a new VM constructor without revisiting that
 -- decision.
 --
--- Outside equation mode this is empty, which is exactly the
--- fall-through behaviour rule occurrences and pre-existing code rely
--- on.
+-- Outside equation mode this is empty: a rule occurrence just falls
+-- through.
 inconclusiveElse :: Maybe EqDispatch -> [(ValExpr, Int)] -> [Stmt]
 inconclusiveElse Nothing _ = []
 inconclusiveElse (Just eq) scrutinees = concatMap check scrutinees
@@ -2236,8 +2244,7 @@ compileBodyGoals symTab varMap si goals = do
 
 -- | Tell-unify two terms and immediately drain the resulting
 -- reactivation queue. Used by 'D.BodyUnify' and the re-binding case of
--- 'D.BodyIs'. Wrapped in a helper because the dispatch shape is not
--- something a casual reader should have to re-derive every time.
+-- 'D.BodyIs'.
 unifyAndReactivate :: ValExpr -> ValExpr -> [Stmt]
 unifyAndReactivate l r =
   [ BoolExprStmt (BUnify l r),
@@ -2424,23 +2431,14 @@ compileFunctionDef func = do
   let funcName = Types.qualifiedToName func.name
       procName' = funcProcName funcName func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
-      funcLabel =
-        Just
-          ( "function "
-              <> flattenName funcName
-              <> "/"
-              <> T.pack (show func.arity)
-          )
+      fnLabel = flattenName funcName <> "/" <> T.pack (show func.arity)
+      funcLabel = Just ("function " <> fnLabel)
       -- The function-entry frame takes the first equation's annotation:
       -- it is pushed before dispatch, so it cannot name one equation.
       (funcLoc, funcParsed) = case func.equations of
         (eq : _) -> (eq.sourceLoc, eq.parsed)
         [] -> (P.dummyLoc, Atom "function")
-      frame =
-        mkFrame
-          ("function " <> flattenName funcName <> "/" <> T.pack (show func.arity))
-          funcLoc
-          funcParsed
+      frame = mkFrame ("function " <> fnLabel) funcLoc funcParsed
       -- Dispatch tracking: every equation's pattern tests record, in
       -- two procedure-level locals, whether a test failed only because
       -- the value it inspected was still unbound. Falling off the end
@@ -2465,8 +2463,7 @@ compileFunctionDef func = do
     traverse
       (\eq -> compileEquation tracksDispatch params (eqSi eq) eq.node)
       func.equations
-  let fnLabel = flattenName funcName <> "/" <> T.pack (show func.arity)
-      dispatchInit
+  let dispatchInit
         | tracksDispatch =
             [ LetVal inconclusiveName (Lit (BoolLit False)),
               LetVal blockedArgName (Lit (IntLit 0))
@@ -2645,24 +2642,6 @@ genReactivateDispatch symTab =
 isLambdaFunc :: D.Function -> Bool
 isLambdaFunc func = T.isPrefixOf "__lambda_" func.name.baseName
 
-{- Note [Occurrence numbering order]
-
-'collectOccurrences' folds each rule's occurrences into the
-'OccurrenceMap' with 'occMapAppend', which is implemented on top of
-@Map.insertWith (++)@ and therefore prepends. Reversing the resulting
-list before 'assignNumbers' restores top-down rule order so that
-occurrence number 1 is the textually first occurrence of the
-constraint, matching the convention in the paper's Listings.
-
-Partner ordering inside 'ruleOccurrences' is "removed first,
-right-to-left": this is the ωr refined operational semantics from
-Duck et al. (2004) and the paper §2.2, Fig. 2. Removed occurrences are
-tried before kept ones so that simplifications fire eagerly, and within
-each group the rightmost head constraint gets the lowest occurrence
-number so that join order matches a left-to-right scan of the body when
-the rule is read as a Horn clause.
--}
-
 {- Note [Head variable extraction]
 
 'buildVarMap' only inspects 'HeadVar' arguments: occurrence head
@@ -2734,16 +2713,6 @@ unreachable (paper §5.3, "all following alive tests thus becomes
 redundant"). Backjumping is only useful for kept partners.
 -}
 
-{- Note [Anonymous rule names]
-
-Anonymous rules get a synthetic @__rule_N@ name in 'ruleOccurrences':
-the propagation history is keyed on (rule name, constraint id tuple).
-If two anonymous propagation rules shared a single placeholder name,
-they would collide in the history and prevent each other from firing.
-The synthetic name uses the rule's program-wide source position, which
-is stable as long as the source order is.
--}
-
 {- Note [Quoting]
 
 @quote@ is a reserved keyword that prevents evaluation of its argument
@@ -2780,10 +2749,10 @@ Example: @R is compound_to_list(quote(1 + 1))@ yields
 
 {- Note [extractSymbolTable placement]
 
-'extractSymbolTable' lives in 'YCHR.Internal.Desugar' rather than here:
-the constraint-type indices it produces are needed both by this module
-and by 'YCHR.Internal.Compile.compile', but they are derivable from the
-desugared program's rule heads together with its 'constraintTypes' map.
-Computing them in the desugarer keeps the compilation pipeline
-single-pass over the desugared AST.
+'extractSymbolTable' lives in 'YCHR.Internal.Desugar', not here. The
+constraint-type indices come from the desugared program alone (its rule
+heads and its 'constraintTypes' map), and they are needed outside this
+module too: "YCHR.Internal.Compile.Pipeline" builds the table once,
+passes it to 'compile', and keeps it on the compiled program for the
+query path.
 -}

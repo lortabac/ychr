@@ -22,7 +22,7 @@
 --   * what the computed result is matched against, as a 'ResultMatch': the
 --     tests the pattern has to pass and the bindings that follow them.
 --
---   * the plans of the aggregates nested in a goal ('planNested').
+--   * the plans of the aggregates nested in a goal ('nested').
 --
 --   * the diagnostics for a form this compiler does not allow (a nested
 --     @takemin@\/@takemax@), and for a program whose aggregators cannot
@@ -120,19 +120,19 @@ planAggregate ruleIdx rule path a = do
   nested <- planNestedAggregates ruleIdx rule path a.goal
   pure
     AggregatePlan
-      { planIndex = case reverse path of
+      { position = case reverse path of
           i : _ -> i
           [] -> 0,
-        planPath = path,
-        planKind = a.kind,
-        planProcName = aggregateProcName ruleIdx path,
-        planAgg = a.agg,
-        planElement = a.element,
-        planGoal = a.goal,
-        planShared = shared,
-        planBind = a.aggBinds,
-        planResultMatch = resultMatch,
-        planNested = nested
+        path = path,
+        kind = a.kind,
+        procName = aggregateProcName ruleIdx path,
+        agg = a.agg,
+        element = a.element,
+        goal = a.goal,
+        shared = shared,
+        bind = a.aggBinds,
+        resultMatch = resultMatch,
+        nested = nested
       }
   where
     shared = a.aggShared
@@ -166,8 +166,8 @@ planNestedAggregates ruleIdx rule path = go 0
               aggregateMentionedVars n
                 `Set.difference` Set.fromList n.aggShared
                 `Set.difference` Set.fromList n.aggBinds
-            tooEarly =
-              locals `Set.intersection` aggregateGoalLocals [r | r <- rest, not (isNested r)]
+            laterLocals = aggregateGoalLocals [r | r <- rest, not (isNested r)]
+            tooEarly = locals `Set.intersection` laterLocals
         tell
           [ Diagnostic label (AnnP (UnboundVariable v) loc origin) []
           | v <- Set.toAscList tooEarly
@@ -217,12 +217,12 @@ checkLocalEscapes rule plans = case Set.toAscList escaped of
     -- visible goal variables.
     locals =
       Set.unions
-        [ aggregateGoalLocals p.planGoal
-            `Set.difference` Set.fromList p.planShared
-            `Set.difference` Set.fromList p.planBind
+        [ aggregateGoalLocals p.goal
+            `Set.difference` Set.fromList p.shared
+            `Set.difference` Set.fromList p.bind
         | p <- plans
         ]
-    visible = Set.fromList [v | p <- plans, isSelectionPlan p, v <- p.planBind]
+    visible = Set.fromList [v | p <- plans, isSelectionPlan p, v <- p.bind]
     escaped =
       (locals `Set.difference` visible)
         `Set.intersection` ( guardVars rule.guard.node
@@ -277,10 +277,8 @@ aggregateResultTypeDeclared typeDefs = any declaresMaybe typeDefs
 
 -- | @library(maybe)@'s type and the constructor the protocol needs. Both
 -- are qualified with their declaring module, which the renamer fixes.
-maybeTypeName :: Types.Name
+maybeTypeName, justConName :: Types.Name
 maybeTypeName = Types.Qualified "maybe" "maybe"
-
-justConName :: Types.Name
 justConName = Types.Qualified "maybe" "just"
 
 -- ---------------------------------------------------------------------------

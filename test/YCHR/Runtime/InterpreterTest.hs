@@ -466,9 +466,9 @@ softGuardBranch prelude cond = do
 frame :: Text -> StackFrame
 frame label =
   StackFrame
-    { frameLabel = label,
-      frameSourceLoc = dummyLoc,
-      frameSourceCode = label
+    { label = label,
+      sourceLoc = dummyLoc,
+      sourceCode = label
     }
 
 -- | 'BSoftGuard' is the VM form behind rule-guard delaying: an
@@ -548,7 +548,7 @@ softGuardTests =
           try @RuntimeErrorThrown (interpret prog baseHostCallRegistry "p" [])
         case outcome of
           Left (RuntimeErrorThrown _ _ stack) ->
-            map (.frameLabel) stack @?= ["caller"]
+            map (.label) stack @?= ["caller"]
           Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
     ]
 

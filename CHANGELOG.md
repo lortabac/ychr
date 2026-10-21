@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+Internal record fields drop their type prefixes.
+
+- **Breaking:** in `YCHR.Internal.Compile.Types`, `AggregatePlan`'s
+  `plan*` fields lose the prefix (`planIndex` is now `position`),
+  `GoalOccurrence`'s `goalIndex`, `goalActiveIndex`, `goalAll`,
+  `goalEnclosing` and `goalLevelShared` are now `aggregateIndex`,
+  `activeIndex`, `conjuncts`, `enclosing` and `levelShared`, and
+  `ResultMatch`'s `resultTests`/`resultBinds` are `tests`/`binds`.
+- **Breaking:** `YCHR.Internal.VM.StackFrame` (the payload of
+  `Error`'s `RuntimeError`) has fields `label`, `sourceLoc` and
+  `sourceCode` instead of `frameLabel`, `frameSourceLoc` and
+  `frameSourceCode`.
+- **Breaking:** `YCHR.Internal.Compile.Pipeline.ModuleSplices` has
+  fields `moduleName`, `file` and `items` instead of `spliceModule`,
+  `spliceFile` and `spliceItems`.
+
 A constraint's type parameters only take *determined* types
 ([docs/reference/type-system.md](docs/reference/type-system.md#determined-types)).
 This closes a hole in the multi-head merge: with `leq(T, T)`, the tells
@@ -82,8 +98,8 @@ inside aggregate goals, so the predefined aggregates nest
 - A nested `takemin`/`takemax` is an error (`AggregateNestedTake`,
   YCHR-40004).
 - **Breaking:** `YCHR.Internal.Compile.Types.AggregatePlan` has new
-  `planPath` and `planNested` fields, `GoalOccurrence` a new
-  `goalLevelShared` field, and `Compile.Names.aggregateProcName` takes
+  `path` and `nested` fields, `GoalOccurrence` a new
+  `levelShared` field, and `Compile.Names.aggregateProcName` takes
   a path (`[Int]`) instead of an index.
 
 The selection aggregates `argmin/2`, `argmax/2`, `takemin/2` and
@@ -102,7 +118,7 @@ The selection aggregates `argmin/2`, `argmax/2`, `takemin/2` and
 - A program that only uses selection forms does not need
   `maybe:just/1` (YCHR-40005).
 - **Breaking:** `YCHR.Internal.Compile.Types.AggregatePlan` has a new
-  `planKind` field.
+  `kind` field.
 - Scheme runtime: a constraint whose type has an indexed position, stored
   while its store is still below the index threshold, now registers as an
   observer of its variables. Binding one of them used to not reactivate

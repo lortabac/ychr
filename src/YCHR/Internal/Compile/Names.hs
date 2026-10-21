@@ -369,7 +369,7 @@ blockedArgName = "$chr_blocked_arg"
 -- | Name of the procedure that computes one aggregate:
 -- @aggregate_\<rule\>_\<path\>@, the path being the aggregate's index in
 -- the head and then, for a nested one, its goal position at each level
--- ('YCHR.Internal.Compile.Types.planPath'). Deliberately not prefixed
+-- (the plan's @path@). Deliberately not prefixed
 -- @func_@: the Scheme backend's export clause keys on that prefix, and
 -- this is not a user function.
 aggregateProcName :: Int -> [Int] -> Name
@@ -440,10 +440,8 @@ aggregateAggName = "$aggregate_agg"
 
 -- | The aggregator's increment and final closures, read out of @Agg@ by
 -- @get-arg@.
-aggregateIncName :: Name
+aggregateIncName, aggregateFinalName :: Name
 aggregateIncName = "$aggregate_inc"
-
-aggregateFinalName :: Name
 aggregateFinalName = "$aggregate_final"
 
 -- | Label of the loop that matches the @j@-th goal conjunct of aggregate
@@ -506,12 +504,15 @@ selectionPosCell k = Name ("$selection_pos_cell_" <> T.pack (show k))
 -- | Procedure locals: whether a match was seen yet, the best key so far,
 -- the current match's key, how many matches were seen, and the position
 -- of the best one.
-selectionFoundName, selectionBestName, selectionKeyName :: Name
+selectionFoundName,
+  selectionBestName,
+  selectionKeyName,
+  selectionCountName,
+  selectionPosName ::
+    Name
 selectionFoundName = "$selection_found"
 selectionBestName = "$selection_best"
 selectionKeyName = "$selection_key"
-
-selectionCountName, selectionPosName :: Name
 selectionCountName = "$selection_count"
 selectionPosName = "$selection_pos"
 
@@ -583,15 +584,15 @@ chrIsUnboundName :: Name
 chrIsUnboundName = "__chr_is_unbound"
 
 -- | Host-language reporter for the /insufficient instantiation/ variant
--- of a dispatch failure. Two shapes, both prefixed with
--- @CHR runtime error: @ by the runtime:
+-- of a dispatch failure. The runtime takes two shapes, both prefixed
+-- with @CHR runtime error: @:
 --
--- * @__chr_inst_error(Detail)@ — a message body the compiler already
---   knows in full (closure dispatch, where the blocked position is
---   static).
+-- * @__chr_inst_error(Detail)@ — a message body known in full.
 --
 -- * @__chr_inst_error(Label, ArgIndex)@ — a function label plus the
 --   runtime-computed 1-based index of the blocking argument (@0@ when
 --   unattributable), which the runtime formats into a sentence.
+--
+-- The compiler only emits the second shape.
 chrInstErrorName :: Name
 chrInstErrorName = "__chr_inst_error"

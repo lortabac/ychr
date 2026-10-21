@@ -160,29 +160,29 @@ data Occurrence = Occurrence
 -- whose type this occurrence belongs to.
 --
 -- The active conjunct's arguments are carried by the occurrence
--- ('activeArgs'); its own HNF guards are the entry at 'goalActiveIndex'
--- of 'goalAll'. The location phase loops the other conjuncts of the goal
+-- ('activeArgs'); its own HNF guards are the entry at 'activeIndex'
+-- of 'conjuncts'. The location phase loops the other conjuncts of the goal
 -- around the active conjunct's guards, so a guard that compares a
 -- variable of an earlier conjunct with a fresh name sees the earlier
 -- binding, and a later conjunct sees whatever the active guards bound.
 data GoalOccurrence = GoalOccurrence
   { -- | Source index of the enclosing aggregate within the rule head.
     -- Used as the label prefix of the goal's loops.
-    goalIndex :: Int,
-    -- | Position of the active conjunct in 'goalAll'.
-    goalActiveIndex :: Int,
+    aggregateIndex :: Int,
+    -- | Position of the active conjunct in 'conjuncts'.
+    activeIndex :: Int,
     -- | Every conjunct of the goal, in goal order, including the active
     -- one. The location phase skips the active conjunct's loop (the
     -- active constraint already is it) but evaluates its guards in
     -- place.
-    goalAll :: [D.AggregateConjunct],
+    conjuncts :: [D.AggregateConjunct],
     -- | The conjuncts of each enclosing goal, innermost first: the order
     -- the location phase loops them in. Empty for a top-level goal.
-    goalEnclosing :: [[D.AggregateConjunct]],
-    -- | For each entry of 'goalEnclosing', the shared inputs of the nested
+    enclosing :: [[D.AggregateConjunct]],
+    -- | For each entry of 'enclosing', the shared inputs of the nested
     -- aggregate the location phase leaves to reach it: the only variables
     -- of the inner goal that may be joined with the outer one.
-    goalLevelShared :: [[Text]]
+    levelShared :: [[Text]]
   }
   deriving (Show, Eq)
 
@@ -235,22 +235,26 @@ data Partner = Partner
 data AggregatePlan = AggregatePlan
   { -- | Source order of this aggregate within the rule head. For a
     -- nested aggregate, its position in the enclosing goal.
-    planIndex :: Int,
+    position :: Int,
     -- | Where the aggregate sits: its index in the rule head, then one
     -- goal position per level of nesting. A top-level plan's path is
-    -- @[planIndex]@. Nested procedure and cell names are built from it.
-    planPath :: [Int],
+    -- @[position]@. Nested procedure and cell names are built from it.
+    path :: [Int],
     -- | Which form it is: the core form or one of the selection forms.
-    planKind :: AggregateKind,
+    kind :: AggregateKind,
     -- | The procedure that computes it.
-    planProcName :: VM.Name,
-    planAgg :: Maybe D.Expr,
-    planElement :: D.Expr,
-    planGoal :: [D.AggregateConjunct],
+    procName :: VM.Name,
+    -- | The @Agg@ expression. 'Nothing' for a selection form, which has
+    -- no aggregator.
+    agg :: Maybe D.Expr,
+    -- | The folded element, or a selection form's key.
+    element :: D.Expr,
+    -- | The goal whose matches the fold runs over.
+    goal :: [D.AggregateConjunct],
     -- | Source variables the aggregate reads as inputs, in the canonical
     -- order the procedure's @aggregate_shared_N@ parameters and every call
     -- site use.
-    planShared :: [Text],
+    shared :: [Text],
     -- | Variables the procedure binds, in the canonical order its
     -- @aggregate_out_N@ parameters use. For the core form these are the
     -- result variables; every other variable of the result pattern is a
@@ -258,30 +262,30 @@ data AggregatePlan = AggregatePlan
     -- For a selection form they are the goal's variables that are not
     -- shared: the selected match's values, visible to the rest of the
     -- rule.
-    planBind :: [Text],
+    bind :: [Text],
     -- | What the procedure does with the computed result: the tests the
     -- pattern has to pass and the out-cell bindings that follow them.
     -- Empty for a selection form, which has no result pattern.
-    planResultMatch :: ResultMatch,
-    -- | The plans of the aggregates nested in 'planGoal', keyed by their
+    resultMatch :: ResultMatch,
+    -- | The plans of the aggregates nested in 'goal', keyed by their
     -- position in it. The fold computes each one in place.
-    planNested :: [(Int, AggregatePlan)]
+    nested :: [(Int, AggregatePlan)]
   }
   deriving (Show, Eq)
 
 -- | Whether a plan is one of the four selection forms.
 isSelectionPlan :: AggregatePlan -> Bool
-isSelectionPlan p = p.planKind /= AggPlain
+isSelectionPlan p = p.kind /= AggPlain
 
 -- | Whether a plan is @takemin@ or @takemax@, so its firing removes the
 -- selected match.
 isTakePlan :: AggregatePlan -> Bool
-isTakePlan p = p.planKind == AggTakemin || p.planKind == AggTakemax
+isTakePlan p = p.kind == AggTakemin || p.kind == AggTakemax
 
 -- | Whether a selection plan keeps the largest key rather than the
 -- smallest.
 selectsMax :: AggregatePlan -> Bool
-selectsMax p = p.planKind == AggArgmax || p.planKind == AggTakemax
+selectsMax p = p.kind == AggArgmax || p.kind == AggTakemax
 
 -- | A result pattern compiled against the computed payload: the tests it
 -- has to pass, and the bindings of the variables it introduces.
@@ -292,17 +296,17 @@ selectsMax p = p.planKind == AggArgmax || p.planKind == AggTakemax
 -- soft failure to abandon.
 data ResultMatch = ResultMatch
   { -- | Structural tests, in pattern order.
-    resultTests :: [BoolExpr],
+    tests :: [BoolExpr],
     -- | One entry per variable the pattern binds, in traversal order: the
     -- source variable and the value subterm it has to agree with. The
     -- procedure binds it with @bunify\<out-cell\> \<subterm\>@, in the
-    -- same order as 'planBind'.
-    resultBinds :: [(Text, ValExpr)]
+    -- same order as 'bind'.
+    binds :: [(Text, ValExpr)]
   }
   deriving (Show, Eq)
 
 instance Semigroup ResultMatch where
-  a <> b = ResultMatch (a.resultTests ++ b.resultTests) (a.resultBinds ++ b.resultBinds)
+  a <> b = ResultMatch (a.tests ++ b.tests) (a.binds ++ b.binds)
 
 instance Monoid ResultMatch where
   mempty = ResultMatch [] []
