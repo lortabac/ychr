@@ -1,10 +1,10 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
--- | CHR Abstract Syntax Tree
+-- | Desugared AST
 --
--- This module defines the internal AST for CHR programs. This is not
--- the direct output of the parser, but a desugared and semantically
--- precise representation that guides compilation to the VM.
+-- The AST the compiler reads. It is not the parser's output but the
+-- desugarer's ("YCHR.Internal.Desugar"): a more precise form that
+-- guides compilation to the VM.
 --
 -- Desugaring already performed at this stage:
 --
@@ -42,7 +42,7 @@ module YCHR.Internal.Desugared
     -- * Expressions
     Expr (..),
 
-    -- * Re-exports from CHR.Types
+    -- * Re-exports from "YCHR.Internal.Types"
     QualifiedConstraint (..),
     QualifiedName (..),
     HeadConstraint (..),
@@ -98,9 +98,8 @@ data Rule = Rule
 --
 -- An aggregate is neither kept nor removed: it reads the store, and the
 -- constraints of its goal stay there (except for a @takemin@/@takemax@,
--- which removes the selected match). Keeping the three lists separate
--- means every walker that only cares about head occurrences still sees
--- exactly what it saw before aggregates existed.
+-- which removes the selected match). The three lists are separate, so a
+-- walker that only cares about head occurrences can ignore aggregates.
 data Head = Head
   { kept :: [HeadConstraint],
     removed :: [HeadConstraint],
@@ -248,16 +247,16 @@ data Function = Function
     -- number of parameters the source lambda declared. The lifted
     -- function's 'arity' counts those parameters /plus/ the captured
     -- free variables the lifter prepends, and the closure term it
-    -- builds has the captures as its only payload. A closure can
-    -- therefore only be invoked with exactly this many arguments;
-    -- 'YCHR.Internal.Compile.genLambdaBranch' uses that to skip
-    -- dispatch branches no call can reach. 'Nothing' for an ordinary
-    -- function.
+    -- builds has the captures as its only payload. So a closure can
+    -- only be applied to exactly this many arguments, and
+    -- 'YCHR.Internal.Compile.buildCallables' keys the lambda's
+    -- callables entry on it. 'Nothing' for an ordinary function.
     lambdaArity :: Maybe Int,
     -- | Whether this function is a candidate for inlining at eligible
-    -- call sites, carried over from 'YCHR.Internal.Resolved.FunctionDef.inline'.
-    -- Always 'False' for a lifted lambda. See 'YCHR.Internal.Desugar.Inline',
-    -- which does the remaining eligibility checks and the substitution.
+    -- call sites, carried over from
+    -- 'YCHR.Internal.Resolved.FunctionDef.inline'. Always 'False' for a
+    -- lifted lambda. See "YCHR.Internal.Desugar.Inline", which does the
+    -- remaining eligibility checks and the substitution.
     inline :: Bool,
     -- | The function's equations, each carrying the source location and
     -- original p-expr of the declaration that wrote it. Keeping the
@@ -275,7 +274,7 @@ data Equation = Equation
     guards :: [Guard],
     -- | Statements executed before evaluating 'rhs'. Empty for
     -- single-expression bodies. The desugarer is responsible for
-    -- restricting which 'R.Expr' shapes are accepted in non-final
+    -- restricting which 'Expr' shapes are accepted in non-final
     -- position; see 'FunStmt'.
     prelude :: [FunStmt],
     rhs :: Expr

@@ -1,19 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Shared data-constructor resolution.
+-- | Data-constructor resolution.
 --
--- Maps from a program's @:- chr_type@ declarations that let any phase
--- (the type checker, the exhaustiveness checker) answer two questions
--- about a use-site constructor name: which declared type and
--- constructor does it refer to ('lookupCon'), and what is its canonical
--- qualified form ('canonicalizeCon').
+-- Maps built from a program's @:- chr_type@ declarations. They answer
+-- two questions about a use-site constructor name: which declared type
+-- and constructor it refers to ('lookupCon'), and what its canonical
+-- qualified form is ('canonicalizeCon'). Used by
+-- "YCHR.Internal.Exhaustiveness".
 --
 -- The subtle part is 'buildConAlias': an unqualified name is resolved
 -- to its declaration only when exactly one declared constructor uses
--- it. Ambiguous names (declared in more than one module) are dropped so
--- callers fall through and treat the use site as unknown rather than
--- guessing. Keeping this logic in one place stops the type checker and
--- the exhaustiveness checker from diverging on that rule.
+-- it. Ambiguous names (declared in more than one module) are dropped,
+-- so callers treat the use site as unknown rather than guess.
 module YCHR.Internal.Constructors
   ( ConEnv (..),
     buildConEnv,
@@ -40,19 +38,19 @@ import YCHR.Internal.Types
 data ConEnv = ConEnv
   { -- | Map from constructor name to its parent type definition and
     -- constructor info.
-    conMap :: Map Name (TypeDefinition, DataConstructor),
+    constructors :: Map Name (TypeDefinition, DataConstructor),
     -- | Resolves a use-site unqualified name to its declaration's
     -- qualified name when exactly one constructor matches. See
     -- 'buildConAlias'.
-    conAlias :: Map Text Name
+    aliases :: Map Text Name
   }
 
 -- | Build a 'ConEnv' from a program's type definitions.
 buildConEnv :: [TypeDefinition] -> ConEnv
 buildConEnv tds =
   ConEnv
-    { conMap = buildConMap tds,
-      conAlias = buildConAlias tds
+    { constructors = buildConMap tds,
+      aliases = buildConAlias tds
     }
 
 -- | Build the constructor-name index consulted by 'lookupCon'.
@@ -84,14 +82,14 @@ buildConAlias tds =
 
 -- | Map a use-site constructor name to its declared, qualified form when a
 -- unique match exists. 'Qualified' names pass through unchanged;
--- 'Unqualified' names are resolved through 'conAlias'. When no unique
+-- 'Unqualified' names are resolved through 'aliases'. When no unique
 -- match exists the name is returned as-is.
 canonicalizeCon :: ConEnv -> Name -> Name
 canonicalizeCon _ name@(Qualified _ _) = name
 canonicalizeCon env (Unqualified n) =
-  Map.findWithDefault (Unqualified n) n env.conAlias
+  Map.findWithDefault (Unqualified n) n env.aliases
 
--- | Look up a (possibly already canonical) constructor name in the
--- 'conMap'. Returns the parent type definition and the constructor.
+-- | Look up a (possibly already canonical) constructor name in
+-- 'constructors'. Returns the parent type definition and the constructor.
 lookupCon :: ConEnv -> Name -> Maybe (TypeDefinition, DataConstructor)
-lookupCon env name = Map.lookup name env.conMap
+lookupCon env name = Map.lookup name env.constructors

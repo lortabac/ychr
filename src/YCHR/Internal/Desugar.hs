@@ -6,12 +6,12 @@
 -- Module      : YCHR.Internal.Desugar
 -- Description : Transforms the resolved AST into the compiler's internal AST.
 --
--- The Desugarer is the transformation pass between the resolved
--- 'YCHR.Internal.Resolved.Program' and the internal 'YCHR.Internal.Desugared.Program'
--- consumed by the compiler. It performs, in order:
+-- The pass between the resolved 'YCHR.Internal.Resolved.Program' and
+-- the 'YCHR.Internal.Desugared.Program' the compiler reads. It does,
+-- in order:
 --
--- 1. /Head-kind flattening/: map the three surface head kinds
---    ('P.Simplification', 'P.Propagation', 'P.Simpagation') to the
+-- 1. /Head-kind flattening/: map the three head kinds
+--    ('R.Simplification', 'R.Propagation', 'R.Simpagation') to the
 --    uniform @Kept\/Removed@ shape of 'D.Head'.
 --
 -- 2. /Head Normal Form (HNF)/: in every head constraint, replace
@@ -19,9 +19,8 @@
 --    emitting explicit 'D.GuardEqual' / 'D.GuardMatch' / 'D.GuardGetArg'
 --    guards.
 --
--- 3. /Goal classification/: partition each body into structured 'D.BodyGoal'
---    values ('D.BodyUnify', 'D.BodyIs', 'D.BodyHostStmt',
---    'D.BodyCall', 'D.BodyTell', or 'D.BodyTrue').
+-- 3. /Goal classification/: turn each body expression into
+--    'D.BodyGoal' values (see 'desugarBodyGoal').
 --
 -- 4. /Guard classification/: map each surface guard term to a 'D.Guard'.
 --
@@ -35,12 +34,12 @@
 -- Module erasure and equation grouping are handled upstream by the
 -- resolve phase ('YCHR.Internal.Resolve').
 --
--- 'extractSymbolTable' is a separate utility that assigns sequential IDs
--- to every 'Qualified' rule-head constraint in the desugared program; it
--- is not part of the main pipeline.
+-- 'extractSymbolTable' is a separate utility that numbers every
+-- constraint of the desugared program; it is not part of the main
+-- pipeline.
 --
--- Non-obvious design choices are documented in the \"Notes\" block at the
--- bottom of this file.
+-- Non-obvious design choices are in the \"Notes\" block at the bottom
+-- of this file.
 module YCHR.Internal.Desugar
   ( -- * Pipeline
     desugarProgram,
@@ -207,8 +206,7 @@ desugarProgram rprog =
             }
    in if null errs then Right result else Left errs
 
--- | Scans a desugared program and builds the optimization map.
--- It ensures that all qualified names get a sequential ID starting from 0.
+-- | Number every constraint of a desugared program, from 0.
 --
 -- Constraint names come from two sources:
 --
@@ -228,10 +226,8 @@ extractSymbolTable prog =
           | r <- rules,
             (name, arity) <- getRuleConstraints r
           ]
-      -- Constraints declared via :- chr_constraint that never appear in
-      -- any rule still need a tell_c and activate_c procedure. Without
-      -- a symbol-table entry the compiler skips them entirely and the
-      -- user hits a raw "user error (Constraint not found)" at goal time.
+      -- Declared constraints that no rule mentions still need a tell_c
+      -- and an activate_c. See the note at the bottom of this module.
       declaredIds =
         Set.fromList
           [ qualifiedNameToIdentifier key.name key.arity
@@ -240,8 +236,8 @@ extractSymbolTable prog =
       allIds = ruleIds `Set.union` declaredIds
    in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
 
--- | Helper to find every constraint instance in a desugared rule,
--- returning its qualified name and arity. Head constraints, body tells
+-- | Every constraint occurrence in a desugared rule, as its qualified
+-- name and arity. Head constraints, body tells
 -- and aggregate goals are all included, since all contribute to the
 -- constraint-symbol table.
 getRuleConstraints :: D.Rule -> [(QualifiedName, Int)]
@@ -376,7 +372,7 @@ desugarConjuncts st0 loc origin = go st0 []
 -- aggregates)@ triple. Propagation rules keep every constraint;
 -- simplification rules remove every constraint; simpagation rules carry
 -- both lists explicitly. The constraint lists are fed to
--- 'normalizeHead'.
+-- 'normalizeHeadConstraints'.
 flattenHeadKind ::
   R.Head ->
   ( [QualifiedConstraint],
@@ -392,10 +388,10 @@ flattenHeadKind h = case h of
 -- Head Normal Form (HNF)
 -- ---------------------------------------------------------------------------
 
--- | In every head constraint, replace non-variable and duplicated-variable
+-- In every head constraint, replace non-variable and duplicated-variable
 -- arguments with fresh variables and emit explicit 'D.GuardEqual',
 -- 'D.GuardMatch', and 'D.GuardGetArg' guards that recover the original
--- semantics. The core of it lives in "YCHR.Internal.Desugar.Hnf".
+-- meaning. The core of it lives in "YCHR.Internal.Desugar.Hnf".
 
 -- | Normalize the kept and removed constraints of a head. Kept is
 -- processed before removed so that variables first appearing in kept
@@ -587,9 +583,10 @@ desugarQueryGoals goals =
     isDisjunction _ = False
 
 -- ---------------------------------------------------------------------------
--- VarNameSupply: fresh variable generation for desugaring
+-- Fresh @__is_N@ names for body desugaring
 -- ---------------------------------------------------------------------------
 
+-- | A fresh @__is_N@ variable name.
 freshVarName :: StateT Int (Writer [Diagnostic DesugarError]) Text
 freshVarName = do
   n <- get
@@ -615,18 +612,19 @@ desugarBodyGoals scope label loc origin exprs =
 
 -- | Classify a resolved body expression into 'D.BodyGoal's.
 --
--- Pattern priority (order matters):
+-- Patterns, tried in this order (order matters):
 --
 -- 1. @X = Y@ -> 'D.BodyUnify'
 -- 2. @X is Expr@ (variable LHS) -> 'D.BodyIs'
 -- 3. @T is Expr@ (non-variable LHS) -> @R is Expr, R = T@ with fresh @R@
 -- 4. 'R.HostExpr' -> 'D.BodyHostStmt'
--- 5. 'R.CallExpr' -> 'D.BodyCall'
--- 6. 'R.ApplyExpr' -> 'D.BodyApply'; @tell(G, …)@ -> 'D.BodyTellDynamic'
--- 7. @A ; B@ -> 'D.BodyOr'
--- 8. Constructor with a 'Qualified' name -> 'D.BodyTell'
--- 9. @true@ in any spelling -> 'D.BodyTrue'
--- 10. Anything else -> error
+-- 5. @true@ in either spelling -> 'D.BodyTrue'
+-- 6. 'R.CallExpr' -> 'D.BodyCall'
+-- 7. 'R.ApplyExpr' -> 'D.BodyApply'
+-- 8. @tell(G, …)@ -> 'D.BodyTellDynamic'
+-- 9. @A ; B@ -> 'D.BodyOr'
+-- 10. Constructor with a 'Qualified' name -> 'D.BodyTell'
+-- 11. Anything else -> error
 desugarBodyGoal ::
   Text ->
   Maybe Text ->
@@ -697,11 +695,10 @@ conjuncts e = [e]
 -- top-level RHS sequence of an equation.
 --
 -- 'liftedFunctions' is a 'Seq' for the same reason 'HnfState.guards'
--- is: appending keeps the accumulator in the order it was built,
--- rather than leaving reverse discovery order to leak into
--- 'D.Program.functions'. Nothing downstream depends on the order —
--- the lifted functions are looked up by name — so the switch is
--- observable only in generated-procedure emission order.
+-- is: appending keeps it in discovery order, so 'D.Program.functions'
+-- lists lifted lambdas in that order. Nothing downstream depends on it
+-- (lifted functions are looked up by name); it only shows in the order
+-- procedures are emitted.
 data LiftState = LiftState
   { counter :: !Int,
     liftedFunctions :: Seq D.Function,
@@ -1028,8 +1025,8 @@ bodyGoalVars = Set.unions . map goalVars
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body).
 --
--- The aggregates are lifted last, so a rule without aggregates keeps the
--- traversal order — and so the @__lambda_N@ numbering — it had before.
+-- The aggregates are lifted last, so their lambdas are numbered after
+-- the guard's and the body's.
 liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
 liftRule st rule =
   let headAnn = rule.head
