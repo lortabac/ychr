@@ -50,6 +50,7 @@ tests =
 -- Fixtures
 -- ---------------------------------------------------------------------------
 
+-- | A procedure with the given name, parameters and body.
 mkProc :: Name -> [Name] -> [Stmt] -> Procedure
 mkProc n ps body =
   Procedure
@@ -59,19 +60,21 @@ mkProc n ps body =
       procKind = PKReactivateDispatch
     }
 
--- | The lowered form of a procedure lowered on its own: a program is
--- built for it so that it gets the index a program would give it (the
--- phase no longer exposes a way to lower a procedure without one).
+-- | The lowered form of a procedure lowered on its own. The phase only
+-- lowers whole programs, so a one-procedure program is built for it.
 lowerSingle :: [Name] -> [Stmt] -> SlotProc
 lowerSingle params body =
-  case Map.lookup "p" (lowerProgram (programWith [mkProc "p" params body])).slotProcedures of
+  case Map.lookup "p" lowered.slotProcedures of
     Just p -> p
     Nothing -> error "lowerSingle: fixture procedure missing"
+  where
+    lowered = lowerProgram (programWith [mkProc "p" params body])
 
 -- | The lowered body of a procedure with the given parameters and body.
 lowerBody :: [Name] -> [Stmt] -> [SlotStmt]
 lowerBody params body = (lowerSingle params body).slotProcBody
 
+-- | A program with the given procedures and nothing else.
 programWith :: [Procedure] -> Program
 programWith procs =
   Program
@@ -164,7 +167,10 @@ slotTests =
           @?= [ SDrainReactivationQueue
                   0
                   [ SExprStmt
-                      (SCallExpr (ProcName "reactivate_dispatch") [SCallId (SIdVar 0 "q")])
+                      ( SCallExpr
+                          (ProcName "reactivate_dispatch")
+                          [SCallId (SIdVar 0 "q")]
+                      )
                   ]
               ],
       testCase "a Tell procedure's fresh id keeps its slot through the call" $
@@ -177,7 +183,8 @@ slotTests =
             Store (IdVar "active")
           ]
           @?= [ SLetId 1 (SCreateConstraint (ConstraintType 7) [SVar 0 "X"]),
-                SExprStmt (SCallExpr (ProcName "activate_c") [SCallId (SIdVar 1 "active")]),
+                SExprStmt
+                  (SCallExpr (ProcName "activate_c") [SCallId (SIdVar 1 "active")]),
                 SStore (SIdVar 1 "active")
               ],
       testCase "the slot count is the arity when the body binds nothing" $

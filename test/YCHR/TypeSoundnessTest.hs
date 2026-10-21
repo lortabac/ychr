@@ -24,7 +24,8 @@
 --
 -- The oracle is /strict/: any exception at all is a failure, as is any
 -- observation its position's contract does not tolerate, and any
--- diagnostic beyond a clean compile. See @Note [Why benign failures are impossible]@ in
+-- diagnostic beyond a clean compile. See
+-- @Note [Why benign failures are impossible]@ in
 -- "YCHR.TypeSoundness.Oracle" for why the generated fragment cannot
 -- fail for any reason other than a real violation.
 --
@@ -42,13 +43,10 @@
 -- @requiring@ clause on a constraint, and the ambient signature a rule
 -- head contributes, which is the only route by which an overloaded
 -- operation reaches a rigid type at all.
+--
 -- Because the generator models rigidity itself and the checker is the
 -- thing under test, a type error is a failure rather than a discard:
--- the two disagreeing is exactly what these stages look for. (This
--- property earned its keep once already: it found the unsound
--- parameter pinning of @GuardEqual@ evidence, fixed by the
--- constructor-only pin discipline of §What evidence does that
--- 'YCHR.TypeSoundness.Types.eqUnifySTy' now models.)
+-- the two disagreeing is exactly what this test looks for.
 --
 -- Evidence is /positional/, and the instrumentation respects that: the
 -- head observation asserts only what matching alone guarantees, and a
@@ -66,8 +64,7 @@
 -- a statement about mode, so it is a violation only at a position
 -- whose declared boundness said it would be ground.
 --
--- What this version deliberately leaves out, so the coverage is not
--- overread:
+-- What this test leaves out, so the coverage is not overread:
 --
 --   * /Bounded functions/. Only constraints carry a @requiring@
 --     clause. The constraint case is where the store interaction
@@ -157,6 +154,8 @@ prop_soundness = withTests 300 (property (soundnessProperty Closed))
 prop_soundness_open :: Property
 prop_soundness_open = withTests 300 (property (soundnessProperty Open))
 
+-- | One run: generate, compile, type-check, run, then judge the
+-- observation log and the goal's bindings.
 soundnessProperty :: Mode -> PropertyT IO ()
 soundnessProperty mode = do
   raw <- forAllWith (T.unpack . showProgram) (genProgramWith mode)
@@ -282,8 +281,8 @@ coverShape mode prog = do
   -- The two rigid rows are low by construction rather than by accident:
   -- every pin turns a rigid variable concrete, so evidence competes for
   -- exactly the variables a merge or a tell would otherwise use. Both
-  -- draws are therefore biased towards the rigid case (see
-  -- 'YCHR.TypeSoundness.Gen.pickTarget' and @pickTellTarget@). The
+  -- draws are therefore biased towards the rigid case (see @pickFrom@
+  -- and @maybeAlias@ in "YCHR.TypeSoundness.Gen"). The
   -- merge row's floor is tight, so it holds at 9% only because
   -- @maybeAlias@ takes a skolem-to-skolem merge outright whenever one
   -- is offered; a plain coin would leave it near 3% and fail about one
@@ -300,14 +299,10 @@ coverShape mode prog = do
   cover 55 "a head occurrence allocates rigid variables" anyRigidHead
   cover (byMode mode 2 1) "an alias merged two rigid variables" anyMerge
   cover 1 "a body tell instantiates a parameter at a rigid type" anyTellAtRigid
-  -- One label per evidence form, because they are reached by quite
-  -- different routes and a single "something was pinned" label would
-  -- hide three of them going to zero.
   -- Bounded polymorphism. The last label is the one that matters: an
   -- overloaded call at a rigid type is the only thing a @requiring@
   -- clause makes possible that is not possible without one — without
-  -- the ambient signature it is YCHR-60006 — and it is the route
-  -- Stage 4's finding could not take.
+  -- the ambient signature it is YCHR-60006.
   --
   -- The four before it are the chain that has to hold for it, and they
   -- are kept as separate labels because a zero on the last one says
@@ -335,6 +330,9 @@ coverShape mode prog = do
   coverOpen mode 40 "a position may hold an unbound value" anyOpenPos
   coverOpen mode 25 "the goal stored an unbound value" (not (null prog.goal.unbounds))
   coverOpen mode 20 "a boundness guard cleared a variable" anyModeGuard
+  -- One label per evidence form, because they are reached by quite
+  -- different routes and a single "something was pinned" label would
+  -- hide three of them going to zero.
   cover 8 "a literal pinned a rigid variable" (pinnedBy PinLit)
   cover 15 "a pattern match pinned a rigid variable" (pinnedBy PinMatch)
   cover 10 "a shared variable pinned a rigid variable" (pinnedBy PinMergeConcrete)
@@ -342,11 +340,10 @@ coverShape mode prog = do
   -- The case where an alias's pair meets a parameter position (a
   -- parametric pin's fresh betas, or two types meeting inside a shared
   -- constructor): the checker derives nothing there, so the instance
-  -- generator carries the identification in 'skForce'. Measured at 17%
-  -- over 5000 programs, then at about 11% over 2700 once constraint
-  -- parameters had to be determined types: a skolem is no longer
-  -- forced to a list, and no list pattern pins one. Hence the lower
-  -- floor.
+  -- generator carries the identification in 'skForce'. Measured at
+  -- about 11% over 2700 programs. It is lowish because constraint
+  -- parameters take determined types only: a skolem is never forced
+  -- to a list, and no list pattern pins one.
   cover 5 "an alias forced a parameter identification" anyForce
   where
     rs = prog.rules
@@ -539,6 +536,7 @@ coverRuntime mode prog lg = do
         n `elem` names
       ]
 
+-- | A goal probe's binding must inhabit the probe's type.
 checkProbe :: Map Text Term -> Probe -> PropertyT IO ()
 checkProbe bindings p = case Map.lookup p.probeVar bindings of
   Nothing ->
@@ -600,13 +598,15 @@ checkUnbound bindings (n, g) = case Map.lookup n bindings of
 wasBound :: Map Text Term -> Text -> Bool
 wasBound bindings n = maybe False (not . isStillFree) (Map.lookup n bindings)
 
+-- | Is this answer term still an unbound variable?
 isStillFree :: Term -> Bool
 isStillFree t = case t of
   Wildcard -> True
   VarTerm _ -> True
   _ -> False
 
--- | Soundness property: well-typed programs bind runtime values within their static types.
+-- | Soundness property: well-typed programs bind runtime values within
+-- their static types.
 tests :: TestTree
 tests =
   testGroup

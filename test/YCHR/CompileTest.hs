@@ -41,6 +41,8 @@ tests =
 -- Shared helpers
 -- ---------------------------------------------------------------------------
 
+-- | Compile the given modules with the standard library, failing the
+-- test on error.
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules stdlib False inputs of
   Left err -> assertFailure $ show err
@@ -61,6 +63,7 @@ findForeach (s : rest) = case s of
       Nothing -> findForeach rest
   _ -> findForeach rest
 
+-- | The index conditions of a @Foreach@.
 foreachConditions :: VM.Stmt -> [(VM.ArgIndex, VM.ValExpr)]
 foreachConditions (VM.Foreach _ _ _ conds _) = conds
 foreachConditions _ = error "foreachConditions: not a Foreach"
@@ -138,10 +141,11 @@ assertForeachConditions prog procName expected =
       Just f -> foreachConditions f @?= expected
 
 -- ---------------------------------------------------------------------------
--- LEQ surface source (duplicated from RunTest so this module is
--- self-contained — both files exercise leq.chr but for different reasons).
+-- LEQ surface source
 -- ---------------------------------------------------------------------------
 
+-- | The leq program. A copy of the one in RunTest, so this module is
+-- self-contained.
 leqSource :: Text
 leqSource =
   ":- module(order, [leq/2]).\n\
@@ -375,6 +379,7 @@ boolPatternTests =
 -- Soft-guard wrapping
 -- ---------------------------------------------------------------------------
 
+-- | A program with a user guard and a non-linear head.
 softGuardSource :: Text
 softGuardSource =
   ":- module(m, [g/1, eq/2]).\n\
@@ -705,7 +710,9 @@ aggregateFoldTests =
               ( \b -> case b of
                   VM.BUnify (VM.Var n) _ ->
                     assertBool
-                      ("bunify binds something that is not an out-cell: " ++ show n.unName)
+                      ( "bunify binds something that is not an out-cell: "
+                          ++ show n.unName
+                      )
                       ("aggregate_out_" `T.isPrefixOf` n.unName)
                   other -> assertFailure ("unexpected bunify shape: " ++ show other)
               )
@@ -851,11 +858,13 @@ foreachLabels = concatMap go
     go (VM.DrainReactivationQueue _ b) = foreachLabels b
     go _ = []
 
+-- | Is this an id comparison against an aggregate's goal suspension?
 isSuspDistinct :: VM.BoolExpr -> Bool
 isSuspDistinct (VM.BIdEqual (VM.IdVar a) (VM.IdVar b)) =
   any ("$aggregate_susp_" `T.isPrefixOf`) [a.unName, b.unName]
 isSuspDistinct _ = False
 
+-- | Is this a @Store@?
 isStoreStmt :: VM.Stmt -> Bool
 isStoreStmt (VM.Store _) = True
 isStoreStmt _ = False
@@ -1085,6 +1094,7 @@ takeminSource =
   \\n\
   \m(M) \\ takemin(D, job(M, D, J)) <=> run(J).\n"
 
+-- | Is this a @Kill@?
 isKillStmt :: VM.Stmt -> Bool
 isKillStmt (VM.Kill _) = True
 isKillStmt _ = False
@@ -1118,7 +1128,9 @@ selectionTests =
               ( \b -> case b of
                   VM.BUnify (VM.Var n) _ ->
                     assertBool
-                      ("bunify binds something that is not an out-cell: " ++ show n.unName)
+                      ( "bunify binds something that is not an out-cell: "
+                          ++ show n.unName
+                      )
                       ("aggregate_out_" `T.isPrefixOf` n.unName)
                   other -> assertFailure ("unexpected bunify shape: " ++ show other)
               )
@@ -1138,7 +1150,8 @@ selectionTests =
           Just p -> do
             let stmts = nestedStmts p.body
                 label = VM.Label "selection_loop_0_0"
-                selected = VM.Kill (VM.IdVar "$selection_id_0_0")
+                selId = VM.IdVar "$selection_id_0_0"
+                selected = VM.Kill selId
                 position x = lookup x (zip stmts [0 :: Int ..])
             assertBool "expected the relocation loop" (label `elem` foreachLabels p.body)
             case (position (VM.Break label), position selected) of
@@ -1146,8 +1159,8 @@ selectionTests =
                 assertBool "the break must come before the kill" (b < k)
               other -> assertFailure ("missing break or kill: " ++ show other)
             callsTo "occurrence_selt__job3_1" p.body
-              @?= [ VM.AId (VM.IdVar "$selection_id_0_0")
-                      : [ VM.AVal (VM.FieldArg (VM.IdVar "$selection_id_0_0") (VM.ArgIndex i))
+              @?= [ VM.AId selId
+                      : [ VM.AVal (VM.FieldArg selId (VM.ArgIndex i))
                         | i <- [0, 1, 2]
                         ]
                       ++ [VM.AVal (VM.Lit (VM.BoolLit True))]
@@ -1192,10 +1205,12 @@ conditionCalls :: VM.Name -> [VM.Stmt] -> Int
 conditionCalls name body =
   length [() | VM.BFromVal (VM.CallExpr n _) <- ifConditions body, n == name]
 
+-- | Is this a @BSoftGuard@?
 isSoftWrap :: VM.BoolExpr -> Bool
 isSoftWrap (VM.BSoftGuard _) = True
 isSoftWrap _ = False
 
+-- | Is this a @BIdEqual@?
 isIdTest :: VM.BoolExpr -> Bool
 isIdTest (VM.BIdEqual _ _) = True
 isIdTest _ = False

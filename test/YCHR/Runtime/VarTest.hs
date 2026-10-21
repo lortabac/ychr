@@ -25,7 +25,8 @@ import YCHR.Internal.Runtime.Var
     unify,
   )
 
--- | Runtime variables: unification, dereferencing, equality, rollback, and observer lists.
+-- | Runtime variables: unification, dereferencing, equality, rollback,
+-- and observer lists.
 tests :: TestTree
 tests =
   testGroup
@@ -43,6 +44,7 @@ tests =
 -- Helpers
 -- ---------------------------------------------------------------------------
 
+-- | Run an action in a fresh, empty session.
 runVarEnv :: Chr a -> IO a
 runVarEnv action = do
   env <-
@@ -168,6 +170,7 @@ unifyTests =
           assertUnifyFailure x (VInt 2)
     ]
 
+-- | 'unifiable' gives the expected answer.
 assertUnifiable :: Value -> Value -> Bool -> Chr ()
 assertUnifiable a b expected = do
   r <- unifiable a b
@@ -247,6 +250,8 @@ unifiableTests =
         liftIO $ r @?= True
     ]
 
+-- | 'unifiable' gives the expected answer and leaves the given
+-- variables as it found them.
 assertUnifiableNoMutation :: [Value] -> Value -> Value -> Bool -> Chr ()
 assertUnifiableNoMutation vars a b expected = do
   before <- traverse getVarId vars

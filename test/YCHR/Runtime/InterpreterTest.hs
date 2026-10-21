@@ -31,7 +31,8 @@ import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 import YCHR.TestHelpers (countAliveByType)
 
--- | Interpreter tests: evaluation, primitives, type predicates, closures, and errors.
+-- | Interpreter tests: evaluation, primitives, type predicates,
+-- closures, and errors.
 tests :: TestTree
 tests =
   testGroup
@@ -139,6 +140,7 @@ expectRuntimeErrorKindWith registry prog entry args = do
     Left (RuntimeErrorThrown kind msg _stack) -> pure (kind, msg)
     Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
 
+-- | A program with one procedure and nothing else.
 singleProc :: Name -> [Name] -> [Stmt] -> Program
 singleProc procName params body =
   Program
@@ -234,9 +236,9 @@ errorPathTests =
       testCase "reading a value slot as a constraint id errors as unbound" $ do
         -- A hand-built program can bind a name in value position and
         -- read it as an id. The slot phase gives both the same slot, so
-        -- the environment holds a value cell where an id is expected;
-        -- that is the same recoverable error the old id map reported
-        -- for a slot it never saw, rather than a wrong id.
+        -- the environment holds a value cell where an id is expected.
+        -- That is reported as an unbound id variable, not read as a
+        -- wrong id.
         let prog =
               singleProc
                 "p"
@@ -463,6 +465,7 @@ softGuardBranch prelude cond = do
     VInt 0 -> pure False
     _ -> assertFailure "expected an integer branch marker"
 
+-- | A stack frame whose label and source text are the given text.
 frame :: Text -> StackFrame
 frame label =
   StackFrame
@@ -591,9 +594,11 @@ bindParamsTests =
 -- LEQ VM program
 -- ---------------------------------------------------------------------------
 
+-- | The type of @leq/2@, the only constraint of 'leqProgram'.
 leqType :: ConstraintType
 leqType = ConstraintType 0
 
+-- | The leq handler, written by hand in VM form.
 leqProgram :: Program
 leqProgram =
   Program
@@ -618,10 +623,12 @@ leqProgram =
         ]
     }
 
+-- | 'leqProgram' after the slot phase.
 leqSlotProgram :: SlotProgram
 leqSlotProgram =
   lowerProgram leqProgram
 
+-- | @tell_leq2@: create the suspension and activate it.
 tellLeq :: Procedure
 tellLeq =
   mkProc
@@ -632,6 +639,8 @@ tellLeq =
       ExprStmt (CallExpr "activate_leq2" [AId (IdVar "id")])
     ]
 
+-- | @activate_leq2@: try each occurrence in turn, stopping once the
+-- constraint is gone.
 activateLeq :: Procedure
 activateLeq =
   mkProc
@@ -659,6 +668,7 @@ activateLeq =
   where
     occCallArgs = [AId (IdVar "id"), AVal (Var "X"), AVal (Var "Y")]
 
+-- | Reflexivity: @leq(X, X) <=> true@.
 occurrenceLeq1 :: Procedure
 occurrenceLeq1 =
   mkProc
@@ -673,6 +683,7 @@ occurrenceLeq1 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Antisymmetry, active as the second head.
 occurrenceLeq2 :: Procedure
 occurrenceLeq2 =
   mkProc
@@ -712,6 +723,7 @@ occurrenceLeq2 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Antisymmetry, active as the first head.
 occurrenceLeq3 :: Procedure
 occurrenceLeq3 =
   mkProc
@@ -751,6 +763,7 @@ occurrenceLeq3 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Idempotence, active as the removed head.
 occurrenceLeq4 :: Procedure
 occurrenceLeq4 =
   mkProc
@@ -785,6 +798,7 @@ occurrenceLeq4 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Idempotence, active as the kept head.
 occurrenceLeq5 :: Procedure
 occurrenceLeq5 =
   mkProc
@@ -817,6 +831,7 @@ occurrenceLeq5 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Transitivity, active as the second head.
 occurrenceLeq6 :: Procedure
 occurrenceLeq6 =
   mkProc
@@ -860,6 +875,7 @@ occurrenceLeq6 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Transitivity, active as the first head.
 occurrenceLeq7 :: Procedure
 occurrenceLeq7 =
   mkProc
@@ -903,6 +919,7 @@ occurrenceLeq7 =
       Return (Lit (BoolLit False))
     ]
 
+-- | @reactivate_dispatch@: reactivate a leq suspension.
 reactivateDispatch :: Procedure
 reactivateDispatch =
   mkProc
@@ -918,6 +935,7 @@ reactivateDispatch =
 -- Test helpers
 -- ---------------------------------------------------------------------------
 
+-- | Tell @leq(x, y)@.
 callTellLeq :: Value -> Value -> Chr Value
 callTellLeq x y =
   callProc "tell_leq2" [CVal x, CVal y]
@@ -984,6 +1002,7 @@ leqTests =
 -- EvalDeep tests
 -- ---------------------------------------------------------------------------
 
+-- | A registry with just integer @+@ and @*@.
 arithCalls :: HostCallRegistry
 arithCalls =
   Map.fromList
@@ -999,6 +1018,8 @@ arithCalls =
       )
     ]
 
+-- | A program whose @calc(x)@ returns the given expression, evaluated
+-- with 'EvalDeep'.
 makeCalcProc :: ValExpr -> Program
 makeCalcProc body =
   Program
@@ -1019,9 +1040,11 @@ makeCalcProc body =
         ]
     }
 
+-- | Run 'makeCalcProc' on one argument.
 runCalc :: ValExpr -> Value -> IO Value
 runCalc body x = interpret (makeCalcProc body) arithCalls "calc" [x]
 
+-- | The integer in a 'VInt', failing the test otherwise.
 expectInt :: Value -> IO Integer
 expectInt (VInt n) = pure n
 expectInt _ = assertFailure "expected VInt _"
@@ -1193,6 +1216,7 @@ typePredicateTests =
 -- =.. (univ) tests
 -- ---------------------------------------------------------------------------
 
+-- | Call a one-argument host call from the base registry.
 callHostCall1 :: Name -> Value -> IO Value
 callHostCall1 name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name

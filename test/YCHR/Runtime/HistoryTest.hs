@@ -25,6 +25,7 @@ tests =
       miscTests
     ]
 
+-- | Run an action in a fresh, empty session.
 runHistoryEnv :: Chr a -> IO a
 runHistoryEnv action = do
   env <-
