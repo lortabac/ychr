@@ -1625,9 +1625,11 @@ instances, and `min` would compare them.
 
 A selection fires with one match, so its goal's bounds hold after it,
 like a head's: in the aggregates to its right, the rule's guard and the
-body (inside an enclosing goal, in the rest of that goal). The key
-comparison still sees only the enclosing ambient signatures, since it
-runs over every match.
+body. Inside an enclosing goal, they hold in the rest of that goal and
+in its `Element` or key, and do not reach past the enclosing aggregate.
+Its own key comparison still sees only the enclosing ambient signatures
+(which include the bounds of selections to its left), since it runs
+over every match.
 
 ```prolog
 :- chr_constraint task(int, T, T) requiring '<'(T, T) -> bool.
