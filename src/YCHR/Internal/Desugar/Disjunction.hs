@@ -52,6 +52,7 @@ import YCHR.Internal.Types
     Name (..),
     QualifiedName (..),
     TypeExpr (..),
+    qualifiedToName,
   )
 -- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
 import Prelude hiding (head)
@@ -102,6 +103,7 @@ lowerDisjunctions prog =
       [c] -> (ConstraintKey c.name (length c.args), map (const anyType) c.args)
       _ -> error "Disjunction.declOf: lifted rule is not a simplification"
 
+-- | Lower the disjunctions in one rule's body.
 lowerRule :: LowerState -> D.Rule -> (LowerState, D.Rule)
 lowerRule st rule =
   let bodyAnn = rule.body
@@ -119,6 +121,7 @@ data Context = Context
     bodyAnn :: AnnP [D.BodyGoal]
   }
 
+-- | The 'Context' for branches lifted out of a rule.
 contextOf :: D.Rule -> Context
 contextOf rule =
   Context
@@ -128,6 +131,7 @@ contextOf rule =
       bodyAnn = rule.body
     }
 
+-- | Lower the disjunctions in a list of goals.
 lowerGoals :: Context -> LowerState -> [D.BodyGoal] -> (LowerState, [D.BodyGoal])
 lowerGoals ctx = mapAccumL (lowerGoal ctx)
 
@@ -169,16 +173,13 @@ liftBranch ctx st branch =
             body = bodyAnn {node = branch'}
           }
       st2 = st1 {counter = idx + 1, lifted = rule : st1.lifted}
-   in (st2, quoted (R.CtorExpr (qualifiedName qname) (map R.VarExpr params)))
+   in (st2, quoted (R.CtorExpr (qualifiedToName qname) (map R.VarExpr params)))
 
 -- | Wrap a disjunct call in @quote\/1@. The alternatives of an @alt@
 -- are goals, not values: the compound has to reach the store as data
 -- rather than be told when the list is built.
 quoted :: R.Expr -> R.Expr
 quoted e = R.CtorExpr (Unqualified "quote") [e]
-
-qualifiedName :: QualifiedName -> Name
-qualifiedName (QualifiedName m n) = Qualified m n
 
 -- | A runtime list as an expression, over the prelude's list
 -- constructors — the pair the renamer canonicalizes @[a, b]@ to.
