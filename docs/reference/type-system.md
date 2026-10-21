@@ -1581,10 +1581,25 @@ every counted match makes it fine:
 snapshot, collect(Y, (item(Y), ? integer(Y)), L) ==> ...   % L : list(int)
 ```
 
-`W` is not checked: it never leaves the aggregate. The check is
-conservative. A rigid pinned to a type that still has a free inner
-parameter (`list(β)`) escapes too, even when the body would only use it
-at `any`.
+`W` is not checked: it never leaves the aggregate. `E` is, because the
+element is the only way a goal's types get into `Agg`'s type, and `Agg`
+may read rule variables. The check is conservative:
+
+- A rigid pinned to a type that still has a free inner parameter
+  (`list(β)`) escapes too, even when the body would only use it at
+  `any`.
+- An aggregator that ignores its element is rejected when the element
+  is per-match:
+
+  ```prolog
+  :- function tally() -> aggregator(int, E, int).
+  tally -> aggregator(0, fun(W, _) -> W + 1 end, fun(W) -> just(W) end).
+
+  snapshot, aggregate(tally, Y, item(Y), N) ==> size(N).   % error
+  snapshot, aggregate(tally, 1, item(_), N) ==> size(N).   % N : int
+  ```
+
+  Pass a constant element instead, as `count/2` does.
 
 ### Selection forms
 

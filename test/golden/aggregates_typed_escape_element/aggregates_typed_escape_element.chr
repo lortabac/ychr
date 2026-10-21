@@ -1,0 +1,12 @@
+% The escape check looks at the element's type, so an aggregator that
+% ignores a per-match element is still rejected. Passing a constant
+% element, as count/2 does, checks.
+:- module(aggregates_typed_escape_element, []).
+:- use_module(library(aggregates)).
+:- use_module(library(maybe)).
+
+:- function tally() -> aggregator(int, E, int).
+tally -> aggregator(0, fun(W, _) -> W + 1 end, fun(W) -> just(W) end).
+
+:- chr_constraint item(T), snapshot, size(int).
+snapshot, aggregate(tally, Y, item(Y), N) ==> size(N).
