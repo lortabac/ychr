@@ -7,12 +7,15 @@
 -- external backends (Erlang, Python, Clojure, etc.) and as a
 -- compilation cache artifact.
 --
--- Example (trimmed; @...@ marks left-out entries):
+-- Example: the classic four-rule @leq@ module, trimmed (@...@ marks
+-- left-out entries). The counts include the prelude: its 10
+-- @tell_list@ constraints and 20 anonymous rules.
 --
 -- @
 -- (vm-program (version 3)
 --   (program 11 (type-names (qualified "leq" "leq") ...)
---     20 (rule-names "__rule_0" ...)
+--     24 (rule-names "__rule_0" ... "__rule_19"
+--                    "reflexivity" "antisymmetry" "idempotence" "transitivity")
 --     (evaluables ...) (callables ...) (tellables ...)
 --     (tellables-unqualified ...) (inert-types ...)
 --     (procedure "tell_leq__leq2" ("$X_0" "$X_1") (tell 0)

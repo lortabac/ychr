@@ -5,13 +5,12 @@
 -- Every @CallExpr@ a program carries must name one of the program's own
 -- procedures, and so must every target of its 'Program.evaluables',
 -- 'Program.callables' and 'Program.tellables' dispatch tables. The
--- compiler derives the procedure names, the call sites that name them,
--- and the tables' targets from the same function and constraint lists,
--- so a dangling target is a compiler bug rather than anything a user
--- program can produce. The
--- interpreter reports one at run time as @callProc: unknown procedure
--- \@name@, on whichever path reaches it first; this module lets the
--- compiler report it before the program runs.
+-- compiler derives the procedure names, the call sites that name them, and
+-- the tables' targets from the same function and constraint lists, so a
+-- dangling target is a compiler bug rather than anything a user program
+-- can produce. The interpreter reports one at run time as
+-- @callProc: unknown procedure \@name@, on whichever path reaches it
+-- first; this module lets the compiler report it before the program runs.
 --
 -- The check is run as an assertion, not as a user-facing diagnostic:
 -- see @YCHR.Internal.Compile.Pipeline.compileModules@ for the compiled
@@ -71,9 +70,9 @@ procedureNames procs = Set.fromList [p.name | p <- procs]
 -- table does not define: the @CallExpr@ sites of every body, then the
 -- 'Program.evaluables', 'Program.callables', 'Program.tellables' and
 -- 'Program.tellablesUnqualified' targets. In first-appearance order,
--- without duplicates. An empty list means the
--- program is closed; 'closureFailure' turns a non-empty one into the
--- message a caller reports.
+-- without duplicates. An empty list means the program is closed;
+-- 'closureFailure' turns a non-empty one into the message a caller
+-- reports.
 danglingTargets :: Program -> [Name]
 danglingTargets prog =
   danglingCalls known prog.procedures

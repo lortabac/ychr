@@ -311,9 +311,10 @@ mkGoalOccurrence symTab rule ruleId' display plans heads activeCon goal = do
           -- Meaningless for a goal occurrence: the active constraint
           -- is not a head. See 'YCHR.Internal.Compile.Types.activeHeadPosition'.
           activeIdx = HeadPosition 0,
-          -- Firing never removes the active goal constraint as a head;
-          -- a take form removes it in its own step
-          -- ('YCHR.Internal.Compile.genSelectStmts').
+          -- Firing never removes the active goal constraint as a head.
+          -- A take form may still remove it as its selected match:
+          -- 'YCHR.Internal.Compile.genSelectStmts' finds the match again
+          -- and 'YCHR.Internal.Compile.genKillStmts' kills it.
           isKept = True,
           activeArgs = activeCon.args,
           partners = resolvedPartners,

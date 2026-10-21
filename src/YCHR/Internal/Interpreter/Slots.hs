@@ -89,12 +89,12 @@
 -- one that read should see.
 --
 -- One reading is an assumption on emitted code rather than a consequence
--- of the walk: an 'If' arm's binders stay in scope for the *other* arm
--- and for the statements after the 'If' (the interpreter's environment
--- is one flat cell array per call, so that is where its bindings live).
--- No emitted 'If' binds a name in its else arm — the then arm carries the rule body or
--- equation, and the else arm is either empty or the eq-dispatch
--- fallback, whose only statements are 'AssignVal's of a binder
+-- of the walk: an 'If' arm's binders stay in scope for the *other* arm and
+-- for the statements after the 'If' (the interpreter's environment is one
+-- flat cell array per call, so that is where its bindings live). No
+-- emitted 'If' binds a name in its else arm — the then arm carries the
+-- rule body or equation, and the else arm is either empty or the
+-- eq-dispatch fallback, whose only statements are 'AssignVal's of a binder
 -- introduced outside the 'If' — so no read can be resolved to one arm's
 -- slot while the other arm wrote a different one. A hand-built 'Program'
 -- that bound one name in both arms and read it afterwards would observe
@@ -103,12 +103,11 @@
 --
 -- The walk is deliberately total rather than failing on a name it cannot
 -- place. A reference or an assignment to a name with no binder in scope
--- gets a fresh slot that no earlier binder wrote; a reference then
--- reaches the interpreter's "unbound variable" runtime error when it
--- runs, instead of this pass turning a recoverable error into a Haskell
--- 'error'. (An assignment does give its
--- slot a place — the interpreter writes a cell on it — so what it lacks
--- is a prior value, not a place to put one.)
+-- gets a fresh slot that no earlier binder wrote; a reference then reaches
+-- the interpreter's "unbound variable" runtime error when it runs, instead
+-- of this pass turning a recoverable error into a Haskell 'error'. (An
+-- assignment does give its slot a place — the interpreter writes a cell on
+-- it — so what it lacks is a prior value, not a place to put one.)
 module YCHR.Internal.Interpreter.Slots
   ( -- * The phase
     Slot,
