@@ -328,11 +328,12 @@ visibilityTests =
 -- Goal-argument warnings
 -- ---------------------------------------------------------------------------
 
--- | Two modules, each with a constraint over a constructor type.
--- @exported@ exports its type, so a host goal naming @red@ canonicalizes
--- and the rule fires; @hidden@ does not, so a goal naming @dark@ warns
--- and no rule matches. The pair is what makes the warning worth surfacing: it is
--- the only signal that an otherwise successful run did nothing.
+-- | This module and 'goalWarningHiddenSource' each declare a constraint
+-- over a constructor type. @exported@ exports its type, so a host goal
+-- naming @red@ canonicalizes and the rule fires; @hidden@ does not, so a
+-- goal naming @dark@ warns and no rule matches. The pair is what makes
+-- the warning worth surfacing: it is the only signal that an otherwise
+-- successful run did nothing.
 goalWarningSource :: Text
 goalWarningSource =
   ":- module(exported, [paint/2, type(col/0)]).\n\

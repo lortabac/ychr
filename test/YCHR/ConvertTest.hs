@@ -356,7 +356,7 @@ canonSource =
       "total([X | Xs], R) <=> total(Xs, Rest), R is X + Rest."
     ]
 
--- | Compile 'canonSource', type-checked.
+-- | Compile 'canonSource' with the full stdlib.
 canonProgram :: IO CompiledProgram
 canonProgram = case compileModules stdlib True [("canon.chr", canonSource)] of
   Left err -> assertFailure ("compile failed: " ++ show err)
