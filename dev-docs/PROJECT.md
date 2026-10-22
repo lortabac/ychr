@@ -92,7 +92,7 @@ A VM program is a record bundling the list of named procedures with a little met
 | `LetVal name valExpr` / `LetId name idExpr` | Bind a local variable to the result of a value or id expression. |
 | `AssignVal name valExpr` / `AssignId name idExpr` | Mutate an existing value- or id-bound variable. |
 | `If boolExpr thenStmts elseStmts` | Conditional execution. The condition is statically a `BoolExpr`. |
-| `Foreach label cType suspVar conditions body` | Labeled loop over the constraint store. Iterates over all stored constraints of type `cType` satisfying the index conditions. Each condition `(argIndex, valExpr)` requires that the argument at `argIndex` is `BEqual` to `valExpr`. Binds the current suspension to `suspVar`. Index conditions use `BEqual` (ask) semantics. |
+| `Foreach label cType suspVar conditions body` | Labeled loop over the constraint store. Iterates over all stored constraints of type `cType` satisfying the index conditions. Each condition (an `IndexCondition` with `argIndex` and `expectedValue`) requires that the argument at `argIndex` is `BEqual` to `expectedValue`. Binds the current suspension to `suspVar`. Index conditions use `BEqual` (ask) semantics. |
 | `Continue label` / `Break label` | Resume the next iteration of, or exit, the named `Foreach`. Enables backjumping when a partner dies and early drop when the active constraint is killed. |
 | `Return valExpr` | Return a value from the current procedure. |
 | `ExprStmt valExpr` / `BoolExprStmt boolExpr` | Evaluate a value or boolean expression for its side effects, discarding the result. Used for procedure calls, host calls, and tell-side `BUnify` in statement position. |

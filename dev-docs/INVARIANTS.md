@@ -604,7 +604,8 @@ The earlier statement of this entry ("`asPartnerArg` produces an
 check") is technically true of the type but overstates the exposure.
 (`IndexCondition` lives in `YCHR.Internal.VM.Types`; it is what a
 `Foreach` carries, so no pair is rebuilt for the VM.) `asPartnerArg`
-(`Compile.hs:803-812`) *generates* the index by enumerating the partner's argument positions:
+(`Compile.hs`) *generates* the index by enumerating the partner's
+argument positions:
 
 ```haskell
 j <- [0 .. length p.constraint.args - 1]

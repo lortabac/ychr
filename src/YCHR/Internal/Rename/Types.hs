@@ -63,7 +63,7 @@ import YCHR.Internal.Types (UnqualifiedIdentifier (..))
 -- considered exported.
 newtype ExportEnv = ExportEnv (Map.Map UnqualifiedIdentifier [Text])
 
--- | Build an export environment from @((name, arity), providers)@ pairs;
+-- | Build an export environment from @(key, providers)@ pairs;
 -- several modules under one key accumulate into one entry.
 makeExportEnv :: [(UnqualifiedIdentifier, [Text])] -> ExportEnv
 makeExportEnv = ExportEnv . Map.fromListWith (++)
@@ -81,7 +81,7 @@ toListExport (ExportEnv m) = Map.toList m
 -- visible within its own declaring module?\".
 newtype DeclEnv = DeclEnv (Map.Map UnqualifiedIdentifier [Text])
 
--- | Build a declaration environment from @((name, arity), declaringModules)@
+-- | Build a declaration environment from @(key, declaringModules)@
 -- pairs; several declarations under one key accumulate into one entry.
 makeDeclEnv :: [(UnqualifiedIdentifier, [Text])] -> DeclEnv
 makeDeclEnv = DeclEnv . Map.fromListWith (++)

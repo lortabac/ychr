@@ -36,6 +36,59 @@ Internal record fields drop their type prefixes.
   whose new `warnings` field holds what used to be the pair's second
   half.
 
+Internal modules use records instead of tuples and long argument
+lists. All of these are **Breaking** for code importing
+`YCHR.Internal.*`:
+
+- Front end:
+  - `Parser.parseModule`, `parseModuleWith` and `parseRule` return
+    `Converted {value, errors}`.
+  - `convertSourceItems` is a `Writer [ChainedError]`.
+  - `OpDecl` moved to `PExpr` (`Parsed` re-exports it).
+  - `PExpr.mergeOps`, `opTableEntries` and the `OpTable` name maps use
+    `OpDecl`.
+  - `parseLeadingTerms` returns `LeadingTerms`.
+- Renamer:
+  - `Rename.renameProgram`, `renameQueryArgsWith` and
+    `renameQueryGoalsWith` return `Renamed {result, warnings}`.
+  - `Rename.Types` envs are keyed by `UnqualifiedIdentifier`, and one
+    `importListPermits` replaces the per-namespace variants.
+  - `Rename.Macro` exports the expansion step shared with declaration
+    macros (`expandStep`, `MacroUse`, `MacroState`).
+  - `selectClause` returns a `ClauseMatch`.
+  - `DeclMacroEnv` and `MacroScope` use identifier records and
+    `CollectedImport`.
+- Resolve and desugar:
+  - Function signatures are `[FunSignature]`.
+  - `nameVisibility` and `FunVisibility` are keyed by
+    `UnqualifiedIdentifier`.
+  - `liftAllLambdas`, `liftQueryLambdas` (now returning `LiftedQuery`)
+    and `inlineFunctions` return `Either`.
+  - `ConEnv.constructors` maps to `DataConstructor`.
+- Compiler and VM:
+  - `Program.evaluables`, `callables` and `tellables` are lists of
+    `Evaluable`, `Callable` and `Tellable` records, in the same order.
+  - `Foreach` conditions are `IndexCondition` records, moved from
+    `Compile.Types` to `VM.Types`.
+  - `ResultMatch.binds` is `[ResultBind]`.
+  - `AggregatePlan.nested` is `[AggregatePlan]`.
+  - The s-expression format is unchanged.
+- Runtime:
+  - `initSessionEnv` takes a `SessionConfig` (`emptySessionConfig`,
+    `programSessionConfig`).
+  - The propagation history holds `HistoryKey`s.
+  - `Index.insertConstraints` takes `IndexEntry`s.
+  - `Goal` resolves tells to `ResolvedTell`.
+  - `Store.getAllStoredConstraints` returns `StoredGroup`s.
+  - `Registry.collectVars` takes a list.
+  - `Interpreter.suspensionView` is gone.
+- Display and type checking:
+  - `Display.displayMsgWithSrcLoc` takes a `MsgBlock`.
+  - `Pretty.prettyFunctionDecl` takes the desugared function.
+  - `DuplicateConstructor` carries `ConstructorDecl`s.
+  - The new `YCHR.Internal.ProgramCheck` runs the type checker and the
+    `constraint_use` check together.
+
 A constraint's type parameters only take *determined* types
 ([docs/reference/type-system.md](docs/reference/type-system.md#determined-types)).
 This closes a hole in the multi-head merge: with `leq(T, T)`, the tells

@@ -544,7 +544,7 @@ headConjunct t = HeadConjunctInvalid t
 -- Definition-time checks
 -- ---------------------------------------------------------------------------
 
--- | Every @(name, arity)@ pair referenced in the term as a compound
+-- | Every name and arity referenced in the term as a compound
 -- qualified with exactly the given module name, at any depth. Used by
 -- the 'YCHR.Internal.Rename.MacroBodyNotExported' check: a macro
 -- body's self-qualified references (@M:x@, where @M@ is the macro's
