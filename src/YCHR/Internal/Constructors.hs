@@ -14,6 +14,7 @@
 -- so callers treat the use site as unknown rather than guess.
 module YCHR.Internal.Constructors
   ( ConEnv (..),
+    ConInfo (..),
     buildConEnv,
     buildConMap,
     buildConAlias,
@@ -38,11 +39,17 @@ import YCHR.Internal.Types
 data ConEnv = ConEnv
   { -- | Map from constructor name to its parent type definition and
     -- constructor info.
-    constructors :: Map Name (TypeDefinition, DataConstructor),
+    constructors :: Map Name ConInfo,
     -- | Resolves a use-site unqualified name to its declaration's
     -- qualified name when exactly one constructor matches. See
     -- 'buildConAlias'.
     aliases :: Map Text Name
+  }
+
+-- | A declared constructor and the type that declares it.
+data ConInfo = ConInfo
+  { parentType :: TypeDefinition,
+    constructor :: DataConstructor
   }
 
 -- | Build a 'ConEnv' from a program's type definitions.
@@ -54,10 +61,10 @@ buildConEnv tds =
     }
 
 -- | Build the constructor-name index consulted by 'lookupCon'.
-buildConMap :: [TypeDefinition] -> Map Name (TypeDefinition, DataConstructor)
+buildConMap :: [TypeDefinition] -> Map Name ConInfo
 buildConMap tds =
   Map.fromList
-    [ (dc.conName, (td, dc))
+    [ (dc.conName, ConInfo td dc)
     | td <- tds,
       dc <- typeConstructors td
     ]
@@ -91,5 +98,5 @@ canonicalizeCon env (Unqualified n) =
 
 -- | Look up a (possibly already canonical) constructor name in
 -- 'constructors'. Returns the parent type definition and the constructor.
-lookupCon :: ConEnv -> Name -> Maybe (TypeDefinition, DataConstructor)
+lookupCon :: ConEnv -> Name -> Maybe ConInfo
 lookupCon env name = Map.lookup name env.constructors

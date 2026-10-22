@@ -45,6 +45,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Constructors
   ( ConEnv,
+    ConInfo (..),
     buildConEnv,
     canonicalizeCon,
     lookupCon,
@@ -186,7 +187,7 @@ termToPat conEnv typeMap (AlgCol cs) term = case term of
   CompoundTerm name sub ->
     let canonical = canonicalizeCon conEnv name
      in case lookupCon conEnv canonical of
-          Just (_, dc)
+          Just ConInfo {constructor = dc}
             -- The constructor must belong to this position's type and be
             -- applied at its declared arity; otherwise the program is
             -- type-incorrect (diagnosed elsewhere), so stay conservative
