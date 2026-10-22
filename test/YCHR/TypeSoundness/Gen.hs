@@ -729,7 +729,7 @@ genRule univ adts cls sigList ix = do
   let ctx0 = ev.ctx
   gs <- Gen.list (Range.constant 0 2) (genGuard ctx0)
   nBinds <- Gen.int (Range.constant 0 2)
-  binds <- foldM genBind (Binds ctx0 []) [0 .. nBinds - 1]
+  binds <- foldM genBind (Binds [] ctx0) [0 .. nBinds - 1]
   let ctx1 = binds.ctx
   gate <- genGatedBind ctx1
   tellItems <-
@@ -1147,7 +1147,12 @@ genEvidenceGuards ctx0
               fromMaybe
                 ctx.ctxSk
                 (pinSkolem PinTypePred v.skolem (predTy fn) ctx.ctxSk)
-        go (k - 1) (Guarded (gs ++ [EPred fn v.name (SSk v.skolem)]) ctx {ctxSk = sk'})
+        go
+          (k - 1)
+          Guarded
+            { guards = gs ++ [EPred fn v.name (SSk v.skolem)],
+              ctx = ctx {ctxSk = sk'}
+            }
     candidates ctx =
       [ RigidVar {name = n, skolem = s}
       | TypedVar n t <- scopeTys ctx,
@@ -1351,12 +1356,12 @@ genGuardOn ctx n t =
 
 -- | Body bindings drawn so far, and the context with their variables in
 -- scope.
-data Binds = Binds {ctx :: Ctx, items :: [BodyItem]}
+data Binds = Binds {items :: [BodyItem], ctx :: Ctx}
 
 -- | One body binding: @W is E@ or @W = T@. Both bind a /fresh/
 -- variable, which is what keeps @=@ unfailable and the store ground.
 genBind :: Binds -> Int -> Gen Binds
-genBind (Binds ctx acc) i = do
+genBind (Binds acc ctx) i = do
   t <- pickTarget ctx
   let w = "W" <> tshow i
   item <-
@@ -1364,7 +1369,7 @@ genBind (Binds ctx acc) i = do
       [ BIs w t <$> genExprRoot ctx t,
         BUnify w t <$> genSTermAt ctx 2 t
       ]
-  pure (Binds ctx {ctxScope = Map.insert w t ctx.ctxScope} (acc ++ [item]))
+  pure (Binds (acc ++ [item]) ctx {ctxScope = Map.insert w t ctx.ctxScope})
 
 -- | A rule that exists only to bind a store-resident variable.
 --
