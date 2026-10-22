@@ -17,6 +17,7 @@ module YCHR.TypeSoundness.Preamble
     gAdt,
 
     -- * Predicate library
+    FnSig (..),
     libFnSig,
     libFnName,
     preamble,
@@ -75,19 +76,22 @@ gAdt def args = GTy (CAdt def) args
 baseTys :: [GTy]
 baseTys = [gInt, gBool, gList gInt, gAdt colorDef [], gAdt shapeDef []]
 
+-- | A library predicate's argument and result types.
+data FnSig = FnSig {args :: [GTy], result :: GTy}
+
 -- | Argument and result types of each library predicate. Every one is
 -- monomorphic: the polymorphism under test comes from generated
 -- declarations, not from the fixture.
-libFnSig :: LibFn -> ([GTy], GTy)
+libFnSig :: LibFn -> FnSig
 libFnSig fn = case fn of
-  FnLt -> ([gInt, gInt], gBool)
-  FnLte -> ([gInt, gInt], gBool)
-  FnSameInt -> ([gInt, gInt], gBool)
-  FnIsZero -> ([gInt], gBool)
-  FnIsNil -> ([gList gInt], gBool)
-  FnLen -> ([gList gInt], gInt)
-  FnIsRed -> ([gAdt colorDef []], gBool)
-  FnArea -> ([gAdt shapeDef []], gInt)
+  FnLt -> FnSig [gInt, gInt] gBool
+  FnLte -> FnSig [gInt, gInt] gBool
+  FnSameInt -> FnSig [gInt, gInt] gBool
+  FnIsZero -> FnSig [gInt] gBool
+  FnIsNil -> FnSig [gList gInt] gBool
+  FnLen -> FnSig [gList gInt] gInt
+  FnIsRed -> FnSig [gAdt colorDef []] gBool
+  FnArea -> FnSig [gAdt shapeDef []] gInt
 
 -- | The source name of each library predicate.
 libFnName :: LibFn -> Text

@@ -275,7 +275,7 @@ renderQuery :: Program -> Text
 renderQuery prog =
   T.intercalate ", " (map tell_ (NE.toList prog.goal.tells) ++ probeParts) <> "."
   where
-    tell_ (s, es) = "gen:" <> s.sigName <> args_ (map renderExpr es)
+    tell_ t = "gen:" <> t.sig.sigName <> args_ (map renderExpr t.args)
     probeParts =
       [ p.probeVar <> " is " <> renderExpr p.probeExpr
       | p <- prog.goal.probes

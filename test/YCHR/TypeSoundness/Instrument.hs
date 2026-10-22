@@ -98,8 +98,8 @@ instrument prog =
     }
   where
     (nextCode, annotated) = mapAccumL instrumentRule 0 prog.rules
-    rs = map fst annotated
-    tables = map snd annotated
+    rs = map (.rule) annotated
+    tables = map (.sites) annotated
     -- One site per generated class, on its catch-all equation.
     --
     -- A class's equations are partial in its declared instance set, so
@@ -128,20 +128,26 @@ instrument prog =
       | c <- cls
       ]
 
+-- | An instrumented rule and its observation sites, keyed by code.
+data Instrumented = Instrumented {rule :: Rule, sites :: [(Int, ObsSite)]}
+
 -- | Instrument one rule, threading the next free site code.
-instrumentRule :: Int -> Rule -> (Int, (Rule, [(Int, ObsSite)]))
+instrumentRule :: Int -> Rule -> (Int, Instrumented)
 instrumentRule code0 r =
   ( codeN,
-    ( r
-        { ruleEvidence = EHostObs headCode headArgs : r.ruleEvidence,
-          guards = evObs ++ r.guards,
-          body = BObs firedCode [] : bodyItems
-        },
-      (headCode, headSite)
-        : (firedCode, firedSite)
-        : evSites
-        ++ bindSites
-    )
+    Instrumented
+      { rule =
+          r
+            { ruleEvidence = EHostObs headCode headArgs : r.ruleEvidence,
+              guards = evObs ++ r.guards,
+              body = BObs firedCode [] : bodyItems
+            },
+        sites =
+          (headCode, headSite)
+            : (firedCode, firedSite)
+            : evSites
+            ++ bindSites
+      }
   )
   where
     headCode = code0
@@ -181,43 +187,47 @@ instrumentRule code0 r =
     clearedBoundness n =
       varBoundnessAtHead r n == MayBeUnbound
         && varBoundness r n == Ground
-    (evObs, evSites)
-      | null r.ruleEvidence || null pinnedVars = ([], [])
-      | otherwise =
-          ( [EHostObs evCode [EVar v.name v.ty | v <- pinnedVars]],
-            [ ( evCode,
-                ObsSite
-                  { osWhere = r.ruleName <> " evidence",
-                    osCheck =
-                      ExpectPos
-                        [ posCheckB (varBoundness r v.name) r.ruleSk v.ty
-                        | v <- pinnedVars
-                        ]
-                  }
-              )
-            ]
-          )
+    hasEvSite = not (null r.ruleEvidence || null pinnedVars)
+    evObs = [EHostObs evCode [EVar v.name v.ty | v <- pinnedVars] | hasEvSite]
+    evSites =
+      [ ( evCode,
+          ObsSite
+            { osWhere = r.ruleName <> " evidence",
+              osCheck =
+                ExpectPos
+                  [ posCheckB (varBoundness r v.name) r.ruleSk v.ty
+                  | v <- pinnedVars
+                  ]
+            }
+        )
+      | hasEvSite
+      ]
     (codeN, expanded) = mapAccumL expand (code0 + 3) r.body
-    bodyItems = concatMap fst expanded
-    bindSites = concatMap snd expanded
+    bodyItems = concatMap (.items) expanded
+    bindSites = concatMap (.sites) expanded
     expand c it = case bound it of
-      Nothing -> (c, ([it], []))
-      Just (w, t) ->
+      Nothing -> (c, Expanded [it] [])
+      Just v ->
         ( c + 1,
-          ( [it, BObs c [EVar w t]],
+          Expanded
+            [it, BObs c [EVar v.name v.ty]]
             [ ( c,
                 ObsSite
-                  { osWhere = r.ruleName <> " binds " <> w,
-                    osCheck = ExpectPos [posCheckB (varBoundness r w) r.ruleSk t]
+                  { osWhere = r.ruleName <> " binds " <> v.name,
+                    osCheck =
+                      ExpectPos [posCheckB (varBoundness r v.name) r.ruleSk v.ty]
                   }
               )
             ]
-          )
         )
     bound it = case it of
-      BIs w t _ -> Just (w, t)
-      BUnify w t _ -> Just (w, t)
+      BIs w t _ -> Just (TypedVar w t)
+      BUnify w t _ -> Just (TypedVar w t)
       _ -> Nothing
+
+-- | One body item with the observation after it, if it binds, and that
+-- observation's site.
+data Expanded = Expanded {items :: [BodyItem], sites :: [(Int, ObsSite)]}
 
 -- | Is this the check for a rigid-typed position?
 isRigidCheck :: PosCheck -> Bool
@@ -308,7 +318,7 @@ derivationBound prog = sum (Map.elems caps)
     caps = foldl step Map.empty [top, top - 1 .. 0]
     step acc s = Map.insert s (min capLimit (goalCount s + fromRules acc s)) acc
     goalCount s =
-      toInteger (length [() | (sig, _) <- NE.toList prog.goal.tells, sig.stratum == s])
+      toInteger (length [() | t <- NE.toList prog.goal.tells, t.sig.stratum == s])
     fromRules acc s =
       sum [firings acc r * tellsTo r s | r <- prog.rules, minHeadStratum r > s]
     firings acc r =

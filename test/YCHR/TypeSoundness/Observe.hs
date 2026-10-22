@@ -51,7 +51,6 @@ import Control.Monad.IO.Class (liftIO)
 import Data.IORef (IORef, modifyIORef')
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'breakOnEnd'; the shim supplies it
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
@@ -161,17 +160,10 @@ conformsSnap ty@(GTy con args) s = case s of
             Outside (n <> " applied to " <> tshow (length as) <> " arguments")
         | otherwise ->
             firstNonInhabits
-              (zipWith conformsSnap (fieldGTys def args c) as)
+              (zipWith conformsSnap (ctorFieldGTys def args c) as)
     firstNonInhabits vs = case filter (/= Inhabits) vs of
       [] -> Inhabits
       (v : _) -> v
-
--- | A constructor's field types at a ground instantiation of its
--- type's parameters.
-fieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
-fieldGTys def args c = map (groundD sub) c.ctorFields
-  where
-    sub = Map.fromList (zip def.adtParams args)
 
 -- | The final component of a possibly-qualified, possibly-mangled
 -- functor name.

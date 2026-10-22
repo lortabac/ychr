@@ -203,7 +203,7 @@ soundnessProperty mode = do
   -- without one, that some later unit bound. Everything else in the
   -- open regime is setup for this.
   let laterBound = case outcome of
-        Just (Right bs) -> any (wasBound bs . fst) prog.goal.unbounds
+        Just (Right bs) -> any (\u -> wasBound bs u.name) prog.goal.unbounds
         _ -> False
   coverOpen mode 15 "a stored unbound value was later bound" laterBound
   case outcome of
@@ -580,18 +580,18 @@ coverOpen m pct name b = cover (byMode m 0 pct) name b
 -- Still free at the end is fine — nothing was obliged to bind it. What
 -- is not fine is a value outside the type of the position it was
 -- stored at, whatever route it took to get there.
-checkUnbound :: Map Text Term -> (Text, GTy) -> PropertyT IO ()
-checkUnbound bindings (n, g) = case Map.lookup n bindings of
+checkUnbound :: Map Text Term -> UnboundVar -> PropertyT IO ()
+checkUnbound bindings u = case Map.lookup u.name bindings of
   Nothing -> pure ()
   Just t
     | isStillFree t -> pure ()
-    | conforms g t -> pure ()
+    | conforms u.ty t -> pure ()
     | otherwise -> do
         annotate
           ( "query variable "
-              ++ T.unpack n
+              ++ T.unpack u.name
               ++ ", stored at a position declared "
-              ++ T.unpack (renderGTy g)
+              ++ T.unpack (renderGTy u.ty)
               ++ ", was bound to a value outside that type: "
               ++ show t
           )

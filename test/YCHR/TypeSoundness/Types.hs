@@ -68,6 +68,8 @@ module YCHR.TypeSoundness.Types
     RuleHead (..),
     Rule (..),
     Probe (..),
+    Tell (..),
+    UnboundVar (..),
     Goal (..),
     Program (..),
 
@@ -83,6 +85,7 @@ module YCHR.TypeSoundness.Types
     renderSTy,
     findCtor,
     ctorFieldTys,
+    ctorFieldGTys,
     ruleHeadList,
     ruleHeads,
     minHeadStratum,
@@ -861,10 +864,18 @@ data Rule = Rule
 data Probe = Probe {probeVar :: Text, probeTy :: GTy, probeExpr :: Expr}
   deriving (Eq, Show)
 
+-- | A constraint told with these arguments.
+data Tell = Tell {sig :: Sig, args :: [Expr]}
+  deriving (Eq, Show)
+
+-- | A query variable passed unbound into a position declared at 'ty'.
+data UnboundVar = UnboundVar {name :: Text, ty :: GTy}
+  deriving (Eq, Show)
+
 -- | The query a generated program is run with.
 data Goal = Goal
   { -- | The constraints told, with their arguments.
-    tells :: NonEmpty (Sig, [Expr]),
+    tells :: NonEmpty Tell,
     probes :: [Probe],
     -- | Query variables passed unbound into a 'MayBeUnbound' position,
     -- with the static type of the position they went into.
@@ -874,7 +885,7 @@ data Goal = Goal
     -- the run eventually bound the variable to has to inhabit the type
     -- the declaration gave that position. A variable still free at the
     -- end is fine — that is the mode axis, not this one.
-    unbounds :: [(Text, GTy)]
+    unbounds :: [UnboundVar]
   }
   deriving (Eq, Show)
 
@@ -991,6 +1002,13 @@ findCtor def n = List.find (\c -> c.ctorName == n) (NE.toList def.adtCtors)
 -- type's parameters.
 ctorFieldTys :: AdtDef -> [STy] -> CtorDef -> [STy]
 ctorFieldTys def args c = map (substD sub) c.ctorFields
+  where
+    sub = Map.fromList (zip def.adtParams args)
+
+-- | A constructor's field types at a ground instantiation of its
+-- type's parameters.
+ctorFieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
+ctorFieldGTys def args c = map (groundD sub) c.ctorFields
   where
     sub = Map.fromList (zip def.adtParams args)
 
