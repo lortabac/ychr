@@ -301,15 +301,16 @@ buildTellables prog =
 -- unambiguous.
 buildTellablesUnqualified :: D.Program -> Map TellableKey TellableResolution
 buildTellablesUnqualified prog =
-  Map.map resolve (groupByPair candidates)
+  Map.map resolve (groupByGoal candidates)
   where
-    candidates :: [(TellableKey, (Name, Types.QualifiedName))]
     candidates =
-      [ ( TellableKey {scope = Just (bareText qn), functor = name, arity = arity},
-          (tellProcName (Types.qualifiedToName qn) arity, qn)
-        )
+      [ TellCandidate
+          { key = TellableKey {scope = Just (bareText qn), functor = name, arity = arity},
+            procName = tellProcName (Types.qualifiedToName qn) arity,
+            constraint = qn
+          }
       | (ConstraintKey qn arity, _) <- Map.toList prog.constraintTypes,
-        Set.member (Name (bareText qn), arity) bareKeys,
+        Set.member (Types.UnqualifiedIdentifier (bareText qn) arity) bareKeys,
         -- A non-ASCII name has two spellings, the same pair
         -- 'buildTellables' registers: the compound's encoded functor
         -- and the atom's raw one. Both are present, so a goal resolves
@@ -320,9 +321,9 @@ buildTellablesUnqualified prog =
 
     bareKeys =
       Set.fromList
-        [ (Name n, arity)
+        [ ident
         | qns <- Map.elems prog.nameVisibility,
-          (Types.UnqualifiedIdentifier n arity, providers) <- Map.toList qns,
+          (ident@(Types.UnqualifiedIdentifier _ arity), providers) <- Map.toList qns,
           [qn] <- [nub providers],
           Map.member (ConstraintKey qn arity) prog.constraintTypes
         ]
@@ -331,12 +332,12 @@ buildTellablesUnqualified prog =
     -- arity. The first key of a group represents it; every other groups
     -- under the same (functor, arity) but may differ in the scope text
     -- only.
-    groupByPair =
+    groupByGoal cs =
       Map.fromListWith
         (\new old -> old <> new)
-        . map (\(key, entry) -> (key {scope = Nothing}, [(key, entry)]))
+        [(c.key {scope = Nothing}, [c]) | c <- cs]
 
-    resolve entries = case nub [procName | (_, (procName, _)) <- entries] of
+    resolve entries = case nub [c.procName | c <- entries] of
       [procName] -> UniqueTell procName
       _ ->
         -- Sorted, not in the map's order, so the message does not depend
@@ -346,8 +347,16 @@ buildTellablesUnqualified prog =
         AmbiguousTell
           ( sortOn
               (Types.flattenName . Types.qualifiedToName)
-              [qn | (_, (_, qn)) <- entries]
+              [c.constraint | c <- entries]
           )
+
+-- | One entry of the origin-less tellables tier before grouping: the key,
+-- the @tell@ procedure, and the constraint it tells.
+data TellCandidate = TellCandidate
+  { key :: TellableKey,
+    procName :: Name,
+    constraint :: Types.QualifiedName
+  }
 
 -- | The bare source name of a qualified constraint name, the text a
 -- goal's functor carries for an unqualified reference.
@@ -2554,10 +2563,9 @@ compileFunctionDef func = do
       funcLabel = Just ("function " <> fnLabel)
       -- The function-entry frame takes the first equation's annotation:
       -- it is pushed before dispatch, so it cannot name one equation.
-      (funcLoc, funcParsed) = case func.equations of
-        (eq : _) -> (eq.sourceLoc, eq.parsed)
-        [] -> (P.dummyLoc, Atom "function")
-      frame = mkFrame ("function " <> fnLabel) funcLoc funcParsed
+      frame = case func.equations of
+        eq : _ -> mkFrame ("function " <> fnLabel) eq.sourceLoc eq.parsed
+        [] -> mkFrame ("function " <> fnLabel) P.dummyLoc (Atom "function")
       -- Dispatch tracking: every equation's pattern tests record, in
       -- two procedure-level locals, whether a test failed only because
       -- the value it inspected was still unbound. Falling off the end
