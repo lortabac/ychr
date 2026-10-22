@@ -92,7 +92,6 @@ import YCHR.Internal.Interpreter.Slots
     SlotProc (..),
     SlotStmt (..),
     SlotValExpr (..),
-    lowerProgram,
   )
 import YCHR.Internal.Meta
   ( FunRefLookup (..),
@@ -101,7 +100,6 @@ import YCHR.Internal.Meta
     lookupFunRef,
     valueToTerm,
   )
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
   ( RuntimeErrorKind (..),
@@ -118,18 +116,17 @@ import YCHR.Internal.Runtime.Error
     tellUnboundError,
   )
 import YCHR.Internal.Runtime.History (addHistory, notInHistory)
-import YCHR.Internal.Runtime.Index (GroundKey, indexablePositions)
+import YCHR.Internal.Runtime.Index (GroundKey)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     HostCallFn (..),
     HostCallRegistry,
     SessionEnv (..),
-    callableRegistry,
-    evaluableRegistry,
     initSessionEnv,
+    programSessionConfig,
     runChr,
-    tellableRegistry,
   )
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
@@ -285,24 +282,8 @@ liftChr action = InterpM (\_ -> action)
 -- buys and what a hand-built 'Program' in a test expects.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
-  let slotProgram = lowerProgram prog
-      evaluableMap = evaluableRegistry prog.evaluables
-      callableMap = callableRegistry prog.callables
-  env <-
-    initSessionEnv
-      prog.typeNames
-      prog.ruleNames
-      prog.inertTypes
-      (indexablePositions prog)
-      builtinOps
-      slotProgram
-      hostCalls
-      evaluableMap
-      callableMap
-      (tellableRegistry prog.tellables)
-      prog.tellablesUnqualified
-      Map.empty
-      mempty
+  -- 'Config.' picks the 'SessionConfig' field over the 'SessionEnv' one.
+  env <- initSessionEnv (programSessionConfig prog) {Config.hostCalls = hostCalls}
   runChr (callProc entryName (map CVal args)) env
 
 -- ---------------------------------------------------------------------------

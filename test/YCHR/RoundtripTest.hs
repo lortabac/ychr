@@ -4,10 +4,8 @@
 -- right-inverses of the parser.
 module YCHR.RoundtripTest (tests) where
 
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Hedgehog
@@ -27,15 +25,14 @@ import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
-import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Parsed qualified as P
-import YCHR.Internal.Parser (builtinOps, parseConstraint, parseRule, parseTerm)
+import YCHR.Internal.Parser (parseConstraint, parseRule, parseTerm)
 import YCHR.Internal.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Types (Constraint (..), Name (..), Term (..))
 import YCHR.Internal.VM qualified as VM
+import YCHR.TestHelpers (runChrEmpty)
 
 -- ---------------------------------------------------------------------------
 -- Generators
@@ -269,26 +266,6 @@ lookupHostCall :: VM.Name -> HostCallFn
 lookupHostCall name = case Map.lookup name baseHostCallRegistry of
   Just hc -> hc
   Nothing -> error $ "host call not found: " ++ show name
-
--- | Run an action in a fresh, empty session.
-runChrEmpty :: Chr a -> IO a
-runChrEmpty action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
 
 -- | @list_to_compound@ undoes @compound_to_list@.
 prop_compoundToListRoundtrip :: Property

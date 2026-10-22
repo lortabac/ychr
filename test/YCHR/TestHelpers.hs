@@ -5,6 +5,8 @@ module YCHR.TestHelpers
     expectErrorContaining,
     countAliveByType,
     countAliveIn,
+    runChrIn,
+    runChrEmpty,
   )
 where
 
@@ -17,7 +19,13 @@ import YCHR.Embedded (stdlib)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram, compileModules)
 import YCHR.Internal.Loc (Ann (..), noAnn)
 import YCHR.Internal.PExpr
-import YCHR.Internal.Runtime.Monad (Chr)
+import YCHR.Internal.Runtime.Monad
+  ( Chr,
+    SessionConfig,
+    emptySessionConfig,
+    initSessionEnv,
+    runChr,
+  )
 import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Internal.Runtime.Types (Suspension)
 import YCHR.Internal.Types (ConstraintType)
@@ -63,3 +71,11 @@ countAliveIn (s : ss) = do
   a <- isSuspAlive s
   rest <- countAliveIn ss
   pure $ (if a then 1 else 0) + rest
+
+-- | Run an action in a fresh session built from the given config.
+runChrIn :: SessionConfig -> Chr a -> IO a
+runChrIn cfg action = initSessionEnv cfg >>= runChr action
+
+-- | Run an action in a fresh, empty session.
+runChrEmpty :: Chr a -> IO a
+runChrEmpty = runChrIn emptySessionConfig

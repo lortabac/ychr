@@ -4,16 +4,13 @@ module YCHR.Runtime.InterpreterTest (tests) where
 
 import Control.Exception (try)
 import Control.Monad.IO.Class (liftIO)
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (SlotProgram, emptySlotProgram, lowerProgram)
+import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.Loc (dummyLoc)
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Error (RuntimeErrorKind (..), RuntimeErrorThrown (..))
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
@@ -23,12 +20,13 @@ import YCHR.Internal.Runtime.Interpreter
     callProc,
     interpret,
   )
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
-import YCHR.TestHelpers (countAliveByType)
+import YCHR.TestHelpers (countAliveByType, runChrEmpty, runChrIn)
 
 -- | Interpreter tests: evaluation, primitives, type predicates,
 -- closures, and errors.
@@ -51,68 +49,18 @@ tests =
 -- Session helpers
 -- ---------------------------------------------------------------------------
 
--- | Run a Chr action with an empty session (no procedures, no types,
--- no host calls). Useful for tests that exercise primitives that only
--- need 'Unify' / store / queue, where the session is set up just to
--- give them a place to live.
-runChrEmpty :: Chr a -> IO a
-runChrEmpty action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
-
 -- | Like 'runChrEmpty' but with the base host-call registry available.
 runChrBase :: Chr a -> IO a
-runChrBase action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      baseHostCallRegistry
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrBase = runChrIn emptySessionConfig {Config.hostCalls = baseHostCallRegistry}
 
 -- | Run a Chr action against the LEQ session.
 runChrLeq :: Chr a -> IO a
-runChrLeq action = do
-  env <-
-    initSessionEnv
-      [Types.Unqualified "leq"]
-      []
-      []
-      IntMap.empty
-      builtinOps
-      leqSlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrLeq =
+  runChrIn
+    emptySessionConfig
+      { Config.typeNames = [Types.Unqualified "leq"],
+        Config.slotProgram = leqSlotProgram
+      }
 
 -- ---------------------------------------------------------------------------
 -- Runtime-error trigger tests

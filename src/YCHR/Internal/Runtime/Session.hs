@@ -68,11 +68,11 @@ import YCHR.Internal.Runtime.Monad
   ( Chr,
     SessionEnv (..),
     callableRegistry,
-    evaluableRegistry,
     initSessionEnv,
+    programSessionConfig,
     runChr,
-    tellableRegistry,
   )
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Reactivation (drainQueue)
 import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
@@ -183,29 +183,27 @@ withCHRExtra si hc extraProcs extraCallables action
       -- keeps the compiled entries' indices and gives the extras the next
       -- ones, resolving the extras' calls against both name spaces; with
       -- no extras it returns the compiled program unchanged.
-      let slotProgram = addProcedures si.slotProgram extraProcs
-          evaluableMap = evaluableRegistry si.program.evaluables
-      -- Extras win, as in the procedure map: a query-time lambda can never
-      -- collide with a compiled one (its lifted name is fresh), but the
-      -- two merges then follow the same rule.
-      let callableMap =
-            callableRegistry extraCallables
-              `Map.union` callableRegistry si.program.callables
+      --
+      -- Extras win in the callables too, as in the procedure map: a
+      -- query-time lambda can never collide with a compiled one (its
+      -- lifted name is fresh), but the two merges then follow the same
+      -- rule.
+      --
+      -- 'Config.' picks the 'SessionConfig' fields over the 'SessionEnv'
+      -- ones.
       env <-
         initSessionEnv
-          si.program.typeNames
-          si.program.ruleNames
-          si.program.inertTypes
-          si.indexPositions
-          si.opTable
-          slotProgram
-          hc
-          evaluableMap
-          callableMap
-          (tellableRegistry si.program.tellables)
-          si.program.tellablesUnqualified
-          si.exportMap
-          si.exportedSet
+          (programSessionConfig si.program)
+            { Config.indexPositions = si.indexPositions,
+              Config.opTable = si.opTable,
+              Config.slotProgram = addProcedures si.slotProgram extraProcs,
+              Config.hostCalls = hc,
+              Config.callables =
+                callableRegistry extraCallables
+                  `Map.union` callableRegistry si.program.callables,
+              Config.exportMap = si.exportMap,
+              Config.exportedSet = si.exportedSet
+            }
       runChr action env
 
 -- | Assert the procedure-name closure invariant for the query-time
