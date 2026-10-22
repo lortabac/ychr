@@ -128,7 +128,7 @@ import YCHR.Internal.Runtime.Error
     isControlException,
     runtimeErrorS,
   )
-import YCHR.Internal.Runtime.Goal (tellGoalConstraint)
+import YCHR.Internal.Runtime.Goal (ResolvedTell (..), tellGoalConstraint)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
@@ -674,8 +674,8 @@ executeBodyGoal (D.BodyTellDynamic _ g extras) = do
   gVal <- evalNestedExpr g
   extraVals <- traverse evalNestedExpr extras
   liftChr $ do
-    (name, args) <- tellGoalConstraint gVal extraVals
-    tellConstraint name args
+    t <- tellGoalConstraint gVal extraVals
+    tellConstraint t.constraint t.args
 
 -- | Runtime error for a failed unification.
 raiseUnifyFailure :: Value -> Value -> Chr ()

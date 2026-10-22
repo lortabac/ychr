@@ -69,6 +69,8 @@ module YCHR.Internal.Runtime.Index
     emptyStoreIndex,
     indexThreshold,
     typeIndexed,
+    IndexEntry (..),
+    PositionKey (..),
     insertConstraints,
     candidateSlots,
 
@@ -186,24 +188,34 @@ indexThreshold = 16
 typeIndexed :: ConstraintType -> StoreIndex -> Bool
 typeIndexed cType si = case cType of ConstraintType tidx -> IntMap.member tidx si
 
--- | Record stored suspensions in the index. Each element pairs a store
--- slot — the suspension's position in the type's store sequence — with
--- its /indexed/ argument positions and their keys, 'Nothing' when the
+-- | One stored suspension to file in the index: its store slot — its
+-- position in the type's store sequence — and the keys of its /indexed/
+-- argument positions.
+data IndexEntry = IndexEntry
+  { slot :: !Int,
+    keys :: ![PositionKey]
+  }
+  deriving (Show, Eq)
+
+-- | An indexed argument position and its key, 'Nothing' when the
 -- argument was not fully ground.
+data PositionKey = PositionKey
+  { position :: !Int,
+    key :: !(Maybe GroundKey)
+  }
+  deriving (Show, Eq)
+
+-- | Record stored suspensions in the index.
 --
--- A single store passes one element; the pass that crosses
+-- A single store passes one entry; the pass that crosses
 -- 'indexThreshold' passes the whole bucket.
-insertConstraints ::
-  ConstraintType ->
-  [(Int, [(Int, Maybe GroundKey)])] ->
-  StoreIndex ->
-  StoreIndex
+insertConstraints :: ConstraintType -> [IndexEntry] -> StoreIndex -> StoreIndex
 insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
   where
     ConstraintType tidx = cType
-    insertStore si (slot, entries) = List.foldl' (insertEntry slot) si entries
-    insertEntry slot si (pos, mkey) =
-      IntMap.alter (Just . insertAt slot pos mkey . fromMaybe IntMap.empty) tidx si
+    insertStore si e = List.foldl' (insertEntry e.slot) si e.keys
+    insertEntry slot si pk =
+      IntMap.alter (Just . insertAt slot pk.position pk.key . fromMaybe IntMap.empty) tidx si
     insertAt slot pos mkey =
       IntMap.alter (Just . updateAt slot mkey . fromMaybe emptyPosIndex) pos
     updateAt slot mkey p = case mkey of

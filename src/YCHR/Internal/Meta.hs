@@ -41,7 +41,12 @@ import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (CallableRegistry, Chr, SessionEnv (..))
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
-import YCHR.Internal.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
+import YCHR.Internal.Runtime.Store
+  ( StoredGroup (..),
+    Suspension (..),
+    getAllStoredConstraints,
+    isSuspAlive,
+  )
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, getVarId, newVar)
 import YCHR.Internal.Types (Term (..), flattenName)
@@ -247,8 +252,8 @@ metaHostCallRegistry =
       )
     ]
   where
-    renderGroup (tyName, susps) =
-      fmap concat . traverse (renderSusp tyName) . toList $ susps
+    renderGroup g =
+      fmap concat . traverse (renderSusp g.typeName) . toList $ g.suspensions
     renderSusp tyName susp@Suspension {args = sargs} = do
       alive <- isSuspAlive susp
       if not alive
@@ -256,8 +261,8 @@ metaHostCallRegistry =
         else do
           argTerms <- traverse (valueToTerm Map.empty) sargs
           pure [prettyTerm (CompoundTerm tyName argTerms)]
-    suspsOfGroup (tyName, susps) =
-      fmap concat . traverse (suspAsValue tyName) . toList $ susps
+    suspsOfGroup g =
+      fmap concat . traverse (suspAsValue g.typeName) . toList $ g.suspensions
     suspAsValue tyName susp@Suspension {args = sargs} = do
       alive <- isSuspAlive susp
       if not alive
