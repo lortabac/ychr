@@ -305,7 +305,9 @@ candidateSuspensions cType pos key = do
 -- | The stored suspensions of one constraint type, with the type's
 -- source name.
 data StoredGroup = StoredGroup
-  { typeName :: Name,
+  { -- | The constraint type's source name.
+    typeName :: Name,
+    -- | Its suspensions in store order, dead ones included.
     suspensions :: Seq Suspension
   }
 

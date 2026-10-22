@@ -215,7 +215,10 @@ insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
     ConstraintType tidx = cType
     insertStore si e = List.foldl' (insertEntry e.slot) si e.keys
     insertEntry slot si pk =
-      IntMap.alter (Just . insertAt slot pk.position pk.key . fromMaybe IntMap.empty) tidx si
+      IntMap.alter
+        (Just . insertAt slot pk.position pk.key . fromMaybe IntMap.empty)
+        tidx
+        si
     insertAt slot pos mkey =
       IntMap.alter (Just . updateAt slot mkey . fromMaybe emptyPosIndex) pos
     updateAt slot mkey p = case mkey of
