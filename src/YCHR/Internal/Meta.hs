@@ -89,13 +89,15 @@ valueToTerm aliases v = do
 -- back into its source character.
 decodeName :: Text -> [Term] -> Term
 decodeName s args = case decodeMangled s of
-  Just (m, n) ->
-    CompoundTerm (Types.Qualified (decodeEscapes m) (decodeEscapes n)) args
+  Just qn ->
+    let m = decodeEscapes qn.moduleName
+        n = decodeEscapes qn.baseName
+     in CompoundTerm (Types.Qualified m n) args
   Nothing -> CompoundTerm (Types.Unqualified (decodeEscapes s)) args
 
--- | Inverse of 'Compile.Names.vmName'. Returns @Just (mod, base)@ when
--- the input is a qualified mangled name, @Nothing@ when it is
--- unqualified.
+-- | Inverse of 'Compile.Names.vmName'. Returns the module and base
+-- parts when the input is a qualified mangled name, @Nothing@ when it
+-- is unqualified. Both parts stay mangled.
 --
 -- The encoding @encodeText m \<\> "__" \<\> encodeText n@ is injective
 -- because 'encodeText' never emits @__@ in its output (non-ASCII chars
@@ -105,11 +107,11 @@ decodeName s args = case decodeMangled s of
 --
 -- A leading @__@ (e.g. compiler-internal @__lambda_3@) yields an empty
 -- module prefix, which the caller treats as unqualified.
-decodeMangled :: Text -> Maybe (Text, Text)
+decodeMangled :: Text -> Maybe Types.QualifiedName
 decodeMangled s = case T.breakOn "__" s of
   (_, rest) | T.null rest -> Nothing
   (m, _) | T.null m -> Nothing
-  (m, rest) -> Just (m, T.drop 2 rest)
+  (m, rest) -> Just (Types.QualifiedName m (T.drop 2 rest))
 
 -- | The local part of a mangled name: the @n@ of a qualified @m__n@,
 -- and the whole thing when there is no module prefix. Escapes are left
@@ -117,7 +119,7 @@ decodeMangled s = case T.breakOn "__" s of
 -- input and two base names compare equal exactly when their source
 -- spellings do ('YCHR.Internal.Compile.Names.encodeText' is injective).
 baseOfMangled :: Text -> Text
-baseOfMangled s = maybe s snd (decodeMangled s)
+baseOfMangled s = maybe s (.baseName) (decodeMangled s)
 
 -- | Replace every @%%u\<6 hex digits\>@ escape in @s@ with the
 -- corresponding character (inverse of 'Compile.Names.encodeText''s
@@ -315,12 +317,12 @@ metaHostCallRegistry =
 -- left as it is.
 resolveFunRefs :: Term -> Chr Term
 resolveFunRefs t = case funRefShape t of
-  Just (name, refArity) -> do
-    flat <- resolveFunRefName name refArity
+  Just ref -> do
+    flat <- resolveFunRefName ref.name ref.arity
     pure
       ( CompoundTerm
           (Types.Unqualified "/")
-          [CompoundTerm (Types.Unqualified flat) [], IntTerm refArity]
+          [CompoundTerm (Types.Unqualified flat) [], IntTerm ref.arity]
       )
   Nothing -> case t of
     CompoundTerm name args -> CompoundTerm name <$> traverse resolveFunRefs args
@@ -328,19 +330,25 @@ resolveFunRefs t = case funRefShape t of
 
 -- | The name and arity of a well-formed surface @fun name\/arity@, or
 -- 'Nothing' for any other term (a malformed @fun@ shape included).
-funRefShape :: Term -> Maybe (Types.Name, Integer)
+funRefShape :: Term -> Maybe FunRef
 funRefShape (CompoundTerm (Types.Unqualified "fun") [inner]) = slashShape inner
 funRefShape _ = Nothing
 
 -- | The @name\/arity@ argument of a @fun@: a two-argument @'/'@ whose
 -- arity is a non-negative integer literal and whose name is a literal
 -- atom, unqualified or qualified.
-slashShape :: Term -> Maybe (Types.Name, Integer)
+slashShape :: Term -> Maybe FunRef
 slashShape (CompoundTerm (Types.Unqualified "/") [nameTerm, IntTerm refArity])
   | refArity >= 0,
     Just name <- funRefName nameTerm =
-      Just (name, refArity)
+      Just FunRef {name = name, arity = refArity}
 slashShape _ = Nothing
+
+-- | A surface @fun name\/arity@: the name as written, and its arity.
+data FunRef = FunRef
+  { name :: Types.Name,
+    arity :: Integer
+  }
 
 -- | The surface name inside a @fun name\/arity@, when it is a literal
 -- atom (unqualified or qualified). A variable, or any other shape, is

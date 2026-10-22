@@ -201,24 +201,25 @@ encodeAliasComponent t = case T.uncons t of
 collectAliases :: VMProgram -> [AliasEntry]
 collectAliases vmp =
   let procNames = Set.fromList [n.unName | p <- vmp.program.procedures, let n = p.name]
+      qualifiedName i = Types.Qualified i.moduleName i.localName
+      tellName i = tellProcName (qualifiedName i) i.arity
       tells =
-        [ (m, n, a, mangleName tn)
-        | Types.QualifiedIdentifier m n a <- Set.toList vmp.exportedSet,
-          let tn = tellProcName (Types.Qualified m n) a,
-          Set.member tn.unName procNames
+        [ i
+        | i <- Set.toList vmp.exportedSet,
+          Set.member (tellName i).unName procNames
         ]
       shortCounts =
-        Map.fromListWith (+) [(shortAliasName n a, 1 :: Int) | (_, n, a, _) <- tells]
+        Map.fromListWith (+) [(shortAliasName i.localName i.arity, 1 :: Int) | i <- tells]
    in [ AliasEntry
-          { qualified = qualifiedAliasIdentifier (Types.Qualified m n) a,
+          { qualified = qualifiedAliasIdentifier (qualifiedName i) i.arity,
             short =
-              let s = shortAliasName n a
+              let s = shortAliasName i.localName i.arity
                in if Map.findWithDefault 0 s shortCounts == 1
                     then Just s
                     else Nothing,
-            target = target
+            target = mangleName (tellName i)
           }
-      | (m, n, a, target) <- tells
+      | i <- tells
       ]
 
 -- | Emit the @(define ALIAS tell_*)@ forms paired with each alias.
@@ -385,17 +386,17 @@ shortExportRegistrations exported =
   [ SList
       [ SAtom "register-short-export!",
         SAtom "%s",
-        compileSymbol (encodeText n),
-        SInt (fromIntegral a),
-        targetSExpr n mods
+        compileSymbol (encodeText key.localName),
+        SInt (fromIntegral key.arity),
+        targetSExpr key.localName mods
       ]
-  | ((n, a), mods) <- Map.toAscList grouped
+  | (key, mods) <- Map.toAscList grouped
   ]
   where
     grouped =
       Map.fromListWith
         (++)
-        [ ((i.localName, i.arity), [i.moduleName])
+        [ (Types.UnqualifiedIdentifier i.localName i.arity, [i.moduleName])
         | i <- Set.toList exported
         ]
     targetSExpr n [m] = compileSymbol (encodeText m <> "__" <> encodeText n)
@@ -623,40 +624,36 @@ needsEscape = any trapped
     trapped (If _ thn els) = needsEscape thn || needsEscape els
     trapped _ = False
 
--- | Whether any statement in the list is a 'Return' (at any depth,
--- including nested loop and drain bodies).
-containsReturn :: [Stmt] -> Bool
-containsReturn = any go
+-- | Whether some statement in the list passes the test, at any depth:
+-- the walk descends into 'If' arms and into loop and drain bodies.
+anyStmtDeep :: (Stmt -> Bool) -> [Stmt] -> Bool
+anyStmtDeep p = any go
   where
-    go (Return _) = True
-    go (If _ thn els) = containsReturn thn || containsReturn els
-    go (Foreach _ _ _ _ body) = containsReturn body
-    go (DrainReactivationQueue _ body) = containsReturn body
-    go _ = False
+    go s =
+      p s || case s of
+        If _ thn els -> anyStmtDeep p thn || anyStmtDeep p els
+        Foreach _ _ _ _ body -> anyStmtDeep p body
+        DrainReactivationQueue _ body -> anyStmtDeep p body
+        _ -> False
+
+-- | Whether any statement in the list is a 'Return', at any depth.
+containsReturn :: [Stmt] -> Bool
+containsReturn = anyStmtDeep isReturn
+  where
+    isReturn (Return _) = True
+    isReturn _ = False
 
 -- | Whether the loop body names 'Break' for the given label. The walk
 -- recurses into nested bodies because a label is unique to the loop that
 -- owns it, so a nested loop's @Break@ names a different label and does
 -- not match.
 hasBreak :: Text -> [Stmt] -> Bool
-hasBreak lbl = any go
-  where
-    go (Break (Label l)) = l == lbl
-    go (If _ thn els) = hasBreak lbl thn || hasBreak lbl els
-    go (Foreach _ _ _ _ body) = hasBreak lbl body
-    go (DrainReactivationQueue _ body) = hasBreak lbl body
-    go _ = False
+hasBreak lbl = anyStmtDeep (== Break (Label lbl))
 
 -- | Whether the loop body names 'Continue' for the given label. See
 -- 'hasBreak' for the label-uniqueness argument.
 hasContinue :: Text -> [Stmt] -> Bool
-hasContinue lbl = any go
-  where
-    go (Continue (Label l)) = l == lbl
-    go (If _ thn els) = hasContinue lbl thn || hasContinue lbl els
-    go (Foreach _ _ _ _ body) = hasContinue lbl body
-    go (DrainReactivationQueue _ body) = hasContinue lbl body
-    go _ = False
+hasContinue lbl = anyStmtDeep (== Continue (Label lbl))
 
 -- | Remove statements that follow a 'Return' in the same statement list:
 -- they are unreachable, and dropping them keeps the generated code (and

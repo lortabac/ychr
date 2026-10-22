@@ -5,6 +5,7 @@
 -- "YCHR.Internal.Compile.Pipeline" for 'CompiledProgram').
 module YCHR.Internal.TypeCheck.Error
   ( TypeCheckError (..),
+    ConstructorDecl (..),
     TypeCheckWarning (..),
     TypeCheckResult (..),
   )
@@ -20,9 +21,8 @@ data TypeCheckError
   | UnboundTypeVar Text Text Text
   | UndefinedType Text Text Text
   | -- | A constructor name is declared by more than one type.
-    -- Carries the flattened constructor name and the
-    -- @(typeName, arity)@ pairs of every declaration.
-    DuplicateConstructor Text [(Text, Int)]
+    -- Carries the flattened constructor name and every declaration.
+    DuplicateConstructor Text [ConstructorDecl]
   | -- | A known data constructor used with the wrong number of
     -- arguments. Carries the flattened constructor name, the
     -- use-site arity, and the declared arity. Constructors are
@@ -53,6 +53,14 @@ data TypeCheckError
     -- values do not fix it, like a list. Carries the constraint's name
     -- and the rendered type.
     UndeterminedInstance Text Text
+  deriving (Show, Eq)
+
+-- | One declaration of a data constructor: the type that declares it,
+-- and the arity it has there.
+data ConstructorDecl = ConstructorDecl
+  { typeName :: Text,
+    arity :: Int
+  }
   deriving (Show, Eq)
 
 -- | Non-fatal diagnostics reported by the type-checker pass. A
