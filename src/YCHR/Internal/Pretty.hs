@@ -32,6 +32,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Loc (Ann (..), noAnn)
 import YCHR.Internal.PExpr qualified as PE
 import YCHR.Internal.Parsed qualified as P
@@ -379,19 +380,15 @@ prettyConstraintDecl qn arity mArgTys bounds = case mArgTys of
 -- dropped. A @refining@ clause is only valid on a closed
 -- single-signature @:- function@, which is the only place it is
 -- emitted.
-prettyFunctionDecl ::
-  QualifiedName ->
-  Int ->
-  [FunSignature] ->
-  [BoundSig] ->
-  Maybe TypeExpr ->
-  DeclKind ->
-  String
-prettyFunctionDecl qn arity sigs bounds refined kind =
-  let keyword = declKindKeyword kind
+prettyFunctionDecl :: D.Function -> DeclKind -> String
+prettyFunctionDecl f kind =
+  let qn = f.name
+      arity = f.arity
+      sigs = f.signatures
+      keyword = declKindKeyword kind
       isFunction = kind == DKFunction || kind == DKOpenFunction
-      reqStr = if isFunction then prettyRequiring bounds else ""
-      refStr = if kind == DKFunction then prettyRefining refined else ""
+      reqStr = if isFunction then prettyRequiring f.requiring else ""
+      refStr = if kind == DKFunction then prettyRefining f.refining else ""
    in case sigs of
         [] ->
           -- An unsignatured function declaration falls back to the

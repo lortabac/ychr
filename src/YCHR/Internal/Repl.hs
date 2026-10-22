@@ -951,7 +951,7 @@ renderInfoEntry = \case
   IEFunction f kind ->
     prettyQualifiedName f.name
       ++ "\n"
-      ++ prettyFunctionDecl f.name f.arity f.signatures f.requiring f.refining kind
+      ++ prettyFunctionDecl f kind
       ++ "\n"
   IEType td ->
     let qn = case td.name of
