@@ -19,6 +19,7 @@ module YCHR.Internal.Compile.Types
     isTakePlan,
     selectsMax,
     ResultMatch (..),
+    ResultBind (..),
     CompiledGuards (..),
     CheckGuards (..),
 
@@ -266,9 +267,10 @@ data AggregatePlan = AggregatePlan
     -- pattern has to pass and the out-cell bindings that follow them.
     -- Empty for a selection form, which has no result pattern.
     resultMatch :: ResultMatch,
-    -- | The plans of the aggregates nested in 'goal', keyed by their
-    -- position in it. The fold computes each one in place.
-    nested :: [(Int, AggregatePlan)]
+    -- | The plans of the aggregates nested in 'goal', in goal order. Each
+    -- one's 'position' is its place in 'goal'. The fold computes each one
+    -- in place.
+    nested :: [AggregatePlan]
   }
   deriving (Show, Eq)
 
@@ -300,7 +302,16 @@ data ResultMatch = ResultMatch
     -- source variable and the value subterm it has to agree with. The
     -- procedure binds it with @bunify\<out-cell\> \<subterm\>@, in the
     -- same order as 'bind'.
-    binds :: [(Text, ValExpr)]
+    binds :: [ResultBind]
+  }
+  deriving (Show, Eq)
+
+-- | One variable a result pattern binds.
+data ResultBind = ResultBind
+  { -- | The source variable.
+    var :: Text,
+    -- | The payload subterm it is bound to.
+    value :: ValExpr
   }
   deriving (Show, Eq)
 

@@ -437,9 +437,11 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
   finalizeCompilation
     libraryMods
     opExports
-    trailingLoc
-    (map fst inputs)
-    spliceDump
+    SourceInfo
+      { trailingLocs = trailingLoc,
+        inputPaths = map fst inputs,
+        splices = spliceDump
+      }
     parsed
 
 -- | Compile already-parsed modules. This is the entry point used by
@@ -479,7 +481,25 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
-  finalizeCompilation libraryMods opExports Map.empty [] [] parsed
+  finalizeCompilation libraryMods opExports noSourceInfo parsed
+
+-- | What compiling from source text knows about the user modules beyond
+-- the modules themselves. DSL-built input has none of it
+-- ('noSourceInfo').
+data SourceInfo = SourceInfo
+  { -- | Trailing-location map for the renamer's "use_module after
+    -- non-import" check.
+    trailingLocs :: Map Text (Maybe SourceLoc),
+    -- | The input file each user module came from, positionally aligned
+    -- with the user modules.
+    inputPaths :: [FilePath],
+    -- | The clauses declaration macros spliced into the input modules.
+    splices :: [ModuleSplices]
+  }
+
+-- | The 'SourceInfo' of DSL-built input: no files, no directives.
+noSourceInfo :: SourceInfo
+noSourceInfo = SourceInfo {trailingLocs = Map.empty, inputPaths = [], splices = []}
 
 -- | 'compileParsedModules' with the whole standard library, throwing the
 -- 'Error' and dropping the warnings. Shared by "YCHR.DSL" and
@@ -498,21 +518,12 @@ finalizeCompilation ::
   [Module] ->
   -- | Per-module operator exports (stdlib + user).
   Map Text [OpDecl] ->
-  -- | Trailing-location map for the renamer's
-  -- "use_module after non-import" check. Empty for DSL-built input.
-  Map Text (Maybe SourceLoc) ->
-  -- | The input file each user module came from, positionally aligned
-  -- with the user modules. Empty for DSL-built input, which has no
-  -- files of its own.
-  [FilePath] ->
-  -- | The clauses declaration macros spliced into the input modules.
-  -- Empty for DSL-built input, which has no directives.
-  [ModuleSplices] ->
+  SourceInfo ->
   -- | User modules (parsed).
   [Module] ->
   Either Error (CompiledProgram, [Warning])
-finalizeCompilation libraryMods opExports trailingLocs inputPaths spliceDump parsed = do
-  checkDuplicateModules inputPaths parsed
+finalizeCompilation libraryMods opExports sources parsed = do
+  checkDuplicateModules sources.inputPaths parsed
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
   -- providers for every name the library exports and make each use
@@ -555,7 +566,7 @@ finalizeCompilation libraryMods opExports trailingLocs inputPaths spliceDump par
       renameInputs =
         RenameInputs
           { operatorExports = opExports,
-            trailingLoc = trailingLocs
+            trailingLoc = sources.trailingLocs
           }
   renamed <- first RenameErrors (renameProgram renameInputs allMods)
   resolved <- first ResolveErrors (resolveProgram renamed.result)
@@ -615,7 +626,7 @@ finalizeCompilation libraryMods opExports trailingLocs inputPaths spliceDump par
           queryFunctionVisibility = buildQueryFunctionVisibility allMods,
           queryRenameEnv = buildQueryRenameEnv allMods,
           desugaredProgram = desugared,
-          splices = spliceDump
+          splices = sources.splices
         },
       warnings
     )
