@@ -1,6 +1,4 @@
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
 
 -- | The CHR session: a running interpreter state for a compiled
 -- program (constraint store, propagation history, reactivation queue,

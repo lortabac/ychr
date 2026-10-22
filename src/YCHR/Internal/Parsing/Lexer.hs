@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Lexer helpers shared by 'YCHR.Internal.SExpr' and 'YCHR.Internal.PExpr'.

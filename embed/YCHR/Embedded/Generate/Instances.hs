@@ -1,5 +1,3 @@
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE StandaloneDeriving #-}
 -- Every instance here is an orphan by construction: the class lives in
 -- "YCHR.Embedded.Generate.ToCode" and the types in the library, and
 -- neither module should learn about code generation.

@@ -1,5 +1,3 @@
-{-# LANGUAGE NumericUnderscores #-}
-
 module Main (main) where
 
 import Test.Tasty (Timeout, defaultMain, localOption, mkTimeout, testGroup)

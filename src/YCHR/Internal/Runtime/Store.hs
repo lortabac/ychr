@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | Constraint store for the CHR Haskell runtime.
 --
 -- Manages constraint suspensions: creation, storage, killing, liveness

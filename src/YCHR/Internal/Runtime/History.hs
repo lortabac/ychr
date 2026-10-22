@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | Propagation history for the CHR Haskell runtime.
 --
 -- Tracks which rule has fired with which combination of constraint

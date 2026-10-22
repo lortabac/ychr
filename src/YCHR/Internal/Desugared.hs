@@ -1,5 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-
 -- | Desugared AST
 --
 -- The AST the compiler reads. It is not the parser's output but the

@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | Per-argument indexes for the constraint store.
 --
 -- The /Indexing/ optimization of Van Weert, Wuille, Schrijvers and

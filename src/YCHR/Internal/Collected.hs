@@ -1,5 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-
 -- | Collected AST: the module representation produced by the collect
 -- phase ('YCHR.Internal.Collect.rewriteImports') and consumed by 'YCHR.Internal.Rename'
 -- and 'YCHR.Internal.Resolve'.

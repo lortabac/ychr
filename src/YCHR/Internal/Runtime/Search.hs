@@ -1,7 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | The search driver: @solve\/1@, @findall\/2@, @fold_solutions\/4@
 -- and @fail\/0@, the host calls behind @library(search)@ — and

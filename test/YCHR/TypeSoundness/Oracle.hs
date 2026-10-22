@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | The oracle: what counts as a soundness violation, and why nothing
 -- else can masquerade as one.

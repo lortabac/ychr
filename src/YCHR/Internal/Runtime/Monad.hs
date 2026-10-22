@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | The 'Chr' monad and the 'SessionEnv' it reads from.
 --
 -- 'Chr' is the host-side runtime monad: a 'ReaderT' over a record of

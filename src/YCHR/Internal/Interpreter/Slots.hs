@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 
 -- | The Haskell interpreter's slot phase: a VM program with every local
 -- variable resolved to a per-procedure integer slot.

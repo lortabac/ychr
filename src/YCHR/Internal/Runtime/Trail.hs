@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | The search undo trail: recording writes, marking a position, and
 -- unwinding back to one.
 --
