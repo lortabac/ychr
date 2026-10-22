@@ -138,6 +138,7 @@ module YCHR.Internal.Interpreter.Slots
   )
 where
 
+import Control.Monad.Trans.State.Strict (State, get, gets, put, runState)
 import Data.Array (Array)
 import Data.Array qualified as Array
 import Data.Map.Strict (Map)
@@ -398,17 +399,11 @@ data SlotCallArg
 -- demands the resolver.
 lowerProgram :: Program -> SlotProgram
 lowerProgram prog =
-  let lowered =
-        [ (i, p.name, lowerProcedureWith (ProcIx i) (resolveCallIn procMap) p)
-        | (i, p) <- zip [0 ..] prog.procedures
-        ]
-      procMap = Map.fromList [(n, proc) | (_, n, proc) <- lowered]
+  let lowered = lowerFrom 0 procMap prog.procedures
+      procMap = byName lowered
    in SlotProgram
         { slotProcedures = procMap,
-          slotProcEntries =
-            Array.listArray
-              (0, length prog.procedures - 1)
-              [proc | (_, _, proc) <- lowered]
+          slotProcEntries = Array.listArray (0, length prog.procedures - 1) lowered
         }
 
 -- | Extend a lowered program with procedures compiled after it —
@@ -438,20 +433,28 @@ addProcedures :: SlotProgram -> [Procedure] -> SlotProgram
 addProcedures sp [] = sp
 addProcedures sp extras =
   let base = snd (Array.bounds sp.slotProcEntries) + 1
-      lowered =
-        [ (i, p.name, lowerProcedureWith (ProcIx i) (resolveCallIn merged) p)
-        | (i, p) <- zip [base ..] extras
-        ]
-      merged =
-        Map.fromList [(n, proc) | (_, n, proc) <- lowered]
-          `Map.union` sp.slotProcedures
+      lowered = lowerFrom base merged extras
+      merged = byName lowered `Map.union` sp.slotProcedures
    in SlotProgram
         { slotProcedures = merged,
           slotProcEntries =
             Array.listArray
               (0, base + length extras - 1)
-              (Array.elems sp.slotProcEntries ++ [proc | (_, _, proc) <- lowered])
+              (Array.elems sp.slotProcEntries ++ lowered)
         }
+
+-- | Lower procedures that take the indices from @base@ on, resolving
+-- their calls against @procMap@.
+lowerFrom :: Int -> Map Name SlotProc -> [Procedure] -> [SlotProc]
+lowerFrom base procMap procs =
+  [ lowerProcedureWith (ProcIx i) (resolveCallIn procMap) p
+  | (i, p) <- zip [base ..] procs
+  ]
+
+-- | Key lowered procedures by name. Building the map forces each
+-- 'SlotProc' to weak head normal form, which leaves its body a thunk.
+byName :: [SlotProc] -> Map Name SlotProc
+byName procs = Map.fromList [(p.slotProcName, p) | p <- procs]
 
 -- | A program with no procedures: what a hand-built session (a unit
 -- test exercising primitives, which needs no compiled procedure) starts
@@ -479,14 +482,16 @@ resolveCallIn procMap n = case Map.lookup n procMap of
 --
 -- The body and the walk's final counter are two projections of one
 -- shared walk, so forcing either runs the walk once and forcing the
--- record itself (for its name, index, arity or kind) runs nothing.
+-- record itself (for its name, index, arity or kind) runs nothing: the
+-- @let@ below binds the walk's result lazily, and the walk starts only
+-- when that result is demanded.
 lowerProcedureWith :: ProcIx -> (Name -> CallTarget) -> Procedure -> SlotProc
 lowerProcedureWith ix resolveCall proc =
   let initialScope = Map.fromList (zip proc.params [0 ..])
       (body, finalWalker) =
-        lowerStmts
+        runState
+          (lowerStmts proc.body)
           (Walker (length proc.params) initialScope resolveCall)
-          proc.body
    in SlotProc
         { slotProcName = proc.name,
           slotProcIx = ix,
@@ -504,182 +509,126 @@ data Walker = Walker
     resolveCall :: Name -> CallTarget
   }
 
+-- | The walk over one procedure body.
+type Walk = State Walker
+
 -- | The slot a name is already bound to, or a fresh one that nothing
 -- will bind (see the module header on totality).
-slotOf :: Walker -> Name -> (Slot, Walker)
-slotOf w name = case Map.lookup name w.scope of
-  Just s -> (s, w)
-  Nothing ->
-    let s = w.nextSlot
-     in (s, w {nextSlot = s + 1, scope = Map.insert name s w.scope})
+slotOf :: Name -> Walk Slot
+slotOf name = do
+  w <- get
+  case Map.lookup name w.scope of
+    Just s -> pure s
+    Nothing -> bindName name
 
 -- | Bind a name to a fresh slot, shadowing any earlier binding.
-bindName :: Walker -> Name -> (Slot, Walker)
-bindName w name =
+bindName :: Name -> Walk Slot
+bindName name = do
+  w <- get
   let s = w.nextSlot
-   in (s, w {nextSlot = s + 1, scope = Map.insert name s w.scope})
+  put w {nextSlot = s + 1, scope = Map.insert name s w.scope}
+  pure s
 
 -- | Walk a statement list left to right. Bindings made by earlier
 -- statements are visible to later ones, matching the interpreter's
 -- single mutable environment; nested blocks see them too.
-lowerStmts :: Walker -> [Stmt] -> ([SlotStmt], Walker)
-lowerStmts w0 = go w0 []
-  where
-    go w acc [] = (reverse acc, w)
-    go w acc (stmt : rest) =
-      let (stmt', w') = lowerStmt w stmt
-       in go w' (stmt' : acc) rest
+lowerStmts :: [Stmt] -> Walk [SlotStmt]
+lowerStmts = traverse lowerStmt
 
-lowerStmt :: Walker -> Stmt -> (SlotStmt, Walker)
-lowerStmt w = \case
-  LetVal name expr ->
-    let (expr', w1) = lowerValExpr w expr
-        (slot, w2) = bindName w1 name
-     in (SLetVal slot expr', w2)
-  LetId name expr ->
-    let (expr', w1) = lowerIdExpr w expr
-        (slot, w2) = bindName w1 name
-     in (SLetId slot expr', w2)
-  AssignVal name expr ->
-    let (expr', w1) = lowerValExpr w expr
-        (slot, w2) = slotOf w1 name
-     in (SAssignVal slot expr', w2)
-  AssignId name expr ->
-    let (expr', w1) = lowerIdExpr w expr
-        (slot, w2) = slotOf w1 name
-     in (SAssignId slot expr', w2)
+lowerStmt :: Stmt -> Walk SlotStmt
+lowerStmt = \case
+  LetVal name expr -> do
+    expr' <- lowerValExpr expr
+    slot <- bindName name
+    pure (SLetVal slot expr')
+  LetId name expr -> do
+    expr' <- lowerIdExpr expr
+    slot <- bindName name
+    pure (SLetId slot expr')
+  AssignVal name expr -> do
+    expr' <- lowerValExpr expr
+    slot <- slotOf name
+    pure (SAssignVal slot expr')
+  AssignId name expr -> do
+    expr' <- lowerIdExpr expr
+    slot <- slotOf name
+    pure (SAssignId slot expr')
   If cond thenBranch elseBranch ->
-    let (cond', w1) = lowerBoolExpr w cond
-        (then', w2) = lowerStmts w1 thenBranch
-        (else', w3) = lowerStmts w2 elseBranch
-     in (SIf cond' then' else', w3)
-  Foreach lbl cType suspVar conditions body ->
-    let (conditions', w1) = lowerConditions w conditions
-        (slot, w2) = bindName w1 suspVar
-        (body', w3) = lowerStmts w2 body
-     in (SForeach lbl cType slot conditions' body', w3)
-  Continue lbl -> (SContinue lbl, w)
-  Break lbl -> (SBreak lbl, w)
-  Return expr -> let (expr', w1) = lowerValExpr w expr in (SReturn expr', w1)
-  ExprStmt expr -> let (expr', w1) = lowerValExpr w expr in (SExprStmt expr', w1)
-  BoolExprStmt expr -> let (expr', w1) = lowerBoolExpr w expr in (SBoolExprStmt expr', w1)
-  Store expr -> let (expr', w1) = lowerIdExpr w expr in (SStore expr', w1)
-  Kill expr -> let (expr', w1) = lowerIdExpr w expr in (SKill expr', w1)
+    SIf <$> lowerBoolExpr cond <*> lowerStmts thenBranch <*> lowerStmts elseBranch
+  Foreach lbl cType suspVar conditions body -> do
+    conditions' <- traverse lowerCondition conditions
+    slot <- bindName suspVar
+    body' <- lowerStmts body
+    pure (SForeach lbl cType slot conditions' body')
+  Continue lbl -> pure (SContinue lbl)
+  Break lbl -> pure (SBreak lbl)
+  Return expr -> SReturn <$> lowerValExpr expr
+  ExprStmt expr -> SExprStmt <$> lowerValExpr expr
+  BoolExprStmt expr -> SBoolExprStmt <$> lowerBoolExpr expr
+  Store expr -> SStore <$> lowerIdExpr expr
+  Kill expr -> SKill <$> lowerIdExpr expr
   AddHistory ruleId ids ->
-    let (ids', w1) = lowerIdExprs w (historyIdsList ids)
-     in (SAddHistory ruleId ids', w1)
-  DrainReactivationQueue suspVar body ->
+    SAddHistory ruleId <$> traverse lowerIdExpr (historyIdsList ids)
+  DrainReactivationQueue suspVar body -> do
     -- The compiler emits no binder for this variable; the interpreter
     -- creates it on the first queue entry, so the phase binds it here.
     -- If the name is already in scope the existing slot is the one the
     -- interpreter would write to.
-    let (slot, w1) = slotOf w suspVar
-        (body', w2) = lowerStmts w1 body
-     in (SDrainReactivationQueue slot body', w2)
+    slot <- slotOf suspVar
+    body' <- lowerStmts body
+    pure (SDrainReactivationQueue slot body')
   TellTerm sc goal extras ->
-    let (goal', w1) = lowerValExpr w goal
-        (extras', w2) = lowerValExprs w1 extras
-     in (STellTerm sc goal' extras', w2)
-  PushFrame frame -> (SPushFrame frame, w)
+    STellTerm sc <$> lowerValExpr goal <*> traverse lowerValExpr extras
+  PushFrame frame -> pure (SPushFrame frame)
 
-lowerConditions :: Walker -> [IndexCondition] -> ([SIndexCondition], Walker)
-lowerConditions w0 = go w0 []
-  where
-    go w acc [] = (reverse acc, w)
-    go w acc (IndexCondition idx expr : rest) =
-      let (expr', w') = lowerValExpr w expr
-       in go w' (SIndexCondition idx expr' : acc) rest
+lowerCondition :: IndexCondition -> Walk SIndexCondition
+lowerCondition (IndexCondition idx expr) = SIndexCondition idx <$> lowerValExpr expr
 
-lowerValExpr :: Walker -> ValExpr -> (SlotValExpr, Walker)
-lowerValExpr w = \case
-  Var name -> let (slot, w') = slotOf w name in (SVar slot name, w')
-  Lit lit -> (SLit lit, w)
-  CallExpr name args ->
-    let (args', w') = lowerCallArgs w args
-     in (SCallExpr (w.resolveCall name) args', w')
-  HostCall name args ->
-    let (args', w') = lowerValExprs w args
-     in (SHostCall name args', w')
-  EvalDeep expr -> let (expr', w') = lowerValExpr w expr in (SEvalDeep expr', w')
+lowerValExpr :: ValExpr -> Walk SlotValExpr
+lowerValExpr = \case
+  Var name -> (\slot -> SVar slot name) <$> slotOf name
+  Lit lit -> pure (SLit lit)
+  CallExpr name args -> do
+    resolveCall <- gets (.resolveCall)
+    SCallExpr (resolveCall name) <$> traverse lowerCallArg args
+  HostCall name args -> SHostCall name <$> traverse lowerValExpr args
+  EvalDeep expr -> SEvalDeep <$> lowerValExpr expr
   ApplyClosure f args ->
-    let (f', w1) = lowerValExpr w f
-        (args', w2) = lowerValExprs w1 args
-     in (SApplyClosure f' args', w2)
-  EvalIs expr -> let (expr', w') = lowerValExpr w expr in (SEvalIs expr', w')
-  NewVar -> (SNewVar, w)
-  MakeTerm functor args ->
-    let (args', w') = lowerValExprs w args in (SMakeTerm functor args', w')
-  GetArg expr idx -> let (expr', w') = lowerValExpr w expr in (SGetArg expr' idx, w')
-  FieldArg expr idx -> let (expr', w') = lowerIdExpr w expr in (SFieldArg expr' idx, w')
-  FieldType expr -> let (expr', w') = lowerIdExpr w expr in (SFieldType expr', w')
+    SApplyClosure <$> lowerValExpr f <*> traverse lowerValExpr args
+  EvalIs expr -> SEvalIs <$> lowerValExpr expr
+  NewVar -> pure SNewVar
+  MakeTerm functor args -> SMakeTerm functor <$> traverse lowerValExpr args
+  GetArg expr idx -> (\e -> SGetArg e idx) <$> lowerValExpr expr
+  FieldArg expr idx -> (\e -> SFieldArg e idx) <$> lowerIdExpr expr
+  FieldType expr -> SFieldType <$> lowerIdExpr expr
 
-lowerValExprs :: Walker -> [ValExpr] -> ([SlotValExpr], Walker)
-lowerValExprs w0 = go w0 []
-  where
-    go w acc [] = (reverse acc, w)
-    go w acc (expr : rest) =
-      let (expr', w') = lowerValExpr w expr
-       in go w' (expr' : acc) rest
-
-lowerBoolExpr :: Walker -> BoolExpr -> (SlotBoolExpr, Walker)
-lowerBoolExpr w = \case
-  BLit b -> (SBLit b, w)
-  BNot expr -> let (expr', w') = lowerBoolExpr w expr in (SBNot expr', w')
-  BAnd l r ->
-    let (l', w1) = lowerBoolExpr w l
-        (r', w2) = lowerBoolExpr w1 r
-     in (SBAnd l' r', w2)
-  BOr l r ->
-    let (l', w1) = lowerBoolExpr w l
-        (r', w2) = lowerBoolExpr w1 r
-     in (SBOr l' r', w2)
+lowerBoolExpr :: BoolExpr -> Walk SlotBoolExpr
+lowerBoolExpr = \case
+  BLit b -> pure (SBLit b)
+  BNot expr -> SBNot <$> lowerBoolExpr expr
+  BAnd l r -> SBAnd <$> lowerBoolExpr l <*> lowerBoolExpr r
+  BOr l r -> SBOr <$> lowerBoolExpr l <*> lowerBoolExpr r
   BMatchTerm expr functor arity ->
-    let (expr', w') = lowerValExpr w expr in (SBMatchTerm expr' functor arity, w')
-  BEqual l r ->
-    let (l', w1) = lowerValExpr w l
-        (r', w2) = lowerValExpr w1 r
-     in (SBEqual l' r', w2)
-  BIdEqual l r ->
-    let (l', w1) = lowerIdExpr w l
-        (r', w2) = lowerIdExpr w1 r
-     in (SBIdEqual l' r', w2)
-  BAlive expr -> let (expr', w') = lowerIdExpr w expr in (SBAlive expr', w')
+    (\e -> SBMatchTerm e functor arity) <$> lowerValExpr expr
+  BEqual l r -> SBEqual <$> lowerValExpr l <*> lowerValExpr r
+  BIdEqual l r -> SBIdEqual <$> lowerIdExpr l <*> lowerIdExpr r
+  BAlive expr -> SBAlive <$> lowerIdExpr expr
   BIsConstraintType expr cType ->
-    let (expr', w') = lowerIdExpr w expr in (SBIsConstraintType expr' cType, w')
+    (\e -> SBIsConstraintType e cType) <$> lowerIdExpr expr
   BNotInHistory ruleId ids ->
-    let (ids', w') = lowerIdExprs w (historyIdsList ids)
-     in (SBNotInHistory ruleId ids', w')
-  BUnify l r ->
-    let (l', w1) = lowerValExpr w l
-        (r', w2) = lowerValExpr w1 r
-     in (SBUnify l' r', w2)
-  BFromVal expr -> let (expr', w') = lowerValExpr w expr in (SBFromVal expr', w')
-  BEvalDeep expr -> let (expr', w') = lowerBoolExpr w expr in (SBEvalDeep expr', w')
-  BSoftGuard expr -> let (expr', w') = lowerBoolExpr w expr in (SBSoftGuard expr', w')
+    SBNotInHistory ruleId <$> traverse lowerIdExpr (historyIdsList ids)
+  BUnify l r -> SBUnify <$> lowerValExpr l <*> lowerValExpr r
+  BFromVal expr -> SBFromVal <$> lowerValExpr expr
+  BEvalDeep expr -> SBEvalDeep <$> lowerBoolExpr expr
+  BSoftGuard expr -> SBSoftGuard <$> lowerBoolExpr expr
 
-lowerIdExpr :: Walker -> IdExpr -> (SlotIdExpr, Walker)
-lowerIdExpr w = \case
-  IdVar name -> let (slot, w') = slotOf w name in (SIdVar slot name, w')
+lowerIdExpr :: IdExpr -> Walk SlotIdExpr
+lowerIdExpr = \case
+  IdVar name -> (\slot -> SIdVar slot name) <$> slotOf name
   CreateConstraint cType args ->
-    let (args', w') = lowerValExprs w args
-     in (SCreateConstraint cType args', w')
+    SCreateConstraint cType <$> traverse lowerValExpr args
 
-lowerIdExprs :: Walker -> [IdExpr] -> ([SlotIdExpr], Walker)
-lowerIdExprs w0 = go w0 []
-  where
-    go w acc [] = (reverse acc, w)
-    go w acc (expr : rest) =
-      let (expr', w') = lowerIdExpr w expr
-       in go w' (expr' : acc) rest
-
-lowerCallArgs :: Walker -> [CallArg] -> ([SlotCallArg], Walker)
-lowerCallArgs w0 = go w0 []
-  where
-    go w acc [] = (reverse acc, w)
-    go w acc (arg : rest) = case arg of
-      AVal expr ->
-        let (expr', w') = lowerValExpr w expr
-         in go w' (SCallVal expr' : acc) rest
-      AId expr ->
-        let (expr', w') = lowerIdExpr w expr
-         in go w' (SCallId expr' : acc) rest
+lowerCallArg :: CallArg -> Walk SlotCallArg
+lowerCallArg = \case
+  AVal expr -> SCallVal <$> lowerValExpr expr
+  AId expr -> SCallId <$> lowerIdExpr expr
