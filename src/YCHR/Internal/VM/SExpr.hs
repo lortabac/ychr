@@ -177,18 +177,20 @@ programToSExpr prog =
         : SList (SAtom "tellables" : map tellableEntryToSExpr prog.tellables)
         : SList
           ( SAtom "tellables-unqualified"
-              : map tellableResolutionToSExpr (Map.toList prog.tellablesUnqualified)
+              : map
+                (uncurry tellableResolutionToSExpr)
+                (Map.toList prog.tellablesUnqualified)
           )
         : SList (SAtom "inert-types" : map constraintTypeToSExpr prog.inertTypes)
         : map procedureToSExpr prog.procedures
     )
 
-evaluableEntryToSExpr :: (EvaluableKey, Name) -> SExpr
-evaluableEntryToSExpr (key, procName) =
+evaluableEntryToSExpr :: Evaluable -> SExpr
+evaluableEntryToSExpr (Evaluable key procName) =
   SList [nameToSExpr key.functor, SInt (fromIntegral key.arity), nameToSExpr procName]
 
-callableEntryToSExpr :: (CallableKey, Name) -> SExpr
-callableEntryToSExpr (key, procName) =
+callableEntryToSExpr :: Callable -> SExpr
+callableEntryToSExpr (Callable key procName) =
   SList
     [ nameToSExpr key.functor,
       nameToSExpr key.identity,
@@ -196,8 +198,8 @@ callableEntryToSExpr (key, procName) =
       nameToSExpr procName
     ]
 
-tellableEntryToSExpr :: (TellableKey, Name) -> SExpr
-tellableEntryToSExpr (key, procName) =
+tellableEntryToSExpr :: Tellable -> SExpr
+tellableEntryToSExpr (Tellable key procName) =
   SList
     [ tellableScopeToSExpr key.scope,
       nameToSExpr key.functor,
@@ -221,8 +223,8 @@ tellableScopeAnyAtom = "any"
 -- proc-name fields are one per candidate. The common case is one; two
 -- mean the pair is ambiguous and the runtime must report it rather than
 -- choose.
-tellableResolutionToSExpr :: (TellableKey, TellableResolution) -> SExpr
-tellableResolutionToSExpr (key, resolution) =
+tellableResolutionToSExpr :: TellableKey -> TellableResolution -> SExpr
+tellableResolutionToSExpr key resolution =
   SList
     ( tellableScopeToSExpr Nothing
         : nameToSExpr key.functor
@@ -287,7 +289,10 @@ stmtToSExpr (Foreach lbl ct sv conds body) =
       labelToSExpr lbl,
       constraintTypeToSExpr ct,
       nameToSExpr sv,
-      SList [SList [SInt (fromIntegral i), valExprToSExpr e] | (ArgIndex i, e) <- conds],
+      SList
+        [ SList [SInt (fromIntegral i), valExprToSExpr e]
+        | IndexCondition (ArgIndex i) e <- conds
+        ],
       SList (map stmtToSExpr body)
     ]
 stmtToSExpr (Continue lbl) = SList [SAtom "continue", labelToSExpr lbl]
@@ -630,44 +635,51 @@ programFromSExpr
         }
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)
 
-evaluableEntryFromSExpr :: SExpr -> Err (EvaluableKey, Name)
+evaluableEntryFromSExpr :: SExpr -> Err Evaluable
 evaluableEntryFromSExpr (SList [fSexpr, SInt arity, pSexpr]) = do
   functor <- nameFromSExpr fSexpr
   procName <- nameFromSExpr pSexpr
-  pure (EvaluableKey {functor = functor, arity = fromInteger arity}, procName)
+  pure
+    Evaluable
+      { key = EvaluableKey {functor = functor, arity = fromInteger arity},
+        procName = procName
+      }
 evaluableEntryFromSExpr s = err ("expected evaluable entry, got: " <> printSExpr s)
 
-callableEntryFromSExpr :: SExpr -> Err (CallableKey, Name)
+callableEntryFromSExpr :: SExpr -> Err Callable
 callableEntryFromSExpr (SList [fSexpr, iSexpr, SInt arity, pSexpr]) = do
   functor <- nameFromSExpr fSexpr
   identity <- nameFromSExpr iSexpr
   procName <- nameFromSExpr pSexpr
   pure
-    ( CallableKey
-        { functor = functor,
-          identity = identity,
-          arity = fromInteger arity
-        },
-      procName
-    )
+    Callable
+      { key =
+          CallableKey
+            { functor = functor,
+              identity = identity,
+              arity = fromInteger arity
+            },
+        procName = procName
+      }
 callableEntryFromSExpr s = err ("expected callable entry, got: " <> printSExpr s)
 
 -- | Parse a 'tellableEntryToSExpr' under @fromScope@, which turns the
 -- entry's scope field into a module name or 'Nothing'. The two tiers
 -- share one shape, so one parser serves both.
 tellableEntryFromSExprWith ::
-  (SExpr -> Err (Maybe Text)) -> SExpr -> Err (TellableKey, Name)
+  (SExpr -> Err (Maybe Text)) -> SExpr -> Err Tellable
 tellableEntryFromSExprWith fromScope (SList [scSexpr, fSexpr, SInt arity, pSexpr]) = do
   scope <- fromScope scSexpr
   functor <- nameFromSExpr fSexpr
   procName <- nameFromSExpr pSexpr
   pure
-    ( TellableKey {scope = scope, functor = functor, arity = fromInteger arity},
-      procName
-    )
+    Tellable
+      { key = TellableKey {scope = scope, functor = functor, arity = fromInteger arity},
+        procName = procName
+      }
 tellableEntryFromSExprWith _ s = err ("expected tellable entry, got: " <> printSExpr s)
 
-tellableEntryFromSExpr :: SExpr -> Err (TellableKey, Name)
+tellableEntryFromSExpr :: SExpr -> Err Tellable
 tellableEntryFromSExpr = tellableEntryFromSExprWith (fmap Just . textFromSExpr)
 
 -- | Parse one @(tellables-unqualified ...)@ child: the same shape as a
@@ -894,10 +906,10 @@ callArgFromSExpr (SList [SAtom "arg-val", e]) = AVal <$> valExprFromSExpr e
 callArgFromSExpr (SList [SAtom "arg-id", e]) = AId <$> idExprFromSExpr e
 callArgFromSExpr s = err ("expected call argument, got: " <> printSExpr s)
 
-condFromSExpr :: SExpr -> Err (ArgIndex, ValExpr)
+condFromSExpr :: SExpr -> Err IndexCondition
 condFromSExpr (SList [SInt i, e]) = do
   pos <- nonNegative "foreach condition index" i
-  (ArgIndex pos,) <$> valExprFromSExpr e
+  IndexCondition (ArgIndex pos) <$> valExprFromSExpr e
 condFromSExpr s = err ("expected (index expr), got: " <> printSExpr s)
 
 nameFromSExpr :: SExpr -> Err Name

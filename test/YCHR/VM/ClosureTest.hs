@@ -24,10 +24,13 @@ import YCHR.Internal.VM
   ( ArgIndex (..),
     BoolExpr (..),
     CallArg (..),
+    Callable (..),
     CallableKey (..),
     ConstraintType (..),
+    Evaluable (..),
     EvaluableKey (..),
     IdExpr (..),
+    IndexCondition (..),
     Literal (..),
     Name (..),
     ProcKind (..),
@@ -75,8 +78,8 @@ mkProc n body =
 -- | A program with the given procedures and dispatch tables.
 programWith ::
   [Procedure] ->
-  [(EvaluableKey, Name)] ->
-  [(CallableKey, Name)] ->
+  [Evaluable] ->
+  [Callable] ->
   Program
 programWith procs evs cls =
   Program
@@ -123,8 +126,8 @@ closedTests =
         danglingTargets
           ( programWith
               [mkProc "f1" [], mkProc "lambda0" []]
-              [(EvaluableKey "f" 1, "f1")]
-              [(CallableKey "/" "f/1" 1, "lambda0")]
+              [Evaluable (EvaluableKey "f" 1) "f1"]
+              [Callable (CallableKey "/" "f/1" 1) "lambda0"]
           )
           @?= [],
       testCase "a program with no calls at all is closed" $
@@ -176,7 +179,7 @@ danglingTests =
                       "l"
                       (ConstraintType 0)
                       "s"
-                      [(ArgIndex 0, CallExpr "ghost1" [])]
+                      [IndexCondition (ArgIndex 0) (CallExpr "ghost1" [])]
                       [ BoolExprStmt
                           ( BAlive
                               (CreateConstraint (ConstraintType 1) [CallExpr "ghost2" []])
@@ -223,17 +226,17 @@ dispatchTableTests =
   testGroup
     "dispatch tables"
     [ testCase "an evaluables target no procedure defines is reported" $
-        danglingTargets (programWith [] [(EvaluableKey "f" 1, "missing")] [])
+        danglingTargets (programWith [] [Evaluable (EvaluableKey "f" 1) "missing"] [])
           @?= ["missing"],
       testCase "a callables target no procedure defines is reported" $
-        danglingTargets (programWith [] [] [(CallableKey "/" "f/1" 1, "missing")])
+        danglingTargets (programWith [] [] [Callable (CallableKey "/" "f/1" 1) "missing"])
           @?= ["missing"],
       testCase "call-site and dispatch-table misses are reported together" $
         danglingTargets
           ( programWith
               [mkProc "a" [ExprStmt (CallExpr "ghostCall" [])]]
-              [(EvaluableKey "f" 1, "ghostEval")]
-              [(CallableKey "/" "g/1" 1, "ghostCallable")]
+              [Evaluable (EvaluableKey "f" 1) "ghostEval"]
+              [Callable (CallableKey "/" "g/1" 1) "ghostCallable"]
           )
           @?= ["ghostCall", "ghostEval", "ghostCallable"],
       testCase "an origin-less tellable target no procedure defines is reported" $
@@ -294,7 +297,9 @@ unionTests =
       testCase "an extra callables target must resolve in the union" $
         let compiled = procedureNames [mkProc "compiled" []]
             known = compiled <> procedureNames [mkProc "__lambda_0" []]
-         in danglingCallables known [(CallableKey "__closure" "__lambda_0" 1, "ghost")]
+         in danglingCallables
+              known
+              [Callable (CallableKey "__closure" "__lambda_0" 1) "ghost"]
               @?= ["ghost"],
       testCase "withCHRExtra rejects an extra that calls an unknown procedure" $ do
         -- The pure checks above can pass while the wiring that runs them

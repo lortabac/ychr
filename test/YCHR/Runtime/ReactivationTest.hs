@@ -4,18 +4,15 @@ module YCHR.Runtime.ReactivationTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import Data.IntMap.Strict qualified as IntMap
-import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
-import YCHR.Internal.Parser (builtinOps)
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Reactivation
 import YCHR.Internal.Runtime.Store (createConstraint, killConstraint)
 import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Internal.Types (ConstraintType (..), Name (..))
+import YCHR.TestHelpers (runChrEmpty, runChrIn)
 
 -- | Reactivation-queue tests: 'enqueueObservers', FIFO order, and reentrancy.
 tests :: TestTree
@@ -28,48 +25,12 @@ tests =
       miscTests
     ]
 
--- | Run an action in a fresh, empty session.
-runReactEnv :: Chr a -> IO a
-runReactEnv action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
-
 -- | A session with one constraint-type slot, so 'createConstraint' has
 -- somewhere to put a suspension. 'enqueueObservers' reads the
 -- id-indexed map, which 'createConstraint' populates on its own, so
 -- nothing here has to be stored.
 runReactStoreEnv :: Chr a -> IO a
-runReactStoreEnv action = do
-  env <-
-    initSessionEnv
-      [Unqualified ""]
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runReactStoreEnv = runChrIn emptySessionConfig {Config.typeNames = [Unqualified ""]}
 
 -- | Drain the queue, collecting all IDs in order.
 drainCollect :: Chr [SuspensionId]
@@ -83,7 +44,7 @@ orderTests =
   testGroup
     "FIFO order"
     [ testCase "multiple enqueues preserve combined order" $ do
-        ids <- runReactEnv $ do
+        ids <- runChrEmpty $ do
           enqueue [SuspensionId 0, SuspensionId 1]
           enqueue [SuspensionId 2, SuspensionId 3]
           drainCollect
@@ -95,7 +56,7 @@ reentrancyTests =
   testGroup
     "reentrancy"
     [ testCase "callback enqueues more IDs" $ do
-        ids <- runReactEnv $ do
+        ids <- runChrEmpty $ do
           ref <- liftIO $ newIORef []
           enqueue [SuspensionId 0]
           drainQueue $ \sid -> do
@@ -106,7 +67,7 @@ reentrancyTests =
           liftIO $ reverse <$> readIORef ref
         ids @?= [SuspensionId 0, SuspensionId 10, SuspensionId 11],
       testCase "deep reentrancy (N < 3 -> enqueue N+1)" $ do
-        ids <- runReactEnv $ do
+        ids <- runChrEmpty $ do
           ref <- liftIO $ newIORef []
           enqueue [SuspensionId 0]
           drainQueue $ \sid@(SuspensionId n) -> do
@@ -159,13 +120,13 @@ miscTests =
   testGroup
     "misc"
     [ testCase "queue empty after drain" $ do
-        ids <- runReactEnv $ do
+        ids <- runChrEmpty $ do
           enqueue [SuspensionId 0, SuspensionId 1]
           _ <- drainCollect
           drainCollect
         ids @?= [],
       testCase "duplicates preserved" $ do
-        ids <- runReactEnv $ do
+        ids <- runChrEmpty $ do
           enqueue [SuspensionId 5, SuspensionId 5]
           drainCollect
         ids @?= [SuspensionId 5, SuspensionId 5]

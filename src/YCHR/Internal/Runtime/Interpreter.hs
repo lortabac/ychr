@@ -84,6 +84,7 @@ import Data.Text.Shim qualified as T
 import YCHR.Internal.Interpreter.Slots
   ( CallTarget (..),
     ProcIx (..),
+    SIndexCondition (..),
     Slot,
     SlotBoolExpr (..),
     SlotCallArg (..),
@@ -91,7 +92,6 @@ import YCHR.Internal.Interpreter.Slots
     SlotProc (..),
     SlotStmt (..),
     SlotValExpr (..),
-    lowerProgram,
   )
 import YCHR.Internal.Meta
   ( FunRefLookup (..),
@@ -100,7 +100,6 @@ import YCHR.Internal.Meta
     lookupFunRef,
     valueToTerm,
   )
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
   ( RuntimeErrorKind (..),
@@ -117,15 +116,17 @@ import YCHR.Internal.Runtime.Error
     tellUnboundError,
   )
 import YCHR.Internal.Runtime.History (addHistory, notInHistory)
-import YCHR.Internal.Runtime.Index (GroundKey, indexablePositions)
+import YCHR.Internal.Runtime.Index (GroundKey)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     HostCallFn (..),
     HostCallRegistry,
     SessionEnv (..),
     initSessionEnv,
+    programSessionConfig,
     runChr,
   )
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
@@ -281,24 +282,8 @@ liftChr action = InterpM (\_ -> action)
 -- buys and what a hand-built 'Program' in a test expects.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
-  let slotProgram = lowerProgram prog
-      evaluableMap = Map.fromList prog.evaluables
-      callableMap = Map.fromList prog.callables
-  env <-
-    initSessionEnv
-      prog.typeNames
-      prog.ruleNames
-      prog.inertTypes
-      (indexablePositions prog)
-      builtinOps
-      slotProgram
-      hostCalls
-      evaluableMap
-      callableMap
-      (Map.fromList prog.tellables)
-      prog.tellablesUnqualified
-      Map.empty
-      mempty
+  -- 'Config.' picks the 'SessionConfig' field over the 'SessionEnv' one.
+  env <- initSessionEnv (programSessionConfig prog) {Config.hostCalls = hostCalls}
   runChr (callProc entryName (map CVal args)) env
 
 -- ---------------------------------------------------------------------------
@@ -806,7 +791,7 @@ execStmt (SPushFrame frame) = do
 -- for why the narrowed list is still a superset of the matches;
 -- 'driverKey' holds the two guards that keep the narrowing invisible to
 -- a program's behaviour.
-foreachCandidates :: ConstraintType -> [(ArgIndex, SlotValExpr)] -> InterpM [Suspension]
+foreachCandidates :: ConstraintType -> [SIndexCondition] -> InterpM [Suspension]
 foreachCandidates cType conditions = do
   mIndexed <- liftChr (indexedPositionsFor cType)
   case mIndexed of
@@ -830,9 +815,9 @@ foreachCandidates cType conditions = do
 -- is stable for the loop's duration. Anything else — including a
 -- compound term holding an unbound variable — falls through to the
 -- unindexed path, which evaluates the condition per candidate.
-driverKey :: IntSet -> [(ArgIndex, SlotValExpr)] -> InterpM (Maybe (Int, GroundKey))
+driverKey :: IntSet -> [SIndexCondition] -> InterpM (Maybe (Int, GroundKey))
 driverKey _ [] = pure Nothing
-driverKey indexed ((ArgIndex pos, expr) : rest)
+driverKey indexed (SIndexCondition (ArgIndex pos) expr : rest)
   | nonRaising expr,
     -- 'pos' is bounded by the constraint arity, so the conversion is safe.
     IntSet.member (fromIntegral pos) indexed = do
@@ -890,7 +875,7 @@ nonRaising (SFieldType _) = False
 execForeach ::
   Label ->
   Slot ->
-  [(ArgIndex, SlotValExpr)] ->
+  [SIndexCondition] ->
   [SlotStmt] ->
   [Suspension] ->
   InterpM Signal
@@ -919,9 +904,9 @@ execForeach lbl suspSlot conditions body (susp : rest) = do
               | l == lbl -> pure SFall
             _ -> pure sig
 
-checkConditions :: Suspension -> [(ArgIndex, SlotValExpr)] -> InterpM Bool
+checkConditions :: Suspension -> [SIndexCondition] -> InterpM Bool
 checkConditions _ [] = pure True
-checkConditions susp ((ArgIndex i, expr) : rest) = do
+checkConditions susp (SIndexCondition (ArgIndex i) expr : rest) = do
   v <- evalValExpr expr
   -- Store's argument accessor takes an 'Int'; 'i' is non-negative.
   let argVal = suspArg susp (fromIntegral i)

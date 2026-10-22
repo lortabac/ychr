@@ -290,7 +290,7 @@ programInfoSExpr infoName symTab vmp ops =
           ++ map callableRegistration vmp.program.callables
           ++ map tellableRegistration vmp.program.tellables
           ++ map
-            unqualifiedTellableRegistration
+            (uncurry unqualifiedTellableRegistration)
             (Map.toList vmp.program.tellablesUnqualified)
           ++ goalRegistrations symTab vmp
           ++ shortExportRegistrations vmp.exportedSet
@@ -481,8 +481,8 @@ indexPositionsSExpr positions =
 -- single entry of the program's evaluables table. The procedure
 -- identifier is the same mangled name bound by 'compileProcedure', so
 -- direct identifier reference resolves it in the library's scope.
-evaluableRegistration :: (EvaluableKey, Name) -> SExpr
-evaluableRegistration (key, procName) =
+evaluableRegistration :: Evaluable -> SExpr
+evaluableRegistration (Evaluable key procName) =
   SList
     [ SAtom "register-evaluable!",
       SAtom "%s",
@@ -498,8 +498,8 @@ evaluableRegistration (key, procName) =
 -- identifiers of their own), matching the atom a closure term carries
 -- at run time. The procedure identifier is the same mangled name bound
 -- by 'compileProcedure'.
-callableRegistration :: (CallableKey, Name) -> SExpr
-callableRegistration (key, procName) =
+callableRegistration :: Callable -> SExpr
+callableRegistration (Callable key procName) =
   SList
     [ SAtom "register-callable!",
       SAtom "%s",
@@ -514,8 +514,8 @@ callableRegistration (key, procName) =
 -- symbol a goal term carries at run time, as for
 -- 'callableRegistration'; the scope is a module name, compared as a
 -- string.
-tellableRegistration :: (TellableKey, Name) -> SExpr
-tellableRegistration (key, procName) = case key.scope of
+tellableRegistration :: Tellable -> SExpr
+tellableRegistration (Tellable key procName) = case key.scope of
   Just m ->
     SList
       [ SAtom "register-tellable!",
@@ -525,15 +525,15 @@ tellableRegistration (key, procName) = case key.scope of
         SInt (fromIntegral key.arity),
         SAtom procName.unName
       ]
-  Nothing -> unqualifiedTellableRegistration (key, UniqueTell procName)
+  Nothing -> unqualifiedTellableRegistration key (UniqueTell procName)
 
 -- | Emit @(register-tellable-anywhere! %s 'functor arity procedure
 -- ...)@ for one entry of the program's origin-less tellables table.
 -- One procedure name per candidate: the Scheme runtime treats more than
 -- one as the ambiguous pair, which is what the Haskell interpreter
 -- does with 'AmbiguousTell'.
-unqualifiedTellableRegistration :: (TellableKey, TellableResolution) -> SExpr
-unqualifiedTellableRegistration (key, resolution) =
+unqualifiedTellableRegistration :: TellableKey -> TellableResolution -> SExpr
+unqualifiedTellableRegistration key resolution =
   SList
     ( SAtom "register-tellable-anywhere!"
         : SAtom "%s"
@@ -844,7 +844,7 @@ compileBody stmts = compileStmts stmts
 -- the key bindings, so an unindexed type evaluates no condition and scans
 -- the whole bucket. A loop with no eligible condition emits a plain
 -- @store-snapshot@ call.
-compileForeach :: Label -> Int -> Name -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
+compileForeach :: Label -> Int -> Name -> [IndexCondition] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
   wrapBreak
     ( SList
@@ -897,7 +897,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     -- Only a total expression may be evaluated eagerly at loop entry; see
     -- 'nonRaising'. The conditions that stay are the only ones an index
     -- could ever be driven by.
-    eligible = [(i, e) | (ArgIndex i, e) <- conds, nonRaising e]
+    eligible = [c | c <- conds, nonRaising c.expectedValue]
     candidatesExpr = case eligible of
       [] -> snapshot
       _ ->
@@ -916,7 +916,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     -- indexing its position. A key found earlier wins: the `not` conjunct
     -- keeps a later condition from being evaluated at all, matching the
     -- interpreter's 'driverKey'.
-    keyBinding n (i, e) =
+    keyBinding n (IndexCondition (ArgIndex i) e) =
       [ SList
           [ SAtom (keyName n),
             SList
@@ -931,7 +931,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
       ]
       where
         priorKey = [SList [SAtom "not", SAtom (keyName (n - 1))] | n > 0]
-    keyClause (n, (i, _)) =
+    keyClause (n, IndexCondition (ArgIndex i) _) =
       SList
         [ SAtom (keyName n),
           SList
@@ -946,7 +946,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     ipName = "%ip-" <> lbl
     keyName n = "%key-" <> lbl <> "-" <> T.pack (show n)
 
-foreachInner :: Text -> Text -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
+foreachInner :: Text -> Text -> [IndexCondition] -> [Stmt] -> SExpr
 foreachInner lbl sv conds body =
   let aliveCheck = SList [SAtom "suspension-alive?", SAtom sv]
       condChecks = map compileCondition conds
@@ -970,7 +970,7 @@ foreachInner lbl sv conds body =
         | otherwise = compileBody body
    in SList [SAtom "when", guard, innerBody]
   where
-    compileCondition (ArgIndex i, e) =
+    compileCondition (IndexCondition (ArgIndex i) e) =
       SList
         [ SAtom "equal?/chr",
           SList [SAtom "constraint-arg", SAtom sv, SInt (fromIntegral i)],

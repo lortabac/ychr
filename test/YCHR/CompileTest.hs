@@ -56,7 +56,7 @@ findForeach (s : rest) = case s of
   _ -> findForeach rest
 
 -- | The index conditions of a @Foreach@.
-foreachConditions :: VM.Stmt -> [(VM.ArgIndex, VM.ValExpr)]
+foreachConditions :: VM.Stmt -> [VM.IndexCondition]
 foreachConditions (VM.Foreach _ _ _ conds _) = conds
 foreachConditions _ = error "foreachConditions: not a Foreach"
 
@@ -123,7 +123,7 @@ findAggregateProcedure prog userRules userIdx aggIdx =
 assertForeachConditions ::
   CompiledProgram ->
   Text ->
-  [(VM.ArgIndex, VM.ValExpr)] ->
+  [VM.IndexCondition] ->
   IO ()
 assertForeachConditions prog procName expected =
   case findProcedure prog procName of
@@ -165,7 +165,9 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_2"
-          [(VM.ArgIndex 1, VM.Var "$X_0"), (VM.ArgIndex 0, VM.Var "$X_1")],
+          [ VM.IndexCondition (VM.ArgIndex 1) (VM.Var "$X_0"),
+            VM.IndexCondition (VM.ArgIndex 0) (VM.Var "$X_1")
+          ],
       testCase "leq idempotence: active occurrence's partner args constrained" $ do
         -- idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
         -- Occurrence 5 (the kept head) is elided as subsumed by the
@@ -174,7 +176,9 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_4"
-          [(VM.ArgIndex 0, VM.Var "$X_0"), (VM.ArgIndex 1, VM.Var "$X_1")],
+          [ VM.IndexCondition (VM.ArgIndex 0) (VM.Var "$X_0"),
+            VM.IndexCondition (VM.ArgIndex 1) (VM.Var "$X_1")
+          ],
       testCase "leq transitivity: single shared variable lifted" $ do
         -- transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
         -- Each occurrence has exactly one HNF equality on the partner.
@@ -182,11 +186,11 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_6"
-          [(VM.ArgIndex 1, VM.Var "$X_0")]
+          [VM.IndexCondition (VM.ArgIndex 1) (VM.Var "$X_0")]
         assertForeachConditions
           prog
           "occurrence_order__leq2_7"
-          [(VM.ArgIndex 0, VM.Var "$X_1")],
+          [VM.IndexCondition (VM.ArgIndex 0) (VM.Var "$X_1")],
       testCase "leq reflexivity: no partners, equality stays residual" $ do
         -- reflexivity @ leq(X, X) <=> true.
         -- The Foreach is absent (single-headed rule), and the residual
@@ -443,7 +447,7 @@ callablesDispatchTests =
         assertEqual
           "distinct callables keys"
           (length prog.program.callables)
-          (Map.size (Map.fromList prog.program.callables)),
+          (Map.size (Map.fromList [(c.key, ()) | c <- prog.program.callables])),
       testCase "a function reference is keyed by flat name and arity" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         assertEqual
@@ -501,9 +505,9 @@ callablesDispatchTests =
         }
     lookupCallable :: CompiledProgram -> VM.CallableKey -> Maybe Text
     lookupCallable prog key =
-      case lookup key prog.program.callables of
-        Just (VM.Name n) -> Just n
-        Nothing -> Nothing
+      case [c.procName | c <- prog.program.callables, c.key == key] of
+        VM.Name n : _ -> Just n
+        [] -> Nothing
     isLiftedLambda :: D.Function -> Bool
     isLiftedLambda func = T.isPrefixOf "__lambda_" func.name.baseName
 
@@ -520,7 +524,7 @@ hasApplyClosure = any goStmt
       VM.AssignId _ e -> goId e
       VM.If c ts es -> goBool c || any goStmt ts || any goStmt es
       VM.Foreach _ _ _ conds body ->
-        any (goVal . snd) conds || any goStmt body
+        any (goVal . (.expectedValue)) conds || any goStmt body
       VM.Continue _ -> False
       VM.Break _ -> False
       VM.Return e -> goVal e

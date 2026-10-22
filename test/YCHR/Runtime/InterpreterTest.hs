@@ -4,16 +4,13 @@ module YCHR.Runtime.InterpreterTest (tests) where
 
 import Control.Exception (try)
 import Control.Monad.IO.Class (liftIO)
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (SlotProgram, emptySlotProgram, lowerProgram)
+import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.Loc (dummyLoc)
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Error (RuntimeErrorKind (..), RuntimeErrorThrown (..))
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
@@ -23,12 +20,13 @@ import YCHR.Internal.Runtime.Interpreter
     callProc,
     interpret,
   )
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
-import YCHR.TestHelpers (countAliveByType)
+import YCHR.TestHelpers (countAliveByType, runChrEmpty, runChrIn)
 
 -- | Interpreter tests: evaluation, primitives, type predicates,
 -- closures, and errors.
@@ -51,68 +49,18 @@ tests =
 -- Session helpers
 -- ---------------------------------------------------------------------------
 
--- | Run a Chr action with an empty session (no procedures, no types,
--- no host calls). Useful for tests that exercise primitives that only
--- need 'Unify' / store / queue, where the session is set up just to
--- give them a place to live.
-runChrEmpty :: Chr a -> IO a
-runChrEmpty action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
-
 -- | Like 'runChrEmpty' but with the base host-call registry available.
 runChrBase :: Chr a -> IO a
-runChrBase action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      baseHostCallRegistry
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrBase = runChrIn emptySessionConfig {Config.hostCalls = baseHostCallRegistry}
 
 -- | Run a Chr action against the LEQ session.
 runChrLeq :: Chr a -> IO a
-runChrLeq action = do
-  env <-
-    initSessionEnv
-      [Types.Unqualified "leq"]
-      []
-      []
-      IntMap.empty
-      builtinOps
-      leqSlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrLeq =
+  runChrIn
+    emptySessionConfig
+      { Config.typeNames = [Types.Unqualified "leq"],
+        Config.slotProgram = leqSlotProgram
+      }
 
 -- ---------------------------------------------------------------------------
 -- Runtime-error trigger tests
@@ -1276,7 +1224,7 @@ lamClosure = VTerm "__closure" [VAtom "m__lambda_0", VAtom "src", VInt 10]
 -- @p2@ to @1@ and @2@) through the given callables table, plus the two
 -- callee procedures the table can reach: @fun_proc@ returns its
 -- argument, @lam_proc@ adds its capture to its argument.
-closureProg :: [(CallableKey, Name)] -> Program
+closureProg :: [Callable] -> Program
 closureProg callables =
   Program
     { typeNames = [],
@@ -1299,7 +1247,7 @@ closureProg callables =
 
 -- | 'closureProg' with an unbound closure: @p@ allocates a fresh
 -- logical variable and applies it.
-unboundClosureProg :: [(CallableKey, Name)] -> Program
+unboundClosureProg :: [Callable] -> Program
 unboundClosureProg callables =
   (closureProg callables)
     { procedures =
@@ -1324,7 +1272,7 @@ closureApplyTests =
     [ testCase "a function reference reaches its table entry" $ do
         v <-
           interpret
-            (closureProg [(funKey, "fun_proc")])
+            (closureProg [Callable funKey "fun_proc"])
             baseHostCallRegistry
             "p"
             [funClosure]
@@ -1334,7 +1282,7 @@ closureApplyTests =
       testCase "a lifted lambda is called with its captures first" $ do
         v <-
           interpret
-            (closureProg [(lamKey, "lam_proc")])
+            (closureProg [Callable lamKey "lam_proc"])
             baseHostCallRegistry
             "p"
             [lamClosure]
@@ -1343,7 +1291,7 @@ closureApplyTests =
           _ -> assertFailure "unexpected value",
       testCase "a function reference applied at another arity misses" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "/" [VAtom "m:f", VInt 2]]
           >>= assertContains "call: no matching closure",
@@ -1352,13 +1300,13 @@ closureApplyTests =
         -- arity it is *applied* at selects the key; the table only holds
         -- the declared one.
         expectRuntimeError
-          (closureProg [(lamKey, "lam_proc")])
+          (closureProg [Callable lamKey "lam_proc"])
           "p2"
           [lamClosure]
           >>= assertContains "call: no matching closure",
       testCase "a data term with a closure-looking field is not a closure" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "pair" [VAtom "m:f", VInt 1]]
           >>= assertContains "call: no matching closure",
@@ -1367,7 +1315,7 @@ closureApplyTests =
         -- so a function-reference term whose identity and arity fields
         -- are bound variables still dispatches.
         let prog =
-              (closureProg [(funKey, "fun_proc")])
+              (closureProg [Callable funKey "fun_proc"])
                 { procedures =
                     [ mkProc
                         "p"
@@ -1384,20 +1332,20 @@ closureApplyTests =
           _ -> assertFailure "expected the bound header to dispatch",
       testCase "a non-term is not a closure" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VInt 5]
           >>= assertContains "call: no matching closure",
       testCase "a well-formed closure with an unknown identity misses" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "/" [VAtom "m:other", VInt 1]]
           >>= assertContains "call: no matching closure",
       testCase "an unbound closure is an instantiation error" $ do
         (kind, msg) <-
           expectRuntimeErrorKind
-            (unboundClosureProg [(funKey, "fun_proc")])
+            (unboundClosureProg [Callable funKey "fun_proc"])
             "p"
             []
         kind @?= InstantiationError

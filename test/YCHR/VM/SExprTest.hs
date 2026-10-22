@@ -97,7 +97,9 @@ roundtripTests =
                 "L1"
                 (ConstraintType 0)
                 "susp"
-                [(ArgIndex 0, Var "x"), (ArgIndex 1, Lit (IntLit 3))]
+                [ IndexCondition (ArgIndex 0) (Var "x"),
+                  IndexCondition (ArgIndex 1) (Lit (IntLit 3))
+                ]
                 [ExprStmt (FieldType (IdVar "susp"))]
             ]
         ),
@@ -286,7 +288,7 @@ formatTests =
       assertContains
         ( serializeProg
             ( mkProgWithCallables
-                [(funRefKey "prelude:double" 1, "func_prelude__double1")]
+                [Callable (funRefKey "prelude:double" 1) "func_prelude__double1"]
             )
         )
         "(callables (\"/\" \"prelude:double\" 1 \"func_prelude__double1\"))",
@@ -299,9 +301,9 @@ formatTests =
                 [mkProcedure "p" [] []]
                 []
                 []
-                [ ( TellableKey {scope = Just "m", functor = "m__c", arity = 2},
+                [ Tellable
+                    (TellableKey {scope = Just "m", functor = "m__c", arity = 2})
                     "tell_m__c2"
-                  )
                 ]
                 Map.empty
                 []
@@ -361,7 +363,10 @@ formatTests =
             [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
             []
             []
-            [(TellableKey {scope = Just "m", functor = "c", arity = 2}, "tell_m__c2")]
+            [ Tellable
+                (TellableKey {scope = Just "m", functor = "c", arity = 2})
+                "tell_m__c2"
+            ]
             Map.empty
             []
         ),
@@ -807,7 +812,7 @@ genStmt =
         <*> genName
         <*> Gen.list
           (Range.linear 0 3)
-          ((,) <$> genArgIndex <*> Gen.small genValExpr)
+          (IndexCondition <$> genArgIndex <*> Gen.small genValExpr)
         <*> Gen.list (Range.linear 0 3) (Gen.small genStmt),
       DrainReactivationQueue
         <$> genName
@@ -828,7 +833,7 @@ mkProg :: [Stmt] -> Program
 mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] [] Map.empty []
 
 -- | 'mkProg' with a non-empty callables table.
-mkProgWithCallables :: [(CallableKey, Name)] -> Program
+mkProgWithCallables :: [Callable] -> Program
 mkProgWithCallables callables =
   Program [] [] [mkProcedure "p" [] []] [] callables [] Map.empty []
 

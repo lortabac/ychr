@@ -4,8 +4,11 @@ module YCHR.Internal.VM
     Program (..),
     Procedure (..),
     ProcKind (..),
+    Evaluable (..),
     EvaluableKey (..),
+    Callable (..),
     CallableKey (..),
+    Tellable (..),
     TellableKey (..),
     TellableResolution (..),
     funRefFunctor,
@@ -13,6 +16,7 @@ module YCHR.Internal.VM
 
     -- * Statements
     Stmt (..),
+    IndexCondition (..),
 
     -- * Expressions
     ValExpr (..),

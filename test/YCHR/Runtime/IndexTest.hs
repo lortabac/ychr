@@ -15,13 +15,11 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (isSubsequenceOf)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Index
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Store
   ( Suspension (..),
     candidateSuspensions,
@@ -44,6 +42,7 @@ import YCHR.Internal.Types (ConstraintType (..), Name (..))
 import YCHR.Internal.VM
   ( ArgIndex (..),
     BoolExpr (..),
+    IndexCondition (..),
     Literal (..),
     ProcKind (..),
     Procedure (..),
@@ -51,6 +50,7 @@ import YCHR.Internal.VM
     Stmt (..),
     ValExpr (..),
   )
+import YCHR.TestHelpers (runChrIn)
 
 -- | Store indexes: ground keys, candidate narrowing, and indexable positions.
 tests :: TestTree
@@ -71,23 +71,12 @@ tests =
 -- | A session that indexes argument 0 of 'ConstraintType' 0, the
 -- arrangement every candidate test below assumes.
 runIndexEnv :: Chr a -> IO a
-runIndexEnv action = do
-  env <-
-    initSessionEnv
-      (replicate 2 (Unqualified ""))
-      []
-      []
-      (IntMap.fromList [(0, IntSet.singleton 0)])
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runIndexEnv =
+  runChrIn
+    emptySessionConfig
+      { Config.typeNames = replicate 2 (Unqualified ""),
+        Config.indexPositions = IntMap.fromList [(0, IntSet.singleton 0)]
+      }
 
 -- | A program whose single procedure has the given body.
 programWith :: [Stmt] -> Program
@@ -113,7 +102,7 @@ programWith stmts =
 -- | A 'Foreach' with one condition on argument @pos@.
 foreach :: ConstraintType -> Word -> [Stmt] -> Stmt
 foreach cType pos body =
-  Foreach "L" cType "susp" [(ArgIndex pos, Lit (IntLit 0))] body
+  Foreach "L" cType "susp" [IndexCondition (ArgIndex pos) (Lit (IntLit 0))] body
 
 -- ---------------------------------------------------------------------------
 -- Keys

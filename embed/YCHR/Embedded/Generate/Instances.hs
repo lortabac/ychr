@@ -73,10 +73,13 @@ import YCHR.Internal.VM.Types
   ( ArgIndex (..),
     BoolExpr (..),
     CallArg (..),
+    Callable (..),
     CallableKey (..),
+    Evaluable (..),
     EvaluableKey (..),
     HistoryIds,
     IdExpr (..),
+    IndexCondition (..),
     Label (..),
     Literal (..),
     ProcKind (..),
@@ -84,6 +87,7 @@ import YCHR.Internal.VM.Types
     Program (..),
     StackFrame (..),
     Stmt (..),
+    Tellable (..),
     TellableKey (..),
     TellableResolution (..),
     ValExpr (..),
@@ -331,6 +335,8 @@ deriving instance Generic Label
 
 deriving instance Generic ArgIndex
 
+deriving instance Generic IndexCondition
+
 deriving instance Generic Literal
 
 deriving instance Generic StackFrame
@@ -347,7 +353,13 @@ deriving instance Generic Stmt
 
 deriving instance Generic ProcKind
 
+deriving instance Generic Evaluable
+
 deriving instance Generic EvaluableKey
+
+deriving instance Generic Callable
+
+deriving instance Generic Tellable
 
 deriving instance Generic CallableKey
 
@@ -364,6 +376,9 @@ instance ToCode Label where
   toCode = genericToCode
 
 instance ToCode ArgIndex where
+  toCode = genericToCode
+
+instance ToCode IndexCondition where
   toCode = genericToCode
 
 instance ToCode Literal where
@@ -390,7 +405,16 @@ instance ToCode Stmt where
 instance ToCode ProcKind where
   toCode = genericToCode
 
+instance ToCode Evaluable where
+  toCode = genericToCode
+
 instance ToCode EvaluableKey where
+  toCode = genericToCode
+
+instance ToCode Callable where
+  toCode = genericToCode
+
+instance ToCode Tellable where
   toCode = genericToCode
 
 instance ToCode CallableKey where

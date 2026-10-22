@@ -24,6 +24,7 @@ import YCHR.Internal.VM
     BoolExpr (..),
     CallArg (..),
     IdExpr (..),
+    IndexCondition (..),
     Literal (..),
     Name,
     ProcKind (..),
@@ -146,14 +147,14 @@ slotTests =
               "l"
               (ConstraintType 0)
               "s"
-              [(ArgIndex 1, Var "a")]
+              [IndexCondition (ArgIndex 1) (Var "a")]
               [Return (Lit (IntLit 0))]
           ]
           @?= [ SForeach
                   "l"
                   (ConstraintType 0)
                   1
-                  [(ArgIndex 1, SVar 0 "a")]
+                  [SIndexCondition (ArgIndex 1) (SVar 0 "a")]
                   [SReturn (SLit (IntLit 0))]
               ],
       testCase "DrainReactivationQueue introduces its variable" $

@@ -37,6 +37,7 @@ import Data.List qualified as List
 import YCHR.Internal.Types (ConstraintType (..))
 import YCHR.Internal.VM.Types
   ( ArgIndex (..),
+    IndexCondition (..),
     Procedure (..),
     Program (..),
     Stmt (..),
@@ -76,7 +77,7 @@ indexablePositions prog = List.foldl' addProc IntMap.empty prog.procedures
       _ -> acc
     -- 'pos' is bounded by the constraint arity, so the conversion to
     -- 'Int' for the 'IntSet' is safe.
-    addCond cType acc (ArgIndex pos, _) =
+    addCond cType acc (IndexCondition (ArgIndex pos) _) =
       let ConstraintType tidx = cType
        in IntMap.insertWith IntSet.union tidx (IntSet.singleton (fromIntegral pos)) acc
 

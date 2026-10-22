@@ -67,15 +67,24 @@ import YCHR.Internal.Runtime.Interpreter
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     SessionEnv (..),
+    callableRegistry,
     initSessionEnv,
+    programSessionConfig,
     runChr,
   )
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Reactivation (drainQueue)
 import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..), Program (..))
+import YCHR.Internal.VM
+  ( Callable (..),
+    CallableKey,
+    Name (..),
+    Procedure (..),
+    Program (..),
+  )
 import YCHR.Internal.VM.Closure
   ( closureFailure,
     danglingCallables,
@@ -163,7 +172,8 @@ withCHR si hc action = withCHRExtra si hc [] [] action
 
 -- | Like 'withCHR' but merges extra procedures and extra callables
 -- (e.g. query-time lambda compilations and the dispatch entries for
--- them) into the tables visible to the action.
+-- them) into the tables visible to the action. Takes the callables as
+-- pairs, the shape 'YCHR.Run.PreparedQuery' exposes.
 withCHRExtra ::
   SessionInput ->
   HostCallRegistry ->
@@ -171,7 +181,7 @@ withCHRExtra ::
   [(CallableKey, Name)] ->
   Chr a ->
   IO a
-withCHRExtra si hc extraProcs extraCallables action
+withCHRExtra si hc extraProcs extraPairs action
   | Just msg <- extraClosureFailure si extraProcs extraCallables = error msg
   | otherwise = do
       -- Query-time lambdas are compiled by the same CHR-to-VM compiler, so
@@ -180,30 +190,30 @@ withCHRExtra si hc extraProcs extraCallables action
       -- keeps the compiled entries' indices and gives the extras the next
       -- ones, resolving the extras' calls against both name spaces; with
       -- no extras it returns the compiled program unchanged.
-      let slotProgram = addProcedures si.slotProgram extraProcs
-          evaluableMap = Map.fromList si.program.evaluables
-      -- Extras win, as in the procedure map: a query-time lambda can never
-      -- collide with a compiled one (its lifted name is fresh), but the
-      -- two merges then follow the same rule.
-      let callableMap =
-            Map.fromList extraCallables
-              `Map.union` Map.fromList si.program.callables
+      --
+      -- Extras win in the callables too, as in the procedure map: a
+      -- query-time lambda can never collide with a compiled one (its
+      -- lifted name is fresh), but the two merges then follow the same
+      -- rule.
+      --
+      -- 'Config.' picks the 'SessionConfig' fields over the 'SessionEnv'
+      -- ones.
       env <-
         initSessionEnv
-          si.program.typeNames
-          si.program.ruleNames
-          si.program.inertTypes
-          si.indexPositions
-          si.opTable
-          slotProgram
-          hc
-          evaluableMap
-          callableMap
-          (Map.fromList si.program.tellables)
-          si.program.tellablesUnqualified
-          si.exportMap
-          si.exportedSet
+          (programSessionConfig si.program)
+            { Config.indexPositions = si.indexPositions,
+              Config.opTable = si.opTable,
+              Config.slotProgram = addProcedures si.slotProgram extraProcs,
+              Config.hostCalls = hc,
+              Config.callables =
+                callableRegistry extraCallables
+                  `Map.union` callableRegistry si.program.callables,
+              Config.exportMap = si.exportMap,
+              Config.exportedSet = si.exportedSet
+            }
       runChr action env
+  where
+    extraCallables = map (uncurry Callable) extraPairs
 
 -- | Assert the procedure-name closure invariant for the query-time
 -- procedures and callables a session merges in.
@@ -223,7 +233,7 @@ withCHRExtra si hc extraProcs extraCallables action
 extraClosureFailure ::
   SessionInput ->
   [Procedure] ->
-  [(CallableKey, Name)] ->
+  [Callable] ->
   Maybe String
 extraClosureFailure si procs callables
   | null procs && null callables = Nothing

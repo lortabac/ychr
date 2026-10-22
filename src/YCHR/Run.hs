@@ -158,7 +158,7 @@ import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckGoals)
 import YCHR.Internal.Types (Constraint (..), Term (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..))
+import YCHR.Internal.VM (Callable (..), CallableKey, Name (..), Procedure (..))
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -240,7 +240,7 @@ runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
         liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
   unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
   let extraProcs = compileQueryLambdas lambdas
-      extraCallables = buildCallables lambdas
+      extraCallables = [(c.key, c.procName) | c <- buildCallables lambdas]
   withCHRExtra (toSessionInput cp) hostCalls extraProcs extraCallables $
     executePreparedQuery lifted
 
@@ -524,7 +524,7 @@ prepareResolved resolved =
     { liftedGoals = resolved.liftedGoals,
       queryLambdas = resolved.queryLambdas,
       extraProcs = compileQueryLambdas resolved.queryLambdas,
-      extraCallables = buildCallables resolved.queryLambdas
+      extraCallables = [(c.key, c.procName) | c <- buildCallables resolved.queryLambdas]
     }
 
 -- | Run the 'liftedGoals' of a 'PreparedQuery' in the current session, in

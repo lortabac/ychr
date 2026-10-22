@@ -3,16 +3,13 @@
 module YCHR.MetaTest (tests) where
 
 import Control.Exception (try)
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
 import YCHR.Embedded (typeCheckerProgram)
 import YCHR.Internal.Compile.Names (vmName)
-import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
 import YCHR.Internal.PExpr (OpTable, OpType (..))
 import YCHR.Internal.Parsed (OpDecl (..))
@@ -23,14 +20,15 @@ import YCHR.Internal.Runtime.Interpreter
     HostCallRegistry,
     baseHostCallRegistry,
   )
-import YCHR.Internal.Runtime.Monad (CallableRegistry, Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (CallableRegistry, Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref, equal)
 import YCHR.Internal.Types (Term (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (CallableKey (..), Name (..), funRefFunctor, lambdaClosureFunctor)
 import YCHR.Run (runProgramWithQuery)
-import YCHR.TestHelpers (compileOrFail)
+import YCHR.TestHelpers (compileOrFail, runChrIn)
 
 -- | Runtime meta: 'read_term_from_string' and function-reference resolution.
 tests :: TestTree
@@ -49,23 +47,12 @@ hostCalls = baseHostCallRegistry <> metaHostCallRegistry
 -- | A session whose operator table is the given one. The reader's table
 -- is a per-session input, so two sessions may differ.
 runChrWith :: OpTable -> Chr a -> IO a
-runChrWith table action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      table
-      emptySlotProgram
-      baseHostCallRegistry
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrWith table =
+  runChrIn
+    emptySessionConfig
+      { Config.opTable = table,
+        Config.hostCalls = baseHostCallRegistry
+      }
 
 -- | The hand-built session every direct reader test uses: no program, so
 -- the built-in operator table.
@@ -88,23 +75,12 @@ readTermWith table s =
 -- operator table. The function-reference reader resolves against the
 -- callables, so its cases inject one instead of compiling a program.
 runChrWithCallables :: CallableRegistry -> Chr a -> IO a
-runChrWithCallables cl action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      baseHostCallRegistry
-      Map.empty
-      cl
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrWithCallables cl =
+  runChrIn
+    emptySessionConfig
+      { Config.hostCalls = baseHostCallRegistry,
+        Config.callables = cl
+      }
 
 -- | Invoke the reader in a session carrying the given callables table.
 readTermWithCallables :: CallableRegistry -> Text -> IO Value
