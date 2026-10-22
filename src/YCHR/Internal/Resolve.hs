@@ -20,14 +20,22 @@ module YCHR.Internal.Resolve
   )
 where
 
-import Control.Monad (when)
+import Control.Monad (unless, when)
+import Control.Monad.Trans.State.Strict
+  ( State,
+    evalState,
+    execState,
+    get,
+    gets,
+    modify',
+    put,
+  )
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub)
-import Data.List qualified as List
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -261,8 +269,9 @@ resolveProgram mods =
       inlineSet = buildInlineSet mods
       constraintUseErrors = checkConstraintUseDeclarations mods
       funVisibility = buildFunctionVisibility mods
-      (resolvedRules, ruleErrs) = resolveRules funVisibility mods
-      (resolvedFunctions, funErrs) = resolveFunctions funVisibility inlineSet mods
+      (resolvedRules, ruleErrs) = runWriter (resolveRules funVisibility mods)
+      (resolvedFunctions, funErrs) =
+        runWriter (resolveFunctions funVisibility inlineSet mods)
       errs =
         eqErrors
           ++ headErrors
@@ -534,25 +543,24 @@ buildFunctionRequiring mods =
 -- Reports only the first equation per name.
 checkEquations ::
   Set QualifiedIdentifier -> [CollectedModule] -> [Diagnostic ResolveError]
-checkEquations cNames mods = snd $ foldl go (Set.empty, []) allEqs
+checkEquations cNames mods =
+  [ noDiag
+      ( P.AnnP
+          (ConstraintHasEquations annEq.node.funName)
+          annEq.sourceLoc
+          annEq.parsed
+      )
+  | annEq <- firstPerKey eqKey offending
+  ]
   where
-    allEqs = [annEq | m <- mods, annEq <- m.equations]
-    go (seen, errs) annEq =
-      case toQualId annEq.node.funName (length annEq.node.args) of
-        Just qid
-          | qid `Set.member` cNames,
-            qid `Set.notMember` seen ->
-              ( Set.insert qid seen,
-                errs
-                  ++ [ noDiag
-                         ( P.AnnP
-                             (ConstraintHasEquations annEq.node.funName)
-                             annEq.sourceLoc
-                             annEq.parsed
-                         )
-                     ]
-              )
-        _ -> (seen, errs)
+    offending =
+      [ annEq
+      | m <- mods,
+        annEq <- m.equations,
+        Just qid <- [eqKey annEq],
+        qid `Set.member` cNames
+      ]
+    eqKey annEq = toQualId annEq.node.funName (length annEq.node.args)
 
 -- | Check that no free-floating equation lives in a module that is not
 -- the declaring module of the function. Equations contributed from
@@ -650,33 +658,21 @@ checkMixedDeclKinds mods =
 -- the same name are suppressed to avoid duplicate diagnostics when a
 -- name is declared as e.g. both @:- function@ and @:- class@).
 checkConstraintFunctionCollision :: [CollectedModule] -> [Diagnostic ResolveError]
-checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
+checkConstraintFunctionCollision mods =
+  map (declDiag ConstraintFunctionCollision) (firstPerKey entryKey entries)
   where
     entries =
-      [ (m, fd, loc)
-      | m <- mods,
+      [ entry
+      | (i, m) <- zip [0 ..] mods,
         let conKeys =
               Set.fromList
-                [(cd.name, cd.arity) | P.Ann c _ <- m.decls, P.ConstraintDecl cd <- [c]],
-        P.Ann d loc <- m.decls,
-        P.FunctionDecl fd <- [d],
-        Set.member (fd.name, fd.arity) conKeys
+                [ UnqualifiedIdentifier cd.name cd.arity
+                | P.Ann c _ <- m.decls,
+                  P.ConstraintDecl cd <- [c]
+                ],
+        entry <- moduleFunctionDecls i m,
+        Set.member (UnqualifiedIdentifier entry.decl.name entry.decl.arity) conKeys
       ]
-    go (seen, errs) (m, fd, loc) =
-      let key = (m.name, fd.name, fd.arity)
-       in if Set.member key seen
-            then (seen, errs)
-            else
-              ( Set.insert key seen,
-                errs
-                  ++ [ noDiag
-                         ( P.AnnP
-                             (ConstraintFunctionCollision (Qualified m.name fd.name))
-                             loc
-                             (PExpr.Atom fd.name)
-                         )
-                     ]
-              )
 
 -- | Reject a data constructor whose name is also declared as a
 -- function-like form (@:- function@, @:- open_function@, @:- class@,
@@ -704,10 +700,18 @@ checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
 -- One diagnostic per @(module, constructorName)@, pointed at the type
 -- declaration that introduces the constructor.
 checkConstructorFunctionCollision :: [CollectedModule] -> [Diagnostic ResolveError]
-checkConstructorFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
+checkConstructorFunctionCollision mods =
+  [ noDiag
+      ( P.AnnP
+          (ConstructorFunctionCollision (qualifiedToName entry.node))
+          entry.sourceLoc
+          (PExpr.Atom entry.node.baseName)
+      )
+  | entry <- firstPerKey (.node) entries
+  ]
   where
     entries =
-      [ (m, n, loc)
+      [ P.Ann (QualifiedName m.name n) loc
       | m <- mods,
         let funNames =
               Set.fromList
@@ -717,21 +721,17 @@ checkConstructorFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
         let n = unqualifiedText dc.conName,
         Set.member n funNames
       ]
-    go (seen, errs) (m, n, loc) =
-      let key = (m.name, n)
-       in if Set.member key seen
-            then (seen, errs)
-            else
-              ( Set.insert key seen,
-                errs
-                  ++ [ noDiag
-                         ( P.AnnP
-                             (ConstructorFunctionCollision (Qualified m.name n))
-                             loc
-                             (PExpr.Atom n)
-                         )
-                     ]
-              )
+
+-- | Keep the first element for each key, in list order.
+firstPerKey :: (Ord k) => (a -> k) -> [a] -> [a]
+firstPerKey key = go Set.empty
+  where
+    go _ [] = []
+    go seen (x : xs)
+      | Set.member k seen = go seen xs
+      | otherwise = x : go (Set.insert k seen) xs
+      where
+        k = key x
 
 -- | Validate every @:- inline@ directive: the named @name\/arity@ must
 -- be declared, by the /same/ module, with @:- function@ \/ @:- class@
@@ -877,8 +877,29 @@ checkExtensionKinds funcKinds mods =
 data FunctionDeclEntry = FunctionDeclEntry
   { decl :: P.FunctionDeclBody,
     owner :: CollectedModule,
+    -- | The owner's position in the input list. Tells two same-named
+    -- modules apart.
+    moduleIndex :: Int,
     loc :: P.SourceLoc
   }
+
+-- | The function declarations of the module at position @i@, in source
+-- order.
+moduleFunctionDecls :: Int -> CollectedModule -> [FunctionDeclEntry]
+moduleFunctionDecls i m =
+  [ FunctionDeclEntry {decl = fd, owner = m, moduleIndex = i, loc = loc}
+  | P.Ann d loc <- m.decls,
+    P.FunctionDecl fd <- [d]
+  ]
+
+-- | Every function declaration of the program, in source order.
+functionDeclEntries :: [CollectedModule] -> [FunctionDeclEntry]
+functionDeclEntries mods = concat (zipWith moduleFunctionDecls [0 ..] mods)
+
+-- | The module, name and arity of a function declaration.
+entryKey :: FunctionDeclEntry -> QualifiedIdentifier
+entryKey entry =
+  QualifiedIdentifier entry.owner.name entry.decl.name entry.decl.arity
 
 -- | A diagnostic about one function declaration, anchored at it.
 declDiag :: (Name -> ResolveError) -> FunctionDeclEntry -> Diagnostic ResolveError
@@ -906,12 +927,8 @@ groupedFunctionDecls mods =
     grouped =
       Map.fromListWith
         (\new old -> old . new)
-        [ ( (m.name, fd.name, fd.arity),
-            ([FunctionDeclEntry {decl = fd, owner = m, loc = loc}] ++)
-          )
-        | m <- mods,
-          P.Ann d loc <- m.decls,
-          P.FunctionDecl fd <- [d]
+        [ (entryKey entry, ([entry] ++))
+        | entry <- functionDeclEntries mods
         ]
 
 -- | Reject @:- extend_class_type@ directives that target a bounded
@@ -1157,33 +1174,36 @@ detectBoundCycles bounded =
           ]
       origins :: Map QualifiedName PExpr.PExpr
       origins = Map.fromList [(bd.name, bd.origin) | bd <- bounded]
-      (_, cycles) = foldl visit (Set.empty, []) (Map.keys graph)
-      visit (visited, acc) qn = dfs graph visited [] acc qn
-   in map (emitCycleDiag origins) cycles
+      search =
+        execState
+          (mapM_ (dfs graph []) (Map.keys graph))
+          CycleSearch {visited = Set.empty, cycles = []}
+   in map (emitCycleDiag origins) search.cycles
 
--- | Depth-first search from @qn@ that pushes any detected cycle onto the
--- accumulator and returns the updated @(visited, cycles)@ pair.
--- See Note [Bound graph cycle detection].
+-- | The state of 'dfs'.
+data CycleSearch = CycleSearch
+  { -- | Vertices whose whole subtree is explored.
+    visited :: Set QualifiedName,
+    -- | Cycles found so far, newest first.
+    cycles :: [[QualifiedName]]
+  }
+
+-- | Depth-first search from @qn@, with @path@ the vertices above it.
+-- Records every cycle it finds. See Note [Bound graph cycle detection].
 dfs ::
   Map QualifiedName [QualifiedName] ->
-  Set QualifiedName ->
   [QualifiedName] ->
-  [[QualifiedName]] ->
   QualifiedName ->
-  (Set QualifiedName, [[QualifiedName]])
-dfs graph visited path acc qn
+  State CycleSearch ()
+dfs graph path qn
   | qn `elem` path =
       let cycle_ = qn : reverse (takeWhile (/= qn) path) ++ [qn]
-       in (visited, cycle_ : acc)
-  | qn `Set.member` visited = (visited, acc)
-  | otherwise =
-      let neighbors = Map.findWithDefault [] qn graph
-          (visited', acc') =
-            foldl
-              (\(v, a) target -> dfs graph v (qn : path) a target)
-              (visited, acc)
-              neighbors
-       in (Set.insert qn visited', acc')
+       in modify' (\s -> s {cycles = cycle_ : s.cycles})
+  | otherwise = do
+      seen <- gets (\s -> Set.member qn s.visited)
+      unless seen $ do
+        mapM_ (dfs graph (qn : path)) (Map.findWithDefault [] qn graph)
+        modify' (\s -> s {visited = Set.insert qn s.visited})
 
 emitCycleDiag ::
   Map QualifiedName PExpr.PExpr ->
@@ -1205,20 +1225,24 @@ typeExprVars (TypeCon _ args) = concatMap typeExprVars args
 -- | Check that no rule head constraint is a function-declared name.
 -- Reports only the first rule per name.
 checkRuleHeads :: Set Name -> [CollectedModule] -> [Diagnostic ResolveError]
-checkRuleHeads fNames mods = snd $ foldl go (Set.empty, []) allRules
+checkRuleHeads fNames mods =
+  concat (evalState (traverse check [r | m <- mods, r <- m.rules]) Set.empty)
   where
-    allRules = [r | m <- mods, r <- m.rules]
-    go (seen, errs) r =
-      let cs = headConstraints r.head.node
-          new =
-            [ ( c.name,
-                noDiag (P.AnnP (FunctionInRuleHead c.name) r.head.sourceLoc r.head.parsed)
-              )
-            | c <- cs,
+    -- The state holds the names already reported. A name repeated in
+    -- one head is reported once per occurrence.
+    check r = do
+      seen <- get
+      let names =
+            [ c.name
+            | c <- headConstraints r.head.node,
               c.name `Set.member` fNames,
               c.name `Set.notMember` seen
             ]
-       in (foldl (\s (n, _) -> Set.insert n s) seen new, errs ++ map snd new)
+      put (foldr Set.insert seen names)
+      pure
+        [ noDiag (P.AnnP (FunctionInRuleHead n) r.head.sourceLoc r.head.parsed)
+        | n <- names
+        ]
 
 -- | Reserved names that cannot be used as constraint or function declarations.
 reservedDeclNames :: Set Text
@@ -1269,36 +1293,36 @@ toQualId (Unqualified _) _ = Nothing
 resolveRules ::
   Map Text FunVisibility ->
   [CollectedModule] ->
-  ([R.Rule], [Diagnostic ResolveError])
+  Writer [Diagnostic ResolveError] [R.Rule]
 resolveRules visMap mods =
-  let raws = [(r, m) | m <- mods, r <- m.rules]
-      go (acc, errs) (r, m) =
-        let vis = funVisibilityFor visMap m.name
-         in case resolveHead vis r.head.sourceLoc r.head.parsed r.head.node of
-              Right rh ->
-                let (guardExprs, guardErrs) =
-                      runWriter
-                        ( traverse
-                            (termToExpr vis r.guard.sourceLoc r.guard.parsed)
-                            r.guard.node
-                        )
-                    (bodyExprs, bodyErrs) =
-                      runWriter
-                        ( traverse
-                            (termToExpr vis r.body.sourceLoc r.body.parsed)
-                            r.body.node
-                        )
-                    rule =
-                      R.Rule
-                        { name = r.name,
-                          moduleName = m.name,
-                          head = P.AnnP rh r.head.sourceLoc r.head.parsed,
-                          guard = P.AnnP guardExprs r.guard.sourceLoc r.guard.parsed,
-                          body = P.AnnP bodyExprs r.body.sourceLoc r.body.parsed
-                        }
-                 in (acc ++ [rule], errs ++ guardErrs ++ bodyErrs)
-              Left newErrs -> (acc, errs ++ newErrs)
-   in foldl go ([], []) raws
+  catMaybes <$> sequence [resolveRule m r | m <- mods, r <- m.rules]
+  where
+    -- A rule whose head fails is dropped; its guard and body are not
+    -- looked at.
+    resolveRule m r =
+      let vis = funVisibilityFor visMap m.name
+       in case resolveHead vis r.head.sourceLoc r.head.parsed r.head.node of
+            Left errs -> Nothing <$ tell errs
+            Right rh -> do
+              guard' <- resolveAnnTerms vis r.guard
+              body' <- resolveAnnTerms vis r.body
+              pure $
+                Just
+                  R.Rule
+                    { name = r.name,
+                      moduleName = m.name,
+                      head = P.AnnP rh r.head.sourceLoc r.head.parsed,
+                      guard = guard',
+                      body = body'
+                    }
+
+-- | Translate annotated terms with 'termToExpr', at their own location.
+resolveAnnTerms ::
+  (Traversable t) =>
+  FunVisibility ->
+  P.AnnP (t Term) ->
+  Writer [Diagnostic ResolveError] (P.AnnP (t R.Expr))
+resolveAnnTerms vis a = traverse (traverse (termToExpr vis a.sourceLoc a.parsed)) a
 
 resolveHead ::
   FunVisibility ->
@@ -1306,34 +1330,30 @@ resolveHead ::
   PExpr.PExpr ->
   P.Head ->
   Either [Diagnostic ResolveError] R.Head
-resolveHead vis loc origin h =
-  let (resolved, errs) = case h of
-        P.Simplification cs aggs ->
-          let (ks, e1) = collect (map (qualifyConstraint loc origin) cs)
-              (as, e2) = collect (map (resolveAggregate vis loc origin) aggs)
-           in (R.Simplification ks as, e1 ++ e2)
-        P.Propagation cs aggs ->
-          let (ks, e1) = collect (map (qualifyConstraint loc origin) cs)
-              (as, e2) = collect (map (resolveAggregate vis loc origin) aggs)
-           in (R.Propagation ks as, e1 ++ e2)
-        P.Simpagation ks rs aggs ->
-          let (ks', e1) = collect (map (qualifyConstraint loc origin) ks)
-              (rs', e2) = collect (map (qualifyConstraint loc origin) rs)
-              (as, e3) = collect (map (resolveAggregate vis loc origin) aggs)
-           in (R.Simpagation ks' rs' as, e1 ++ e2 ++ e3)
-   in if null errs then Right resolved else Left errs
-
--- | Split a list of results into the successful ones and the
--- diagnostics, keeping the order of each.
---
--- An accumulator rather than 'partitionEithers': each result already
--- carries a list of diagnostics here, so the two components would be a
--- value list and a list of lists, which reads worse than this.
-collect :: [Either [a] b] -> ([b], [a])
-collect = List.foldr step ([], [])
+resolveHead vis loc origin h = failOnDiags $ case h of
+  P.Simplification cs aggs ->
+    R.Simplification <$> qualifyAll cs <*> resolveAll aggs
+  P.Propagation cs aggs ->
+    R.Propagation <$> qualifyAll cs <*> resolveAll aggs
+  P.Simpagation ks rs aggs ->
+    R.Simpagation <$> qualifyAll ks <*> qualifyAll rs <*> resolveAll aggs
   where
-    step (Right b) (bs, as) = (b : bs, as)
-    step (Left a) (bs, as) = (bs, a ++ as)
+    qualifyAll = collect . map (qualifyConstraint loc origin)
+    resolveAll = collect . map (resolveAggregate vis loc origin)
+
+-- | Run a writer, and fail if it wrote any diagnostic.
+failOnDiags :: Writer [e] a -> Either [e] a
+failOnDiags w = case runWriter w of
+  (a, []) -> Right a
+  (_, errs) -> Left errs
+
+-- | Keep the successful results and write the diagnostics, both in
+-- order.
+collect :: [Either [e] b] -> Writer [e] [b]
+collect xs = catMaybes <$> traverse step xs
+  where
+    step (Right b) = pure (Just b)
+    step (Left errs) = Nothing <$ tell errs
 
 -- | Resolve an aggregate: qualify its goal's constraints, and type its
 -- expressions. A malformed aggregate reports its own diagnostics and is
@@ -1349,31 +1369,25 @@ resolveAggregate ::
   PExpr.PExpr ->
   Aggregate ->
   Either [Diagnostic ResolveError] R.Aggregate
-resolveAggregate vis loc origin agg =
-  let (mAgg, e1) = runWriter (traverse (termToExpr vis loc origin) agg.agg)
-      (element', e2) = runWriter (termToExpr vis loc origin agg.element)
-      (conjuncts, e3) =
-        collect (map resolveConjunct agg.goal)
-      errs = e1 ++ e2 ++ e3
-   in if null errs
-        then
-          Right
-            R.Aggregate
-              { R.kind = agg.kind,
-                R.agg = mAgg,
-                R.element = element',
-                R.goal = concat conjuncts,
-                R.result = agg.result
-              }
-        else Left errs
+resolveAggregate vis loc origin agg = failOnDiags $ do
+  mAgg <- traverse (termToExpr vis loc origin) agg.agg
+  element' <- termToExpr vis loc origin agg.element
+  conjuncts <- collect (map resolveConjunct agg.goal)
+  pure
+    R.Aggregate
+      { R.kind = agg.kind,
+        R.agg = mAgg,
+        R.element = element',
+        R.goal = conjuncts,
+        R.result = agg.result
+      }
   where
     resolveConjunct (AggConstraint c) =
-      (: []) . R.AggConstraint <$> qualifyConstraint loc origin c
+      R.AggConstraint <$> qualifyConstraint loc origin c
     resolveConjunct (AggNested a) =
-      (: []) . R.AggNested <$> resolveAggregate vis loc origin a
+      R.AggNested <$> resolveAggregate vis loc origin a
     resolveConjunct (AggGuard g) =
-      let (e, errs) = runWriter (termToExpr vis loc origin g)
-       in if null errs then Right [R.AggGuard e] else Left errs
+      R.AggGuard <$> failOnDiags (termToExpr vis loc origin g)
 
 qualifyConstraint ::
   P.SourceLoc ->
@@ -1389,68 +1403,58 @@ resolveFunctions ::
   Map Text FunVisibility ->
   Set ConstraintKey ->
   [CollectedModule] ->
-  ([R.FunctionDef], [Diagnostic ResolveError])
-resolveFunctions visMap inlineSet mods =
-  let -- Collect all function declarations with their declaring module,
-      -- tagged with the module's input position so 'build' can tell two
-      -- same-named modules apart.
-      allDecls =
-        [ (QualifiedName m.name fd.name, fd.arity, fd, im, m)
-        | (im, m) <- zip [0 :: Int ..] mods,
-          P.Ann d _ <- m.decls,
-          P.FunctionDecl fd <- [d]
-        ]
-      -- Group by (qualifiedName, arity)
-      grouped =
-        Map.toList $
-          Map.fromListWith
-            (++)
-            [ ((qn, ar), [(fd, im, m)])
-            | (qn, ar, fd, im, m) <- allDecls
-            ]
-      build ((qn, ar), decls) =
-        let declPairs = [(fd, m) | (fd, _, m) <- decls]
-            -- 'gatherEquations' selects equations by (name, arity)
-            -- from the declaring module. Module names are unique across
-            -- a program that went through
-            -- 'YCHR.Internal.Compile.Pipeline.finalizeCompilation',
-            -- which rejects duplicates, so a group normally comes from
-            -- one module and gathering once per declaration would
-            -- suffice. Deduplicating by input position anyway keeps
-            -- 'resolveProgram' safe for a direct caller that bypasses
-            -- that check: the two same-named modules' equations are
-            -- then both gathered rather than one module's being
-            -- silently dropped. (A multi-signature @:- class@
-            -- contributes one declaration per signature; gathering per
-            -- distinct module, not per declaration, is what stops
-            -- every equation being repeated N times.)
-            declModules =
-              Map.elems (Map.fromList [(im, (fd, m)) | (fd, im, m) <- decls])
-            (eqss, eqErrss) =
-              unzip [gatherEquations visMap mods m fd | (fd, m) <- declModules]
-            def =
-              R.FunctionDef
-                { name = qn,
-                  arity = ar,
-                  signatures =
-                    collectSignatures (map fst declPairs)
-                      ++ collectExtensionSignatures mods qn ar,
-                  isOpen = any (\(fd, _) -> fd.isOpen) declPairs,
-                  requiring = concatMap (\(fd, _) -> fromMaybe [] fd.requiring) declPairs,
-                  -- At most one declaration of the group can carry
-                  -- one: 'checkRefiningDeclarations' rejects it on
-                  -- everything but a single-signature @:- function@,
-                  -- and 'checkMultiSigOnFunction' rejects a second
-                  -- signature for the same name and arity.
-                  refining =
-                    listToMaybe
-                      [t | (fd, _) <- declPairs, Just t <- [fd.refining]],
-                  inline = Set.member (ConstraintKey qn ar) inlineSet,
-                  equations = concat eqss
-                }
-         in (def, concat eqErrss)
-      (defs, defErrss) = unzip (map build grouped)
-   in (defs, concat defErrss)
+  Writer [Diagnostic ResolveError] [R.FunctionDef]
+resolveFunctions visMap inlineSet mods = traverse build (Map.toList grouped)
+  where
+    -- Group by qualified name and arity. 'Map.fromListWith' leaves each
+    -- group in reverse source order.
+    grouped =
+      Map.fromListWith
+        (++)
+        [(declKey entry, [entry]) | entry <- functionDeclEntries mods]
+    declKey :: FunctionDeclEntry -> ConstraintKey
+    declKey entry =
+      ConstraintKey (QualifiedName entry.owner.name entry.decl.name) entry.decl.arity
+    build (key, entries) = do
+      let decls = map (.decl) entries
+          -- 'gatherEquations' selects equations by (name, arity)
+          -- from the declaring module. Module names are unique across
+          -- a program that went through
+          -- 'YCHR.Internal.Compile.Pipeline.finalizeCompilation',
+          -- which rejects duplicates, so a group normally comes from
+          -- one module and gathering once per declaration would
+          -- suffice. Deduplicating by input position anyway keeps
+          -- 'resolveProgram' safe for a direct caller that bypasses
+          -- that check: the two same-named modules' equations are
+          -- then both gathered rather than one module's being
+          -- silently dropped. (A multi-signature @:- class@
+          -- contributes one declaration per signature; gathering per
+          -- distinct module, not per declaration, is what stops
+          -- every equation being repeated N times.)
+          declModules =
+            Map.elems (Map.fromList [(entry.moduleIndex, entry) | entry <- entries])
+      eqss <-
+        traverse
+          (\entry -> gatherEquations visMap mods entry.owner entry.decl)
+          declModules
+      pure
+        R.FunctionDef
+          { name = key.name,
+            arity = key.arity,
+            signatures =
+              collectSignatures decls
+                ++ collectExtensionSignatures mods key.name key.arity,
+            isOpen = any (.isOpen) decls,
+            requiring = concatMap (fromMaybe [] . (.requiring)) decls,
+            -- At most one declaration of the group can carry
+            -- one: 'checkRefiningDeclarations' rejects it on
+            -- everything but a single-signature @:- function@,
+            -- and 'checkMultiSigOnFunction' rejects a second
+            -- signature for the same name and arity.
+            refining = listToMaybe [t | fd <- decls, Just t <- [fd.refining]],
+            inline = Set.member key inlineSet,
+            equations = concat eqss
+          }
 
 -- | Collect type signatures from a group of declarations for the same function.
 collectSignatures :: [P.FunctionDeclBody] -> [FunSignature]
@@ -1491,51 +1495,29 @@ gatherEquations ::
   [CollectedModule] ->
   CollectedModule ->
   P.FunctionDeclBody ->
-  ([P.AnnP R.FunctionEquation], [Diagnostic ResolveError])
+  Writer [Diagnostic ResolveError] [P.AnnP R.FunctionEquation]
 gatherEquations visMap mods m fd =
-  let qualName = Qualified m.name fd.name
-      primaryEqs =
-        [ (annEq, m)
-        | annEq <- m.equations,
-          annEq.node.funName == qualName,
-          length annEq.node.args == fd.arity
-        ]
-      extensionEqs =
-        [ (annEq, mod_)
-        | mod_ <- mods,
-          annEq <- mod_.extensions ++ mod_.classExtensions,
-          annEq.node.funName == qualName,
-          length annEq.node.args == fd.arity
-        ]
-      strip (annEq, srcMod) =
-        stripFunName (funVisibilityFor visMap srcMod.name) annEq
-      (eqs, eqErrss) = unzip (map strip (primaryEqs ++ extensionEqs))
-   in (eqs, concat eqErrss)
+  sequence $
+    [strip m annEq | annEq <- m.equations, matches annEq]
+      ++ [ strip srcMod annEq
+         | srcMod <- mods,
+           annEq <- srcMod.extensions ++ srcMod.classExtensions,
+           matches annEq
+         ]
+  where
+    qualName = Qualified m.name fd.name
+    matches annEq =
+      annEq.node.funName == qualName && length annEq.node.args == fd.arity
+    strip srcMod = stripFunName (funVisibilityFor visMap srcMod.name)
 
 stripFunName ::
   FunVisibility ->
   P.AnnP P.FunctionEquation ->
-  (P.AnnP R.FunctionEquation, [Diagnostic ResolveError])
-stripFunName vis (P.AnnP eq loc parsed) =
-  let (guardExprs, guardErrs) =
-        runWriter
-          ( traverse
-              (termToExpr vis eq.guard.sourceLoc eq.guard.parsed)
-              eq.guard.node
-          )
-      (rhsExprs, rhsErrs) =
-        runWriter
-          ( traverse
-              (termToExpr vis eq.rhs.sourceLoc eq.rhs.parsed)
-              eq.rhs.node
-          )
-      resolvedEq =
-        R.FunctionEquation
-          { args = eq.args,
-            guard = P.AnnP guardExprs eq.guard.sourceLoc eq.guard.parsed,
-            rhs = P.AnnP rhsExprs eq.rhs.sourceLoc eq.rhs.parsed
-          }
-   in (P.AnnP resolvedEq loc parsed, guardErrs ++ rhsErrs)
+  Writer [Diagnostic ResolveError] (P.AnnP R.FunctionEquation)
+stripFunName vis (P.AnnP eq loc parsed) = do
+  guard' <- resolveAnnTerms vis eq.guard
+  rhs' <- resolveAnnTerms vis eq.rhs
+  pure (P.AnnP R.FunctionEquation {args = eq.args, guard = guard', rhs = rhs'} loc parsed)
 
 -- | Flatten the top-level comma operator of a 'Term' into a non-empty
 -- sequence. Used to give lambda bodies the same sequenced form as

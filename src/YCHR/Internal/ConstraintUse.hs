@@ -57,6 +57,12 @@ data ConstraintUseError
   = ConstraintUseViolation QualifiedName Int ConstraintUse OccurrenceRole
   deriving (Eq, Show)
 
+-- | A constraint in a rule head, with the side it is on.
+data Occurrence = Occurrence
+  { constraint :: HeadConstraint,
+    role :: OccurrenceRole
+  }
+
 -- | Check every rule head of the program. One diagnostic per offending
 -- occurrence, anchored at its rule's head.
 checkConstraintUse :: D.Program -> [Diagnostic ConstraintUseError]
@@ -68,36 +74,37 @@ checkConstraintUse prog
       let AnnP h loc origin = r.head
           label = fmap ("rule " <>) r.name
           occurrences =
-            [(hc, KeptOccurrence) | hc <- h.kept]
-              ++ [(hc, RemovedOccurrence) | hc <- h.removed]
+            [Occurrence hc KeptOccurrence | hc <- h.kept]
+              ++ [Occurrence hc RemovedOccurrence | hc <- h.removed]
               -- A constraint in an aggregate goal is a kept occurrence: an
               -- aggregate keeps its goal's constraints (spec
               -- §Interaction with other features). The exception is a
               -- top-level takemin/takemax, which removes the match it
               -- selects. A nested aggregate's constraints stay kept.
-              ++ [ (hc, role)
-                 | agg <- h.aggregates,
-                   (hc, topLevel) <- goalConstraints agg,
-                   let role
-                         | topLevel && removesMatch agg = RemovedOccurrence
-                         | otherwise = KeptOccurrence
-                 ]
+              ++ concat
+                [ goalOccurrences topRole agg
+                | agg <- h.aggregates,
+                  let topRole
+                        | removesMatch agg = RemovedOccurrence
+                        | otherwise = KeptOccurrence
+                ]
        in [ Diagnostic label (AnnP err loc origin) []
-          | (hc, role) <- occurrences,
-            let arity = length hc.args,
+          | occ <- occurrences,
+            let hc = occ.constraint
+                arity = length hc.args,
             Just use <- [Map.lookup (ConstraintKey hc.name arity) prog.constraintUses],
-            not (allows use role),
-            let err = ConstraintUseViolation hc.name arity use role
+            not (allows use occ.role),
+            let err = ConstraintUseViolation hc.name arity use occ.role
           ]
 
     -- The CHR constraint conjuncts of an aggregate goal, including those
-    -- of a nested aggregate, each flagged with whether it sits directly
+    -- of a nested aggregate. @role@ is the role of a constraint directly
     -- in this goal.
-    goalConstraints agg = concatMap conjunctConstraints agg.goal
-    conjunctConstraints (D.AggConstraint hc _) = [(hc, True)]
-    conjunctConstraints (D.AggNested nested) =
-      [(hc, False) | (hc, _) <- goalConstraints nested]
-    conjunctConstraints (D.AggGuard _) = []
+    goalOccurrences role agg = concatMap (conjunctOccurrences role) agg.goal
+    conjunctOccurrences role (D.AggConstraint hc _) = [Occurrence hc role]
+    conjunctOccurrences _ (D.AggNested nested) =
+      goalOccurrences KeptOccurrence nested
+    conjunctOccurrences _ (D.AggGuard _) = []
 
     removesMatch agg = agg.kind == AggTakemin || agg.kind == AggTakemax
 

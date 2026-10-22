@@ -104,7 +104,7 @@ import YCHR.Internal.Compile.Pipeline
     compileModules,
     compileParsedModules,
   )
-import YCHR.Internal.Desugar (desugarQueryGoals, liftQueryLambdas)
+import YCHR.Internal.Desugar (LiftedQuery (..), desugarQueryGoals, liftQueryLambdas)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic)
 import YCHR.Internal.Display (displayMsg)
@@ -252,13 +252,15 @@ runGoalConstraint ::
   IO (Map Text Term)
 runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
   qt <- resolveQueryTellOrThrow cp constraint
-  let (lifted, lambdas, liftErrs) =
-        liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qt.name qt.args]
-  unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
-  let extraProcs = compileQueryLambdas lambdas
-      extraCallables = [(c.key, c.procName) | c <- buildCallables lambdas]
+  lifted <-
+    either
+      (throwIO . DesugarErrors)
+      pure
+      (liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qt.name qt.args])
+  let extraProcs = compileQueryLambdas lifted.lambdas
+      extraCallables = [(c.key, c.procName) | c <- buildCallables lifted.lambdas]
   withCHRExtra (toSessionInput cp) hostCalls extraProcs extraCallables $
-    executePreparedQuery lifted
+    executePreparedQuery lifted.goals
 
 -- | Resolve a goal's name and arguments, throwing. A name that does not
 -- resolve, or resolves to a function, is 'GoalNotAConstraint'
@@ -481,8 +483,13 @@ resolveQueryGoals cp src = do
       (throwIO . DesugarErrors)
       pure
       (desugarQueryGoals exprs)
-  let (lifted, lambdas, liftErrs) = liftQueryLambdas cp.nextLambdaIndex bodyGoals
-  unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
+  liftedQuery <-
+    either
+      (throwIO . DesugarErrors)
+      pure
+      (liftQueryLambdas cp.nextLambdaIndex bodyGoals)
+  let lifted = liftedQuery.goals
+      lambdas = liftedQuery.lambdas
   let cdp = cp.desugaredProgram
   pure
     ResolvedQuery

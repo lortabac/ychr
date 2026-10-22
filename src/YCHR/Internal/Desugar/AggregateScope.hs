@@ -24,6 +24,7 @@ module YCHR.Internal.Desugar.AggregateScope
   )
 where
 
+import Control.Monad.Trans.State.Strict (State, evalState, get, put, runState)
 import Data.Foldable (toList)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -37,20 +38,31 @@ import YCHR.Internal.Types (AggregateKind (..), HeadArg (..), Term (..))
 -- | Fill the binder fields of a rule's aggregates, given the names bound
 -- before the first one.
 scopeAggregates :: Set Text -> [D.Aggregate] -> [D.Aggregate]
-scopeAggregates bound0 = snd . go 0 bound0
+scopeAggregates bound0 aggs = evalState (go bound0 aggs) 0
   where
-    go n _ [] = (n, [])
-    go n bound (a : rest) =
-      let (n1, a') = scopeAggregate n bound a
-          (n2, rest') = go n1 (boundAfter bound a) rest
-       in (n2, a' : rest')
+    go _ [] = pure []
+    go bound (a : rest) =
+      (:) <$> scopeAggregate bound a <*> go (boundAfter bound a) rest
 
 -- | Fill one aggregate's fields, and those of the aggregates nested in its
--- goal. The 'Int' numbers the @$res_N@ names, which have to be unique in
+-- goal. The state numbers the @$res_N@ names, which have to be unique in
 -- the rule.
-scopeAggregate :: Int -> Set Text -> D.Aggregate -> (Int, D.Aggregate)
-scopeAggregate n0 bound a =
-  ( n2,
+scopeAggregate :: Set Text -> D.Aggregate -> State Int D.Aggregate
+scopeAggregate bound a = do
+  result <-
+    if a.kind == AggPlain
+      then Just <$> resultHnf bound a.result
+      else pure Nothing
+  goal' <- scopeGoal (Set.fromList shared) a.goal
+  let own = exprVars a.element `Set.union` Set.unions (map conjunctVars goal')
+      -- A selection's goal variables are what it binds: they are visible.
+      -- A plain form's result is matched outside the goal, so a result
+      -- variable that the goal also mentions is a local too.
+      locals
+        | a.kind == AggPlain = own `Set.difference` Set.fromList shared
+        | otherwise =
+            own `Set.difference` Set.fromList shared `Set.difference` Set.fromList binds
+  pure
     a
       { D.goal = goal',
         D.aggShared = shared,
@@ -58,56 +70,48 @@ scopeAggregate n0 bound a =
         D.aggBinds = binds,
         D.aggResult = result
       }
-  )
   where
     shared = Set.toAscList (aggregateMentionedVars a `Set.intersection` bound)
     binds = aggregateBinds bound a
-    (n1, result)
-      | a.kind == AggPlain = Just <$> resultHnf n0 bound a.result
-      | otherwise = (n0, Nothing)
-    (n2, goal') = scopeGoal n1 (Set.fromList shared) a.goal
-    own = exprVars a.element `Set.union` Set.unions (map conjunctVars goal')
     conjunctVars (D.AggConstraint hc guards) =
       Set.unions (map headArgVars hc.args) `Set.union` guardVars guards
     conjunctVars (D.AggGuard g) = guardVars [g]
     conjunctVars (D.AggNested nested) = Set.fromList nested.aggBinds
-    -- A selection's goal variables are what it binds: they are visible.
-    -- A plain form's result is matched outside the goal, so a result
-    -- variable that the goal also mentions is a local too.
-    locals
-      | a.kind == AggPlain = own `Set.difference` Set.fromList shared
-      | otherwise =
-          own `Set.difference` Set.fromList shared `Set.difference` Set.fromList binds
 
 -- | Fill the fields of the aggregates nested in a goal, tracking what the
 -- goal has bound at each position.
-scopeGoal :: Int -> Set Text -> [D.AggregateConjunct] -> (Int, [D.AggregateConjunct])
-scopeGoal n _ [] = (n, [])
-scopeGoal n scope (c : rest) = case c of
+scopeGoal :: Set Text -> [D.AggregateConjunct] -> State Int [D.AggregateConjunct]
+scopeGoal _ [] = pure []
+scopeGoal scope (c : rest) = case c of
   D.AggConstraint hc guards ->
     let scope' =
           Set.unions (scope : map headArgVars hc.args)
             `Set.union` Set.fromList [v | D.GuardGetArg v _ _ <- guards]
-     in (c :) <$> scopeGoal n scope' rest
-  D.AggGuard _ -> (c :) <$> scopeGoal n scope rest
+     in (c :) <$> scopeGoal scope' rest
+  D.AggGuard _ -> (c :) <$> scopeGoal scope rest
   D.AggNested nested ->
-    let (n1, nested') = scopeAggregate n scope nested
-        (n2, rest') = scopeGoal n1 (boundAfter scope nested) rest
-     in (n2, D.AggNested nested' : rest')
+    (:)
+      <$> (D.AggNested <$> scopeAggregate scope nested)
+      <*> scopeGoal (boundAfter scope nested) rest
 
 -- | The result pattern in head normal form, with @bound@ as what HNF has
 -- already seen: a bound variable is a test, a fresh one a binding.
-resultHnf :: Int -> Set Text -> Term -> (Int, D.AggregateResult)
-resultHnf n bound t =
-  let st = hnfState {counter = n, seen = bound, prefix = resultPrefix}
-      (st', arg) = normalizeArg st t
-      guards = toList st'.guards
-   in case arg of
-        HeadVar v -> (st'.counter, D.AggregateResult v guards)
-        -- A wildcard still needs a slot to type the payload in.
-        HeadWildcard ->
-          let v = resultPrefix <> T.pack (show st'.counter)
-           in (st'.counter + 1, D.AggregateResult v guards)
+resultHnf :: Set Text -> Term -> State Int D.AggregateResult
+resultHnf bound t = do
+  n <- get
+  let (arg, st) =
+        runState
+          (normalizeArg t)
+          hnfState {counter = n, seen = bound, prefix = resultPrefix}
+      guards = toList st.guards
+  case arg of
+    HeadVar v -> do
+      put st.counter
+      pure (D.AggregateResult v guards)
+    -- A wildcard still needs a slot to type the payload in.
+    HeadWildcard -> do
+      put (st.counter + 1)
+      pure (D.AggregateResult (resultPrefix <> T.pack (show st.counter)) guards)
 
 -- | Prefix of the fresh result variables. @$@ keeps them apart from source
 -- variables, and @res@ from HNF's @$hnf_N@.

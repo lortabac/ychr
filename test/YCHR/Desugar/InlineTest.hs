@@ -55,14 +55,13 @@ inlinedProgram src = do
   desugared <- case desugarProgram resolved of
     Right p -> pure p
     Left errs -> assertFailure ("unexpected desugar errors: " ++ show (map diagMsg errs))
-  let (lifted, liftErrs) = liftAllLambdas desugared
-  case liftErrs of
-    [] -> pure ()
-    errs -> assertFailure ("unexpected lambda-lift errors: " ++ show (map diagMsg errs))
-  let (inlined, inlineErrs) = inlineFunctions lifted
-  case inlineErrs of
-    [] -> pure inlined
-    errs -> assertFailure ("unexpected inline errors: " ++ show (map diagMsg errs))
+  lifted <- case liftAllLambdas desugared of
+    Right p -> pure p
+    Left errs ->
+      assertFailure ("unexpected lambda-lift errors: " ++ show (map diagMsg errs))
+  case inlineFunctions lifted of
+    Right p -> pure p
+    Left errs -> assertFailure ("unexpected inline errors: " ++ show (map diagMsg errs))
   where
     diagMsg :: (Display (Diagnostic e)) => Diagnostic e -> String
     diagMsg = displayMsg

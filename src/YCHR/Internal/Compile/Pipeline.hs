@@ -571,19 +571,13 @@ finalizeCompilation libraryMods opExports sources parsed = do
   renamed <- first RenameErrors (renameProgram renameInputs allMods)
   resolved <- first ResolveErrors (resolveProgram renamed.result)
   desugared <- first DesugarErrors (desugarProgram resolved)
-  let (desugaredLifted, liftErrs) = liftAllLambdas desugared
-  case liftErrs of
-    [] -> pure ()
-    _ -> Left (DesugarErrors liftErrs)
+  desugaredLifted <- first DesugarErrors (liftAllLambdas desugared)
   -- After lambda lifting, so a lambda inside a disjunct is already a
   -- closure over the enclosing scope by the time the branch moves out.
   -- 'desugaredProgram' below keeps the /pre/-lowering AST, because the
   -- type checker has to see each branch in the rule it was written in.
   let desugared' = lowerDisjunctions desugaredLifted
-  let (desugaredInlined, inlineErrs) = inlineFunctions desugared'
-  case inlineErrs of
-    [] -> pure ()
-    _ -> Left (DesugarErrors inlineErrs)
+  desugaredInlined <- first DesugarErrors (inlineFunctions desugared')
   let symTab = extractSymbolTable desugaredInlined
       exhaustWarnings = checkExhaustiveness resolved
       warnings =

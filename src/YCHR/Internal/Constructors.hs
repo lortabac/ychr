@@ -3,8 +3,8 @@
 -- | Data-constructor resolution.
 --
 -- Maps built from a program's @:- chr_type@ declarations. They answer
--- two questions about a use-site constructor name: which declared type
--- and constructor it refers to ('lookupCon'), and what its canonical
+-- two questions about a use-site constructor name: which declared
+-- constructor it refers to ('lookupCon'), and what its canonical
 -- qualified form is ('canonicalizeCon'). Used by
 -- "YCHR.Internal.Exhaustiveness".
 --
@@ -36,9 +36,8 @@ import YCHR.Internal.Types
 -- | Constructor-resolution maps derived from a program's type
 -- definitions.
 data ConEnv = ConEnv
-  { -- | Map from constructor name to its parent type definition and
-    -- constructor info.
-    constructors :: Map Name (TypeDefinition, DataConstructor),
+  { -- | Map from constructor name to the declared constructor.
+    constructors :: Map Name DataConstructor,
     -- | Resolves a use-site unqualified name to its declaration's
     -- qualified name when exactly one constructor matches. See
     -- 'buildConAlias'.
@@ -54,10 +53,10 @@ buildConEnv tds =
     }
 
 -- | Build the constructor-name index consulted by 'lookupCon'.
-buildConMap :: [TypeDefinition] -> Map Name (TypeDefinition, DataConstructor)
+buildConMap :: [TypeDefinition] -> Map Name DataConstructor
 buildConMap tds =
   Map.fromList
-    [ (dc.conName, (td, dc))
+    [ (dc.conName, dc)
     | td <- tds,
       dc <- typeConstructors td
     ]
@@ -90,6 +89,6 @@ canonicalizeCon env (Unqualified n) =
   Map.findWithDefault (Unqualified n) n env.aliases
 
 -- | Look up a (possibly already canonical) constructor name in
--- 'constructors'. Returns the parent type definition and the constructor.
-lookupCon :: ConEnv -> Name -> Maybe (TypeDefinition, DataConstructor)
+-- 'constructors'.
+lookupCon :: ConEnv -> Name -> Maybe DataConstructor
 lookupCon env name = Map.lookup name env.constructors

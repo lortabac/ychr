@@ -54,7 +54,7 @@ below.
 | 3 | Record update on a record-dot expression doesn't parse | open — workaround applied to `src/` (see below) |
 | 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
 | 5 | No `TemplateHaskell` support | open upstream — workaround applied: no TH in `library ychr`; the MicroHs `ychr` compiles resources decoded at build time by `make resources` (see below) |
-| 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
+| 6 | `mapAccumL` is list-only | open — no site left in `src/` (see below) |
 | 7 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
 | 8 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
 | 9 | `Data.Text.replicate` rejects a zero multiplier | open upstream — no YCHR-side workaround; the MicroHs `ychr` cannot render help (see below) |
@@ -732,6 +732,11 @@ exists; only the signature and body of `Data.List`'s versions need to
 change.
 
 ### Local workaround (applied)
+
+No longer needed: the lambda lifter now runs in `State`, and
+`liftBodyGoal`'s `D.BodyOr` arm uses `traverse` on the `NonEmpty`
+directly, which MicroHs accepts. No `mapAccumL` is left in `src/`. The
+rest of this section records the old workaround.
 
 Applied to `src/YCHR/Internal/Desugar.hs`, `liftBodyGoal`'s `D.BodyOr`
 arm — the only `mapAccumL` in the tree applied to a `NonEmpty`. Every
