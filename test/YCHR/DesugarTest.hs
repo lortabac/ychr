@@ -64,6 +64,12 @@ desugar mods = do
     Right p -> return p
     Left errs -> assertFailure $ "unexpected errors: " ++ show errs
 
+-- | Lift a program's lambdas, failing the test on errors.
+liftOrFail :: D.Program -> IO D.Program
+liftOrFail prog = case liftAllLambdas prog of
+  Right p -> return p
+  Left errs -> assertFailure $ "unexpected lambda-lift errors: " ++ show errs
+
 -- | The only rule of the desugared program.
 singleRule :: [Module] -> IO D.Rule
 singleRule mods = do
@@ -749,8 +755,7 @@ lambdaLiftTests =
                   }
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
-        let (lifted, liftErrs) = liftAllLambdas prog
-        liftErrs @?= []
+        lifted <- liftOrFail prog
         let isLambda f = f.name.baseName == "__lambda_0"
         case filter isLambda lifted.functions of
           [lam] -> do
@@ -943,8 +948,7 @@ aggregateTests =
                     (var "W")
                 ]
         prog <- desugar [simpleModule hd]
-        let (prog', errs) = liftAllLambdas prog
-        errs @?= []
+        prog' <- liftOrFail prog
         -- The element is evaluated inside the goal's loop, so the goal
         -- variable is in scope and becomes a leading capture parameter.
         liftedLambdaParams prog' @?= [["W", "Y"]],
@@ -959,8 +963,7 @@ aggregateTests =
                     (var "W")
                 ]
         prog <- desugar [simpleModule hd]
-        let (prog', errs) = liftAllLambdas prog
-        errs @?= []
+        prog' <- liftOrFail prog
         -- agg is evaluated before the fold's loops: the goal variable is
         -- outside its scope, so it is not captured. Compiling the lifted
         -- body reports it as an unbound variable, which is the right

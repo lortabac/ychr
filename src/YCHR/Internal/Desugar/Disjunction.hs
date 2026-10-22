@@ -34,13 +34,13 @@
 --     types here would only restate what has already been checked.
 module YCHR.Internal.Desugar.Disjunction (lowerDisjunctions) where
 
-import Data.List (mapAccumL)
+import Control.Monad.Trans.State.Strict (State, gets, modify', runState)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Internal.Desugar (bodyGoalVars, guardVars, ruleModName)
+import YCHR.Internal.Desugar (bodyGoalVars, ruleModName, ruleScope)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Resolved qualified as R
@@ -73,7 +73,7 @@ disjPrefix = "__disj_"
 altConstraint :: QualifiedName
 altConstraint = QualifiedName "search" "alt"
 
--- | Threaded state: a counter supplying fresh @__disj_N@ names, and
+-- | State of the pass: a counter supplying fresh @__disj_N@ names, and
 -- the rules lifted out so far, newest first. The counter is global to
 -- the program rather than per rule, so a name identifies its branch
 -- uniquely wherever it shows up.
@@ -89,7 +89,7 @@ data LowerState = LowerState
 lowerDisjunctions :: D.Program -> D.Program
 lowerDisjunctions prog =
   let st0 = LowerState {counter = 1, lifted = []}
-      (st, rules') = mapAccumL lowerRule st0 prog.rules
+      (rules', st) = runState (traverse lowerRule prog.rules) st0
       newRules = reverse st.lifted
    in prog
         { D.rules = rules' ++ newRules,
@@ -103,11 +103,11 @@ lowerDisjunctions prog =
       _ -> error "Disjunction.declOf: lifted rule is not a simplification"
 
 -- | Lower the disjunctions in one rule's body.
-lowerRule :: LowerState -> D.Rule -> (LowerState, D.Rule)
-lowerRule st rule =
+lowerRule :: D.Rule -> State LowerState D.Rule
+lowerRule rule = do
   let bodyAnn = rule.body
-      (st', goals) = lowerGoals (contextOf rule) st bodyAnn.node
-   in (st', rule {D.body = bodyAnn {node = goals}})
+  goals <- lowerGoals (contextOf rule) bodyAnn.node
+  pure rule {D.body = bodyAnn {node = goals}}
 
 -- | What a lifted branch needs from the rule it came out of: the
 -- module to declare the new constraint in, the variables in scope, and
@@ -131,25 +131,25 @@ contextOf rule =
     }
 
 -- | Lower the disjunctions in a list of goals.
-lowerGoals :: Context -> LowerState -> [D.BodyGoal] -> (LowerState, [D.BodyGoal])
-lowerGoals ctx = mapAccumL (lowerGoal ctx)
+lowerGoals :: Context -> [D.BodyGoal] -> State LowerState [D.BodyGoal]
+lowerGoals ctx = traverse (lowerGoal ctx)
 
 -- | One goal. Only 'D.BodyOr' changes: @;@ can appear nowhere else in
 -- a body, so no other shape needs walking.
-lowerGoal :: Context -> LowerState -> D.BodyGoal -> (LowerState, D.BodyGoal)
-lowerGoal ctx st (D.BodyOr branches) =
-  let (st', altGoals) = mapAccumL (liftBranch ctx) st (NE.toList branches)
-   in (st', D.BodyTell altConstraint [exprList altGoals])
-lowerGoal _ st goal = (st, goal)
+lowerGoal :: Context -> D.BodyGoal -> State LowerState D.BodyGoal
+lowerGoal ctx (D.BodyOr branches) = do
+  altGoals <- traverse (liftBranch ctx) (NE.toList branches)
+  pure (D.BodyTell altConstraint [exprList altGoals])
+lowerGoal _ goal = pure goal
 
 -- | Lift one branch into its own rule and return the quoted call that
 -- names it. A nested disjunction inside the branch is lowered first,
 -- so the rule this produces is already free of them.
-liftBranch :: Context -> LowerState -> [D.BodyGoal] -> (LowerState, R.Expr)
-liftBranch ctx st branch =
-  let (st1, branch') = lowerGoals ctx st branch
-      params = Set.toAscList (bodyGoalVars branch' `Set.intersection` ctx.scope)
-      idx = st1.counter
+liftBranch :: Context -> [D.BodyGoal] -> State LowerState R.Expr
+liftBranch ctx branch = do
+  branch' <- lowerGoals ctx branch
+  idx <- gets (.counter)
+  let params = Set.toAscList (bodyGoalVars branch' `Set.intersection` ctx.scope)
       qname = QualifiedName ctx.modName (disjPrefix <> T.pack (show idx))
       headAnn = ctx.headAnn
       bodyAnn = ctx.bodyAnn
@@ -171,8 +171,8 @@ liftBranch ctx st branch =
             guard = bodyAnn {node = []},
             body = bodyAnn {node = branch'}
           }
-      st2 = st1 {counter = idx + 1, lifted = rule : st1.lifted}
-   in (st2, quoted (R.CtorExpr (qualifiedToName qname) (map R.VarExpr params)))
+  modify' (\st -> st {counter = idx + 1, lifted = rule : st.lifted})
+  pure (quoted (R.CtorExpr (qualifiedToName qname) (map R.VarExpr params)))
 
 -- | Wrap a disjunct call in @quote\/1@. The alternatives of an @alt@
 -- are goals, not values: the compound has to reach the store as data
@@ -187,18 +187,3 @@ exprList = foldr cons nil
   where
     cons h t = R.CtorExpr (Qualified "prelude" ".") [h, t]
     nil = R.CtorExpr (Qualified "prelude" "[]") []
-
--- | Every variable the rule mentions: head, guard, and body. The same
--- scope the lambda lifter uses, and for the same reason — a lifted
--- body must not capture a name the enclosing rule does not have.
-ruleScope :: D.Rule -> Set.Set Text
-ruleScope rule =
-  Set.unions
-    [ Set.fromList
-        [ v
-        | c <- rule.head.node.kept ++ rule.head.node.removed,
-          HeadVar v <- c.args
-        ],
-      guardVars rule.guard.node,
-      bodyGoalVars rule.body.node
-    ]

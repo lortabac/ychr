@@ -12,13 +12,15 @@
 -- result pattern.
 module YCHR.Internal.Desugar.Hnf
   ( HnfState (..),
+    Hnf,
     hnfState,
     normalizeArg,
     headTermToExpr,
   )
 where
 
-import Data.List qualified as List
+import Control.Monad (zipWithM_)
+import Control.Monad.Trans.State.Strict (State, get, modify', put)
 import Data.Sequence (Seq, (|>))
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
@@ -50,7 +52,7 @@ headTermToExpr (TextTerm s) = D.TextExpr s
 headTermToExpr (CompoundTerm n args) =
   D.CtorExpr n (map headTermToExpr args)
 
--- | Threaded state for HNF: a fresh-variable counter, the set of
+-- | State for HNF: a fresh-variable counter, the set of
 -- variable names already seen in the head so far (so that duplicates
 -- can be detected), the guards emitted so far, and the prefix of the
 -- fresh names.
@@ -70,31 +72,50 @@ data HnfState = HnfState
 hnfState :: HnfState
 hnfState = HnfState 0 Set.empty Seq.empty hnfPrefix
 
--- | The next fresh name, and the state with the counter moved past it.
-fresh :: HnfState -> (Text, HnfState)
-fresh st = (st.prefix <> T.pack (show st.counter), st {counter = st.counter + 1})
+-- | An HNF step.
+type Hnf = State HnfState
 
-emit :: HnfState -> D.Guard -> HnfState
-emit st g = st {guards = st.guards |> g}
+-- | The next fresh name; moves the counter past it.
+fresh :: Hnf Text
+fresh = do
+  st <- get
+  put st {counter = st.counter + 1}
+  pure (st.prefix <> T.pack (show st.counter))
+
+emit :: D.Guard -> Hnf ()
+emit g = modify' (\st -> st {guards = st.guards |> g})
+
+-- | Record a variable as seen. Returns whether it was seen before.
+see :: Text -> Hnf Bool
+see v = do
+  st <- get
+  let before = Set.member v st.seen
+  put st {seen = Set.insert v st.seen}
+  pure before
 
 -- | Normalize one argument of a head constraint. Fresh variables are
 -- only introduced for duplicates and non-variables; first-use variables
 -- and wildcards pass through.
-normalizeArg :: HnfState -> Term -> (HnfState, HeadArg)
-normalizeArg st (VarTerm v)
-  | Set.member v st.seen =
-      let (x, st') = fresh st
-       in (emit st' (D.GuardEqual (D.VarExpr v) (D.VarExpr x)), HeadVar x)
-  | otherwise = (st {seen = Set.insert v st.seen}, HeadVar v)
+normalizeArg :: Term -> Hnf HeadArg
+normalizeArg (VarTerm v) = do
+  dup <- see v
+  if dup
+    then do
+      x <- fresh
+      emit (D.GuardEqual (D.VarExpr v) (D.VarExpr x))
+      pure (HeadVar x)
+    else pure (HeadVar v)
 -- Wildcards pass through unchanged: they match anything, are never referenced,
 -- and cannot duplicate, so no fresh variable or guard is needed.
-normalizeArg st Wildcard = (st, HeadWildcard)
-normalizeArg st (CompoundTerm cname cargs) =
-  let (x, st') = fresh st
-   in (decomposeCompound st' x cname cargs, HeadVar x)
-normalizeArg st term =
-  let (x, st') = fresh st
-   in (emit st' (D.GuardEqual (D.VarExpr x) (headTermToExpr term)), HeadVar x)
+normalizeArg Wildcard = pure HeadWildcard
+normalizeArg (CompoundTerm cname cargs) = do
+  x <- fresh
+  decomposeCompound x cname cargs
+  pure (HeadVar x)
+normalizeArg term = do
+  x <- fresh
+  emit (D.GuardEqual (D.VarExpr x) (headTermToExpr term))
+  pure (HeadVar x)
 
 -- | Decompose a compound term into match and extraction guards. Both
 -- 'Qualified' and 'Unqualified' constructor functors are handled
@@ -102,35 +123,33 @@ normalizeArg st term =
 -- 'Qualified' form, and the compiler emits both as a single flat-atom
 -- compound (see 'YCHR.Internal.Compile.compileTerm') — so HNF can just emit one
 -- 'GuardMatch' per compound regardless of where the name originated.
-decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
-decomposeCompound st parentVar cname cargs =
+decomposeCompound :: Text -> Name -> [Term] -> Hnf ()
+decomposeCompound parentVar cname cargs = do
   -- 'length' is non-negative, so the conversion to 'Word' is safe.
-  let matchGuard = D.GuardMatch (D.VarExpr parentVar) cname (fromIntegral (length cargs))
-   in List.foldl'
-        (\s (i, arg) -> decomposeArg s parentVar i arg)
-        (emit st matchGuard)
-        (zip [0 ..] cargs)
+  emit (D.GuardMatch (D.VarExpr parentVar) cname (fromIntegral (length cargs)))
+  zipWithM_ (decomposeArg parentVar) [0 ..] cargs
 
 -- | Decompose a single argument of a compound term.
-decomposeArg :: HnfState -> Text -> Word -> Term -> HnfState
-decomposeArg st parentVar i (VarTerm v)
-  | Set.member v st.seen =
+decomposeArg :: Text -> Word -> Term -> Hnf ()
+decomposeArg parentVar i (VarTerm v) = do
+  dup <- see v
+  if dup
+    then do
       -- Duplicate variable: extract and check equality
-      let (x, st') = fresh st
-       in emit
-            (emit st' (D.GuardGetArg x (D.VarExpr parentVar) i))
-            (D.GuardEqual (D.VarExpr v) (D.VarExpr x))
-  | otherwise =
+      x <- fresh
+      emit (D.GuardGetArg x (D.VarExpr parentVar) i)
+      emit (D.GuardEqual (D.VarExpr v) (D.VarExpr x))
+    else
       -- First occurrence: extract and bind
-      emit (st {seen = Set.insert v st.seen}) (D.GuardGetArg v (D.VarExpr parentVar) i)
-decomposeArg st _ _ Wildcard = st
-decomposeArg st parentVar i (CompoundTerm cname cargs) =
+      emit (D.GuardGetArg v (D.VarExpr parentVar) i)
+decomposeArg _ _ Wildcard = pure ()
+decomposeArg parentVar i (CompoundTerm cname cargs) = do
   -- Nested compound: extract then recursively decompose
-  let (x, st') = fresh st
-   in decomposeCompound (emit st' (D.GuardGetArg x (D.VarExpr parentVar) i)) x cname cargs
-decomposeArg st parentVar i term =
+  x <- fresh
+  emit (D.GuardGetArg x (D.VarExpr parentVar) i)
+  decomposeCompound x cname cargs
+decomposeArg parentVar i term = do
   -- Ground term (atom, integer, string): extract and check equality
-  let (x, st') = fresh st
-   in emit
-        (emit st' (D.GuardGetArg x (D.VarExpr parentVar) i))
-        (D.GuardEqual (D.VarExpr x) (headTermToExpr term))
+  x <- fresh
+  emit (D.GuardGetArg x (D.VarExpr parentVar) i)
+  emit (D.GuardEqual (D.VarExpr x) (headTermToExpr term))

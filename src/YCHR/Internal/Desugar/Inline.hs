@@ -84,25 +84,20 @@ type Candidates = Map QualifiedName Candidate
 -- level). A program with no @:- inline@-marked function comes back
 -- unchanged.
 --
--- When a candidate's declared shape is ineligible, or two or more
--- candidates call each other, the diagnostics describe why and the
--- program comes back unchanged (mirrors
--- 'YCHR.Internal.Desugar.liftAllLambdas': the caller treats any
--- non-empty error list as a hard failure and never looks at the
--- program half of the pair).
-inlineFunctions :: D.Program -> (D.Program, [Diagnostic DesugarError])
-inlineFunctions prog = case buildCandidates prog.functions of
-  Left errs -> (prog, errs)
-  Right raw
-    | Map.null raw -> (prog, [])
-    | otherwise ->
+-- Fails when a candidate's declared shape is ineligible, or two or
+-- more candidates call each other; the diagnostics describe why.
+inlineFunctions :: D.Program -> Either [Diagnostic DesugarError] D.Program
+inlineFunctions prog = do
+  raw <- buildCandidates prog.functions
+  pure $
+    if Map.null raw
+      then prog
+      else
         let cands = finalCandidates raw
-         in ( prog
-                { D.rules = map (rewriteRule cands) prog.rules,
-                  D.functions = map (rewriteFunction cands) prog.functions
-                },
-              []
-            )
+         in prog
+              { D.rules = map (rewriteRule cands) prog.rules,
+                D.functions = map (rewriteFunction cands) prog.functions
+              }
 
 -- ---------------------------------------------------------------------------
 -- Candidate collection and validation
@@ -149,10 +144,13 @@ shapeCheck f = case f.equations of
     | otherwise -> []
   eqs -> [diag (InlineNotSingleEquation f.name (length eqs))]
   where
-    diag err = noDiag (AnnP err loc pexpr)
-    (loc, pexpr) = case f.equations of
-      (annEq : _) -> (annEq.sourceLoc, annEq.parsed)
-      [] -> (dummyLoc, Atom "inline")
+    diag = atFirstEquation f.equations
+
+-- | A diagnostic anchored at the first of some equations.
+atFirstEquation :: [AnnP D.Equation] -> DesugarError -> Diagnostic DesugarError
+atFirstEquation eqs err = case eqs of
+  (annEq : _) -> noDiag (AnnP err annEq.sourceLoc annEq.parsed)
+  [] -> noDiag (AnnP err dummyLoc (Atom "inline"))
 
 -- | Every 'R.CallExpr' target reachable anywhere inside an expression,
 -- regardless of nesting. Used both to build the candidate call graph
@@ -201,12 +199,8 @@ cycleDiagnostic :: [D.Function] -> [QualifiedName] -> Diagnostic DesugarError
 cycleDiagnostic marked cyclic =
   let names = sort (map (flattenName . qualifiedToName) cyclic)
       cyclicSet = Set.fromList cyclic
-      (loc, pexpr) = case [f | f <- marked, Set.member f.name cyclicSet] of
-        (f : _) -> case f.equations of
-          (annEq : _) -> (annEq.sourceLoc, annEq.parsed)
-          [] -> (dummyLoc, Atom "inline")
-        [] -> (dummyLoc, Atom "inline")
-   in noDiag (AnnP (InlineCycle names) loc pexpr)
+      firstCyclic = take 1 [f | f <- marked, Set.member f.name cyclicSet]
+   in atFirstEquation (concatMap (.equations) firstCyclic) (InlineCycle names)
 
 -- ---------------------------------------------------------------------------
 -- Candidate finalization
