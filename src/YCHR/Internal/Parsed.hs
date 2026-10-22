@@ -78,7 +78,7 @@ where
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import YCHR.Internal.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
-import YCHR.Internal.PExpr (OpType (..), PExpr (..))
+import YCHR.Internal.PExpr (OpDecl (..), OpType (..), PExpr (..))
 import YCHR.Internal.Types
   ( Aggregate (..),
     AggregateConjunct (..),
@@ -353,14 +353,6 @@ data Declaration
   | OperatorDecl OpDecl
   | TypeExportDecl TypeExportDeclBody
   | MacroExportDecl MacroExportDeclBody
-  deriving (Show, Eq)
-
--- | An @op(...)@ entry from a module's export or import list.
-data OpDecl = OpDecl
-  { fixity :: Int,
-    opType :: OpType,
-    opName :: Text
-  }
   deriving (Show, Eq)
 
 -- | A function equation: @lhs [| guard] -> rhs@.

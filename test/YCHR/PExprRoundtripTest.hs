@@ -57,7 +57,7 @@ genSafeAtom = Gen.filter isOk $ do
     isOk s =
       s `notElem` wordOps
         && not ("__" `Text.isInfixOf` s)
-    wordOps = [name | (_, ty, name) <- opTableEntries testOps, not (isSymOp ty name)]
+    wordOps = [d.opName | d <- opTableEntries testOps, not (isSymOp d.opType d.opName)]
     -- The real symbol set (`YCHR.Internal.PExpr.symbolChars`), kept in
     -- sync here: `\` is a symbol character (the prelude's disequality
     -- operator and the simpagation operator both use it).

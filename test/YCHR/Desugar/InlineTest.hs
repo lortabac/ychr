@@ -26,7 +26,7 @@ import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Parsed (AnnP (..))
-import YCHR.Internal.Parser (parseModule)
+import YCHR.Internal.Parser (Converted (..), parseModule)
 import YCHR.Internal.Rename (Renamed (..), defaultRenameInputs, renameProgram)
 import YCHR.Internal.Resolve (resolveProgram)
 import YCHR.Internal.Resolved qualified as R
@@ -38,7 +38,7 @@ import YCHR.Internal.Types (QualifiedName (..))
 -- whichever stage raised it.
 inlinedProgram :: Text -> IO D.Program
 inlinedProgram src = do
-  (m, parseErrs) <- case parseModule "<inline-test>" src of
+  Converted m parseErrs <- case parseModule "<inline-test>" src of
     Left err -> assertFailure ("parse error: " ++ show err)
     Right ok -> pure ok
   case parseErrs of

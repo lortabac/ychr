@@ -64,19 +64,19 @@ prettyOps = case PE.mergeOps builtinOps stdArithOps of
   Left _ -> builtinOps
   where
     stdArithOps =
-      [ (200, PE.Fy, "-"),
-        (500, PE.Yfx, "+"),
-        (500, PE.Yfx, "-"),
-        (400, PE.Yfx, "*"),
-        (400, PE.Yfx, "div"),
-        (400, PE.Yfx, "mod"),
-        (400, PE.Yfx, "rem"),
-        (700, PE.Xfx, "<"),
-        (700, PE.Xfx, ">"),
-        (700, PE.Xfx, ">="),
-        (700, PE.Xfx, "=<"),
-        (700, PE.Xfx, "=="),
-        (700, PE.Xfx, "\\==")
+      [ PE.OpDecl 200 PE.Fy "-",
+        PE.OpDecl 500 PE.Yfx "+",
+        PE.OpDecl 500 PE.Yfx "-",
+        PE.OpDecl 400 PE.Yfx "*",
+        PE.OpDecl 400 PE.Yfx "div",
+        PE.OpDecl 400 PE.Yfx "mod",
+        PE.OpDecl 400 PE.Yfx "rem",
+        PE.OpDecl 700 PE.Xfx "<",
+        PE.OpDecl 700 PE.Xfx ">",
+        PE.OpDecl 700 PE.Xfx ">=",
+        PE.OpDecl 700 PE.Xfx "=<",
+        PE.OpDecl 700 PE.Xfx "==",
+        PE.OpDecl 700 PE.Xfx "\\=="
       ]
 
 -- ---------------------------------------------------------------------------

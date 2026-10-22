@@ -45,7 +45,7 @@ import YCHR.Internal.Compile.Names
     runtimeName,
     vmName,
   )
-import YCHR.Internal.PExpr (OpTable, OpType (..), opTableEntries)
+import YCHR.Internal.PExpr (OpDecl (..), OpTable, OpType (..), opTableEntries)
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
 import YCHR.Internal.Types (SymbolTable, symbolTableToList)
 import YCHR.Internal.Types qualified as Types
@@ -426,7 +426,7 @@ opTableSExpr table =
                   SAtom (opTypeText ty),
                   SString name
                 ]
-            | (fix, ty, name) <- opTableEntries table
+            | OpDecl fix ty name <- opTableEntries table
             ]
         ]
     ]

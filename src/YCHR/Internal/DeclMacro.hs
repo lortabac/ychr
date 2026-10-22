@@ -52,7 +52,8 @@ import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.PExpr (PExpr (..))
 import YCHR.Internal.Parsed
 import YCHR.Internal.Parser
-  ( ParseValidationError (..),
+  ( ChainedError (..),
+    ParseValidationError (..),
     SourceItem (..),
     convertSourceItems,
     convertTerm,
@@ -236,10 +237,10 @@ expandAndConvert env scope terms =
   let defErrs = checkDefinitions scope
       (items, expErrs) =
         runWriter (evalStateT (expandModule env scope terms) initialMacroState)
-      (m, convErrs) = convertSourceItems scope.name items
+      (m, convErrs) = runWriter (convertSourceItems scope.name items)
    in ExpandedModule
         { converted = m,
-          parseErrors = [e | (e, []) <- convErrs],
+          parseErrors = [e | ChainedError e [] <- convErrs],
           expansionErrors =
             defErrs
               ++ expErrs
@@ -247,7 +248,7 @@ expandAndConvert env scope terms =
                      Nothing
                      (DeclMacroParseError <$> e)
                      (renderExpansionChain chain)
-                 | (e, chain@(_ : _)) <- convErrs
+                 | ChainedError e chain@(_ : _) <- convErrs
                  ],
           splices = [si | si <- items, not (null si.expansion)]
         }

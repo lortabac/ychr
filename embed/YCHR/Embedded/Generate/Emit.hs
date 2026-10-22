@@ -46,7 +46,7 @@ import Data.List (intercalate, nub)
 import YCHR.Embedded.Generate.Code
 import YCHR.Embedded.Generate.Instances ()
 import YCHR.Embedded.Generate.ToCode (ToCode (..))
-import YCHR.Internal.PExpr (OpTable, opTableEntries)
+import YCHR.Internal.PExpr (OpDecl (..), OpTable, opTableEntries)
 import YCHR.Internal.Runtime.Session (SessionInput (..))
 import YCHR.Internal.StdLib (StdLib (..))
 
@@ -176,7 +176,7 @@ opTableCode :: OpTable -> Code
 opTableCode table =
   CApp
     (CName "PExpr.mkOpTable")
-    [toCode [(fix, [(ty, name)]) | (fix, ty, name) <- opTableEntries table]]
+    [toCode [(fix, [(ty, name)]) | OpDecl fix ty name <- opTableEntries table]]
 
 -- ---------------------------------------------------------------------------
 -- Hoisting
