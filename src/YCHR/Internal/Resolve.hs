@@ -387,11 +387,7 @@ buildFunctionVisibility = buildDeclVisibility functionKey
 -- Read by the compiler to build the tellables table a dynamic
 -- @tell\/N@ resolves through (see 'YCHR.Internal.Compile.buildTellables').
 buildNameVisibility :: [CollectedModule] -> Map Text NameVisibility
-buildNameVisibility = buildDeclVisibility valueKey
-  where
-    valueKey (P.ConstraintDecl cd) = Just (UnqualifiedIdentifier cd.name cd.arity)
-    valueKey (P.FunctionDecl fd) = Just (UnqualifiedIdentifier fd.name fd.arity)
-    valueKey _ = Nothing
+buildNameVisibility = buildDeclVisibility valueEntry
 
 -- | The visibility rule shared by 'buildFunctionVisibility' and
 -- 'buildNameVisibility', over the declarations @declKey@ selects.
