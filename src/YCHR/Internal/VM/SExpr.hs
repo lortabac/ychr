@@ -455,12 +455,12 @@ checkDeclaredCount what declared actual
 
 vmProgramFromSExpr :: SExpr -> Err VMProgram
 vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
-  (version, body) <- headerVersion rest
+  header <- headerVersion rest
   -- Check the version before descending.  A unit written in a format
   -- this reader does not know has to be diagnosed as that, not by
   -- whatever unknown construct it happens to hit first.
-  checkVMVersion version
-  case body of
+  checkVMVersion header.version
+  case header.body of
     [progS, SList (SAtom "exports" : exportSexprs), stS] -> do
       prog <- programFromSExpr progS
       exports <- traverse identFromSExpr exportSexprs
@@ -471,7 +471,7 @@ vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
             exportedSet = Set.fromList exports,
             symbolTable = st
           }
-    _ -> case firstVersionHeader body of
+    _ -> case firstVersionHeader header.body of
       Just v -> err ("duplicate (version N) header in vm-program: " <> printSExpr v)
       Nothing ->
         err
@@ -486,9 +486,9 @@ vmProgramFromSExpr s = err ("expected (vm-program ...), got: " <> printSExpr s)
 -- pre-versioning format, which no version-aware binary supports.  A
 -- @(version ...)@ that is present but not first is a malformed header
 -- rather than an absent one, and says so.
-headerVersion :: [SExpr] -> Err (Maybe Integer, [SExpr])
+headerVersion :: [SExpr] -> Err VersionHeader
 headerVersion (SList (SAtom "version" : args) : rest) = case args of
-  [SInt n] -> pure (Just n, rest)
+  [SInt n] -> pure VersionHeader {version = Just n, body = rest}
   _ -> err ("expected (version N), got: " <> printSExpr (SList (SAtom "version" : args)))
 headerVersion rest = case firstVersionHeader rest of
   Just v ->
@@ -496,7 +496,14 @@ headerVersion rest = case firstVersionHeader rest of
       ( "the (version N) header must be the first child of vm-program, got: "
           <> printSExpr v
       )
-  Nothing -> pure (Nothing, rest)
+  Nothing -> pure VersionHeader {version = Nothing, body = rest}
+
+-- | A @vm-program@'s children, split by 'headerVersion'.
+data VersionHeader = VersionHeader
+  { version :: Maybe Integer,
+    -- | The children after the header.
+    body :: [SExpr]
+  }
 
 -- | The first @(version ...)@ among a @vm-program@'s children, if any.
 firstVersionHeader :: [SExpr] -> Maybe SExpr
@@ -605,23 +612,15 @@ programFromSExpr
     -- @(version N)@ header is checked first, so any unit not written in
     -- 'vmVersion' is rejected at the version gate, not at some unknown
     -- construct.
-    let (clSexprs, rest') = case rest of
-          SList (SAtom "callables" : cls) : rs -> (cls, rs)
-          rs -> ([], rs)
-    cls <- traverse callableEntryFromSExpr clSexprs
-    let (tlSexprs, rest'') = case rest' of
-          SList (SAtom "tellables" : tls) : rs -> (tls, rs)
-          rs -> ([], rs)
-    tls <- traverse tellableEntryFromSExpr tlSexprs
-    let (tuSexprs, rest''') = case rest'' of
-          SList (SAtom "tellables-unqualified" : tus) : rs -> (tus, rs)
-          rs -> ([], rs)
-    tus <- Map.fromList <$> traverse tellableUnqualifiedEntryFromSExpr tuSexprs
-    let (itSexprs, procs) = case rest''' of
-          SList (SAtom "inert-types" : its) : ps -> (its, ps)
-          ps -> ([], ps)
-    its <- traverse constraintTypeFromSExpr itSexprs
-    ps <- traverse procedureFromSExpr procs
+    let clSection = optionalSection "callables" rest
+    cls <- traverse callableEntryFromSExpr clSection.items
+    let tlSection = optionalSection "tellables" clSection.rest
+    tls <- traverse tellableEntryFromSExpr tlSection.items
+    let tuSection = optionalSection "tellables-unqualified" tlSection.rest
+    tus <- Map.fromList <$> traverse tellableUnqualifiedEntryFromSExpr tuSection.items
+    let itSection = optionalSection "inert-types" tuSection.rest
+    its <- traverse constraintTypeFromSExpr itSection.items
+    ps <- traverse procedureFromSExpr itSection.rest
     pure
       Program
         { typeNames = tns,
@@ -634,6 +633,20 @@ programFromSExpr
           procedures = ps
         }
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)
+
+-- | An optional @(tag items...)@ section at the head of a list of
+-- s-expressions, and what follows it.
+data Section = Section
+  { -- | The section's items; empty when the section is absent.
+    items :: [SExpr],
+    rest :: [SExpr]
+  }
+
+-- | Split off the optional @(tag ...)@ section at the head of the list.
+optionalSection :: Text -> [SExpr] -> Section
+optionalSection tag (SList (SAtom t : xs) : rest)
+  | t == tag = Section {items = xs, rest = rest}
+optionalSection _ rest = Section {items = [], rest = rest}
 
 evaluableEntryFromSExpr :: SExpr -> Err Evaluable
 evaluableEntryFromSExpr (SList [fSexpr, SInt arity, pSexpr]) = do
