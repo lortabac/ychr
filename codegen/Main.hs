@@ -66,11 +66,11 @@ run opts = do
   typechecker <- readChrDir typeCheckerDir
   case loadBoth libraryDir typeCheckerDir libraries typechecker of
     Left err -> failWith (T.unpack err)
-    Right (librarySources, typecheckerSources) ->
-      case parseStdLib librarySources of
+    Right sources ->
+      case parseStdLib sources.libraries of
         Left err -> failWith ("cannot parse the standard library: " ++ show err)
         Right stdlib ->
-          case compileTypeCheckerModules stdlib typecheckerSources of
+          case compileTypeCheckerModules stdlib sources.typeChecker of
             Left err -> failWith ("cannot compile the type-checker: " ++ show err)
             Right session ->
               let modules =
@@ -81,6 +81,12 @@ run opts = do
                     then checkModules opts modules
                     else writeModules opts modules
 
+-- | The sources of the two resource directories.
+data Sources = Sources
+  { libraries :: [(FilePath, Text)],
+    typeChecker :: [(FilePath, Text)]
+  }
+
 -- | Both directories' sources, or the first error either loader or the
 -- emptiness check reports.
 loadBoth ::
@@ -88,11 +94,11 @@ loadBoth ::
   FilePath ->
   Either Text [(FilePath, Text)] ->
   Either Text [(FilePath, Text)] ->
-  Either Text ([(FilePath, Text)], [(FilePath, Text)])
+  Either Text Sources
 loadBoth libraryDir typeCheckerDir libraries typechecker = do
   librarySources <- requireSources libraryDir libraries
   typecheckerSources <- requireSources typeCheckerDir typechecker
-  pure (librarySources, typecheckerSources)
+  pure Sources {libraries = librarySources, typeChecker = typecheckerSources}
 
 -- | An empty directory is almost always a root one level off, and an
 -- empty standard library would otherwise be accepted silently — the

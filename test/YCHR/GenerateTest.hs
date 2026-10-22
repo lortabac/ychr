@@ -105,24 +105,24 @@ tests =
       testGroup
         "hoist"
         [ testCase "splits a list longer than the chunk size" $ do
-            let (body, bindings) =
+            let hoisted =
                   hoist
                     (EmitOptions {chunkSize = 2, maxBindingBytes = 1000000})
                     (CList [CInt 1, CInt 2, CInt 3, CInt 4, CInt 5])
-            length bindings @?= 3
-            renderCode body @?= "concat [generated_0, generated_1, generated_2]",
+            length hoisted.bindings @?= 3
+            renderCode hoisted.body @?= "concat [generated_0, generated_1, generated_2]",
           testCase "lifts an oversized expression to its own binding" $ do
-            let (body, bindings) =
+            let hoisted =
                   hoist
                     (EmitOptions {chunkSize = 100, maxBindingBytes = 5})
                     (CApp (CName "f") [CString "abcdef"])
-            length bindings @?= 1
-            body @?= CName "generated_0",
+            length hoisted.bindings @?= 1
+            hoisted.body @?= CName "generated_0",
           testCase "leaves an empty list in place" $ do
-            let (body, bindings) =
+            let hoisted =
                   hoist defaultEmitOptions (CList [])
-            length bindings @?= 0
-            body @?= CList []
+            length hoisted.bindings @?= 0
+            hoisted.body @?= CList []
         ],
       testGroup
         "emitted modules"

@@ -38,10 +38,12 @@ module YCHR.Embedded.Generate.Emit
     emitTypeChecker,
 
     -- * Internals
+    Hoisted (..),
     hoist,
   )
 where
 
+import Control.Monad.Trans.State.Strict (State, get, put, runState)
 import Data.List (intercalate, nub)
 import YCHR.Embedded.Generate.Code
 import YCHR.Embedded.Generate.Instances ()
@@ -98,25 +100,30 @@ data GeneratedModule = GeneratedModule
 emitStdLib :: EmitOptions -> StdLib -> GeneratedModule
 emitStdLib opts (StdLib modules) =
   buildModule
-    "YCHR.Embedded.Generated.StdLib"
-    ["stdlib"]
-    "The bundled standard library, decoded by ychr-codegen."
-    [ -- Belt-and-braces: the emitter renders 'Maybe' as the bare @Just@/
-      -- @Nothing@, and both hosts resolve those without this import today.
-      -- It is spelled out because two compilers read the file and only one
-      -- of them would notice the day that stops being true.
-      "import Data.Maybe (Maybe (..))",
-      "import YCHR.Internal.StdLib (StdLib (..))"
-    ]
-    [ TopBinding
-        { name = "stdlib",
-          signature = Just "StdLib",
-          body = body
-        }
-    ]
-    hoisted
+    ModuleSpec
+      { name = "YCHR.Embedded.Generated.StdLib",
+        exports = ["stdlib"],
+        prologue = "The bundled standard library, decoded by ychr-codegen.",
+        fixedImports =
+          [ -- Belt-and-braces: the emitter renders 'Maybe' as the bare
+            -- @Just@/@Nothing@, and both hosts resolve those without this
+            -- import today. It is spelled out because two compilers read
+            -- the file and only one of them would notice the day that stops
+            -- being true.
+            "import Data.Maybe (Maybe (..))",
+            "import YCHR.Internal.StdLib (StdLib (..))"
+          ],
+        entries =
+          [ TopBinding
+              { name = "stdlib",
+                signature = Just "StdLib",
+                body = hoisted.body
+              }
+          ],
+        hoisted = hoisted.bindings
+      }
   where
-    (body, hoisted) = hoist opts (CApp (CName "StdLib") [toCode modules])
+    hoisted = hoist opts (CApp (CName "StdLib") [toCode modules])
 
 -- | The module holding the precomputed type-checker, as
 -- @typeCheckerProgram :: SessionInput@.
@@ -132,24 +139,29 @@ emitStdLib opts (StdLib modules) =
 emitTypeChecker :: EmitOptions -> SessionInput -> GeneratedModule
 emitTypeChecker opts (SessionInput program _ _ exportMap exportedSet ops) =
   buildModule
-    "YCHR.Embedded.Generated.TypeCheck"
-    ["typeCheckerProgram"]
-    "The bundled type-checker, decoded by ychr-codegen."
-    [ -- Unused today, but the emitted AST is the same literal vocabulary as
-      -- 'emitStdLib''s, so a field that becomes a 'Maybe' must not have to
-      -- remember this import to keep MicroHs compiling.
-      "import Data.Maybe (Maybe (..))",
-      "import YCHR.Internal.Runtime.Session (SessionInput)"
-    ]
-    [ TopBinding
-        { name = "typeCheckerProgram",
-          signature = Just "SessionInput",
-          body = body
-        }
-    ]
-    hoisted
+    ModuleSpec
+      { name = "YCHR.Embedded.Generated.TypeCheck",
+        exports = ["typeCheckerProgram"],
+        prologue = "The bundled type-checker, decoded by ychr-codegen.",
+        fixedImports =
+          [ -- Unused today, but the emitted AST is the same literal
+            -- vocabulary as 'emitStdLib''s, so a field that becomes a
+            -- 'Maybe' must not have to remember this import to keep
+            -- MicroHs compiling.
+            "import Data.Maybe (Maybe (..))",
+            "import YCHR.Internal.Runtime.Session (SessionInput)"
+          ],
+        entries =
+          [ TopBinding
+              { name = "typeCheckerProgram",
+                signature = Just "SessionInput",
+                body = hoisted.body
+              }
+          ],
+        hoisted = hoisted.bindings
+      }
   where
-    (body, hoisted) =
+    hoisted =
       hoist
         opts
         ( CApp
@@ -182,55 +194,55 @@ opTableCode table =
 -- Hoisting
 -- ---------------------------------------------------------------------------
 
--- | Flatten a tree into @(body, bindings)@: the expression to render in
--- place, and the bindings to render around it.
+-- | What 'hoist' returns: the expression to render in place, and the
+-- bindings to render around it.
+data Hoisted = Hoisted
+  { body :: Code,
+    bindings :: [TopBinding]
+  }
+
+-- | The state of the hoisting walk: the number of the next binding, and
+-- the bindings made so far, newest first.
+data HoistState = HoistState
+  { next :: Int,
+    bindings :: [TopBinding]
+  }
+
+-- | Flatten a tree into a body and the bindings it refers to.
 --
 -- The invariant is that no binding body exceeds 'maxBindingBytes', with
 -- one exception: a node whose bulk is literal cannot be split further
 -- without giving the lifted literal a type, so a constructor application
 -- (or tuple) holding a very long string is emitted whole.
-hoist :: EmitOptions -> Code -> (Code, [TopBinding])
-hoist opts root = (root', reverse bindings)
+hoist :: EmitOptions -> Code -> Hoisted
+hoist opts root = Hoisted {body = root', bindings = reverse final.bindings}
   where
-    (root', _, bindings) = walk root 0 []
+    (root', final) = runState (walk root) HoistState {next = 0, bindings = []}
 
-    walk :: Code -> Int -> [TopBinding] -> (Code, Int, [TopBinding])
-    walk c n acc = case c of
-      CApp f args ->
-        let (f', n1, a1) = walk f n acc
-            (args', n2, a2) = walkMany args n1 a1
-         in check (CApp f' args') n2 a2
-      CList xs ->
-        let (xs', n1, a1) = walkMany xs n acc
-         in if length xs' > opts.chunkSize
-              || codeSize (CList xs') > opts.maxBindingBytes
-              then
-                let (c', n2, a2) = chunk xs' n1 a1
-                 in check c' n2 a2
-              else check (CList xs') n1 a1
-      CTuple xs ->
-        let (xs', n1, a1) = walkMany xs n acc
-         in check (CTuple xs') n1 a1
-      CParens x ->
-        let (x', n1, a1) = walk x n acc
-         in (CParens x', n1, a1)
-      _ -> (c, n, acc)
-
-    walkMany [] n acc = ([], n, acc)
-    walkMany (x : xs) n acc =
-      let (x', n1, a1) = walk x n acc
-          (xs', n2, a2) = walkMany xs n1 a1
-       in (x' : xs', n2, a2)
+    walk :: Code -> State HoistState Code
+    walk c = case c of
+      CApp f args -> do
+        f' <- walk f
+        args' <- traverse walk args
+        check (CApp f' args')
+      CList xs -> do
+        xs' <- traverse walk xs
+        if length xs' > opts.chunkSize
+          || codeSize (CList xs') > opts.maxBindingBytes
+          then chunk xs' >>= check
+          else check (CList xs')
+      CTuple xs -> traverse walk xs >>= check . CTuple
+      CParens x -> CParens <$> walk x
+      _ -> pure c
 
     -- Lift a sub-expression that is still too big. A name is already a
     -- binding, so lifting it again would only add indirection.
-    check c n acc
+    check c
       | codeSize c > opts.maxBindingBytes,
         not (isName c),
         not (isEmptyList c) =
-          let (body, n1, acc1) = shrink c n acc
-           in (CName (generatedName n1), n1 + 1, bind n1 body : acc1)
-      | otherwise = (c, n, acc)
+          shrink c >>= bind
+      | otherwise = pure c
 
     -- Lifting a node does not shrink it: a constructor application of
     -- a dozen large arguments is still over budget once its binding is
@@ -238,14 +250,12 @@ hoist opts root = (root', reverse bindings)
     -- that what remains is a head and a dozen names. Literal leaves are
     -- deliberately left in place — a top-level binding holding a bare
     -- literal would be ambiguous under the monomorphism restriction.
-    shrink (CApp f args) n acc =
-      let (revArgs, n', acc') = foldl liftArg ([], n, acc) args
-       in (CApp f (reverse revArgs), n', acc')
-    shrink c n acc = (c, n, acc)
+    shrink (CApp f args) = CApp f <$> traverse liftArg args
+    shrink c = pure c
 
-    liftArg (rev, n, acc) arg
-      | hoistable arg = (CName (generatedName n) : rev, n + 1, bind n arg : acc)
-      | otherwise = (arg : rev, n, acc)
+    liftArg arg
+      | hoistable arg = bind arg
+      | otherwise = pure arg
 
     hoistable (CApp _ _) = True
     hoistable (CList []) = False
@@ -253,20 +263,19 @@ hoist opts root = (root', reverse bindings)
     hoistable (CTuple _) = True
     hoistable _ = False
 
-    chunk xs n acc =
-      let groups = chunkBySize opts xs
-          (vars, n', acc') = bindEach (map CList groups) n acc
-       in ( concatLists vars,
-            n',
-            acc'
-          )
+    chunk xs = concatLists <$> traverse (bind . CList) (chunkBySize opts xs)
 
-    bindEach [] n acc = ([], n, acc)
-    bindEach (c : cs) n acc =
-      let (vars, n', acc') = bindEach cs (n + 1) (bind n c : acc)
-       in (CName (generatedName n) : vars, n', acc')
-
-    bind n c = TopBinding (generatedName n) Nothing c
+    -- Make a new binding for @c@ and return its name.
+    bind :: Code -> State HoistState Code
+    bind c = do
+      st <- get
+      let n = st.next
+      put
+        HoistState
+          { next = n + 1,
+            bindings = TopBinding (generatedName n) Nothing c : st.bindings
+          }
+      pure (CName (generatedName n))
 
 generatedName :: Int -> String
 generatedName n = "generated_" ++ show n
@@ -311,24 +320,31 @@ chunkBySize opts = goChunks [] 0 0
 -- Rendering
 -- ---------------------------------------------------------------------------
 
--- | Assemble a module from its exported entry points and the bindings
--- the hoisting pass produced. Imports are derived from the aliases the
--- code actually mentions.
-buildModule ::
-  String ->
-  [String] ->
-  String ->
-  [String] ->
-  [TopBinding] ->
-  [TopBinding] ->
+-- | What 'buildModule' assembles a module from.
+data ModuleSpec = ModuleSpec
+  { -- | The module name.
+    name :: String,
+    exports :: [String],
+    -- | The first line of the module's Haddock.
+    prologue :: String,
+    -- | Imports written before the derived ones.
+    fixedImports :: [String],
+    -- | The exported entry points.
+    entries :: [TopBinding],
+    -- | The bindings the hoisting pass produced.
+    hoisted :: [TopBinding]
+  }
+
+-- | Assemble a module from its spec. Imports are derived from the
+-- aliases the code actually mentions.
+buildModule :: ModuleSpec -> GeneratedModule
+buildModule spec =
   GeneratedModule
-buildModule name exports prologue fixedImports entries hoisted =
-  GeneratedModule
-    { path = pathFromModule name,
+    { path = pathFromModule spec.name,
       source = unlines sourceLines
     }
   where
-    allBindings = entries ++ hoisted
+    allBindings = spec.entries ++ spec.hoisted
     aliases = usedAliases allBindings
     aliasImports =
       [ "import qualified " ++ m ++ " as " ++ a
@@ -338,14 +354,14 @@ buildModule name exports prologue fixedImports entries hoisted =
     sourceLines =
       [ "{-# LANGUAGE OverloadedStrings #-}",
         "",
-        "-- | " ++ prologue,
+        "-- | " ++ spec.prologue,
         "--",
         "-- Machine-generated by ychr-codegen; do not edit by hand.",
         "-- Regenerate with `make resources` (see dev-docs/MICROHS_PERFORMANCE.md).",
-        "module " ++ name ++ " (" ++ intercalate ", " exports ++ ") where",
+        "module " ++ spec.name ++ " (" ++ intercalate ", " spec.exports ++ ") where",
         ""
       ]
-        ++ fixedImports
+        ++ spec.fixedImports
         ++ aliasImports
         ++ [""]
         ++ concatMap renderBinding allBindings
