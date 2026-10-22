@@ -3,7 +3,6 @@
 module YCHR.RenameTest (tests) where
 
 import Data.Map.Strict qualified as Map
-import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 -- Brings 'CollectedModule''s field labels into scope (qualified) so that
@@ -26,6 +25,7 @@ import YCHR.Internal.Rename
     defaultRenameInputs,
   )
 import YCHR.Internal.Rename qualified as Rn
+import YCHR.TestHelpers (algebraicTD)
 
 -- | Test-local wrapper that forwards to 'Rn.renameProgram' with empty
 -- rename inputs (no operator-export map and no trailing-loc map). It
@@ -37,11 +37,6 @@ renameProgram ::
   [Module] ->
   Either [Diagnostic RenameError] (Renamed [CollectedModule])
 renameProgram = Rn.renameProgram defaultRenameInputs . rewriteImports
-
--- | Build an algebraic type definition positionally (the constructors
--- are wrapped in the 'Algebraic' 'TypeKind').
-algebraicTD :: Name -> [Text] -> [DataConstructor] -> SourceLoc -> TypeDefinition
-algebraicTD n vs cs loc = TypeDefinition n vs (Algebraic cs) loc
 
 -- | Renamer tests: cross-module name resolution, visibility, imports, exports, warnings.
 tests :: TestTree

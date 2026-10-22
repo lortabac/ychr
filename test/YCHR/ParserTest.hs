@@ -8,6 +8,7 @@ import Data.Text qualified as Text
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Parsec (ParseError)
+import YCHR.DSL (atom)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Parser
   ( Converted (..),
@@ -19,6 +20,7 @@ import YCHR.Internal.Parser
     parseModule,
     parseModuleWith,
   )
+import YCHR.TestHelpers (algebraicTD)
 
 -- | Parser tests: directives, rules, terms, operators, type declarations, and errors.
 tests :: TestTree
@@ -54,10 +56,6 @@ macroShapes m =
   [ (d.node.name, d.node.arity, [(c.node.params, c.node.body) | c <- d.node.clauses])
   | d <- m.macros
   ]
-
--- | An atom, as the parser represents it.
-atom :: Text -> Term
-atom n = CompoundTerm (Unqualified n) []
 
 -- | Strip source locations from a Rule for structural comparison.
 stripRuleLoc :: Rule -> Rule
@@ -1169,11 +1167,6 @@ typeDefsOf :: Text -> IO [TypeDefinition]
 typeDefsOf src = parseAndExtract p extract src
   where
     extract m = pure (map (normalizeTypeDefLoc . (.node)) m.typeDecls)
-
--- | Build an algebraic type definition positionally (the constructors
--- are wrapped in the 'Algebraic' 'TypeKind').
-algebraicTD :: Name -> [Text] -> [DataConstructor] -> SourceLoc -> TypeDefinition
-algebraicTD n vs cs loc = TypeDefinition n vs (Algebraic cs) loc
 
 -- | Strip the source location from a parsed 'TypeDefinition' so test
 -- expected values can omit line/column numbers.

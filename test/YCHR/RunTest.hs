@@ -43,7 +43,7 @@ import YCHR.Run
     toSessionInput,
     withCHR,
   )
-import YCHR.TestHelpers (compileOrFail, countAliveByType, expectErrorContaining)
+import YCHR.TestHelpers (compileOrFail, countAliveByType, expectErrorContaining, leqSource)
 
 -- | End-to-end 'YCHR.Run' tests: compiling and running surface programs and queries.
 tests :: TestTree
@@ -60,21 +60,6 @@ tests =
       arityOverloadTests,
       uncheckedQueryTests
     ]
-
--- ---------------------------------------------------------------------------
--- LEQ surface source
--- ---------------------------------------------------------------------------
-
--- | The classic @leq@ handler.
-leqSource :: Text
-leqSource =
-  ":- module(order, [leq/2]).\n\
-  \:- chr_constraint leq/2.\n\
-  \\n\
-  \reflexivity @ leq(X, X) <=> true.\n\
-  \antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n\
-  \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
-  \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
 
 -- | The constraint type of a declared constraint. Errors if absent.
 lookupType :: CompiledProgram -> Identifier -> ConstraintType
@@ -168,24 +153,23 @@ fibSource =
   \rec @ fib(N, R) <=> N1 is host:'-'(N, 1), N2 is host:'-'(N, 2), \
   \fib(N1, R1), fib(N2, R2), Tmp is host:'+'(R1, R2), R = Tmp.\n"
 
--- | The two integer arguments of a binary host call.
-extractIntArgs :: String -> [Value] -> (Integer, Integer)
-extractIntArgs _ [VInt a, VInt b] = (a, b)
-extractIntArgs context vals =
-  error $
-    context ++ ": expected 2 Int arguments, got " ++ show (length vals)
+-- | A binary host call over two integers.
+intBinOp :: String -> (Integer -> Integer -> Integer) -> HostCallFn
+intBinOp context op = HostCallFn $ \args -> case args of
+  [VInt a, VInt b] -> pure (VInt (op a b))
+  vals ->
+    error $
+      context ++ ": expected 2 Int arguments, got " ++ show (length vals)
 
 -- | Integer @+@ and @-@ for 'fibSource'.
 fibHostCalls :: HostCallRegistry
 fibHostCalls =
   Map.fromList
     [ ( VM.Name "+",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "+" args in pure (VInt (a + b))
+        intBinOp "+" (+)
       ),
       ( VM.Name "-",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "-" args in pure (VInt (a - b))
+        intBinOp "-" (-)
       )
     ]
 
@@ -662,12 +646,10 @@ qbodyHostCalls :: HostCallRegistry
 qbodyHostCalls =
   Map.fromList
     [ ( VM.Name "+",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "+" args in pure (VInt (a + b))
+        intBinOp "+" (+)
       ),
       ( VM.Name "*",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "*" args in pure (VInt (a * b))
+        intBinOp "*" (*)
       )
     ]
 

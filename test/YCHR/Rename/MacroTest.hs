@@ -9,6 +9,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
+import YCHR.DSL (atom)
 import YCHR.Internal.Parsed (ExpansionStep (..), MacroClause (..), SourceLoc (..))
 import YCHR.Internal.Rename.Macro
   ( ClauseMatch (..),
@@ -28,10 +29,6 @@ tests =
   testGroup
     "Rename.Macro"
     [matchTests, variantTests, instantiateTests, chainTests]
-
--- | An unqualified atom.
-atom :: Text -> Term
-atom n = CompoundTerm (Unqualified n) []
 
 -- | A variable.
 var :: Text -> Term

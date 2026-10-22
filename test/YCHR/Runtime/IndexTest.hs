@@ -14,7 +14,6 @@ import Data.Foldable (toList)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (isSubsequenceOf)
-import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import YCHR.Internal.Runtime.Index
@@ -50,7 +49,7 @@ import YCHR.Internal.VM
     Stmt (..),
     ValExpr (..),
   )
-import YCHR.TestHelpers (runChrIn)
+import YCHR.TestHelpers (emptyProgram, runChrIn)
 
 -- | Store indexes: ground keys, candidate narrowing, and indexable positions.
 tests :: TestTree
@@ -81,22 +80,15 @@ runIndexEnv =
 -- | A program whose single procedure has the given body.
 programWith :: [Stmt] -> Program
 programWith stmts =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      procedures =
+  emptyProgram
+    { procedures =
         [ Procedure
             { name = "p",
               params = [],
               body = stmts,
               procKind = PKTell (ConstraintType 0)
             }
-        ],
-      evaluables = [],
-      callables = [],
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = []
+        ]
     }
 
 -- | A 'Foreach' with one condition on argument @pos@.
