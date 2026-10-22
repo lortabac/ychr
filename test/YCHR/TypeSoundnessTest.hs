@@ -380,8 +380,8 @@ coverShape mode prog = do
     anyAmbientVar = any ruleHasAmbientVar rs
     ruleHasAmbientVar r =
       or
-        [ resolveSTy r.ruleSk t == SSk sk
-        | (_, t) <- ruleVars r,
+        [ resolveSTy r.ruleSk v.ty == SSk sk
+        | v <- ruleVars r,
           h <- ruleHeads r,
           b <- h.headSig.sigBounds,
           (tv, sk) <- zip h.headSig.sigTvs h.headSkolems,

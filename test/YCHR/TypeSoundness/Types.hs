@@ -87,6 +87,7 @@ module YCHR.TypeSoundness.Types
     ruleHeads,
     minHeadStratum,
     headArgTys,
+    TypedVar (..),
     patVars,
     headVars,
     isTell,
@@ -1017,6 +1018,10 @@ headArgTys h = fmap (substD sub) (sigArgDTys h.headSig)
   where
     sub = Map.fromList (zip h.headSig.sigTvs (map SSk h.headSkolems))
 
+-- | A variable with its implementation-site type.
+data TypedVar = TypedVar {name :: Text, ty :: STy}
+  deriving (Eq, Show)
+
 -- | Every variable bound by a pattern, with its implementation-site
 -- type, in left-to-right order. Names may repeat:
 -- 'YCHR.TypeSoundness.Gen.maybeAlias' can rename one pattern variable
@@ -1027,9 +1032,9 @@ headArgTys h = fmap (substD sub) (sigArgDTys h.headSig)
 -- field, and an ill-shaped pattern is an 'error' rather than an empty
 -- result: this is what decides which variables get observed, so
 -- silently returning fewer would silently weaken the oracle.
-patVars :: SkolemEnv -> STy -> Pat -> [(Text, STy)]
+patVars :: SkolemEnv -> STy -> Pat -> [TypedVar]
 patVars env ty p = case p of
-  PVar n _ -> [(n, ty)]
+  PVar n _ -> [TypedVar n ty]
   PWild -> []
   PLit _ -> []
   PNil -> []
@@ -1056,7 +1061,7 @@ patVars env ty p = case p of
         )
 
 -- | 'patVars' over every argument of one head occurrence.
-headVars :: SkolemEnv -> HeadC -> [(Text, STy)]
+headVars :: SkolemEnv -> HeadC -> [TypedVar]
 headVars env h =
   concat (zipWith (patVars env) (NE.toList (headArgTys h)) (NE.toList h.pats))
 
@@ -1068,9 +1073,9 @@ isTell it = case it of
 
 -- | Every head-bound variable of a rule, deduplicated by name, under
 -- the rule's own final skolem state.
-ruleVars :: Rule -> [(Text, STy)]
+ruleVars :: Rule -> [TypedVar]
 ruleVars r =
-  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSk) (ruleHeads r))
+  nubBy (\a b -> a.name == b.name) (concatMap (headVars r.ruleSk) (ruleHeads r))
 
 -- | Whether each of a rule's variables may hold no value yet.
 varBoundness :: Rule -> Text -> Boundness
@@ -1085,6 +1090,6 @@ varBoundnessAtHead r n
   | otherwise = Ground
 
 -- | As 'ruleVars', but under the state matching alone establishes.
-ruleVarsAtHead :: Rule -> [(Text, STy)]
+ruleVarsAtHead :: Rule -> [TypedVar]
 ruleVarsAtHead r =
-  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSkHead) (ruleHeads r))
+  nubBy (\a b -> a.name == b.name) (concatMap (headVars r.ruleSkHead) (ruleHeads r))

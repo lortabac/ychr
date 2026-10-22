@@ -148,14 +148,14 @@ instrumentRule code0 r =
     firedCode = code0 + 1
     evCode = code0 + 2
     headVarsList = ruleVarsAtHead r
-    headArgs = [EVar n t | (n, t) <- headVarsList]
+    headArgs = [EVar v.name v.ty | v <- headVarsList]
     headSite =
       ObsSite
         { osWhere = r.ruleName <> " head",
           osCheck =
             ExpectPos
-              [ posCheckB (varBoundnessAtHead r n) r.ruleSkHead t
-              | (n, t) <- headVarsList
+              [ posCheckB (varBoundnessAtHead r v.name) r.ruleSkHead v.ty
+              | v <- headVarsList
               ]
         }
     firedSite =
@@ -171,11 +171,11 @@ instrumentRule code0 r =
     -- guards' success entails them; this asserts that at run time it
     -- really does.
     pinnedVars =
-      [ (n, t)
-      | (n, t) <- ruleVars r,
-        pinnedType n t || clearedBoundness n
+      [ v
+      | v <- ruleVars r,
+        pinnedType v.ty || clearedBoundness v.name
       ]
-    pinnedType _ t =
+    pinnedType t =
       isRigidCheck (posCheck r.ruleSkHead t)
         && not (isRigidCheck (posCheck r.ruleSk t))
     clearedBoundness n =
@@ -184,14 +184,14 @@ instrumentRule code0 r =
     (evObs, evSites)
       | null r.ruleEvidence || null pinnedVars = ([], [])
       | otherwise =
-          ( [EHostObs evCode [EVar n t | (n, t) <- pinnedVars]],
+          ( [EHostObs evCode [EVar v.name v.ty | v <- pinnedVars]],
             [ ( evCode,
                 ObsSite
                   { osWhere = r.ruleName <> " evidence",
                     osCheck =
                       ExpectPos
-                        [ posCheckB (varBoundness r n) r.ruleSk t
-                        | (n, t) <- pinnedVars
+                        [ posCheckB (varBoundness r v.name) r.ruleSk v.ty
+                        | v <- pinnedVars
                         ]
                   }
               )

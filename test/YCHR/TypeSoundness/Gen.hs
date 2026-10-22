@@ -145,8 +145,9 @@ data Mode
 
 -- | The scope, with every type fully resolved, so comparisons do not
 -- have to chase bindings.
-scopeTys :: Ctx -> [(Text, STy)]
-scopeTys ctx = [(n, stripSTy ctx.ctxSk t) | (n, t) <- Map.toList ctx.ctxScope]
+scopeTys :: Ctx -> [TypedVar]
+scopeTys ctx =
+  [TypedVar n (stripSTy ctx.ctxSk t) | (n, t) <- Map.toList ctx.ctxScope]
 
 -- | Variables usable in an /evaluated/ position: everything in scope
 -- at that type except the possibly-unbound ones.
@@ -162,7 +163,7 @@ varsAt ctx ty =
 -- @=@ operand, an ask-equality, a boundness or type predicate.
 varsAtAny :: Ctx -> STy -> [Expr]
 varsAtAny ctx ty =
-  [EVar n t | (n, t) <- scopeTys ctx, t == stripSTy ctx.ctxSk ty]
+  [EVar v.name v.ty | v <- scopeTys ctx, v.ty == stripSTy ctx.ctxSk ty]
 
 -- | Can a value of this type be built here at all?
 --
@@ -196,7 +197,7 @@ rigidTargets ctx =
   List.nub [t | EVar _ t <- allUntainted, isSkTy t]
   where
     allUntainted =
-      concat [varsAt ctx t | (_, t) <- scopeTys ctx]
+      concat [varsAt ctx v.ty | v <- scopeTys ctx]
 
 -- | A target type for a body binding ('genBind') or an ask-equality
 -- ('richAlts'), biased towards the rigid ones.
@@ -662,7 +663,7 @@ genRule univ adts cls sigList ix = do
       scope0 =
         Map.fromListWith
           (\_ old -> old)
-          (concatMap (headVars skHead) (NE.toList heads_))
+          [(v.name, v.ty) | v <- concatMap (headVars skHead) (NE.toList heads_)]
       -- Every head occurrence of a bounded declaration contributes its
       -- bound as an ambient signature at that occurrence's own rigid
       -- variable. The rule head is an implementation site, so it
@@ -687,7 +688,7 @@ genRule univ adts cls sigList ix = do
       -- as readily.
       tainted =
         Set.fromList
-          [ n
+          [ v.name
           | h <- NE.toList heads_,
             (spec, ty, p) <-
               zip3
@@ -695,7 +696,7 @@ genRule univ adts cls sigList ix = do
                 (NE.toList (headArgTys h))
                 (NE.toList h.pats),
             spec.argBound == MayBeUnbound,
-            (n, _) <- patVars skHead ty p
+            v <- patVars skHead ty p
           ]
       ctxHead =
         Ctx
@@ -968,8 +969,8 @@ maybeAlias cls sk hs
                   ++ [(1, Gen.element plain) | not (null plain)]
               )
   where
-    alias (keep, drop_, sk') =
-      pure (fmap (renameHead drop_ keep) hs, notePins sk sk')
+    alias a =
+      pure (fmap (renameHead a.renamed a.keep) hs, notePins sk a.env)
     vs = concatMap (headVars sk) (NE.toList hs)
     -- 'eqUnifySTy' is the checker's own @GuardEqual@ discipline —
     -- skolem merges and pins go into the static model, parameter
@@ -979,11 +980,11 @@ maybeAlias cls sk hs
     -- outermost-constructor mismatch, a forcing conflict) is simply
     -- not offered.
     pairs =
-      [ (a, b, sk')
-      | (a, ta) <- vs,
-        (b, tb) <- vs,
-        a < b,
-        Just sk' <- [eqUnifySTy ta tb sk],
+      [ Alias {keep = a.name, renamed = b.name, env = sk'}
+      | a <- vs,
+        b <- vs,
+        a.name < b.name,
+        Just sk' <- [eqUnifySTy a.ty b.ty sk],
         -- The merge may pin a bounded parameter; the same gate as
         -- every other pin applies (see 'pinOk').
         pinsRespectBounds sk'
@@ -1015,10 +1016,10 @@ maybeAlias cls sk hs
     -- so pins and forcings are still preferred over plain aliases.
     (merging, plain) =
       List.partition
-        ( \(_, _, sk') ->
+        ( \a ->
             not
-              ( Map.null (Map.difference sk'.skBind sk.skBind)
-                  && Map.null (Map.difference sk'.skForce sk.skForce)
+              ( Map.null (Map.difference a.env.skBind sk.skBind)
+                  && Map.null (Map.difference a.env.skForce sk.skForce)
               )
         )
         pairs
@@ -1027,8 +1028,12 @@ maybeAlias cls sk hs
     -- a parameter identification, both of which the evidence guards
     -- also produce in abundance.
     skMerges = filter isSkMerge merging
-    isSkMerge (_, _, sk') =
-      any isSkTy (Map.elems (Map.difference sk'.skBind sk.skBind))
+    isSkMerge a =
+      any isSkTy (Map.elems (Map.difference a.env.skBind sk.skBind))
+
+-- | A candidate alias: rename 'renamed' to 'keep', giving the skolem
+-- state 'env'.
+data Alias = Alias {keep :: Text, renamed :: Text, env :: SkolemEnv}
 
 -- | Record, for coverage, which of the bindings a merge added pinned a
 -- skolem to a concrete type rather than aliasing it to another skolem.
@@ -1102,22 +1107,22 @@ genEvidenceGuards ctx0
     go k (gs, ctx) = case candidates ctx of
       [] -> pure (gs, ctx)
       cs -> do
-        (n, s) <- Gen.element cs
-        (fn, t, src) <-
+        v <- Gen.element cs
+        fn <-
           Gen.element
-            [ alt
-            | alt@(_, t, _) <-
-                [ (PredInteger, SCon CInt [], PinTypePred),
-                  (PredBoolean, SCon CBool [], PinTypePred)
-                ],
-              t `elem` predTys,
-              pinOk ctx.ctxClasses ctx.ctxBounded s t
+            [ p
+            | p <- [PredInteger, PredBoolean],
+              predTy p `elem` predTys,
+              pinOk ctx.ctxClasses ctx.ctxBounded v.skolem (predTy p)
             ]
-        let sk' = fromMaybe ctx.ctxSk (pinSkolem src s t ctx.ctxSk)
-        go (k - 1) (gs ++ [EPred fn n (SSk s)], ctx {ctxSk = sk'})
+        let sk' =
+              fromMaybe
+                ctx.ctxSk
+                (pinSkolem PinTypePred v.skolem (predTy fn) ctx.ctxSk)
+        go (k - 1) (gs ++ [EPred fn v.name (SSk v.skolem)], ctx {ctxSk = sk'})
     candidates ctx =
-      [ (n, s)
-      | (n, t) <- scopeTys ctx,
+      [ RigidVar {name = n, skolem = s}
+      | TypedVar n t <- scopeTys ctx,
         SSk s <- [t],
         not (Map.member s ctx.ctxSk.skPinned),
         -- A force-constrained skolem's instance is already fixed by
@@ -1131,6 +1136,12 @@ genEvidenceGuards ctx0
         any (pinOk ctx.ctxClasses ctx.ctxBounded s) predTys
       ]
     predTys = [SCon CInt [], SCon CBool []]
+    predTy p = case p of
+      PredInteger -> SCon CInt []
+      PredBoolean -> SCon CBool []
+
+-- | An in-scope variable whose type is a bare skolem.
+data RigidVar = RigidVar {name :: Text, skolem :: Skolem}
 
 -- | 0–2 boundness guards, each on a variable that may hold no value
 -- yet, removing it from the taint for everything to their right.
@@ -1196,25 +1207,25 @@ genGuard ctx
             ++ [(3, Gen.element testable) | not (null testable)]
             ++ [(1, Gen.element anchors)]
         )
-        >>= uncurry (genGuardOn ctx)
+        >>= \v -> genGuardOn ctx v.name v.ty
   where
     anchors =
-      [ b
-      | b@(n, t) <- scopeTys ctx,
-        not (n `Set.member` ctx.ctxTainted),
-        anchorable n t
+      [ v
+      | v <- scopeTys ctx,
+        not (v.name `Set.member` ctx.ctxTainted),
+        anchorable v.name v.ty
       ]
-    testable = [b | b@(_, t) <- anchors, hasPredicate t]
+    testable = [v | v <- anchors, hasPredicate v.ty]
     -- Anchors whose type is still rigid and whose bound puts an
     -- overloaded predicate in scope. Preferred over the merely
     -- testable ones: this is the only place an overloaded operation
     -- can reach a rigid type, and left to compete on equal terms with
     -- every concrete anchor it lands in about 1% of programs.
     ambientAnchors =
-      [ b
-      | b@(_, t) <- anchors,
-        SSk _ <- [t],
-        not (null (classesAt ctx t))
+      [ v
+      | v <- anchors,
+        SSk _ <- [v.ty],
+        not (null (classesAt ctx v.ty))
       ]
     -- Every alternative draws the opposite operand with the anchor out
     -- of scope, so an anchor is only usable when its own type is still
@@ -1348,15 +1359,16 @@ genPlantedBinder mode sigList
         [ (1, pure []),
           ( 4,
             do
-              (sig, i, g) <- Gen.element cands
-              st <- genClosedSTermAt g
+              slot <- Gen.element cands
+              let sig = slot.sig
+              st <- genClosedSTermAt slot.ground
               let (sks, sk) = freshSkolems (length sig.sigTvs) emptySkolems
                   sub = Map.fromList (zip sig.sigTvs (map SSk sks))
                   tys = map (substD sub) (NE.toList (sigArgDTys sig))
                   names = ["P" <> tshow k | k <- [0 .. length tys - 1]]
                   pats = zipWith PVar names tys
-                  target = names !! i
-                  targetTy = tys !! i
+                  target = names !! slot.pos
+                  targetTy = tys !! slot.pos
                   taintedNames =
                     Set.fromList
                       [ n
@@ -1394,12 +1406,15 @@ genPlantedBinder mode sigList
     -- to be built for it, and at a type parameter there is nothing to
     -- build.
     cands =
-      [ (sig, i, g)
+      [ OpenSlot {sig = sig, pos = i, ground = g}
       | sig <- NE.toList sigList,
         (i, spec) <- zip [0 ..] (NE.toList sig.sigArgs),
         spec.argBound == MayBeUnbound,
         Just g <- [groundDTy spec.argTy]
       ]
+
+-- | A 'MayBeUnbound' argument position whose declared type is ground.
+data OpenSlot = OpenSlot {sig :: Sig, pos :: Int, ground :: GTy}
 
 -- | A gated binding of a store-resident variable.
 --
@@ -1425,8 +1440,8 @@ genGatedBind ctx
         [ (1, pure ([], [], ctx)),
           ( 4,
             do
-              (n, t, g) <- Gen.element cands
-              st <- genClosedSTermAt g
+              c <- Gen.element cands
+              st <- genClosedSTermAt c.ground
               -- The taint is deliberately /not/ cleared. The variable is
               -- bound from this body item onward, but the guard-position
               -- observations sit to its left, where it is still free —
@@ -1434,19 +1449,23 @@ genGatedBind ctx
               -- the conservative reading: it only narrows what the
               -- items after it may do with the variable.
               pure
-                ( [EUnifiable (EVar n t) (sTermToExpr st)],
-                  [BUnify n t st],
+                ( [EUnifiable (EVar c.var.name c.var.ty) (sTermToExpr st)],
+                  [BUnify c.var.name c.var.ty st],
                   ctx
                 )
           )
         ]
   where
     cands =
-      [ (n, t, g)
-      | (n, t) <- scopeTys ctx,
-        n `Set.member` ctx.ctxTainted,
-        Just g <- [groundOf ctx.ctxSk t]
+      [ GroundedVar {var = v, ground = g}
+      | v <- scopeTys ctx,
+        v.name `Set.member` ctx.ctxTainted,
+        Just g <- [groundOf ctx.ctxSk v.ty]
       ]
+
+-- | A variable whose type has no skolem left, with that type as a
+-- ground type.
+data GroundedVar = GroundedVar {var :: TypedVar, ground :: GTy}
 
 -- | The smallest closed structural term of a ground type.
 genClosedSTermAt :: GTy -> Gen STerm
@@ -1567,7 +1586,7 @@ freqOr ctx who ty alts
             ++ ": no inhabitant at "
             ++ T.unpack (renderSTy (stripSTy ctx.ctxSk ty))
             ++ "; scope = "
-            ++ show [(n, renderSTy t) | (n, t) <- scopeTys ctx]
+            ++ show [(v.name, renderSTy v.ty) | v <- scopeTys ctx]
         )
   | otherwise = Gen.frequency alts
 
@@ -1908,7 +1927,7 @@ genRuleInstance univ cls r = do
   binding <-
     Map.fromList
       <$> traverse
-        (\(n, t) -> (n,) <$> genClosedLeafAt (groundTy t))
+        (\v -> (v.name,) <$> genClosedLeafAt (groundTy v.ty))
         (ruleVars r)
   traverse (headInstance groundTy binding) (ruleHeadList r.ruleHead)
   where

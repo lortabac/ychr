@@ -306,7 +306,7 @@ renderSkolemNote prog
         ++ [ "%     " <> skName s <> " := " <> renderSTy t
            | (s, t) <- Map.toList r.ruleSk.skBind
            ]
-        ++ [ "%     " <> n <> " : " <> renderSTy (stripSTy r.ruleSk t)
-           | (n, t) <- ruleVars r
+        ++ [ "%     " <> v.name <> " : " <> renderSTy (stripSTy r.ruleSk v.ty)
+           | v <- ruleVars r
            ]
     skName (Skolem i) = "T#" <> tshow i
