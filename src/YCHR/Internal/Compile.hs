@@ -335,7 +335,8 @@ buildTellablesUnqualified prog =
     groupByGoal cs =
       Map.fromListWith
         (\new old -> old <> new)
-        [(c.key {scope = Nothing}, [c]) | c <- cs]
+        [(anyScope c.key, [c]) | c <- cs]
+    anyScope k = k {scope = Nothing}
 
     resolve entries = case nub [c.procName | c <- entries] of
       [procName] -> UniqueTell procName
