@@ -15,6 +15,7 @@ module YCHR.Internal.Meta
     valueToTerm,
     termToValue,
     decodeName,
+    decodeMangled,
 
     -- * Function references
     FunRefLookup (..),
