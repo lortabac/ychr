@@ -81,20 +81,20 @@ newtype ConstraintType = ConstraintType {unConstraintType :: Int}
 newtype RuleId = RuleId {unRuleId :: Int}
   deriving (Show, Eq, Ord)
 
--- | A name together with its arity, identifying a constraint or function.
+-- | A name together with its arity (a constraint, function, primitive, ...).
 data Identifier = Identifier {name :: Name, arity :: Int}
   deriving (Show, Eq, Ord)
 
--- | An unqualified name with its arity. Used in @exportMap@, where
--- names are looked up before qualification.
+-- | An unqualified name with its arity. Used as a lookup key where
+-- names are not qualified yet.
 data UnqualifiedIdentifier = UnqualifiedIdentifier
   { localName :: Text,
     arity :: Int
   }
   deriving (Show, Eq, Ord)
 
--- | A fully-qualified name with its arity. Used in @exportedSet@, where
--- all names are guaranteed to be module-qualified.
+-- | A module, name and arity. Used as a lookup key where names are
+-- already module-qualified.
 data QualifiedIdentifier = QualifiedIdentifier
   { moduleName :: Text,
     localName :: Text,
@@ -145,10 +145,10 @@ data QualifiedName = QualifiedName
   }
   deriving (Show, Eq, Ord)
 
--- | Key of the per-constraint declaration maps (@constraintTypes@,
--- @constraintBounds@). Constraints can be overloaded on arity, so the
--- name alone does not identify a declaration: keying by name would let
--- one arity shadow the declared types of another.
+-- | Qualified name + arity key, for constraints (@constraintTypes@,
+-- @constraintBounds@) and functions (the inline set). Names can be
+-- overloaded on arity, so the name alone does not identify a
+-- declaration: keying by name would let one arity shadow another.
 data ConstraintKey = ConstraintKey
   { name :: !QualifiedName,
     arity :: !Int

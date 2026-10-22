@@ -895,7 +895,8 @@ groupMacroClauses items =
   (filter allowed (defined ++ orphanDefs), undeclared ++ builtinNameErrors)
   where
     clauseKey n c = UnqualifiedIdentifier n (length c.node.params)
-    declaredKeys = Set.fromList [UnqualifiedIdentifier k.node.name k.node.arity | k <- decls]
+    declaredKeys =
+      Set.fromList [UnqualifiedIdentifier k.node.name k.node.arity | k <- decls]
     decls = concat [ks | ItemDirective (DirMacroDecl ks) <- items]
     oneLineDefs = [d | ItemDirective (DirMacro d) <- items]
     oneLineKeys =
@@ -986,7 +987,10 @@ checkMacroClauseContiguity = go Set.empty Nothing
             _ ->
               let closed' = maybe closed (`Set.insert` closed) prev
                   errs =
-                    [ AnnP (DiscontiguousMacroClauses k.localName k.arity) c.sourceLoc c.parsed
+                    [ AnnP
+                        (DiscontiguousMacroClauses k.localName k.arity)
+                        c.sourceLoc
+                        c.parsed
                     | k `Set.member` closed'
                     ]
                in errs ++ go closed' (Just k) rest

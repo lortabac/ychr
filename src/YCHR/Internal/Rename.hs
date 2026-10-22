@@ -1139,7 +1139,11 @@ checkMacroDefinitions ctx = do
             then do
               emitErrorIn
                 ctx
-                (AnnP (DuplicateMacro key.localName key.arity) annDef.sourceLoc annDef.parsed)
+                ( AnnP
+                    (DuplicateMacro key.localName key.arity)
+                    annDef.sourceLoc
+                    annDef.parsed
+                )
               pure seen
             else pure (Set.insert key seen)
 
@@ -1184,9 +1188,10 @@ checkMacroDefinitions ctx = do
       _ -> pure ()
 
     selfDeclaresAndExports n a =
-      self `elem` lookupExport (UnqualifiedIdentifier n a) ctx.exportEnv
-        || self `elem` lookupExport (UnqualifiedIdentifier n a) ctx.macroExportEnv
-        || self `elem` Map.findWithDefault [] (UnqualifiedIdentifier n a) ctx.dataConProviders
+      let key = UnqualifiedIdentifier n a
+       in self `elem` lookupExport key ctx.exportEnv
+            || self `elem` lookupExport key ctx.macroExportEnv
+            || self `elem` Map.findWithDefault [] key ctx.dataConProviders
 
 renameRule :: RenameCtx -> Rule -> Rename Rule
 renameRule ctx0 r = do
@@ -2149,7 +2154,10 @@ visibleProviders ctx n arity =
         filter
           ( \mn ->
               any
-                (\imp -> imp.importModule == mn && importListPermits n arity imp.importItems)
+                ( \imp ->
+                    imp.importModule == mn
+                      && importListPermits n arity imp.importItems
+                )
                 ctx.moduleImports
           )
           (lookupExport (UnqualifiedIdentifier n arity) ctx.exportEnv)
@@ -2535,7 +2543,10 @@ typeImportProviders ctx n arity =
   filter
     ( \mn ->
         any
-          (\imp -> imp.importModule == mn && importListPermitsType n arity imp.importItems)
+          ( \imp ->
+              imp.importModule == mn
+                && importListPermitsType n arity imp.importItems
+          )
           ctx.moduleImports
     )
     (lookupExport (UnqualifiedIdentifier n arity) ctx.typeExportEnv)

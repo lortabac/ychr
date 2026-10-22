@@ -426,8 +426,10 @@ buildDeclVisibility declKey mods =
       Nothing -> True
       Just annExports -> any (matchesDecl key) annExports.node
 
-    matchesDecl key (P.FunctionDecl fd') = fd'.name == key.localName && fd'.arity == key.arity
-    matchesDecl key (P.ConstraintDecl cd) = cd.name == key.localName && cd.arity == key.arity
+    matchesDecl key (P.FunctionDecl fd') =
+      fd'.name == key.localName && fd'.arity == key.arity
+    matchesDecl key (P.ConstraintDecl cd) =
+      cd.name == key.localName && cd.arity == key.arity
     matchesDecl _ _ = False
 
 -- | Look up the function-visibility table for a single module,

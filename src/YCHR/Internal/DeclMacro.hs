@@ -473,7 +473,10 @@ mixedKeys scope =
   where
     keysOf k =
       Set.fromList
-        [UnqualifiedIdentifier d.node.name d.node.arity | d <- scope.macros, d.node.kind == k]
+        [ UnqualifiedIdentifier d.node.name d.node.arity
+        | d <- scope.macros,
+          d.node.kind == k
+        ]
 
 -- | Report an error at the outermost directive, with the chain.
 emit :: SourceLoc -> PExpr -> [Use] -> DeclMacroError -> Expand ()
