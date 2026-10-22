@@ -221,9 +221,9 @@ extractSymbolTable prog =
   let rules = prog.rules
       ruleIds =
         Set.fromList
-          [ qualifiedNameToIdentifier name arity
+          [ qualifiedNameToIdentifier key.name key.arity
           | r <- rules,
-            (name, arity) <- getRuleConstraints r
+            key <- getRuleConstraints r
           ]
       -- Declared constraints that no rule mentions still need a tell_c
       -- and an activate_c. See the note at the bottom of this module.
@@ -239,20 +239,20 @@ extractSymbolTable prog =
 -- name and arity. Head constraints, body tells
 -- and aggregate goals are all included, since all contribute to the
 -- constraint-symbol table.
-getRuleConstraints :: D.Rule -> [(QualifiedName, Int)]
+getRuleConstraints :: D.Rule -> [ConstraintKey]
 getRuleConstraints r =
   let AnnP {node = rHead} = r.head
       AnnP {node = rBody} = r.body
-      headPair hc = (hc.name, length hc.args)
-   in map headPair rHead.kept
-        ++ map headPair rHead.removed
-        ++ concatMap aggPairs rHead.aggregates
-        ++ [(qn, length args) | D.BodyTell qn args <- rBody]
+      headKey hc = ConstraintKey hc.name (length hc.args)
+   in map headKey rHead.kept
+        ++ map headKey rHead.removed
+        ++ concatMap aggKeys rHead.aggregates
+        ++ [ConstraintKey qn (length args) | D.BodyTell qn args <- rBody]
   where
-    aggPairs a = concatMap conjunctPair a.goal
-    conjunctPair (D.AggConstraint hc _) = [(hc.name, length hc.args)]
-    conjunctPair (D.AggNested a) = aggPairs a
-    conjunctPair (D.AggGuard _) = []
+    aggKeys a = concatMap conjunctKey a.goal
+    conjunctKey (D.AggConstraint hc _) = [ConstraintKey hc.name (length hc.args)]
+    conjunctKey (D.AggNested a) = aggKeys a
+    conjunctKey (D.AggGuard _) = []
 
 -- | Desugar one resolved rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head and on every

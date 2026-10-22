@@ -70,7 +70,11 @@ import YCHR.Internal.Rename.Macro
     selectClause,
     termsSize,
   )
-import YCHR.Internal.Types (QualifiedName (..))
+import YCHR.Internal.Types
+  ( QualifiedIdentifier (..),
+    QualifiedName (..),
+    UnqualifiedIdentifier (..),
+  )
 
 -- ---------------------------------------------------------------------------
 -- Errors
@@ -136,12 +140,12 @@ scopeName s = s.name
 -- | Macros of all modules, indexed for lookup.
 data DeclMacroEnv = DeclMacroEnv
   { scopes :: Map Text MacroScope,
-    -- | Definitions by (module, name, arity). First one wins; the
+    -- | Definitions by module, name and arity. First one wins; the
     -- renamer reports duplicates.
-    definitions :: Map (Text, Text, Int) MacroDef,
+    definitions :: Map QualifiedIdentifier MacroDef,
     -- | Exported macros: all of them if there's no export list, else
     -- the @macro(Name\/Arity)@ items.
-    exported :: Set (Text, Text, Int)
+    exported :: Set QualifiedIdentifier
   }
 
 -- | Index all scopes.
@@ -152,26 +156,27 @@ buildDeclMacroEnv allScopes =
       definitions =
         Map.fromListWith
           (\_new old -> old)
-          [ ((s.name, d.node.name, d.node.arity), d.node)
+          [ (QualifiedIdentifier s.name d.node.name d.node.arity, d.node)
           | s <- allScopes,
             d <- s.macros
           ],
       exported =
         Set.fromList
-          [ (s.name, n, a)
+          [ QualifiedIdentifier s.name k.localName k.arity
           | s <- allScopes,
-            (n, a) <- exportedMacros s
+            k <- exportedMacros s
           ]
     }
   where
     exportedMacros s =
-      let own = [(d.node.name, d.node.arity) | d <- s.macros]
+      let own = [UnqualifiedIdentifier d.node.name d.node.arity | d <- s.macros]
        in case s.exports of
             Nothing -> own
             Just items ->
-              [ (meb.name, meb.arity)
+              [ k
               | MacroExportDecl meb <- items,
-                (meb.name, meb.arity) `elem` own
+                let k = UnqualifiedIdentifier meb.name meb.arity,
+                k `elem` own
               ]
 
 -- | Modules that make macro @n\/a@ of the given kind visible: the
@@ -182,16 +187,16 @@ providers env scope kind n a =
   filter
     ofKind
     ( nub
-        ( [scope.name | Map.member (scope.name, n, a) env.definitions]
+        ( [scope.name | Map.member (QualifiedIdentifier scope.name n a) env.definitions]
             ++ [ mn
                | (mn, il) <- scope.imports,
-                 Set.member (mn, n, a) env.exported,
+                 Set.member (QualifiedIdentifier mn n a) env.exported,
                  importListPermitsMacro n a il
                ]
         )
     )
   where
-    ofKind mn = case Map.lookup (mn, n, a) env.definitions of
+    ofKind mn = case Map.lookup (QualifiedIdentifier mn n a) env.definitions of
       Just d -> d.kind == kind
       Nothing -> False
 
@@ -290,7 +295,7 @@ directive env scope loc chain body = do
       Just (qual, n, rawArgs)
         -- Already reported as a duplicate; don't pile a mismatch on it.
         | qual `elem` [Nothing, Just scope.name],
-          Set.member (n, length rawArgs) (mixedKeys scope) ->
+          Set.member (UnqualifiedIdentifier n (length rawArgs)) (mixedKeys scope) ->
             pure []
       Just (qual, n, rawArgs) -> case resolveUse env scope qual n (length rawArgs) of
         Left err -> failIn chain err
@@ -350,7 +355,7 @@ expandUse ::
   Expand [SourceItem]
 expandUse env scope loc chain body prov n useArgs = do
   st <- get
-  case Map.lookup (prov, n, arity) env.definitions of
+  case Map.lookup (QualifiedIdentifier prov n arity) env.definitions of
     Nothing -> pure [] -- defensive: 'resolveUse' only names real providers
     Just def
       | st.abandoned -> pure []
@@ -456,21 +461,21 @@ checkDefinitions scope =
     Just form <- [forbiddenForm e]
   ]
     ++ [ Diagnostic Nothing (AnnP err d.sourceLoc d.parsed) []
-       | (n, a) <- Set.toList (mixedKeys scope),
-         let err = DeclMacroRenameError (DuplicateMacro n a)
-             sameKey d' = (d'.node.name, d'.node.arity) == (n, a),
+       | k <- Set.toList (mixedKeys scope),
+         let err = DeclMacroRenameError (DuplicateMacro k.localName k.arity)
+             sameKey d' = UnqualifiedIdentifier d'.node.name d'.node.arity == k,
          -- Report the second definition, as the renamer would.
          d <- take 1 (drop 1 (filter sameKey scope.macros))
        ]
 
 -- | Keys a module defines as both a goal macro and a declaration macro.
-mixedKeys :: MacroScope -> Set (Text, Int)
+mixedKeys :: MacroScope -> Set UnqualifiedIdentifier
 mixedKeys scope =
   Set.intersection (keysOf GoalMacro) (keysOf DeclMacro)
   where
     keysOf k =
       Set.fromList
-        [(d.node.name, d.node.arity) | d <- scope.macros, d.node.kind == k]
+        [UnqualifiedIdentifier d.node.name d.node.arity | d <- scope.macros, d.node.kind == k]
 
 -- | Report an error at the outermost directive, with the chain.
 emit :: SourceLoc -> PExpr -> [Use] -> DeclMacroError -> Expand ()

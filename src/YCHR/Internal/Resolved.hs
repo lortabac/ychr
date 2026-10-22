@@ -59,6 +59,7 @@ import YCHR.Internal.Types
     Term (..),
     TypeDefinition,
     TypeExpr,
+    UnqualifiedIdentifier,
     flattenName,
     headArgToTerm,
     qualifiedToName,
@@ -85,7 +86,7 @@ data Program = Program
     -- view the renamer resolves a goal's name in. A dynamic @tell\/N@
     -- resolves against its calling module's entry; see
     -- 'YCHR.Internal.Compile.buildTellables'.
-    nameVisibility :: Map Text (Map (Text, Int) [QualifiedName]),
+    nameVisibility :: Map Text (Map UnqualifiedIdentifier [QualifiedName]),
     functionNames :: Set QualifiedName,
     typeDefinitions :: [TypeDefinition]
   }

@@ -76,7 +76,7 @@ data Program = Program
     -- | See 'YCHR.Internal.Resolved.Program'.
     constraintUses :: Map ConstraintKey ConstraintUse,
     -- | See 'YCHR.Internal.Resolved.Program'.
-    nameVisibility :: Map Text (Map (Text, Int) [QualifiedName]),
+    nameVisibility :: Map Text (Map UnqualifiedIdentifier [QualifiedName]),
     typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)

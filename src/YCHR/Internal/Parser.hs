@@ -81,6 +81,7 @@ import Text.Parsec (ParseError)
 import YCHR.Internal.PExpr (PExpr (Atom, Compound, Str, Var))
 import YCHR.Internal.PExpr qualified as P
 import YCHR.Internal.Parsed
+import YCHR.Internal.Types (UnqualifiedIdentifier (..))
 
 -- * Operator tables
 
@@ -837,27 +838,27 @@ scanModuleTerms defaultName terms =
 
 -- | Built-in directives (name, arity). Any other directive is a
 -- declaration-macro use. Declaration macros can't use these keys.
-builtinDirectives :: Set (Text, Int)
+builtinDirectives :: Set UnqualifiedIdentifier
 builtinDirectives =
   Set.fromList
-    [ ("module", 1),
-      ("module", 2),
-      ("use_module", 1),
-      ("use_module", 2),
-      ("chr_constraint", 1),
-      ("chr_type", 1),
-      ("opaque_type", 1),
-      ("function", 1),
-      ("open_function", 1),
-      ("class", 1),
-      ("open_class", 1),
-      ("extend_function", 1),
-      ("extend_class", 1),
-      ("extend_class_type", 1),
-      ("inline", 1),
-      ("constraint_use", 1),
-      ("macro", 1),
-      ("macro_decls", 1)
+    [ UnqualifiedIdentifier "module" 1,
+      UnqualifiedIdentifier "module" 2,
+      UnqualifiedIdentifier "use_module" 1,
+      UnqualifiedIdentifier "use_module" 2,
+      UnqualifiedIdentifier "chr_constraint" 1,
+      UnqualifiedIdentifier "chr_type" 1,
+      UnqualifiedIdentifier "opaque_type" 1,
+      UnqualifiedIdentifier "function" 1,
+      UnqualifiedIdentifier "open_function" 1,
+      UnqualifiedIdentifier "class" 1,
+      UnqualifiedIdentifier "open_class" 1,
+      UnqualifiedIdentifier "extend_function" 1,
+      UnqualifiedIdentifier "extend_class" 1,
+      UnqualifiedIdentifier "extend_class_type" 1,
+      UnqualifiedIdentifier "inline" 1,
+      UnqualifiedIdentifier "constraint_use" 1,
+      UnqualifiedIdentifier "macro" 1,
+      UnqualifiedIdentifier "macro_decls" 1
     ]
 
 -- | Name of a directive's term (empty if it has none).
@@ -870,8 +871,9 @@ directiveName body = case body of
 -- | Is @T@ in @:- T@ a built-in directive?
 isBuiltinDirective :: PExpr -> Bool
 isBuiltinDirective body = case body of
-  Atom n -> Set.member (n, 0) builtinDirectives
-  Compound n args -> Set.member (n, length args) builtinDirectives
+  Atom n -> Set.member (UnqualifiedIdentifier n 0) builtinDirectives
+  Compound n args ->
+    Set.member (UnqualifiedIdentifier n (length args)) builtinDirectives
   _ -> False
 
 -- | Group a module's macro definitions and clauses into 'MacroDef's.
@@ -892,13 +894,14 @@ groupMacroClauses :: [ModuleItem] -> ([AnnP MacroDef], [AnnP ParseValidationErro
 groupMacroClauses items =
   (filter allowed (defined ++ orphanDefs), undeclared ++ builtinNameErrors)
   where
-    clauseKey n c = (n, length c.node.params)
-    declaredKeys = Set.fromList [(k.node.name, k.node.arity) | k <- decls]
+    clauseKey n c = UnqualifiedIdentifier n (length c.node.params)
+    declaredKeys = Set.fromList [UnqualifiedIdentifier k.node.name k.node.arity | k <- decls]
     decls = concat [ks | ItemDirective (DirMacroDecl ks) <- items]
     oneLineDefs = [d | ItemDirective (DirMacro d) <- items]
-    oneLineKeys = Set.fromList [(d.node.name, d.node.arity) | d <- oneLineDefs]
-    clauses = [(clauseKey n c, n, c) | ItemMacroClause n c <- items]
-    clausesOf k = [c | (k', _, c) <- clauses, k' == k]
+    oneLineKeys =
+      Set.fromList [UnqualifiedIdentifier d.node.name d.node.arity | d <- oneLineDefs]
+    clauses = [(clauseKey n c, c) | ItemMacroClause n c <- items]
+    clausesOf k = [c | (k', c) <- clauses, k' == k]
 
     -- Definitions and declarations in item order; a repeated
     -- declaration gets no clauses.
@@ -907,7 +910,7 @@ groupMacroClauses items =
     goDefs seen (ItemDirective (DirMacro d) : rest) = d : goDefs seen rest
     goDefs seen (ItemDirective (DirMacroDecl ks) : rest) =
       let step (acc, sn) (AnnP k l p) =
-            let key = (k.name, k.arity)
+            let key = UnqualifiedIdentifier k.name k.arity
                 cs = if Set.member key sn then [] else clausesOf key
              in (acc ++ [AnnP (MacroDef k.kind k.name k.arity cs) l p], Set.insert key sn)
           (ds, seen') = foldl step ([], seen) ks
@@ -917,7 +920,8 @@ groupMacroClauses items =
     -- A declaration macro can't take a built-in directive's key. Drop
     -- it (and any extra clauses); its clauses still count as declared.
     isBuiltinDeclMacro d =
-      d.kind == DeclMacro && Set.member (d.name, d.arity) builtinDirectives
+      d.kind == DeclMacro
+        && Set.member (UnqualifiedIdentifier d.name d.arity) builtinDirectives
     allowed d = not (isBuiltinDeclMacro d.node)
     builtinNameErrors =
       [ AnnP (DeclMacroBuiltinDirective d.node.name d.node.arity) d.sourceLoc d.parsed
@@ -928,23 +932,26 @@ groupMacroClauses items =
     orphanKeys =
       nubOrd
         [ k
-        | (k, _, _) <- clauses,
+        | (k, _) <- clauses,
           Set.notMember k declaredKeys,
           Set.member k oneLineKeys
         ]
     -- Clauses for a one-line definition take its kind.
     oneLineKind k =
-      case [d.node.kind | d <- oneLineDefs, (d.node.name, d.node.arity) == k] of
+      case [ d.node.kind
+           | d <- oneLineDefs,
+             UnqualifiedIdentifier d.node.name d.node.arity == k
+           ] of
         (kd : _) -> kd
         [] -> GoalMacro
     orphanDefs =
       [ AnnP (MacroDef (oneLineKind k) n a cs) first.sourceLoc first.parsed
-      | k@(n, a) <- orphanKeys,
+      | k@(UnqualifiedIdentifier n a) <- orphanKeys,
         cs@(first : _) <- [clausesOf k]
       ]
     undeclared =
-      [ AnnP (uncurry UndeclaredMacroClause k) c.sourceLoc c.parsed
-      | (k, _, c) <- clauses,
+      [ AnnP (UndeclaredMacroClause k.localName k.arity) c.sourceLoc c.parsed
+      | (k, c) <- clauses,
         Set.notMember k declaredKeys,
         Set.notMember k oneLineKeys
       ]
@@ -973,13 +980,13 @@ checkMacroClauseContiguity = go Set.empty Nothing
   where
     go _closed _prev [] = []
     go closed prev (ItemMacroClause n c : rest) =
-      let k = (n, length c.node.params)
+      let k = UnqualifiedIdentifier n (length c.node.params)
        in case prev of
             Just p | p == k -> go closed prev rest
             _ ->
               let closed' = maybe closed (`Set.insert` closed) prev
                   errs =
-                    [ AnnP (uncurry DiscontiguousMacroClauses k) c.sourceLoc c.parsed
+                    [ AnnP (DiscontiguousMacroClauses k.localName k.arity) c.sourceLoc c.parsed
                     | k `Set.member` closed'
                     ]
                in errs ++ go closed' (Just k) rest

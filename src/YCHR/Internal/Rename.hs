@@ -354,7 +354,7 @@ type DataConEnv = Map Text [Int]
 -- Built from the same declarations as 'DataConEnv' but indexed and valued
 -- so the renamer can canonicalize bare uses of declared constructors to
 -- their qualified form (the runtime then sees one canonical flat atom).
-type DataConProviders = Map (Text, Int) [Text]
+type DataConProviders = Map UnqualifiedIdentifier [Text]
 
 -- | A type declaration: declaring module, type name and arity. Key of
 -- the constructor-visibility maps, so two types with the same name in
@@ -445,8 +445,8 @@ data MacroUse = MacroUse
   }
 
 -- | The @(definingModule, name, arity)@ identity of a chain entry.
-macroUseKey :: MacroUse -> (Text, Text, Int)
-macroUseKey u = (u.definingModule, u.name, u.arity)
+macroUseKey :: MacroUse -> QualifiedIdentifier
+macroUseKey u = QualifiedIdentifier u.definingModule u.name u.arity
 
 -- | The chain shown on a diagnostic: goal-macro uses first, then the
 -- declaration macros that generated the rule or equation. Innermost
@@ -519,7 +519,7 @@ data RenameCtx = RenameCtx
     -- name, and arity. Looked up once a use has been resolved to a
     -- provider module (by 'visibleMacroProviders' or a qualified
     -- reference) to get at the actual 'MacroDef' to instantiate.
-    macroDefTable :: Map (Text, Text, Int) MacroDef,
+    macroDefTable :: Map QualifiedIdentifier MacroDef,
     -- | The chain of macro uses currently being expanded, innermost
     -- (most recently entered) first. Used for the repeat check
     -- ('MacroCycle'), the depth limit ('MacroExpansionTooDeep') and,
@@ -587,7 +587,7 @@ buildDataConProviders ::
 buildDataConProviders visible mods =
   Map.fromListWith
     (++)
-    [ ((t, length dc.conArgs), [m.name])
+    [ (UnqualifiedIdentifier t (length dc.conArgs), [m.name])
     | m <- mods,
       Ann td _ <- m.typeDecls,
       let key =
@@ -607,7 +607,7 @@ buildAllDataConProviders :: [CollectedModule] -> DataConProviders
 buildAllDataConProviders mods =
   Map.fromListWith
     (++)
-    [ ((t, length dc.conArgs), [m.name])
+    [ (UnqualifiedIdentifier t (length dc.conArgs), [m.name])
     | m <- mods,
       Ann td _ <- m.typeDecls,
       dc <- typeConstructors td,
@@ -620,9 +620,10 @@ buildAllDataConProviders mods =
 -- their existing handling (typically: leave the name 'Unqualified' and
 -- emit an undeclared-data-constructor warning).
 canonicalizeDataCon :: RenameCtx -> Text -> Int -> Maybe Name
-canonicalizeDataCon ctx n arity = case Map.lookup (n, arity) ctx.dataConProviders of
-  Just [m] -> Just (Qualified m n)
-  _ -> Nothing
+canonicalizeDataCon ctx n arity =
+  case Map.lookup (UnqualifiedIdentifier n arity) ctx.dataConProviders of
+    Just [m] -> Just (Qualified m n)
+    _ -> Nothing
 
 -- | Variant that takes a 'Name' (so compound-functor sites can call it
 -- without unwrapping). 'Qualified' names pass through unchanged;
@@ -643,7 +644,7 @@ canonicalizeData ctx (Unqualified n) arity =
 checkAmbiguousDataCon ::
   RenameCtx -> SourceLoc -> PExpr -> Text -> Int -> Rename ()
 checkAmbiguousDataCon ctx loc origin n arity =
-  case Map.lookup (n, arity) ctx.dataConProviders of
+  case Map.lookup (UnqualifiedIdentifier n arity) ctx.dataConProviders of
     Just ms@(_ : _ : _) ->
       emitErrorIn ctx (AnnP (AmbiguousDataConstructor n ms) loc origin)
     _ -> pure ()
@@ -699,7 +700,7 @@ conProvidersAnyArity ctx n =
   nub
     [ m
     | arity <- Map.findWithDefault [] n ctx.dataConEnv,
-      m <- Map.findWithDefault [] (n, arity) ctx.dataConProviders
+      m <- Map.findWithDefault [] (UnqualifiedIdentifier n arity) ctx.dataConProviders
     ]
 
 -- | All declared constraints and functions across all modules, indexed by
@@ -708,10 +709,10 @@ conProvidersAnyArity ctx n =
 buildDeclEnv :: [CollectedModule] -> DeclEnv
 buildDeclEnv mods =
   makeDeclEnv
-    [ ((n, a), [m.name])
+    [ (k, [m.name])
     | m <- mods,
       Ann d _ <- m.decls,
-      Just (n, a) <- [declNameArity d]
+      Just k <- [declNameArity d]
     ]
 
 -- | Only /exported/ constraints and functions (for cross-module resolution).
@@ -721,19 +722,19 @@ buildDeclEnv mods =
 buildExportEnv :: [CollectedModule] -> ExportEnv
 buildExportEnv mods =
   makeExportEnv
-    [ ((n, a), [m.name])
+    [ (k, [m.name])
     | m <- mods,
       d <- case m.exports of
         Nothing -> map (.node) m.decls
         Just annExports -> filter isConstraintOrFunctionDecl annExports.node,
-      Just (n, a) <- [declNameArity d]
+      Just k <- [declNameArity d]
     ]
 
 -- | All type declarations across all modules.
 buildTypeDeclEnv :: [CollectedModule] -> DeclEnv
 buildTypeDeclEnv mods =
   makeDeclEnv
-    [ ((unqualifiedText td.name, length td.typeVars), [m.name])
+    [ (UnqualifiedIdentifier (unqualifiedText td.name) (length td.typeVars), [m.name])
     | m <- mods,
       Ann td _ <- m.typeDecls
     ]
@@ -747,11 +748,12 @@ buildTypeExportEnv mods =
     | m <- mods,
       key <- case m.exports of
         Nothing ->
-          [ (unqualifiedText td.name, length td.typeVars)
+          [ UnqualifiedIdentifier (unqualifiedText td.name) (length td.typeVars)
           | Ann td _ <-
               m.typeDecls
           ]
-        Just annExports -> [(td.name, td.arity) | TypeExportDecl td <- annExports.node]
+        Just annExports ->
+          [UnqualifiedIdentifier td.name td.arity | TypeExportDecl td <- annExports.node]
     ]
 
 -- | Where each @(name, arity)@ macro is declared, mirroring
@@ -762,7 +764,7 @@ buildTypeExportEnv mods =
 buildMacroDeclEnv :: [CollectedModule] -> DeclEnv
 buildMacroDeclEnv mods =
   makeDeclEnv
-    [ ((d.node.name, d.node.arity), [m.name])
+    [ (UnqualifiedIdentifier d.node.name d.node.arity, [m.name])
     | m <- mods,
       d <- m.macros
     ]
@@ -777,9 +779,9 @@ buildMacroExportEnv mods =
     [ (key, [m.name])
     | m <- mods,
       key <- case m.exports of
-        Nothing -> [(d.node.name, d.node.arity) | d <- m.macros]
+        Nothing -> [UnqualifiedIdentifier d.node.name d.node.arity | d <- m.macros]
         Just annExports ->
-          [ (meb.name, meb.arity)
+          [ UnqualifiedIdentifier meb.name meb.arity
           | MacroExportDecl meb <- annExports.node,
             any (\d -> d.node.name == meb.name && d.node.arity == meb.arity) m.macros
           ]
@@ -791,11 +793,11 @@ buildMacroExportEnv mods =
 -- named the provider module, so no visibility filtering happens here.
 -- If a module defines a key twice ('DuplicateMacro'), the first
 -- definition wins.
-buildMacroDefTable :: [CollectedModule] -> Map (Text, Text, Int) MacroDef
+buildMacroDefTable :: [CollectedModule] -> Map QualifiedIdentifier MacroDef
 buildMacroDefTable mods =
   Map.fromListWith
     (\_new old -> old)
-    [ ((m.name, d.node.name, d.node.arity), d.node)
+    [ (QualifiedIdentifier m.name d.node.name d.node.arity, d.node)
     | m <- mods,
       d <- m.macros
     ]
@@ -803,11 +805,11 @@ buildMacroDefTable mods =
 -- | The @(name, arity)@ a declaration is referenced by. Operator
 -- declarations name an operator rather than a symbol in the
 -- constraint/function namespace, so they contribute nothing.
-declNameArity :: Declaration -> Maybe (Text, Int)
-declNameArity (ConstraintDecl cd) = Just (cd.name, cd.arity)
-declNameArity (FunctionDecl fd) = Just (fd.name, fd.arity)
-declNameArity (ExtendClassTypeDecl ed) = Just (ed.name, ed.arity)
-declNameArity (TypeExportDecl td) = Just (td.name, td.arity)
+declNameArity :: Declaration -> Maybe UnqualifiedIdentifier
+declNameArity (ConstraintDecl cd) = Just (UnqualifiedIdentifier cd.name cd.arity)
+declNameArity (FunctionDecl fd) = Just (UnqualifiedIdentifier fd.name fd.arity)
+declNameArity (ExtendClassTypeDecl ed) = Just (UnqualifiedIdentifier ed.name ed.arity)
+declNameArity (TypeExportDecl td) = Just (UnqualifiedIdentifier td.name td.arity)
 declNameArity (OperatorDecl {}) = Nothing
 -- Macros are tracked through their own table ('YCHR.Internal.Rename.Macro'),
 -- not through 'DeclEnv'\/'ExportEnv': they are a separate namespace from
@@ -933,16 +935,16 @@ validateExports = traverse_ validateOne
             cs
 
     isDeclared m n a =
-      (n, a) `elem` [k | Ann d _ <- m.decls, Just k <- [declNameArity d]]
+      UnqualifiedIdentifier n a
+        `elem` [k | Ann d _ <- m.decls, Just k <- [declNameArity d]]
     isTypeDeclared m n a =
-      (n, a)
-        `elem` [ ( unqualifiedText td.name,
-                   length td.typeVars
-                 )
+      UnqualifiedIdentifier n a
+        `elem` [ UnqualifiedIdentifier (unqualifiedText td.name) (length td.typeVars)
                | Ann td _ <- m.typeDecls
                ]
     isMacroDeclared m n a =
-      (n, a) `elem` [(d.node.name, d.node.arity) | d <- m.macros]
+      UnqualifiedIdentifier n a
+        `elem` [UnqualifiedIdentifier d.node.name d.node.arity | d <- m.macros]
 
     declaredConstructors m n a =
       [ unqualifiedText dc.conName
@@ -1033,18 +1035,18 @@ validateImportLists mods ctx =
       when (op `notElem` Map.findWithDefault [] mn ctx.operatorExports) $
         emitError (AnnP (UnknownOperatorImport mn op.opName) loc origin)
     checkItem mn loc origin (ConstraintDecl ConstraintDeclBody {name = n, arity = a}) =
-      when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
+      when (mn `notElem` lookupExport (UnqualifiedIdentifier n a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
     checkItem mn loc origin (FunctionDecl FunctionDeclBody {name = n, arity = a}) =
-      when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
+      when (mn `notElem` lookupExport (UnqualifiedIdentifier n a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
     checkItem _ _ _ ExtendClassTypeDecl {} = pure ()
     checkItem mn loc origin (TypeExportDecl (TypeExportDeclBody n a cs)) =
-      if mn `notElem` lookupExport (n, a) ctx.typeExportEnv
+      if mn `notElem` lookupExport (UnqualifiedIdentifier n a) ctx.typeExportEnv
         then emitError (AnnP (UnknownImport mn n a) loc origin)
         else checkImportedCons mn loc origin n a cs
     checkItem mn loc origin (MacroExportDecl MacroExportDeclBody {name = n, arity = a}) =
-      when (mn `notElem` lookupExport (n, a) ctx.macroExportEnv) $
+      when (mn `notElem` lookupExport (UnqualifiedIdentifier n a) ctx.macroExportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
 
     checkImportedCons _ _ _ _ _ Nothing = pure ()
@@ -1134,20 +1136,20 @@ checkMacroDefinitions ctx = do
     declKeys = Set.fromList [k | Ann d _ <- m.decls, Just k <- [declNameArity d]]
 
     checkDuplicate seen annDef =
-      let key = (annDef.node.name, annDef.node.arity)
+      let key = UnqualifiedIdentifier annDef.node.name annDef.node.arity
        in if Set.member key seen
             then do
               emitErrorIn
                 ctx
-                (AnnP (uncurry DuplicateMacro key) annDef.sourceLoc annDef.parsed)
+                (AnnP (DuplicateMacro key.localName key.arity) annDef.sourceLoc annDef.parsed)
               pure seen
             else pure (Set.insert key seen)
 
     -- Declaration macros are only directives, so they may share names
     -- with constraints and functions.
     checkCollision annDef =
-      let key@(n, a) = (annDef.node.name, annDef.node.arity)
-          err = MacroNameCollision (QualifiedName self n) a
+      let key = UnqualifiedIdentifier annDef.node.name annDef.node.arity
+          err = MacroNameCollision (QualifiedName self key.localName) key.arity
        in when (annDef.node.kind == GoalMacro && Set.member key declKeys) $
             emitErrorIn ctx (AnnP err annDef.sourceLoc annDef.parsed)
 
@@ -1165,17 +1167,17 @@ checkMacroDefinitions ctx = do
           macroName = QualifiedName self d.name
           warnUnused v =
             emitWarningIn ctx (AnnP (UnusedMacroParameter macroName v) loc origin)
-          checkRef (rn, ra) =
+          checkRef (UnqualifiedIdentifier rn ra) =
             unless (selfDeclaresAndExports rn ra) $
               let err = MacroBodyNotExported macroName d.arity rn ra
                in emitErrorIn ctx (AnnP err loc origin)
-          primitiveInHead (pn, pa) = primitiveOutsideMacro ctx loc origin pn pa
+          primitiveInHead p = primitiveOutsideMacro ctx loc origin p.name p.arity
       traverse_ warnUnused unused
       traverse_ checkRef (concatMap (qualifiedRefsIn self) clause.body)
       traverse_ primitiveInHead (concatMap primitivesIn clause.params)
 
     checkReservedDecl (Ann d loc) = case declNameArity d of
-      Just (n, a)
+      Just (UnqualifiedIdentifier n a)
         | isConstraintOrFunctionDecl d,
           isPrimitiveName (Unqualified n) a ->
             let origin =
@@ -1184,9 +1186,9 @@ checkMacroDefinitions ctx = do
       _ -> pure ()
 
     selfDeclaresAndExports n a =
-      self `elem` lookupExport (n, a) ctx.exportEnv
-        || self `elem` lookupExport (n, a) ctx.macroExportEnv
-        || self `elem` Map.findWithDefault [] (n, a) ctx.dataConProviders
+      self `elem` lookupExport (UnqualifiedIdentifier n a) ctx.exportEnv
+        || self `elem` lookupExport (UnqualifiedIdentifier n a) ctx.macroExportEnv
+        || self `elem` Map.findWithDefault [] (UnqualifiedIdentifier n a) ctx.dataConProviders
 
 renameRule :: RenameCtx -> Rule -> Rename Rule
 renameRule ctx0 r = do
@@ -1591,7 +1593,7 @@ expandMacroUse ctx loc origin providerMod name args = do
   where
     n = unqualifiedText name
     arity = length args
-    key = (providerMod, n, arity)
+    key = QualifiedIdentifier providerMod n arity
     qn = QualifiedName providerMod n
     size = termsSize args
     depth = case ctx.macroChain of
@@ -2122,11 +2124,13 @@ validateQualified ctx loc origin m n arity
       emitErrorIn ctx (AnnP (UnknownModule m) loc origin)
   | m /= ctx.currentModule.name && m `notElem` importedModuleNames ctx =
       emitErrorIn ctx (AnnP (ModuleNotImported m n arity) loc origin)
-  | m `elem` Map.findWithDefault [] (n, arity) ctx.dataConProviders = pure ()
-  | m `elem` Map.findWithDefault [] (n, arity) ctx.allDataConProviders =
+  | m `elem` Map.findWithDefault [] key ctx.dataConProviders = pure ()
+  | m `elem` Map.findWithDefault [] key ctx.allDataConProviders =
       emitErrorIn ctx (AnnP (NonExportedConstructor m n arity) loc origin)
   | otherwise =
       emitErrorIn ctx (AnnP (NotExportedByModule m n arity) loc origin)
+  where
+    key = UnqualifiedIdentifier n arity
 
 -- | Every module the current module imports. Used to decide whether a
 -- qualified reference's target module is in scope at all (distinct from
@@ -2142,7 +2146,7 @@ visibleProviders ctx n arity =
   let ownProviders =
         filter
           (== ctx.currentModule.name)
-          (lookupDecl (n, arity) ctx.declEnv)
+          (lookupDecl (UnqualifiedIdentifier n arity) ctx.declEnv)
       importProviders =
         filter
           ( \mn ->
@@ -2150,7 +2154,7 @@ visibleProviders ctx n arity =
                 (\(imn, il) -> imn == mn && importListPermits n arity il)
                 ctx.moduleImports
           )
-          (lookupExport (n, arity) ctx.exportEnv)
+          (lookupExport (UnqualifiedIdentifier n arity) ctx.exportEnv)
    in -- Deduplicate: multiple declarations with the same name/arity in
       -- one module (e.g., overloaded function signatures) are not ambiguous.
       nub (ownProviders ++ importProviders)
@@ -2165,7 +2169,7 @@ visibleMacroProviders ctx kind n arity =
   let ownProviders =
         filter
           (== ctx.currentModule.name)
-          (lookupDecl (n, arity) ctx.macroDeclEnv)
+          (lookupDecl (UnqualifiedIdentifier n arity) ctx.macroDeclEnv)
       importProviders =
         filter
           ( \mn ->
@@ -2173,12 +2177,12 @@ visibleMacroProviders ctx kind n arity =
                 (\(imn, il) -> imn == mn && importListPermitsMacro n arity il)
                 ctx.moduleImports
           )
-          (lookupExport (n, arity) ctx.macroExportEnv)
+          (lookupExport (UnqualifiedIdentifier n arity) ctx.macroExportEnv)
    in filter (isKind kind n arity) (nub (ownProviders ++ importProviders))
   where
     -- Filter by kind: a goal macro and a declaration macro with the same
     -- key never clash.
-    isKind k nm a mn = case Map.lookup (mn, nm, a) ctx.macroDefTable of
+    isKind k nm a mn = case Map.lookup (QualifiedIdentifier mn nm a) ctx.macroDefTable of
       Just d -> d.kind == k
       Nothing -> False
 
@@ -2513,7 +2517,7 @@ resolveTypeName ctx n arity =
   let ownProviders =
         filter
           (== ctx.currentModule.name)
-          (lookupDecl (n, arity) ctx.typeDeclEnv)
+          (lookupDecl (UnqualifiedIdentifier n arity) ctx.typeDeclEnv)
       matches = ownProviders ++ typeImportProviders ctx n arity
    in case matches of
         [m] -> Qualified m n
@@ -2530,7 +2534,7 @@ typeImportProviders ctx n arity =
           (\(imn, il) -> imn == mn && importListPermitsType n arity il)
           ctx.moduleImports
     )
-    (lookupExport (n, arity) ctx.typeExportEnv)
+    (lookupExport (UnqualifiedIdentifier n arity) ctx.typeExportEnv)
 
 -- | Type names the grammar wires in: the base types plus the
 -- function-type syntax. Declaring any of them as a user type would
@@ -2554,7 +2558,7 @@ validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
           origin = Atom n
       when (n `Set.member` reservedTypeNames) $
         emitError (AnnP (ReservedTypeName n arity) td.loc origin)
-      when ((n, arity) `Set.member` seen) $
+      when (UnqualifiedIdentifier n arity `Set.member` seen) $
         emitError (AnnP (DuplicateTypeDeclaration n arity) td.loc origin)
       -- Module identity is name-based, so a module that shadows a
       -- same-named library (e.g. a module `strings` importing
@@ -2563,7 +2567,7 @@ validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
       case filter (/= ctx.currentModule.name) (typeImportProviders ctx n arity) of
         (pm : _) -> emitError (AnnP (TypeShadowsImport n arity pm) td.loc origin)
         [] -> pure ()
-      pure (Set.insert (n, arity) seen)
+      pure (Set.insert (UnqualifiedIdentifier n arity) seen)
 
 -- ---------------------------------------------------------------------------
 -- Query renaming

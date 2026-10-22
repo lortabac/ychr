@@ -56,6 +56,7 @@ import YCHR.Internal.Types
     QualifiedName (..),
     Term (..),
     TypeExpr (..),
+    UnqualifiedIdentifier (..),
     flattenName,
     qualifiedToName,
     typeConstructors,
@@ -347,13 +348,13 @@ are read by 'termToExpr' to commit each compound to a 'CallExpr' or
 -- reachable from the module to the qualified names of the function
 -- declarations that provide it.
 -- See Note [FunVisibility vs renamer visibility].
-type FunVisibility = Map (Text, Int) [QualifiedName]
+type FunVisibility = Map UnqualifiedIdentifier [QualifiedName]
 
 -- | Per-module constraint and function visibility: each local
 -- @(name, arity)@ a module can name, with the qualified declarations
 -- that provide it. Same shape as 'FunVisibility'; see
 -- 'buildNameVisibility'.
-type NameVisibility = Map (Text, Int) [QualifiedName]
+type NameVisibility = Map UnqualifiedIdentifier [QualifiedName]
 
 -- | Build a function-visibility map for every module in a program.
 --
@@ -366,7 +367,7 @@ type NameVisibility = Map (Text, Int) [QualifiedName]
 buildFunctionVisibility :: [CollectedModule] -> Map Text FunVisibility
 buildFunctionVisibility = buildDeclVisibility functionKey
   where
-    functionKey (P.FunctionDecl fd) = Just (fd.name, fd.arity)
+    functionKey (P.FunctionDecl fd) = Just (UnqualifiedIdentifier fd.name fd.arity)
     functionKey _ = Nothing
 
 -- | Per-module visibility of constraints and functions together, built
@@ -378,8 +379,8 @@ buildFunctionVisibility = buildDeclVisibility functionKey
 buildNameVisibility :: [CollectedModule] -> Map Text NameVisibility
 buildNameVisibility = buildDeclVisibility valueKey
   where
-    valueKey (P.ConstraintDecl cd) = Just (cd.name, cd.arity)
-    valueKey (P.FunctionDecl fd) = Just (fd.name, fd.arity)
+    valueKey (P.ConstraintDecl cd) = Just (UnqualifiedIdentifier cd.name cd.arity)
+    valueKey (P.FunctionDecl fd) = Just (UnqualifiedIdentifier fd.name fd.arity)
     valueKey _ = Nothing
 
 -- | The visibility rule shared by 'buildFunctionVisibility' and
@@ -388,16 +389,16 @@ buildNameVisibility = buildDeclVisibility valueKey
 -- @P == M@, or @M@ has a @use_module(P)@ import whose import list
 -- permits it and @P@'s export list (if any) includes it.
 buildDeclVisibility ::
-  (P.Declaration -> Maybe (Text, Int)) ->
+  (P.Declaration -> Maybe UnqualifiedIdentifier) ->
   [CollectedModule] ->
-  Map Text (Map (Text, Int) [QualifiedName])
+  Map Text (Map UnqualifiedIdentifier [QualifiedName])
 buildDeclVisibility declKey mods =
   Map.fromList [(m.name, perModule m) | m <- mods]
   where
     perModule selfMod =
       Map.fromListWith
         (\a b -> nub (a ++ b))
-        [ (key, [QualifiedName provider.name (fst key)])
+        [ (key, [QualifiedName provider.name key.localName])
         | provider <- mods,
           P.Ann d _ <- provider.decls,
           Just key <- [declKey d],
@@ -425,8 +426,8 @@ buildDeclVisibility declKey mods =
       Nothing -> True
       Just annExports -> any (matchesDecl key) annExports.node
 
-    matchesDecl (n, a) (P.FunctionDecl fd') = fd'.name == n && fd'.arity == a
-    matchesDecl (n, a) (P.ConstraintDecl cd) = cd.name == n && cd.arity == a
+    matchesDecl key (P.FunctionDecl fd') = fd'.name == key.localName && fd'.arity == key.arity
+    matchesDecl key (P.ConstraintDecl cd) = cd.name == key.localName && cd.arity == key.arity
     matchesDecl _ _ = False
 
 -- | Look up the function-visibility table for a single module,
@@ -447,7 +448,7 @@ buildQueryFunctionVisibility :: [CollectedModule] -> FunVisibility
 buildQueryFunctionVisibility mods =
   Map.fromListWith
     (\a b -> nub (a ++ b))
-    [ ((fd.name, fd.arity), [QualifiedName m.name fd.name])
+    [ (UnqualifiedIdentifier fd.name fd.arity, [QualifiedName m.name fd.name])
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.FunctionDecl fd <- [d],
@@ -763,10 +764,10 @@ checkInlineDeclarations mods =
 -- 'checkInlineDeclarations'\'s errors; 'resolveProgram' only consults
 -- the resulting 'R.Program' when that list is empty, so an invalid
 -- entry here never reaches a 'R.FunctionDef'.
-buildInlineSet :: [CollectedModule] -> Set (QualifiedName, Int)
+buildInlineSet :: [CollectedModule] -> Set ConstraintKey
 buildInlineSet mods =
   Set.fromList
-    [ (QualifiedName m.name entry.node.name, entry.node.arity)
+    [ ConstraintKey (QualifiedName m.name entry.node.name) entry.node.arity
     | m <- mods,
       entry <- m.inlines
     ]
@@ -785,13 +786,14 @@ checkConstraintUseDeclarations mods =
   | m <- mods,
     let declared =
           Set.fromList
-            [ (cd.name, cd.arity)
+            [ UnqualifiedIdentifier cd.name cd.arity
             | P.Ann d _ <- m.decls,
               P.ConstraintDecl cd <- [d]
             ],
     (i, entry) <- zip [0 :: Int ..] m.constraintUses,
     let spec = entry.node
-        earlier = [(e.node.name, e.node.arity) | e <- take i m.constraintUses],
+        earlier =
+          [UnqualifiedIdentifier e.node.name e.node.arity | e <- take i m.constraintUses],
     err <- entryErrors declared earlier spec
   ]
   where
@@ -802,7 +804,7 @@ checkConstraintUseDeclarations mods =
           [ConstraintUseConflictingDeclaration spec.name spec.arity]
       | otherwise = []
       where
-        key = (spec.name, spec.arity)
+        key = UnqualifiedIdentifier spec.name spec.arity
 
 -- | The declared use policy of every constraint named by a
 -- @:- constraint_use@ directive, keyed by its qualified name and arity.
@@ -1383,7 +1385,7 @@ qualifyConstraint loc origin (Constraint n args) = case n of
 
 resolveFunctions ::
   Map Text FunVisibility ->
-  Set (QualifiedName, Int) ->
+  Set ConstraintKey ->
   [CollectedModule] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
 resolveFunctions visMap inlineSet mods =
@@ -1441,7 +1443,7 @@ resolveFunctions visMap inlineSet mods =
                   refining =
                     listToMaybe
                       [t | (fd, _) <- declPairs, Just t <- [fd.refining]],
-                  inline = Set.member (qn, ar) inlineSet,
+                  inline = Set.member (ConstraintKey qn ar) inlineSet,
                   equations = concat eqss
                 }
          in (def, concat eqErrss)
@@ -1629,7 +1631,8 @@ termToExpr vis loc origin = go
       -- visibility-validated, so the @elem@ check here is effectively
       -- a function-vs-constructor distinction.
       CompoundTerm name@(Qualified m b) args
-        | QualifiedName m b `elem` Map.findWithDefault [] (b, length args) vis ->
+        | QualifiedName m b
+            `elem` Map.findWithDefault [] (UnqualifiedIdentifier b (length args)) vis ->
             R.CallExpr (QualifiedName m b) <$> traverse go args
         | otherwise ->
             R.CtorExpr name <$> traverse go args
@@ -1645,7 +1648,7 @@ termToExpr vis loc origin = go
       -- (@UnknownName@/@AmbiguousName@ in @ResolveAll@ positions,
       -- @UndeclaredDataConstructor@ in @NoResolve@).
       CompoundTerm name@(Unqualified n) args ->
-        case Map.lookup (n, length args) vis of
+        case Map.lookup (UnqualifiedIdentifier n (length args)) vis of
           Just [qn] -> R.CallExpr qn <$> traverse go args
           _ -> R.CtorExpr name <$> traverse go args
 

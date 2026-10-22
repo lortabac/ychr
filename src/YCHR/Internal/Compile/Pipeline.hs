@@ -533,13 +533,13 @@ finalizeCompilation libraryMods opExports trailingLocs inputPaths spliceDump par
       exportEnv = buildExportEnv allMods
       exportMap =
         Map.fromList
-          [ (Types.UnqualifiedIdentifier n a, toResolution n ms)
-          | ((n, a), ms) <- toListExport exportEnv
+          [ (k, toResolution k.localName ms)
+          | (k, ms) <- toListExport exportEnv
           ]
       exportedSet =
         Set.fromList
-          [ Types.QualifiedIdentifier m n a
-          | ((n, a), ms) <- toListExport exportEnv,
+          [ Types.QualifiedIdentifier m k.localName k.arity
+          | (k, ms) <- toListExport exportEnv,
             m <- ms
           ]
       renameInputs =

@@ -263,7 +263,7 @@ buildTellables prog =
       tellProcName (Types.qualifiedToName qn) arity
     )
   | sc <- Set.toList (tellScopes prog),
-    ((n, arity), providers) <-
+    (Types.UnqualifiedIdentifier n arity, providers) <-
       Map.toList (Map.findWithDefault Map.empty sc prog.nameVisibility),
     qn <- providers,
     Map.member (ConstraintKey qn arity) prog.constraintTypes,
@@ -319,7 +319,7 @@ buildTellablesUnqualified prog =
       Set.fromList
         [ (Name n, arity)
         | qns <- Map.elems prog.nameVisibility,
-          ((n, arity), providers) <- Map.toList qns,
+          (Types.UnqualifiedIdentifier n arity, providers) <- Map.toList qns,
           [qn] <- [nub providers],
           Map.member (ConstraintKey qn arity) prog.constraintTypes
         ]

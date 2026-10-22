@@ -71,7 +71,13 @@ import YCHR.Internal.Parsed
     MacroExportDeclBody (..),
     SourceLoc (..),
   )
-import YCHR.Internal.Types (Constraint (..), Name (..), Term (..))
+import YCHR.Internal.Types
+  ( Constraint (..),
+    Identifier (..),
+    Name (..),
+    Term (..),
+    UnqualifiedIdentifier (..),
+  )
 
 -- | Whether a @macro(name\/arity)@ entry in an import list permits
 -- importing @(name, arity)@. 'Nothing' (no import list, i.e. plain
@@ -195,10 +201,11 @@ isPrimitiveName (Unqualified "$atom") 1 = True
 isPrimitiveName _ _ = False
 
 -- | Every construction primitive occurring in a term, at any depth, as
--- @(name, arity)@. Used to reject primitives in macro head patterns.
-primitivesIn :: Term -> [(Name, Int)]
+-- name and arity. Used to reject primitives in macro head patterns.
+primitivesIn :: Term -> [Identifier]
 primitivesIn (CompoundTerm n args) =
-  [(n, length args) | isPrimitiveName n (length args)] ++ concatMap primitivesIn args
+  [Identifier n (length args) | isPrimitiveName n (length args)]
+    ++ concatMap primitivesIn args
 primitivesIn _ = []
 
 -- | Instantiate a clause's body at one use, in one pass over the body as
@@ -410,16 +417,16 @@ headConjunct t = HeadConjunctInvalid t
 -- compound it builds, not to @f\/0@; with an argument list that is not
 -- a proper list as written, the arity is unknown and @f@ is not
 -- checked.
-qualifiedRefsIn :: Text -> Term -> [(Text, Int)]
+qualifiedRefsIn :: Text -> Term -> [UnqualifiedIdentifier]
 qualifiedRefsIn self = go
   where
     go (CompoundTerm (Unqualified "$compound") [CompoundTerm (Qualified m n) [], l])
       | m == self = case properList l of
-          Just xs -> (n, length xs) : concatMap go xs
+          Just xs -> UnqualifiedIdentifier n (length xs) : concatMap go xs
           -- The arity is not known until the macro is used.
           Nothing -> go l
     go (CompoundTerm (Qualified m n) args)
-      | m == self = (n, length args) : concatMap go args
+      | m == self = UnqualifiedIdentifier n (length args) : concatMap go args
       | otherwise = concatMap go args
     go (CompoundTerm _ args) = concatMap go args
     go _ = []

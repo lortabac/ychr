@@ -40,42 +40,43 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import YCHR.Internal.Types (UnqualifiedIdentifier)
 
 -- | All names exported by each module, indexed by @(name, arity)@. For a
 -- module without an explicit @module@ directive, every declaration is
 -- considered exported.
-newtype ExportEnv = ExportEnv (Map.Map (Text, Int) [Text])
+newtype ExportEnv = ExportEnv (Map.Map UnqualifiedIdentifier [Text])
 
 -- | Build an export environment from @((name, arity), providers)@ pairs;
 -- several modules under one key accumulate into one entry.
-makeExportEnv :: [((Text, Int), [Text])] -> ExportEnv
+makeExportEnv :: [(UnqualifiedIdentifier, [Text])] -> ExportEnv
 makeExportEnv = ExportEnv . Map.fromListWith (++)
 
 -- | The modules exporting @(name, arity)@; @[]@ when none do.
-lookupExport :: (Text, Int) -> ExportEnv -> [Text]
+lookupExport :: UnqualifiedIdentifier -> ExportEnv -> [Text]
 lookupExport k (ExportEnv m) = Map.findWithDefault [] k m
 
 -- | Every @(name, arity)@ entry with its providers, in ascending key order.
-toListExport :: ExportEnv -> [((Text, Int), [Text])]
+toListExport :: ExportEnv -> [(UnqualifiedIdentifier, [Text])]
 toListExport (ExportEnv m) = Map.toList m
 
 -- | All names declared anywhere in the program, indexed by @(name, arity)@.
 -- Unlike 'ExportEnv', this ignores export lists: it answers \"is this name
 -- visible within its own declaring module?\".
-newtype DeclEnv = DeclEnv (Map.Map (Text, Int) [Text])
+newtype DeclEnv = DeclEnv (Map.Map UnqualifiedIdentifier [Text])
 
 -- | Build a declaration environment from @((name, arity), declaringModules)@
 -- pairs; several declarations under one key accumulate into one entry.
-makeDeclEnv :: [((Text, Int), [Text])] -> DeclEnv
+makeDeclEnv :: [(UnqualifiedIdentifier, [Text])] -> DeclEnv
 makeDeclEnv = DeclEnv . Map.fromListWith (++)
 
 -- | The modules declaring @(name, arity)@; @[]@ when none do.
-lookupDecl :: (Text, Int) -> DeclEnv -> [Text]
+lookupDecl :: UnqualifiedIdentifier -> DeclEnv -> [Text]
 lookupDecl k (DeclEnv m) = Map.findWithDefault [] k m
 
 -- | Every @(name, arity)@ entry with its declaring modules, in ascending
 -- key order.
-toListDecl :: DeclEnv -> [((Text, Int), [Text])]
+toListDecl :: DeclEnv -> [(UnqualifiedIdentifier, [Text])]
 toListDecl (DeclEnv m) = Map.toList m
 
 -- | Names that must stay 'YCHR.Types.Unqualified' even in resolving
