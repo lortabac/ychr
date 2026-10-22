@@ -31,6 +31,9 @@ module YCHR.Internal.Parsed
     AnnP (..),
     noAnnP,
     noAnnPAt,
+    Site (..),
+    siteOf,
+    annAt,
 
     -- * Program structure
     Module (..),
@@ -111,6 +114,21 @@ noAnnP x = AnnP x dummyLoc (Atom "")
 -- that have a meaningful location but no underlying surface 'PExpr'.
 noAnnPAt :: SourceLoc -> a -> AnnP a
 noAnnPAt loc x = AnnP x loc (Atom "")
+
+-- | Where a diagnostic points: a source location and the 'PExpr'
+-- written there. An 'AnnP' without its node.
+data Site = Site
+  { loc :: SourceLoc,
+    origin :: PExpr
+  }
+
+-- | The site of an annotated node.
+siteOf :: AnnP a -> Site
+siteOf a = Site a.sourceLoc a.parsed
+
+-- | Annotate a node with a site.
+annAt :: Site -> a -> AnnP a
+annAt s x = AnnP x s.loc s.origin
 
 -- | A @use_module@ target: a module name or @library(name)@, plus its
 -- optional item list.

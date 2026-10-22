@@ -92,6 +92,7 @@ import YCHR.Internal.Rename
     RenameError,
     RenameInputs (..),
     RenameWarning,
+    Renamed (..),
     buildExportEnv,
     buildQueryRenameEnv,
     renameProgram,
@@ -547,8 +548,8 @@ finalizeCompilation libraryMods opExports trailingLocs inputPaths spliceDump par
           { operatorExports = opExports,
             trailingLoc = trailingLocs
           }
-  (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
-  resolved <- first ResolveErrors (resolveProgram renamed)
+  renamed <- first RenameErrors (renameProgram renameInputs allMods)
+  resolved <- first ResolveErrors (resolveProgram renamed.result)
   desugared <- first DesugarErrors (desugarProgram resolved)
   let (desugaredLifted, liftErrs) = liftAllLambdas desugared
   case liftErrs of
@@ -566,7 +567,7 @@ finalizeCompilation libraryMods opExports trailingLocs inputPaths spliceDump par
   let symTab = extractSymbolTable desugaredInlined
       exhaustWarnings = checkExhaustiveness resolved
       warnings =
-        [RenameWarnings renameWarnings | not (null renameWarnings)]
+        [RenameWarnings renamed.warnings | not (null renamed.warnings)]
           ++ [ExhaustivenessWarnings exhaustWarnings | not (null exhaustWarnings)]
   prog <- first CompileErrors (compile desugaredInlined symTab)
   -- Assert the procedure-name closure invariant: every call the
