@@ -401,6 +401,7 @@ library
                     , YCHR.Internal.Loc
                     , YCHR.Internal.Compile.Aggregate
                     , YCHR.Internal.Compile.Pipeline
+                    , YCHR.Internal.CompileOrThrow
                     , YCHR.Internal.Compile.Names
                     , YCHR.Internal.Compile.Occurrences
                     , YCHR.Internal.Compile.Passive
@@ -424,6 +425,7 @@ library
                     , YCHR.Internal.Parsing.Lexer
                     , YCHR.Internal.PExpr
                     , YCHR.Internal.Pretty
+                    , YCHR.Internal.ProgramCheck
                     , YCHR.Internal.Rename
                     , YCHR.Internal.Rename.Macro
                     , YCHR.Internal.Rename.Types

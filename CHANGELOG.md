@@ -28,6 +28,13 @@ Internal record fields drop their type prefixes.
   `constructors` and `aliases`.
 - **Breaking:** `YCHR.Internal.Repl.runRepl` takes one `ReplOptions`
   record instead of positional arguments.
+- **Breaking:** the query-pipeline part of `YCHR.Run` (not covered by
+  the PVP) returns records instead of pairs. `prepareGoal` and
+  `prepareGoalTerm` return a `PreparedGoal` (`constraint`, `warnings`),
+  `resolveQueryTellOrThrow` returns a `QueryTell` (`name`, `args`), and
+  `prepareQuery` and `prepareQueryUnchecked` return a `PreparedQuery`
+  whose new `warnings` field holds what used to be the pair's second
+  half.
 
 A constraint's type parameters only take *determined* types
 ([docs/reference/type-system.md](docs/reference/type-system.md#determined-types)).

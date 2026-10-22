@@ -31,6 +31,7 @@
 module YCHR.Playground
   ( -- * State
     Playground (..),
+    Step (..),
 
     -- * Operations
     initPlayground,
@@ -63,13 +64,13 @@ import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Parsed qualified as Parsed
 import YCHR.Internal.Pretty (prettyQueryResult)
+import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..), loadResourcesAt)
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.Runtime.Session (SessionInput, toSessionInput, withCHRExtra)
 import YCHR.Internal.StdLib (StdLib (..))
-import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Run
   ( Error,
     PreparedQuery (..),
@@ -97,6 +98,13 @@ data Playground = Playground
     -- step, and 'reload' and 'runReplLine' never force it.
     checker :: SessionInput,
     loaded :: Maybe CompiledProgram
+  }
+
+-- | What an operation returns: the playground to keep and the response
+-- to send back.
+data Step = Step
+  { playground :: Playground,
+    output :: String
   }
 
 -- | Load the bundled resources from a source-tree root (@libraries\/@
@@ -150,28 +158,20 @@ response status payload = status ++ "\n\n" ++ payload
 --
 -- The state a failed operation would have installed is dropped with it:
 -- the response describes the 'Playground' the caller still has.
-guarded :: Playground -> IO (Playground, String) -> IO (Playground, String)
+guarded :: Playground -> IO Step -> IO Step
 guarded pg act = do
   attempt <- try @SomeException $ do
-    pair@(_, out) <- act
-    _ <- evaluate (length out)
-    pure pair
+    result <- act
+    _ <- evaluate (length result.output)
+    pure result
   pure $ case attempt of
-    Left exc -> (pg, response statusError (renderException exc))
-    Right pair -> pair
+    Left exc -> Step {playground = pg, output = response statusError (renderException exc)}
+    Right result -> result
 
 -- | Render the warnings of a compilation the way the CLI does — through
 -- 'displayMsg', so the payload carries the same ANSI colours.
 renderWarnings :: [Warning] -> String
 renderWarnings = concatMap displayMsg
-
--- | The type checker reports its warnings as plain diagnostics rather
--- than as a 'Warning'; wrap them the way the CLI and the REPL do, so
--- they render identically.
-renderTypeWarnings :: TypeCheckResult -> String
-renderTypeWarnings result
-  | null result.warnings = ""
-  | otherwise = renderWarnings [TypeCheckWarnings result.warnings]
 
 -- | Render an exception the way the REPL does: a project 'Error' through
 -- its formatter, anything else through 'displayException'.
@@ -197,16 +197,17 @@ renderException exc = case fromException exc of
 -- bundled library on every reload, which is invisible for compilation
 -- but dominates type checking — the checker would be handed ~900
 -- procedures of library code before the program's own.
-reload :: Playground -> Text -> IO (Playground, String)
+reload :: Playground -> Text -> IO Step
 reload pg src = guarded pg $ do
   compiled <-
     evaluate (compileModules pg.stdlib False [("editor.chr", src)])
   pure $ case compiled of
-    Left err -> (pg, response statusError (displayMsg err))
+    Left err -> Step {playground = pg, output = response statusError (displayMsg err)}
     Right (prog, warnings) ->
-      ( pg {loaded = Just prog},
-        response statusOk (renderWarnings warnings ++ summary pg prog)
-      )
+      Step
+        { playground = pg {loaded = Just prog},
+          output = response statusOk (renderWarnings warnings ++ summary pg prog)
+        }
 
 -- | The one line a successful reload prints: which constraint types the
 -- /user's/ modules declare. Standard-library constraints are left out —
@@ -250,12 +251,13 @@ summary pg prog =
 -- parse, execute in a fresh CHR session, print the bindings — except
 -- that nothing is written to @stdout@; the response carries it. The
 -- goal syntax is documented in @docs\/reference\/repl.md@.
-runReplLine :: Playground -> Text -> IO (Playground, String)
+runReplLine :: Playground -> Text -> IO Step
 runReplLine pg line = guarded pg (dispatch (T.strip line))
   where
     dispatch stripped
-      | T.null stripped = pure (pg, response statusOk "")
-      | Just _ <- T.stripPrefix ":" stripped = pure (pg, runCommand pg stripped)
+      | T.null stripped = pure Step {playground = pg, output = response statusOk ""}
+      | Just _ <- T.stripPrefix ":" stripped =
+          pure Step {playground = pg, output = runCommand pg stripped}
       | otherwise = runGoal pg stripped
 
 -- | The colon commands the page supports: the terminal REPL's
@@ -288,14 +290,15 @@ runCommand pg command = case words (T.unpack command) of
       Just prog -> response statusOk (render prog)
 
 -- | Run one goal against the loaded program, in a fresh CHR session.
-runGoal :: Playground -> Text -> IO (Playground, String)
+runGoal :: Playground -> Text -> IO Step
 runGoal pg goal = case pg.loaded of
-  Nothing -> pure (pg, response statusError noProgram)
+  Nothing -> pure Step {playground = pg, output = response statusError noProgram}
   Just prog -> do
     prepared <- try @SomeException (prepareQueryUnchecked prog goal)
     case prepared of
-      Left exc -> pure (pg, response statusError (renderException exc))
-      Right (prep, warnings) -> executeQuery pg prog prep warnings
+      Left exc ->
+        pure Step {playground = pg, output = response statusError (renderException exc)}
+      Right prep -> executeQuery pg prog prep
 
 -- | Execute a prepared query in a fresh session. Split out of 'runGoal'
 -- so 'PreparedQuery' is named in a signature: with @NoFieldSelectors@,
@@ -305,10 +308,9 @@ executeQuery ::
   Playground ->
   CompiledProgram ->
   PreparedQuery ->
-  [Warning] ->
-  IO (Playground, String)
-executeQuery pg prog prep warnings = do
-  let warns = renderWarnings warnings
+  IO Step
+executeQuery pg prog prep = do
+  let warns = renderWarnings prep.warnings
   executed <-
     try @SomeException $
       withCHRExtra
@@ -318,10 +320,15 @@ executeQuery pg prog prep warnings = do
         prep.extraCallables
         (executePreparedQuery prep.liftedGoals)
   pure $ case executed of
-    Left exc -> (pg, response statusError (warns ++ renderException exc))
+    Left exc ->
+      Step {playground = pg, output = response statusError (warns ++ renderException exc)}
     -- A ground goal binds nothing, and 'prettyQueryResult' returns
     -- the empty string for it; that is success, not silence.
-    Right bindings -> (pg, response statusOk (warns ++ prettyQueryResult bindings))
+    Right bindings ->
+      Step
+        { playground = pg,
+          output = response statusOk (warns ++ prettyQueryResult bindings)
+        }
 
 -- | The message a query or a colon command prints when nothing has been
 -- loaded yet.
@@ -336,28 +343,25 @@ noProgram = "No program loaded. Press Reload first.\n"
 -- forcing the checker on first use, and check its rule heads against
 -- their @:- constraint_use@ declarations. Errors from either make the
 -- response an error (as @ychr check@ exits non-zero); warnings do not.
-typecheck :: Playground -> IO (Playground, String)
+typecheck :: Playground -> IO Step
 typecheck pg = guarded pg $ case pg.loaded of
-  Nothing -> pure (pg, response statusError noProgram)
+  Nothing -> pure Step {playground = pg, output = response statusError noProgram}
   Just prog -> do
-    let useErrors = checkConstraintUse prog.desugaredProgram
     checked <-
-      try @SomeException (typeCheckProgram pg.checker prog.desugaredProgram)
-    pure $ case checked of
-      Left exc ->
-        (pg, response statusError (concatMap displayMsg useErrors ++ renderException exc))
-      Right result
-        | not (null useErrors && null result.errors) ->
-            ( pg,
-              response
-                statusError
-                ( concatMap displayMsg useErrors
-                    ++ concatMap displayMsg result.errors
-                    ++ renderTypeWarnings result
-                )
-            )
-        | otherwise ->
-            (pg, response statusOk (renderTypeWarnings result))
+      try @SomeException (checkProgram pg.checker prog.desugaredProgram)
+    let out = case checked of
+          -- A crashed checker still shows the use violations.
+          Left exc ->
+            response
+              statusError
+              ( concatMap displayMsg (checkConstraintUse prog.desugaredProgram)
+                  ++ renderException exc
+              )
+          Right check
+            | not (null check.errors) ->
+                response statusError (concat check.errors ++ renderWarnings check.warnings)
+            | otherwise -> response statusOk (renderWarnings check.warnings)
+    pure Step {playground = pg, output = out}
 
 -- ---------------------------------------------------------------------------
 -- Help

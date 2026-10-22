@@ -837,10 +837,10 @@ uncheckedQueryTests =
           Left exc ->
             assertFailure $
               "expected prepareQueryUnchecked to prepare the goal, got: " ++ show exc
-          Right (prepared, ws) -> do
+          Right prepared -> do
             assertBool
               "expected the query to be prepared"
               (not (null prepared.liftedGoals))
             assertBool "expected no type-check warnings" $
-              null [() | TypeCheckWarnings _ <- ws]
+              null [() | TypeCheckWarnings _ <- prepared.warnings]
     ]

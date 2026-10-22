@@ -32,6 +32,7 @@ import System.IO (hFlush, hPutStr, stdout)
 import YCHR.Internal.Resources (resourceRoot)
 import YCHR.Playground
   ( Playground,
+    Step (..),
     initPlayground,
     reload,
     response,
@@ -66,12 +67,16 @@ readCommand pg = do
     [] -> readCommand pg
     (":quit" : _) -> pure ()
     (":load" : rest) -> case rest of
-      [] -> emit (pg, response statusError "usage: :load FILE\n")
+      [] -> emit Step {playground = pg, output = response statusError "usage: :load FILE\n"}
       (file : _) -> do
         contents <- try @SomeException (TIO.readFile file)
         case contents of
           Left exc ->
-            emit (pg, response statusError ("Error: " ++ displayException exc ++ "\n"))
+            emit
+              Step
+                { playground = pg,
+                  output = response statusError ("Error: " ++ displayException exc ++ "\n")
+                }
           Right text -> run (reload pg text)
     (":text" : _) -> do
       src <- readProgramText
@@ -85,15 +90,15 @@ readCommand pg = do
 
 -- | Run an operation, print its response with the framing line the tests
 -- split on, and continue with the updated state.
-run :: IO (Playground, String) -> IO ()
+run :: IO Step -> IO ()
 run act = act >>= emit
 
 -- | Print a response and its framing line, then read the next command.
-emit :: (Playground, String) -> IO ()
-emit (pg, out) = do
-  hPutStr stdout (out ++ "\n---\n")
+emit :: Step -> IO ()
+emit result = do
+  hPutStr stdout (result.output ++ "\n---\n")
   hFlush stdout
-  readCommand pg
+  readCommand result.playground
 
 -- | Program text terminated by a line containing only @.@.
 readProgramText :: IO String

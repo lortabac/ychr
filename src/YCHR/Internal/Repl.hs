@@ -48,7 +48,6 @@ import System.Exit (exitFailure)
 import System.IO (hPutStr, hPutStrLn, stderr, stdout)
 import YCHR.Internal.Collected (CollectedModule (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
-import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Display (Display (..), displayMsg, renderSplices)
 import YCHR.Internal.LineInput (LineInput (..), LineInputSettings (..), mkLineInput)
@@ -64,6 +63,7 @@ import YCHR.Internal.Pretty
     prettyTypeDecl,
     renderAtom,
   )
+import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Session
@@ -76,7 +76,6 @@ import YCHR.Internal.Runtime.Session
   )
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
 import YCHR.Internal.StdLib (StdLib)
-import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.TypeCheck.Render (typeModule)
 import YCHR.Internal.Types
   ( BoundSig,
@@ -308,9 +307,9 @@ runOuterQueryWith timed opts prog line = do
       prepareQueryWith opts.typeChecker prog (T.pack line)
   case prepResult of
     Left exc -> reportQueryException exc
-    Right (prep, ws) -> do
-      printWarnings ws
-      unless (opts.werror && not (null ws)) $ do
+    Right prep -> do
+      printWarnings prep.warnings
+      unless (opts.werror && not (null prep.warnings)) $ do
         start <- getCPUTime
         execResult <-
           try @SomeException $
@@ -354,9 +353,9 @@ runTracedQuery opts prog line = do
       prepareQueryWith opts.typeChecker prog (T.pack line)
   case prepResult of
     Left exc -> reportQueryException exc
-    Right (prep, ws) -> do
-      printWarnings ws
-      unless (opts.werror && not (null ws)) $ do
+    Right prep -> do
+      printWarnings prep.warnings
+      unless (opts.werror && not (null prep.warnings)) $ do
         execResult <-
           try @SomeException $
             withCHRExtraTraced
@@ -456,9 +455,9 @@ handleLiveQuery opts cp src = do
     liftIO (try @SomeException (prepareQueryWith opts.typeChecker cp src))
   case prepResult of
     Left exc -> pure (classifyAsRecoverable exc)
-    Right (prep, ws) -> do
-      liftIO (printWarnings ws)
-      if opts.werror && not (null ws)
+    Right prep -> do
+      liftIO (printWarnings prep.warnings)
+      if opts.werror && not (null prep.warnings)
         then pure (QueryRecoverable "")
         else case prep.queryLambdas of
           (lam : _) ->
@@ -993,10 +992,9 @@ printWarnings = mapM_ (hPutStr stderr . displayMsg)
 -- program loads at all) does not consult them.
 printTypeDiagnostics :: SessionInput -> CompiledProgram -> IO ()
 printTypeDiagnostics typeChecker prog = do
-  mapM_ (hPutStr stderr . displayMsg) (checkConstraintUse prog.desugaredProgram)
-  result <- typeCheckProgram typeChecker prog.desugaredProgram
-  mapM_ (hPutStr stderr . displayMsg) result.errors
-  unless (null result.warnings) (printWarnings [TypeCheckWarnings result.warnings])
+  check <- checkProgram typeChecker prog.desugaredProgram
+  mapM_ (hPutStr stderr) check.errors
+  printWarnings check.warnings
 
 -- | 'printTypeDiagnostics' when a checker is available. The CLI's
 -- @--no-check@ passes 'Nothing' and gets no report at all.
@@ -1011,6 +1009,6 @@ prepareQueryWith ::
   Maybe SessionInput ->
   CompiledProgram ->
   Text ->
-  IO (PreparedQuery, [Warning])
+  IO PreparedQuery
 prepareQueryWith Nothing = prepareQueryUnchecked
 prepareQueryWith (Just typeChecker) = prepareQuery typeChecker

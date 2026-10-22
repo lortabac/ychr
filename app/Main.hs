@@ -13,17 +13,18 @@ import YCHR.Embedded (loadResources)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
-import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (displayMsg, renderSplices)
 import YCHR.Internal.Pretty (prettyBindings)
+import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..))
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
-import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
   ( Error (..),
+    PreparedGoal (..),
+    QueryTell (..),
     Warning (..),
     compileFiles,
     prepareGoal,
@@ -281,9 +282,10 @@ runGoal resources opts files = withCompiled resources files $ \prog warnings -> 
   prepResult <- try @SomeException (prepareGoal prog opts.goal)
   case prepResult of
     Left exc -> reportErrorAndExit exc
-    Right (constraint, goalWarnings) -> do
-      printWarnings goalWarnings
-      exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
+    Right prepared -> do
+      let constraint = prepared.constraint
+      printWarnings prepared.warnings
+      exitOnWerror opts.werror (warnings ++ typeWarnings ++ prepared.warnings)
       -- Without the checker the goal runs through 'runGoalConstraint',
       -- the same unchecked entry point the library exposes; with it,
       -- 'runPreparedGoal' type-checks the goal first.
@@ -353,19 +355,19 @@ runGenDriver resources opts files =
     -- runtime in the same flat-functor form the compiled head patterns
     -- expect.
     prepResult <- try @SomeException (prepareGoal prog opts.goal)
-    (constraint, goalWarnings) <- case prepResult of
+    prepared <- case prepResult of
       Left e -> reportGenErrorAndExit e
-      Right pair -> pure pair
-    printWarnings goalWarnings
-    outcome <- try @SomeException (resolveQueryTellOrThrow prog constraint)
-    (qn, exprs) <- case outcome of
+      Right prepared -> pure prepared
+    printWarnings prepared.warnings
+    outcome <- try @SomeException (resolveQueryTellOrThrow prog prepared.constraint)
+    queryTell <- case outcome of
       Left e -> reportGenErrorAndExit e
-      Right pair -> pure pair
+      Right queryTell -> pure queryTell
     -- Combine file-level, type-check, and goal-level warnings into a
     -- single Werror decision so a single run reports every warning
     -- before exiting.
-    exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
-    case generateDriver (T.pack "program") qn exprs of
+    exitOnWerror opts.werror (warnings ++ typeWarnings ++ prepared.warnings)
+    case generateDriver (T.pack "program") queryTell.name queryTell.args of
       Left err -> do
         putStr (displayMsg err)
         exitFailure
@@ -455,15 +457,12 @@ typeCheckUnless noCheck resources prog
 -- warnings.
 typeCheckOrExit :: Resources -> CompiledProgram -> IO [Warning]
 typeCheckOrExit resources prog = do
-  let useErrors = checkConstraintUse prog.desugaredProgram
-  result <- typeCheckProgram resources.typeCheckerProgram prog.desugaredProgram
-  unless (null useErrors && null result.errors) $ do
-    mapM_ (hPutStr stderr . displayMsg) useErrors
-    mapM_ (hPutStr stderr . displayMsg) result.errors
+  check <- checkProgram resources.typeCheckerProgram prog.desugaredProgram
+  unless (null check.errors) $ do
+    mapM_ (hPutStr stderr) check.errors
     exitFailure
-  let ws = [TypeCheckWarnings result.warnings | not (null result.warnings)]
-  printWarnings ws
-  pure ws
+  printWarnings check.warnings
+  pure check.warnings
 
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (hPutStr stderr . displayMsg)

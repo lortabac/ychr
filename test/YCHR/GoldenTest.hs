@@ -17,13 +17,13 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
-import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Pretty (prettyBindings)
+import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
-import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Run
   ( Error,
+    PreparedGoal (..),
     Warning (..),
     compileFiles,
     prepareGoal,
@@ -256,14 +256,14 @@ runPositive spec goalFile expectedFile = do
   typeCheckOrFail spec prog
   query <- TIO.readFile goalFile
   expected <- readFile expectedFile
-  (constraint, goalWs) <- prepareGoal prog (T.strip query)
-  checkWarnings spec "goal" goalWs
+  prepared <- prepareGoal prog (T.strip query)
+  checkWarnings spec "goal" prepared.warnings
   bindings <-
     runPreparedGoal
       typeCheckerProgram
       prog
       defaultHostCallRegistry
-      constraint
+      prepared.constraint
   prettyBindings bindings @?= expected
 
 -- | Compile + program-typecheck must succeed; running the goal must throw
@@ -284,15 +284,15 @@ runGoalNegative spec goalFile errorFile = do
   typeCheckOrFail spec prog
   query <- TIO.readFile goalFile
   expectedSubstrings <- nonEmptyLines <$> readFile errorFile
-  (constraint, goalWs) <- prepareGoal prog (T.strip query)
-  checkWarnings spec "goal" goalWs
+  prepared <- prepareGoal prog (T.strip query)
+  checkWarnings spec "goal" prepared.warnings
   outcome <-
     try @SomeException $
       runPreparedGoal
         typeCheckerProgram
         prog
         defaultHostCallRegistry
-        constraint
+        prepared.constraint
   case outcome of
     Right _ ->
       assertFailure
@@ -320,14 +320,11 @@ runNegative spec errorFile = do
   case result of
     Left err -> assertAllPresent (displayMsg err) expectedSubstrings
     Right (prog, _ws) -> do
-      typeResult <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
-      let errs =
-            map displayMsg (checkConstraintUse prog.desugaredProgram)
-              ++ map displayMsg typeResult.errors
-      case errs of
+      check <- checkProgram typeCheckerProgram prog.desugaredProgram
+      case check.errors of
         [] ->
           assertFailure "Expected compilation or type checking to fail, but it succeeded"
-        _ -> assertAllPresent (unlines errs) expectedSubstrings
+        errs -> assertAllPresent (unlines errs) expectedSubstrings
 
 -- | The trimmed, non-empty lines of an @.error@ file.
 nonEmptyLines :: String -> [String]
@@ -350,19 +347,13 @@ assertAllPresent msg =
 -- compile-time warnings.
 typeCheckOrFail :: TestSpec -> CompiledProgram -> IO ()
 typeCheckOrFail spec prog = do
-  result <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
-  let errs =
-        map displayMsg (checkConstraintUse prog.desugaredProgram)
-          ++ map displayMsg result.errors
-  case errs of
+  check <- checkProgram typeCheckerProgram prog.desugaredProgram
+  case check.errors of
     [] -> pure ()
-    _ ->
+    errs ->
       assertFailure
         ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines errs)
-  checkWarnings
-    spec
-    "typecheck"
-    [TypeCheckWarnings result.warnings | not (null result.warnings)]
+  checkWarnings spec "typecheck" check.warnings
 
 -- | Assert no warnings unless the test is on the allowlist. The
 -- @phase@ label distinguishes compile-time warnings from goal-time
