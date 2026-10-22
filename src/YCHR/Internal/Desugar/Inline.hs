@@ -33,6 +33,8 @@
 -- postorder depth-first walk visits every node exactly once.
 module YCHR.Internal.Desugar.Inline (inlineFunctions) where
 
+import Control.Monad (unless)
+import Control.Monad.Trans.State.Strict (execState, gets, modify')
 import Data.List (sort)
 -- 'foldl'' is imported qualified because the Prelude only re-exports it
 -- from base 4.20 (GHC 9.10); MicroHs's bundled base is older. An
@@ -226,16 +228,24 @@ finalCandidates raw = List.foldl' step Map.empty (topoOrder graph)
 -- Sound only when the graph is acyclic, which every caller here has
 -- already checked; an unchecked cyclic graph would make this loop.
 topoOrder :: Map QualifiedName (Set QualifiedName) -> [QualifiedName]
-topoOrder graph = reverse order
+topoOrder graph = reverse walk.finished
   where
-    (_, order) = List.foldl' visit (Set.empty, []) (Map.keys graph)
-    visit (seen, out) n
-      | n `Set.member` seen = (seen, out)
-      | otherwise =
-          let seen1 = Set.insert n seen
-              (seen2, out2) = List.foldl' visit (seen1, out) (Set.toList (successors n))
-           in (seen2, n : out2)
+    walk = execState (mapM_ visit (Map.keys graph)) (TopoWalk Set.empty [])
+    visit n = do
+      seen <- gets (\w -> Set.member n w.visited)
+      unless seen $ do
+        modify' (\w -> w {visited = Set.insert n w.visited})
+        mapM_ visit (Set.toList (successors n))
+        modify' (\w -> w {finished = n : w.finished})
     successors n = Map.findWithDefault Set.empty n graph
+
+-- | The state of 'topoOrder'.
+data TopoWalk = TopoWalk
+  { -- | Nodes already entered.
+    visited :: Set QualifiedName,
+    -- | Nodes whose walk is done, last finished first.
+    finished :: [QualifiedName]
+  }
 
 -- ---------------------------------------------------------------------------
 -- Substitution

@@ -57,7 +57,8 @@ inlinedProgram src = do
     Left errs -> assertFailure ("unexpected desugar errors: " ++ show (map diagMsg errs))
   lifted <- case liftAllLambdas desugared of
     Right p -> pure p
-    Left errs -> assertFailure ("unexpected lambda-lift errors: " ++ show (map diagMsg errs))
+    Left errs ->
+      assertFailure ("unexpected lambda-lift errors: " ++ show (map diagMsg errs))
   case inlineFunctions lifted of
     Right p -> pure p
     Left errs -> assertFailure ("unexpected inline errors: " ++ show (map diagMsg errs))

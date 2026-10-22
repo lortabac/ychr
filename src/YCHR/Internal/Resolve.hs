@@ -21,7 +21,15 @@ module YCHR.Internal.Resolve
 where
 
 import Control.Monad (unless, when)
-import Control.Monad.Trans.State.Strict (State, evalState, execState, get, gets, modify', put)
+import Control.Monad.Trans.State.Strict
+  ( State,
+    evalState,
+    execState,
+    get,
+    gets,
+    modify',
+    put,
+  )
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
