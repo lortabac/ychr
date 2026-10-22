@@ -513,7 +513,7 @@ runSearch who mode goalArg onSolution = do
 
 -- | A resolved goal and its variables, collected in the calling
 -- session.
-data PreparedGoal = PreparedGoal
+data PreparedSearch = PreparedSearch
   { goals :: ![ResolvedTell],
     -- | The unbound variables reachable from the goal at entry: the
     -- only thing a commit keeps.
@@ -522,10 +522,10 @@ data PreparedGoal = PreparedGoal
 
 -- | Collect the goal's variables, before the fork exists: they are the
 -- unbound variables reachable from the goal /at entry/.
-prepareSearch :: [ResolvedTell] -> Chr PreparedGoal
+prepareSearch :: [ResolvedTell] -> Chr PreparedSearch
 prepareSearch goals = do
   vars <- collectVars (concatMap (\t -> t.args) goals)
-  pure (PreparedGoal {goals = goals, goalVars = vars})
+  pure (PreparedSearch {goals = goals, goalVars = vars})
 
 -- | Tell a goal that is already resolved.
 tellResolved :: ResolvedTell -> Chr ()
@@ -576,7 +576,7 @@ checkUnwatched who vars = do
 driveSearch ::
   String ->
   ForkStore ->
-  PreparedGoal ->
+  PreparedSearch ->
   Chr SolutionStep ->
   Chr DriveResult
 driveSearch who mode prepared onSolution = do
@@ -634,7 +634,7 @@ data DriveResult = DriveResult
 -- The bindings land on the caller's trail if it has one. The observers
 -- 'unify' returns are dropped: the check ruled out a live one, and this
 -- is not a rule body, so there is no drain to hand them to.
-commitGoalVars :: String -> PreparedGoal -> Maybe [Value] -> Chr ()
+commitGoalVars :: String -> PreparedSearch -> Maybe [Value] -> Chr ()
 commitGoalVars _ _ Nothing = pure ()
 commitGoalVars who prepared (Just vals) = do
   checkUnwatched who prepared.goalVars
