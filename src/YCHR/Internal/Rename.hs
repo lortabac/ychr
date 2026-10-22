@@ -888,18 +888,25 @@ declaredConstructors m k =
 typeKey :: TypeDefinition -> UnqualifiedIdentifier
 typeKey td = UnqualifiedIdentifier (unqualifiedText td.name) (length td.typeVars)
 
--- | The constructor list of the first @type(n\/a, ...)@ entry for @k@
--- in a declaration list. 'Nothing' if there is no such entry,
--- @Just Nothing@ for @type(n\/a)@ (every constructor), @Just (Just cs)@
--- for an explicit list.
-typeExportEntry :: UnqualifiedIdentifier -> [Declaration] -> Maybe (Maybe [Text])
+-- | What a declaration list says about the constructors of one type.
+data TypeEntry
+  = -- | No @type(n\/a, ...)@ entry for the type.
+    NoTypeEntry
+  | -- | @type(n\/a)@: every constructor.
+    AllConstructors
+  | -- | @type(n\/a, [c, ...])@: these constructors.
+    TheseConstructors [Text]
+
+-- | The first @type(n\/a, ...)@ entry for @k@ in a declaration list.
+typeExportEntry :: UnqualifiedIdentifier -> [Declaration] -> TypeEntry
 typeExportEntry k decls =
   case [ cs
        | TypeExportDecl (TypeExportDeclBody n a cs) <- decls,
          UnqualifiedIdentifier n a == k
        ] of
-    (cs : _) -> Just cs
-    [] -> Nothing
+    (Nothing : _) -> AllConstructors
+    (Just cs : _) -> TheseConstructors cs
+    [] -> NoTypeEntry
 
 -- ---------------------------------------------------------------------------
 -- Module, rule, equation, head renaming
@@ -1023,7 +1030,10 @@ validateImportLists mods ctx =
       Just m ->
         let allowed = case m.exports of
               Nothing -> Nothing
-              Just exports -> fromMaybe (Just []) (typeExportEntry k exports.node)
+              Just exports -> case typeExportEntry k exports.node of
+                NoTypeEntry -> Just []
+                AllConstructors -> Nothing
+                TheseConstructors xs -> Just xs
          in case allowed of
               Nothing -> declared
               Just xs -> filter (`elem` xs) declared
@@ -2195,9 +2205,9 @@ importListPermitsCons ::
 importListPermitsCons _ allCons Nothing = allCons
 importListPermitsCons k allCons (Just decls) =
   case typeExportEntry k decls of
-    Just Nothing -> allCons
-    Just (Just xs) -> Set.fromList xs
-    Nothing -> Set.empty
+    AllConstructors -> allCons
+    TheseConstructors xs -> Set.fromList xs
+    NoTypeEntry -> Set.empty
 
 -- | For each type visible to the current module, the set of constructor
 -- names also visible. Locally declared types contribute every declared
@@ -2232,9 +2242,9 @@ visibleDataCons mods ctx =
     exporterAllowance m k allCons = case m.exports of
       Nothing -> Just allCons
       Just exports -> case typeExportEntry k exports.node of
-        Just Nothing -> Just allCons
-        Just (Just xs) -> Just (Set.fromList xs)
-        Nothing -> Nothing
+        AllConstructors -> Just allCons
+        TheseConstructors xs -> Just (Set.fromList xs)
+        NoTypeEntry -> Nothing
 
     importerAllowance mn k allCons =
       let relevant = [imp.importItems | imp <- ctx.moduleImports, imp.importModule == mn]
