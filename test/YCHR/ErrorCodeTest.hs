@@ -65,6 +65,7 @@ import YCHR.Internal.Rename.Macro (PrimitiveOperand (..))
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..))
+import YCHR.Internal.TypeCheck.Error (ConstructorDecl (..))
 import YCHR.Internal.Types (ConstraintUse (..), Name, QualifiedName, Term)
 
 -- ---------------------------------------------------------------------------
@@ -126,6 +127,8 @@ deriving instance Data ConstraintUseError
 deriving instance Data DesugarError
 
 deriving instance Data CompileError
+
+deriving instance Data ConstructorDecl
 
 deriving instance Data TypeCheckError
 
