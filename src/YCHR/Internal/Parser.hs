@@ -78,7 +78,12 @@ import Data.Text (Text)
 import Data.Text.Shim qualified as Text
 import System.FilePath (takeBaseName)
 import Text.Parsec (ParseError)
-import YCHR.Internal.PExpr (PExpr (Atom, Compound, Str, Var))
+import YCHR.Internal.PExpr
+  ( LeadingTerms (..),
+    PExpr (Atom, Compound, Str, Var),
+    mergeOps,
+    opTableEntries,
+  )
 import YCHR.Internal.PExpr qualified as P
 import YCHR.Internal.Parsed
 import YCHR.Internal.Types (UnqualifiedIdentifier (..))
@@ -148,18 +153,6 @@ builtinOps =
       -- 'wordOpSet' prevents 'atomP' from treating it as an atom.
       (P.maxPrec + 1, [(P.Fx, "end")])
     ]
-
--- | Merge user-defined operators into an existing table.
--- Returns 'Left' with the conflicting operator name if a naming conflict is
--- found (same operator name at a different fixity or type).
-mergeOps :: OpTable -> [OpDecl] -> Either Text OpTable
-mergeOps base decls =
-  P.mergeOps base [(d.fixity, d.opType, d.opName) | d <- decls]
-
--- | List all operator entries in an 'OpTable' as @(fixity, type, name)@
--- triples. The order is unspecified.
-opTableEntries :: OpTable -> [(Int, P.OpType, Text)]
-opTableEntries = P.opTableEntries
 
 -- * Public parsing functions
 
@@ -354,7 +347,7 @@ data ModuleDirectiveInfo = ModuleDirectiveInfo
 -- @:- module(...)@ or @:- use_module(...)@.
 collectModuleHeader :: String -> Text -> Either ParseError ModuleHeader
 collectModuleHeader sourceName src = do
-  (terms, tloc) <- P.parseLeadingTerms firstPassTable sourceName src
+  LeadingTerms terms tloc <- P.parseLeadingTerms firstPassTable sourceName src
   let (modPart, rest1) = case terms of
         (t : ts) | Just i <- asModuleDirective t -> (Just i, ts)
         _ -> (Nothing, terms)

@@ -600,7 +600,7 @@ showOperators prog = mapM_ (putStrLn . renderOp) entries
     entries =
       sort
         [ (fix, opTypeStr ty, name)
-        | (fix, ty, name) <- opTableEntries prog.opTable
+        | P.OpDecl fix ty name <- opTableEntries prog.opTable
         ]
     renderOp (fix, ty, name) =
       "op(" ++ show fix ++ ", " ++ ty ++ ", " ++ renderAtom name ++ ")"

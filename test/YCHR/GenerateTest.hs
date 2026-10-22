@@ -34,7 +34,7 @@ import YCHR.Embedded.Generate.Emit
 import YCHR.Embedded.Generate.Instances ()
 import YCHR.Embedded.Generate.ToCode (toCode)
 import YCHR.Internal.Loc (SourceLoc (..))
-import YCHR.Internal.PExpr (OpTable, PExpr (..), mkOpTable, opTableEntries)
+import YCHR.Internal.PExpr (OpDecl (..), OpTable, PExpr (..), mkOpTable, opTableEntries)
 import YCHR.Internal.Parser (parseTermWith)
 import YCHR.Internal.Runtime.Session (SessionInput (..))
 import YCHR.Internal.StdLib (StdLib (..))
@@ -163,7 +163,7 @@ tests =
             let table = Embedded.typeCheckerProgram.opTable
                 rebuilt =
                   mkOpTable
-                    [(fix, [(ty, name)]) | (fix, ty, name) <- opTableEntries table]
+                    [(fix, [(ty, name)]) | OpDecl fix ty name <- opTableEntries table]
             mapM_
               (sameParse table rebuilt)
               ["1 + 1", "1 + 1.5", "a = b", "f(X, Y)", "X is 2 * 3"]

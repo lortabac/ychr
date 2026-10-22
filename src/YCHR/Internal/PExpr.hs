@@ -21,6 +21,7 @@ module YCHR.Internal.PExpr
     -- * Operator table
     OpTable (..),
     OpType (..),
+    OpDecl (..),
     mkOpTable,
     mergeOps,
     opTableEntries,
@@ -38,6 +39,7 @@ module YCHR.Internal.PExpr
     parseTermNoDot,
     parseFirstTerm,
     parseLeadingTerms,
+    LeadingTerms (..),
 
     -- * Pretty-printing
     prettyPExpr,
@@ -158,6 +160,14 @@ isPostfix Xf = True
 isPostfix Yf = True
 isPostfix _ = False
 
+-- | One operator: an @op(Fixity, Type, Name)@ entry.
+data OpDecl = OpDecl
+  { fixity :: Int,
+    opType :: OpType,
+    opName :: Text
+  }
+  deriving (Show, Eq)
+
 -- | Operator table: maps fixity level to a list of operators at that level.
 --
 -- Lower fixity number means higher precedence (tighter binding), following
@@ -172,51 +182,51 @@ data OpTable = OpTable
     -- them as atoms.
     wordOpSet :: Set Text,
     -- | Prefix operators indexed by name.
-    prefixByName :: Map Text (Int, OpType),
+    prefixByName :: Map Text OpDecl,
     -- | Infix and postfix operators indexed by name.
-    infixByName :: Map Text (Int, OpType)
+    infixByName :: Map Text OpDecl
   }
   deriving (Show)
+
+-- | The by-name views of a list of operators. 'mkOpTable' and
+-- 'mergeOps' share it.
+data OpIndex = OpIndex
+  { wordOps :: Set Text,
+    prefixOps :: Map Text OpDecl,
+    infixOps :: Map Text OpDecl
+  }
+
+-- | Index operators by name. A later entry for the same name wins.
+indexOps :: [OpDecl] -> OpIndex
+indexOps decls =
+  OpIndex
+    { wordOps = Set.fromList [d.opName | d <- decls, not (isSymbolic d.opName)],
+      prefixOps = Map.fromList [(d.opName, d) | d <- decls, isPrefix d.opType],
+      infixOps =
+        Map.fromList
+          [(d.opName, d) | d <- decls, isInfix d.opType || isPostfix d.opType]
+    }
 
 -- | Build an 'OpTable' from a list of @(fixity, operators)@ pairs.
 mkOpTable :: [(Int, [(OpType, Text)])] -> OpTable
 mkOpTable entries =
   OpTable
     { opsByFixity = IntMap.fromListWith (++) entries,
-      wordOpSet =
-        Set.fromList
-          [ name
-          | (_, ops) <- entries,
-            (_, name) <- ops,
-            not (isSymbolic name)
-          ],
-      prefixByName =
-        Map.fromList
-          [ (name, (fix, ty))
-          | (fix, ops) <- entries,
-            (ty, name) <- ops,
-            isPrefix ty
-          ],
-      infixByName =
-        Map.fromList
-          [ (name, (fix, ty))
-          | (fix, ops) <- entries,
-            (ty, name) <- ops,
-            isInfix ty || isPostfix ty
-          ]
+      wordOpSet = index.wordOps,
+      prefixByName = index.prefixOps,
+      infixByName = index.infixOps
     }
+  where
+    index = indexOps [OpDecl fix ty name | (fix, ops) <- entries, (ty, name) <- ops]
 
 -- | Merge additional operators into an existing table.
 -- Returns @Left name@ if an operator conflicts (same name, same category
 -- but different fixity or type).  Dual-role operators (prefix + infix)
 -- are allowed.
-mergeOps :: OpTable -> [(Int, OpType, Text)] -> Either Text OpTable
+mergeOps :: OpTable -> [OpDecl] -> Either Text OpTable
 mergeOps base decls = do
   checkConflicts
-  let userEntries =
-        [ (fix, [(ty, name)])
-        | (fix, ty, name) <- decls
-        ]
+  let userEntries = [(d.fixity, [(d.opType, d.opName)]) | d <- decls]
   pure
     OpTable
       { opsByFixity =
@@ -224,44 +234,33 @@ mergeOps base decls = do
             mergeBucket
             base.opsByFixity
             (IntMap.fromListWith mergeBucket userEntries),
-        wordOpSet =
-          Set.union
-            base.wordOpSet
-            (Set.fromList [name | (_, _, name) <- decls, not (isSymbolic name)]),
-        prefixByName =
-          Map.union
-            base.prefixByName
-            (Map.fromList [(name, (fix, ty)) | (fix, ty, name) <- decls, isPrefix ty]),
-        infixByName =
-          Map.union
-            base.infixByName
-            ( Map.fromList
-                [(name, (fix, ty)) | (fix, ty, name) <- decls, isInfix ty || isPostfix ty]
-            )
+        wordOpSet = Set.union base.wordOpSet new.wordOps,
+        prefixByName = Map.union base.prefixByName new.prefixOps,
+        infixByName = Map.union base.infixByName new.infixOps
       }
   where
+    new = indexOps decls
     mergeBucket xs ys = nub (xs ++ ys)
     checkConflicts :: Either Text ()
     checkConflicts =
       let -- Check prefix ops for conflicts
-          existingPrefix = Map.toList base.prefixByName
-          newPrefix = [(name, (fix, ty)) | (fix, ty, name) <- decls, isPrefix ty]
+          existingPrefix = Map.elems base.prefixByName
+          newPrefix = [d | d <- decls, isPrefix d.opType]
           -- Check infix/postfix ops for conflicts
-          existingInfix = Map.toList base.infixByName
-          newInfix =
-            [(name, (fix, ty)) | (fix, ty, name) <- decls, isInfix ty || isPostfix ty]
-          insert (n, ft) acc = case Map.lookup n acc of
-            Nothing -> Right (Map.insert n ft acc)
-            Just ft' | ft == ft' -> Right acc
-            Just _ -> Left n
+          existingInfix = Map.elems base.infixByName
+          newInfix = [d | d <- decls, isInfix d.opType || isPostfix d.opType]
+          insert d acc = case Map.lookup d.opName acc of
+            Nothing -> Right (Map.insert d.opName d acc)
+            Just d' | d == d' -> Right acc
+            Just _ -> Left d.opName
        in foldM (flip insert) Map.empty (existingPrefix ++ newPrefix)
             *> foldM (flip insert) Map.empty (existingInfix ++ newInfix)
             *> pure ()
 
--- | List all operator entries as @(fixity, type, name)@ triples.
-opTableEntries :: OpTable -> [(Int, OpType, Text)]
+-- | List all operator entries. The order is unspecified.
+opTableEntries :: OpTable -> [OpDecl]
 opTableEntries table =
-  [ (fix, ty, name)
+  [ OpDecl fix ty name
   | (fix, ops) <- IntMap.toList table.opsByFixity,
     (ty, name) <- ops
   ]
@@ -574,7 +573,7 @@ nudP table maxFix = try atomicTerm <|> prefixOp
       sp <- getPosition
       name <- anyOpToken table
       case Map.lookup name table.prefixByName of
-        Just (fix, ty) | fix <= maxFix -> do
+        Just (OpDecl fix ty _) | fix <= maxFix -> do
           let operandMax = case ty of
                 Fy -> fix -- y position: operand may have equal fixity
                 _ -> fix - 1 -- x position (Fx): strictly lower
@@ -592,7 +591,7 @@ ledLoop table maxFix lhs lhsFix = do
   mOp <- optionMaybe (lookAhead (try (anyOpToken table)))
   case mOp of
     Just name
-      | Just (fix, ty) <- Map.lookup name table.infixByName,
+      | Just (OpDecl fix ty _) <- Map.lookup name table.infixByName,
         fix <= maxFix,
         lhsFix <= leftMax ty fix -> do
           _ <- anyOpToken table -- consume
@@ -692,17 +691,17 @@ parseFirstTerm table =
         <* void (many anyChar)
     )
 
+-- | Result of 'parseLeadingTerms'.
+data LeadingTerms = LeadingTerms
+  { -- | The terms that parsed.
+    terms :: [Ann PExpr],
+    -- | Where parsing stopped, or 'Nothing' if the whole input parsed.
+    stoppedAt :: Maybe SourceLoc
+  }
+
 -- | Parse leading dot-terminated terms while they parse with the given
 -- operator table; stop at the first term that fails to parse.
---
--- Returns the successfully parsed terms plus, if there is unparseable
--- content remaining, the source location at which parsing stopped.
--- Returns 'Nothing' for the location if the entire input was consumed.
-parseLeadingTerms ::
-  OpTable ->
-  String ->
-  Text ->
-  Either ParseError ([Ann PExpr], Maybe SourceLoc)
+parseLeadingTerms :: OpTable -> String -> Text -> Either ParseError LeadingTerms
 parseLeadingTerms table = parse (sc *> loop [])
   where
     loop acc = do
@@ -712,11 +711,11 @@ parseLeadingTerms table = parse (sc *> loop [])
         Nothing -> do
           remaining <- getInput
           if T.null remaining
-            then pure (reverse acc, Nothing)
+            then pure (LeadingTerms (reverse acc) Nothing)
             else do
               sp <- getPosition
               _ <- many anyChar
-              pure (reverse acc, Just (sourceLocFromPos sp))
+              pure (LeadingTerms (reverse acc) (Just (sourceLocFromPos sp)))
 
 -- ---------------------------------------------------------------------------
 -- Pretty-printing
@@ -729,7 +728,7 @@ parseLeadingTerms table = parse (sc *> loop [])
 -- precedence.
 prettyPExpr :: OpTable -> PExpr -> String
 prettyPExpr table =
-  prettyPrec table.infixByName table.prefixByName table.wordOpSet maxPrec
+  prettyPrec table maxPrec
 
 -- | Render a 'PExpr' within a precedence context.
 --
@@ -743,45 +742,39 @@ prettyPExpr table =
 --
 -- So for @yfx@ at fixity F: left gets F, right gets F−1.
 -- For @xfy@: left gets F−1, right gets F. Etc.
-prettyPrec ::
-  Map Text (Int, OpType) ->
-  Map Text (Int, OpType) ->
-  Set Text ->
-  Int ->
-  PExpr ->
-  String
-prettyPrec _ _ _ _ (Var v) = T.unpack v
-prettyPrec _ _ _ _ (Int n)
+prettyPrec :: OpTable -> Int -> PExpr -> String
+prettyPrec _ _ (Var v) = T.unpack v
+prettyPrec _ _ (Int n)
   | n < 0 = "(" ++ show n ++ ")"
   | otherwise = show n
-prettyPrec _ _ _ _ (Float n)
+prettyPrec _ _ (Float n)
   | n < 0 = "(" ++ showFloat n ++ ")"
   | otherwise = showFloat n
   where
     showFloat x =
       let s = show x
        in if '.' `elem` s then s else s ++ ".0"
-prettyPrec _ _ _ _ (Atom "[]") = "[]"
-prettyPrec _ _ wops _ (Atom a) = renderAtom wops a
-prettyPrec _ _ _ _ (Str s) = renderString s
-prettyPrec _ _ _ _ Wildcard = "_"
+prettyPrec _ _ (Atom "[]") = "[]"
+prettyPrec table _ (Atom a) = renderAtom table.wordOpSet a
+prettyPrec _ _ (Str s) = renderString s
+prettyPrec _ _ Wildcard = "_"
 -- List syntax
-prettyPrec iops pops wops _ (Compound "." [h, t]) =
-  "[" ++ rec maxArgPrec h.node ++ prettyListTail iops pops wops t.node ++ "]"
+prettyPrec table _ (Compound "." [h, t]) =
+  "[" ++ rec maxArgPrec h.node ++ prettyListTail table t.node ++ "]"
   where
-    rec = prettyPrec iops pops wops
+    rec = prettyPrec table
 -- Lambda: fun(X, Y) -> body end
-prettyPrec iops pops wops _ (Compound "->" [Ann (Compound "fun" params) _, body]) =
+prettyPrec table _ (Compound "->" [Ann (Compound "fun" params) _, body]) =
   "fun("
     ++ intercalate ", " [rec maxArgPrec a.node | a <- params]
     ++ ") -> "
     ++ rec maxPrec body.node
     ++ " end"
   where
-    rec = prettyPrec iops pops wops
+    rec = prettyPrec table
 -- Infix operators
-prettyPrec iops pops wops ctx (Compound f [l, r])
-  | Just (fix, ty) <- Map.lookup f iops,
+prettyPrec table ctx (Compound f [l, r])
+  | Just (OpDecl fix ty _) <- Map.lookup f table.infixByName,
     isInfix ty =
       let (lCtx, rCtx) = case ty of
             Yfx -> (fix, fix - 1)
@@ -799,10 +792,10 @@ prettyPrec iops pops wops ctx (Compound f [l, r])
               ++ rec rCtx r.node
        in if fix > ctx then "(" ++ rendered ++ ")" else rendered
   where
-    rec = prettyPrec iops pops wops
+    rec = prettyPrec table
 -- Prefix operators
-prettyPrec iops pops wops ctx (Compound f [x])
-  | Just (fix, ty) <- Map.lookup f pops,
+prettyPrec table ctx (Compound f [x])
+  | Just (OpDecl fix ty _) <- Map.lookup f table.prefixByName,
     isPrefix ty =
       let argCtx = case ty of
             Fy -> fix
@@ -810,10 +803,10 @@ prettyPrec iops pops wops ctx (Compound f [x])
           rendered = T.unpack f ++ " " ++ rec argCtx x.node
        in if fix > ctx then "(" ++ rendered ++ ")" else rendered
   where
-    rec = prettyPrec iops pops wops
+    rec = prettyPrec table
 -- Postfix operators
-prettyPrec iops pops wops ctx (Compound f [x])
-  | Just (fix, ty) <- Map.lookup f iops,
+prettyPrec table ctx (Compound f [x])
+  | Just (OpDecl fix ty _) <- Map.lookup f table.infixByName,
     isPostfix ty =
       let argCtx = case ty of
             Yf -> fix
@@ -821,27 +814,22 @@ prettyPrec iops pops wops ctx (Compound f [x])
           rendered = rec argCtx x.node ++ " " ++ T.unpack f
        in if fix > ctx then "(" ++ rendered ++ ")" else rendered
   where
-    rec = prettyPrec iops pops wops
+    rec = prettyPrec table
 -- Regular compounds
-prettyPrec iops pops wops _ (Compound f args) =
-  renderAtom wops f
+prettyPrec table _ (Compound f args) =
+  renderAtom table.wordOpSet f
     ++ "("
-    ++ intercalate ", " [prettyPrec iops pops wops maxArgPrec a.node | a <- args]
+    ++ intercalate ", " [prettyPrec table maxArgPrec a.node | a <- args]
     ++ ")"
 
 -- | Render the rest of a list after its first element.
-prettyListTail ::
-  Map Text (Int, OpType) ->
-  Map Text (Int, OpType) ->
-  Set Text ->
-  PExpr ->
-  String
-prettyListTail _ _ _ (Atom "[]") = ""
-prettyListTail iops pops wops (Compound "." [h, t]) =
-  ", " ++ rec h.node ++ prettyListTail iops pops wops t.node
+prettyListTail :: OpTable -> PExpr -> String
+prettyListTail _ (Atom "[]") = ""
+prettyListTail table (Compound "." [h, t]) =
+  ", " ++ rec h.node ++ prettyListTail table t.node
   where
-    rec = prettyPrec iops pops wops maxArgPrec
-prettyListTail iops pops wops other = " | " ++ prettyPrec iops pops wops maxArgPrec other
+    rec = prettyPrec table maxArgPrec
+prettyListTail table other = " | " ++ prettyPrec table maxArgPrec other
 
 -- | True if the atom needs single-quote wrapping.
 needsQuoting :: Set Text -> Text -> Bool
