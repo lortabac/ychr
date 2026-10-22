@@ -56,6 +56,7 @@ import YCHR.Internal.Parsed qualified as Parsed
 import YCHR.Internal.Parser (opTableEntries, parseTermWith)
 import YCHR.Internal.Pretty
   ( DeclKind (..),
+    declKindKeyword,
     prettyConstraintDecl,
     prettyFunctionDecl,
     prettyQualifiedName,
@@ -575,12 +576,7 @@ declarationsText prog = concatMap (++ "\n") declLines
               [("chr_constraint", n, a)]
           Parsed.FunctionDecl
             Parsed.FunctionDeclBody {name = n, arity = a, isOpen = o, kind = k} ->
-              let kw = case (o, k) of
-                    (False, Parsed.DKFunction) -> "function"
-                    (True, Parsed.DKFunction) -> "open_function"
-                    (False, Parsed.DKClass) -> "class"
-                    (True, Parsed.DKClass) -> "open_class"
-               in [(kw, n, a)]
+              [(declKindKeyword (toDeclKind o k), n, a)]
           Parsed.ExtendClassTypeDecl
             Parsed.ExtendClassTypeDeclBody {name = n, arity = a} ->
               [("extend_class_type", n, a)]

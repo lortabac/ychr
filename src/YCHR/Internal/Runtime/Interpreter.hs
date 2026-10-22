@@ -94,6 +94,7 @@ import YCHR.Internal.Interpreter.Slots
   )
 import YCHR.Internal.Meta
   ( FunRefLookup (..),
+    decodeMangled,
     decodeName,
     flatToName,
     lookupFunRef,
@@ -1345,16 +1346,12 @@ invokeByKey key args = do
 -- source atom.
 hostCallName :: EvaluableKey -> Maybe Name
 hostCallName key = do
-  let (module_, rest) = T.breakOn "__" key.functor.unName
-  if T.null rest || T.null module_
+  qn <- decodeMangled key.functor.unName
+  -- 'decodeName' doubles as the @%%u@-escape decoder. Feeding it a
+  -- separator-free component cannot re-split it.
+  if "__" `T.isInfixOf` qn.baseName || unescaped qn.moduleName /= Just "host"
     then Nothing
-    else do
-      let base = T.drop 2 rest
-      -- 'decodeName' doubles as the @%%u@-escape decoder. Feeding it a
-      -- separator-free component cannot re-split it.
-      if "__" `T.isInfixOf` base || unescaped module_ /= Just "host"
-        then Nothing
-        else Name <$> unescaped base
+    else Name <$> unescaped qn.baseName
   where
     unescaped t = case decodeName t [] of
       CompoundTerm (Types.Unqualified f) _ -> Just f

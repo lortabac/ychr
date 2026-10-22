@@ -47,6 +47,7 @@ import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
 import YCHR.Internal.PExpr qualified as PExpr
 import YCHR.Internal.Parsed (FunctionDeclKind (..))
 import YCHR.Internal.Parsed qualified as P
+import YCHR.Internal.Rename.Types (importListPermits, valueEntry)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( Aggregate (..),
@@ -386,11 +387,7 @@ buildFunctionVisibility = buildDeclVisibility functionKey
 -- Read by the compiler to build the tellables table a dynamic
 -- @tell\/N@ resolves through (see 'YCHR.Internal.Compile.buildTellables').
 buildNameVisibility :: [CollectedModule] -> Map Text NameVisibility
-buildNameVisibility = buildDeclVisibility valueKey
-  where
-    valueKey (P.ConstraintDecl cd) = Just (UnqualifiedIdentifier cd.name cd.arity)
-    valueKey (P.FunctionDecl fd) = Just (UnqualifiedIdentifier fd.name fd.arity)
-    valueKey _ = Nothing
+buildNameVisibility = buildDeclVisibility valueEntry
 
 -- | The visibility rule shared by 'buildFunctionVisibility' and
 -- 'buildNameVisibility', over the declarations @declKey@ selects.
@@ -425,21 +422,13 @@ buildDeclVisibility declKey mods =
         [im.node | im <- selfMod.imports]
 
     matchesImport providerName key im
-      | im.importModule == providerName = importListPermits key im.importItems
+      | im.importModule == providerName =
+          importListPermits valueEntry key im.importItems
       | otherwise = False
-
-    importListPermits _ Nothing = True
-    importListPermits key (Just decls) = any (matchesDecl key) decls
 
     exportPermits provider key = case provider.exports of
       Nothing -> True
-      Just annExports -> any (matchesDecl key) annExports.node
-
-    matchesDecl key (P.FunctionDecl fd') =
-      fd'.name == key.localName && fd'.arity == key.arity
-    matchesDecl key (P.ConstraintDecl cd) =
-      cd.name == key.localName && cd.arity == key.arity
-    matchesDecl _ _ = False
+      Just annExports -> importListPermits valueEntry key (Just annExports.node)
 
 -- | Look up the function-visibility table for a single module,
 -- returning the empty map for unknown modules.
