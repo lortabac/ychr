@@ -730,7 +730,12 @@ genGuardedFire symTab occMap varMap occ = do
       body = case (null occ.aggregates, fire.history) of
         (True, Nothing) -> guarded fire.stmts
         (True, Just h) ->
-          guarded [If (BNotInHistory h.rule h.ids) (AddHistory h.rule h.ids : fire.stmts) []]
+          guarded
+            [ If
+                (BNotInHistory h.rule h.ids)
+                (AddHistory h.rule h.ids : fire.stmts)
+                []
+            ]
         (False, Nothing) ->
           aggregateStoreStmts ++ cellStmts ++ guarded fire.stmts
         (False, Just h) ->
@@ -2039,7 +2044,9 @@ asPartnerArg occ (Var n) = Map.lookup n partArgs
   where
     partArgs =
       Map.fromList
-        [ (partArgName k j, PartnerArg {partner = k, argIndex = ArgIndex (fromIntegral j)})
+        [ ( partArgName k j,
+            PartnerArg {partner = k, argIndex = ArgIndex (fromIntegral j)}
+          )
         | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
           j <- [0 .. length p.constraint.args - 1]
         ]
@@ -2412,9 +2419,9 @@ applyStmt si f args = do
 -- is sufficient. The type checker gates on the same syntactic shape
 -- (@body_is@ in @typechecker\/walk.chr@) — same pattern, same widening
 -- rule.
-isValue :: D.Expr -> ValExpr -> ValExpr
-isValue (R.VarExpr _) e = EvalIs e
-isValue _ e = EvalDeep e
+isRhsValue :: D.Expr -> ValExpr -> ValExpr
+isRhsValue (R.VarExpr _) e = EvalIs e
+isRhsValue _ e = EvalDeep e
 
 -- | Tell-unify two terms and immediately drain the resulting
 -- reactivation queue. Used by 'D.BodyUnify' and the re-binding case of
@@ -2517,7 +2524,7 @@ compileBodyGoal si (D.BodyUnify t1 t2) = do
   pure (newStmts ++ unifyAndReactivate t1' t2')
 compileBodyGoal si (D.BodyHostStmt f args) = hostCallStmt si f args
 compileBodyGoal si (D.BodyIs v expr) = do
-  rhs <- isValue expr <$> goalExpr si expr
+  rhs <- isRhsValue expr <$> goalExpr si expr
   vm <- get
   case lookupVar v vm of
     -- Re-binding a variable already bound by the head: tell-unify so any
@@ -2564,9 +2571,10 @@ compileFunctionDef func = do
       funcLabel = Just ("function " <> fnLabel)
       -- The function-entry frame takes the first equation's annotation:
       -- it is pushed before dispatch, so it cannot name one equation.
+      frameAt = mkFrame ("function " <> fnLabel)
       frame = case func.equations of
-        eq : _ -> mkFrame ("function " <> fnLabel) eq.sourceLoc eq.parsed
-        [] -> mkFrame ("function " <> fnLabel) P.dummyLoc (Atom "function")
+        eq : _ -> frameAt eq.sourceLoc eq.parsed
+        [] -> frameAt P.dummyLoc (Atom "function")
       -- Dispatch tracking: every equation's pattern tests record, in
       -- two procedure-level locals, whether a test failed only because
       -- the value it inspected was still unbound. Falling off the end
@@ -2691,7 +2699,7 @@ compileEquation tracksDispatch params si eq = do
 compileFunStmt :: SrcInfo -> D.FunStmt -> GoalM [Stmt]
 compileFunStmt si (D.FunHostStmt f args) = hostCallStmt si f args
 compileFunStmt si (D.FunIs v expr) = do
-  rhs <- isValue expr <$> goalExpr si expr
+  rhs <- isRhsValue expr <$> goalExpr si expr
   modify (insertVar v (Var (Name v)))
   pure [LetVal (Name v) rhs]
 compileFunStmt si (D.FunCall qn args) = functionCallStmt si qn args
