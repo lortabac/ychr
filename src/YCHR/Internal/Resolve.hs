@@ -1403,9 +1403,10 @@ resolveFunctions visMap inlineSet mods = traverse build (Map.toList grouped)
     grouped =
       Map.fromListWith
         (++)
-        [ (ConstraintKey (QualifiedName entry.owner.name entry.decl.name) entry.decl.arity, [entry])
-        | entry <- functionDeclEntries mods
-        ]
+        [(declKey entry, [entry]) | entry <- functionDeclEntries mods]
+    declKey :: FunctionDeclEntry -> ConstraintKey
+    declKey entry =
+      ConstraintKey (QualifiedName entry.owner.name entry.decl.name) entry.decl.arity
     build (key, entries) = do
       let decls = map (.decl) entries
           -- 'gatherEquations' selects equations by (name, arity)
