@@ -18,6 +18,7 @@ module YCHR.Internal.Pretty
 
     -- * Declarations (REPL @:info@)
     DeclKind (..),
+    declKindKeyword,
     prettyQualifiedName,
     prettyConstraintDecl,
     prettyFunctionDecl,
@@ -290,6 +291,7 @@ data DeclKind
   | DKOpenClass
   deriving (Show, Eq)
 
+-- | The directive keyword of a declaration kind.
 declKindKeyword :: DeclKind -> String
 declKindKeyword DKFunction = "function"
 declKindKeyword DKOpenFunction = "open_function"
