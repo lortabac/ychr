@@ -48,14 +48,19 @@ lists. All of these are **Breaking** for code importing
   - `PExpr.mergeOps`, `opTableEntries` and the `OpTable` name maps use
     `OpDecl`.
   - `parseLeadingTerms` returns `LeadingTerms`.
+  - `Parser.builtinDirectives` is a `Set UnqualifiedIdentifier`.
 - Renamer:
   - `Rename.renameProgram`, `renameQueryArgsWith` and
     `renameQueryGoalsWith` return `Renamed {result, warnings}`.
-  - `Rename.Types` envs are keyed by `UnqualifiedIdentifier`, and one
-    `importListPermits` replaces the per-namespace variants.
+  - `Rename.Types` envs are keyed by `UnqualifiedIdentifier`, and
+    `Rename.Types.importListPermits` replaces
+    `Rename.Macro.importListPermitsMacro`.
   - `Rename.Macro` exports the expansion step shared with declaration
     macros (`expandStep`, `MacroUse`, `MacroState`).
-  - `selectClause` returns a `ClauseMatch`.
+  - `selectClause` returns a `ClauseMatch`, which `instantiateClause`
+    and `instantiateBody` take.
+  - `primitivesIn` returns `[Identifier]` and `qualifiedRefsIn`
+    `[UnqualifiedIdentifier]`.
   - `DeclMacroEnv` and `MacroScope` use identifier records and
     `CollectedImport`.
 - Resolve and desugar:
@@ -64,23 +69,29 @@ lists. All of these are **Breaking** for code importing
     `UnqualifiedIdentifier`.
   - `liftAllLambdas`, `liftQueryLambdas` (now returning `LiftedQuery`)
     and `inlineFunctions` return `Either`.
-  - `ConEnv.constructors` maps to `DataConstructor`.
+  - `Constructors.lookupCon`, `buildConMap` and `ConEnv.constructors`
+    give the `DataConstructor` only.
 - Compiler and VM:
-  - `Program.evaluables`, `callables` and `tellables` are lists of
-    `Evaluable`, `Callable` and `Tellable` records, in the same order.
+  - `VM.Program.evaluables`, `callables` and `tellables` are lists of
+    `Evaluable`, `Callable` and `Tellable` (`{key, procName}`) records
+    instead of pairs; the `build*` and `VM.Closure.dangling*` functions
+    follow.
   - `Foreach` conditions are `IndexCondition` records, moved from
-    `Compile.Types` to `VM.Types`.
+    `Compile.Types` to `VM.Types`; the slot AST's `SForeach` carries
+    `SIndexCondition`s.
   - `ResultMatch.binds` is `[ResultBind]`.
   - `AggregatePlan.nested` is `[AggregatePlan]`.
   - The s-expression format is unchanged.
 - Runtime:
   - `initSessionEnv` takes a `SessionConfig` (`emptySessionConfig`,
     `programSessionConfig`).
-  - The propagation history holds `HistoryKey`s.
+  - The propagation history is a `Set Runtime.Monad.HistoryKey`.
   - `Index.insertConstraints` takes `IndexEntry`s.
-  - `Goal` resolves tells to `ResolvedTell`.
+  - `Runtime.Goal.goalConstraints`, `altGoalConstraints` and
+    `tellGoalConstraint` return `ResolvedTell`.
   - `Store.getAllStoredConstraints` returns `StoredGroup`s.
-  - `Registry.collectVars` takes a list.
+  - `Registry.collectVars` takes a list of values and returns their
+    variables.
   - `Interpreter.suspensionView` is gone.
 - Display and type checking:
   - `Display.displayMsgWithSrcLoc` takes a `MsgBlock`.
