@@ -64,8 +64,7 @@ import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..)
 import YCHR.Internal.Rename.Macro (PrimitiveOperand (..))
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.TypeCheck (TypeCheckError (..))
-import YCHR.Internal.TypeCheck.Error (ConstructorDecl (..))
+import YCHR.Internal.TypeCheck (ConstructorDecl (..), TypeCheckError (..))
 import YCHR.Internal.Types (ConstraintUse (..), Name, QualifiedName, Term)
 
 -- ---------------------------------------------------------------------------

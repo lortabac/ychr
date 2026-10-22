@@ -25,6 +25,7 @@
 module YCHR.Internal.TypeCheck
   ( -- * Results
     TypeCheckError (..),
+    ConstructorDecl (..),
     TypeCheckWarning (..),
     TypeCheckResult (..),
 

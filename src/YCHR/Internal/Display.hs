@@ -74,8 +74,11 @@ import YCHR.Internal.Rename.Macro
   )
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.TypeCheck (TypeCheckError (..), TypeCheckWarning (..))
-import YCHR.Internal.TypeCheck.Error (ConstructorDecl (..))
+import YCHR.Internal.TypeCheck
+  ( ConstructorDecl (..),
+    TypeCheckError (..),
+    TypeCheckWarning (..),
+  )
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (StackFrame (..))
 
@@ -239,7 +242,12 @@ data MsgBlock = MsgBlock
 
 -- | Render a located diagnostic. Every 'Diagnostic' instance below is
 -- this with its own severity, code and message function.
-displayDiagnostic :: Severity -> (e -> ErrorCode) -> (e -> String) -> Diagnostic e -> String
+displayDiagnostic ::
+  Severity ->
+  (e -> ErrorCode) ->
+  (e -> String) ->
+  Diagnostic e ->
+  String
 displayDiagnostic sev codeOf msgOf (Diagnostic lbl (AnnP err loc origin) ctx) =
   displayMsgWithSrcLoc
     MsgBlock
@@ -1446,7 +1454,11 @@ renameWarningMsg (UnusedMacroParameter qn param) =
     )
 
 instance Display (Diagnostic ExhaustivenessWarning) where
-  displayMsg = displayDiagnostic SevWarning exhaustivenessWarningCode exhaustivenessWarningMsg
+  displayMsg =
+    displayDiagnostic
+      SevWarning
+      exhaustivenessWarningCode
+      exhaustivenessWarningMsg
 
 exhaustivenessWarningMsg :: ExhaustivenessWarning -> String
 exhaustivenessWarningMsg (NonExhaustiveMatch name witness) =
