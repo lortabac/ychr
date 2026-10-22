@@ -29,7 +29,7 @@ import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Parsed qualified as P
-import YCHR.Internal.Parser (builtinOps, parseConstraint, parseRule, parseTerm)
+import YCHR.Internal.Parser (Converted (..), builtinOps, parseConstraint, parseRule, parseTerm)
 import YCHR.Internal.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
@@ -202,9 +202,9 @@ prop_ruleRoundtrip = property $ do
   annotate src
   case parseRule "<roundtrip>" (Text.pack src) of
     Left err -> annotate (show err) >> failure
-    Right (_, validErrs@(_ : _)) -> annotate (show validErrs) >> failure
-    Right (Nothing, _) -> annotate "parser returned no rule" >> failure
-    Right (Just r', []) -> stripRuleAnn r' === r
+    Right (Converted _ validErrs@(_ : _)) -> annotate (show validErrs) >> failure
+    Right (Converted Nothing _) -> annotate "parser returned no rule" >> failure
+    Right (Converted (Just r') []) -> stripRuleAnn r' === r
 
 -- ---------------------------------------------------------------------------
 -- =.. roundtrip
@@ -345,21 +345,21 @@ assertRuleRoundtrips :: Text -> IO ()
 assertRuleRoundtrips src = case parseRule "<roundtrip>" src of
   Left err ->
     assertFailure ("parse failed on input:\n" ++ Text.unpack src ++ "\n" ++ show err)
-  Right (_, validErrs@(_ : _)) ->
+  Right (Converted _ validErrs@(_ : _)) ->
     assertFailure ("parse validation errors on input:\n" ++ show validErrs)
-  Right (Nothing, _) ->
+  Right (Converted Nothing _) ->
     assertFailure ("parser returned no rule for input:\n" ++ Text.unpack src)
-  Right (Just rule1, []) -> do
+  Right (Converted (Just rule1) []) -> do
     let pretty1 = prettyRuleSrc rule1
     case parseRule "<roundtrip>" (Text.pack pretty1) of
       Left err ->
         assertFailure
           ("re-parse failed on pretty output:\n" ++ pretty1 ++ "\n" ++ show err)
-      Right (_, validErrs@(_ : _)) ->
+      Right (Converted _ validErrs@(_ : _)) ->
         assertFailure ("re-parse validation errors on pretty output:\n" ++ show validErrs)
-      Right (Nothing, _) ->
+      Right (Converted Nothing _) ->
         assertFailure ("re-parse produced no rule on pretty output:\n" ++ pretty1)
-      Right (Just rule2, []) -> prettyRuleSrc rule2 @?= pretty1
+      Right (Converted (Just rule2) []) -> prettyRuleSrc rule2 @?= pretty1
 
 fixedRuleCases :: TestTree
 fixedRuleCases =

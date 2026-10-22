@@ -10,7 +10,8 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Parsec (ParseError)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Parser
-  ( ModuleHeader (..),
+  ( Converted (..),
+    ModuleHeader (..),
     ParseValidationError (..),
     builtinOps,
     collectModuleHeader,
@@ -39,12 +40,12 @@ tests =
 
 -- | Parse a source string with no filename.
 p :: Text -> Either ParseError Module
-p src = fst <$> parseModule "" src
+p src = (.value) <$> parseModule "" src
 
 -- | Parse and return only the validation errors, with each error's
 -- variant extracted (location/origin discarded).
 pErrs :: Text -> Either ParseError [ParseValidationError]
-pErrs src = map (.node) . snd <$> parseModule "" src
+pErrs src = map (.node) . (.errors) <$> parseModule "" src
 
 -- | A module's macros as @(name, arity, [(params, body)])@, with the
 -- source annotations dropped.
@@ -1196,7 +1197,7 @@ bodyOfWithLt :: Text -> IO [Term]
 bodyOfWithLt src = case mergeOps builtinOps [OpDecl 700 Xfx "<"] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
   Right table ->
-    parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src
+    parseAndExtract (fmap (.value) . parseModuleWith table "") (withFirstRule (.body.node)) src
 
 -- | Like 'bodyOf', but parses with @\\==@ added as a 700 xfx operator, the
 -- fixity the prelude declares, so a body can use the disequality operator
@@ -1205,7 +1206,7 @@ bodyOfWithBackslashEq :: Text -> IO [Term]
 bodyOfWithBackslashEq src = case mergeOps builtinOps [OpDecl 700 Xfx "\\=="] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
   Right table ->
-    parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src
+    parseAndExtract (fmap (.value) . parseModuleWith table "") (withFirstRule (.body.node)) src
 
 -- | The head of the module's first rule.
 headOf :: Text -> IO Head
