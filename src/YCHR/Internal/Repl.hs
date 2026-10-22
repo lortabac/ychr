@@ -63,7 +63,11 @@ import YCHR.Internal.Pretty
     prettyTypeDecl,
     renderAtom,
   )
-import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
+import YCHR.Internal.ProgramCheck
+  ( ProgramCheck (..),
+    constraintUseErrors,
+    typeCheckReport,
+  )
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Session
@@ -1010,9 +1014,10 @@ printWarnings = mapM_ (hPutStr stderr . displayMsg)
 -- program loads at all) does not consult them.
 printTypeDiagnostics :: SessionInput -> CompiledProgram -> IO ()
 printTypeDiagnostics typeChecker prog = do
-  check <- checkProgram typeChecker prog.desugaredProgram
-  mapM_ (hPutStr stderr) check.errors
-  printWarnings check.warnings
+  mapM_ (hPutStr stderr) (constraintUseErrors prog.desugaredProgram)
+  report <- typeCheckReport typeChecker prog.desugaredProgram
+  mapM_ (hPutStr stderr) report.errors
+  printWarnings report.warnings
 
 -- | 'printTypeDiagnostics' when a checker is available. The CLI's
 -- @--no-check@ passes 'Nothing' and gets no report at all.

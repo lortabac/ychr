@@ -75,7 +75,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
-import YCHR.Internal.CompileOrThrow (compileOrThrow)
+import YCHR.Internal.Compile.Pipeline (compileOrThrow)
 import YCHR.Internal.Meta (termToValue, valueToTerm)
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)

@@ -67,7 +67,12 @@ readCommand pg = do
     [] -> readCommand pg
     (":quit" : _) -> pure ()
     (":load" : rest) -> case rest of
-      [] -> emit Step {playground = pg, output = response statusError "usage: :load FILE\n"}
+      [] ->
+        emit
+          Step
+            { playground = pg,
+              output = response statusError "usage: :load FILE\n"
+            }
       (file : _) -> do
         contents <- try @SomeException (TIO.readFile file)
         case contents of
@@ -75,7 +80,10 @@ readCommand pg = do
             emit
               Step
                 { playground = pg,
-                  output = response statusError ("Error: " ++ displayException exc ++ "\n")
+                  output =
+                    response
+                      statusError
+                      ("Error: " ++ displayException exc ++ "\n")
                 }
           Right text -> run (reload pg text)
     (":text" : _) -> do

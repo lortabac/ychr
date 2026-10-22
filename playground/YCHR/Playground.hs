@@ -60,11 +60,14 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Collected (CollectedModule (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
-import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Parsed qualified as Parsed
 import YCHR.Internal.Pretty (prettyQueryResult)
-import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
+import YCHR.Internal.ProgramCheck
+  ( ProgramCheck (..),
+    checkProgram,
+    constraintUseErrors,
+  )
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..), loadResourcesAt)
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
@@ -165,7 +168,11 @@ guarded pg act = do
     _ <- evaluate (length result.output)
     pure result
   pure $ case attempt of
-    Left exc -> Step {playground = pg, output = response statusError (renderException exc)}
+    Left exc ->
+      Step
+        { playground = pg,
+          output = response statusError (renderException exc)
+        }
     Right result -> result
 
 -- | Render the warnings of a compilation the way the CLI does — through
@@ -354,12 +361,14 @@ typecheck pg = guarded pg $ case pg.loaded of
           Left exc ->
             response
               statusError
-              ( concatMap displayMsg (checkConstraintUse prog.desugaredProgram)
+              ( concat (constraintUseErrors prog.desugaredProgram)
                   ++ renderException exc
               )
           Right check
             | not (null check.errors) ->
-                response statusError (concat check.errors ++ renderWarnings check.warnings)
+                response
+                  statusError
+                  (concat check.errors ++ renderWarnings check.warnings)
             | otherwise -> response statusOk (renderWarnings check.warnings)
     pure Step {playground = pg, output = out}
 

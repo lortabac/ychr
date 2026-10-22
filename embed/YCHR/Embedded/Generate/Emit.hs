@@ -117,13 +117,13 @@ emitStdLib opts (StdLib modules) =
           [ TopBinding
               { name = "stdlib",
                 signature = Just "StdLib",
-                body = hoisted.body
+                body = h.body
               }
           ],
-        hoisted = hoisted.bindings
+        hoisted = h.bindings
       }
   where
-    hoisted = hoist opts (CApp (CName "StdLib") [toCode modules])
+    h = hoist opts (CApp (CName "StdLib") [toCode modules])
 
 -- | The module holding the precomputed type-checker, as
 -- @typeCheckerProgram :: SessionInput@.
@@ -155,13 +155,13 @@ emitTypeChecker opts (SessionInput program _ _ exportMap exportedSet ops) =
           [ TopBinding
               { name = "typeCheckerProgram",
                 signature = Just "SessionInput",
-                body = hoisted.body
+                body = h.body
               }
           ],
-        hoisted = hoisted.bindings
+        hoisted = h.bindings
       }
   where
-    hoisted =
+    h =
       hoist
         opts
         ( CApp
@@ -324,6 +324,7 @@ chunkBySize opts = goChunks [] 0 0
 data ModuleSpec = ModuleSpec
   { -- | The module name.
     name :: String,
+    -- | The names in the module's export list.
     exports :: [String],
     -- | The first line of the module's Haddock.
     prologue :: String,

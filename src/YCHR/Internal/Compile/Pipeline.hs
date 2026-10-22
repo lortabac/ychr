@@ -19,10 +19,11 @@ module YCHR.Internal.Compile.Pipeline
     compileModules,
     compileFiles,
     compileParsedModules,
+    compileOrThrow,
   )
 where
 
-import Control.Exception (Exception)
+import Control.Exception (Exception, throwIO)
 import Data.Bifunctor (first)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
@@ -478,6 +479,14 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
   finalizeCompilation libraryMods opExports Map.empty [] [] parsed
+
+-- | 'compileParsedModules' with the whole standard library, throwing the
+-- 'Error' and dropping the warnings. Shared by "YCHR.DSL" and
+-- "YCHR.Convert".
+compileOrThrow :: StdLib -> [Module] -> IO CompiledProgram
+compileOrThrow stdlib modules = case compileParsedModules stdlib True modules of
+  Left err -> throwIO err
+  Right (cp, _warnings) -> pure cp
 
 -- | Shared post-parse, post-library-resolution pipeline: rename, resolve,
 -- desugar, lambda-lift, compile, and assemble the resulting

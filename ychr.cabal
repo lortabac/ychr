@@ -403,7 +403,6 @@ library
                     , YCHR.Internal.Loc
                     , YCHR.Internal.Compile.Aggregate
                     , YCHR.Internal.Compile.Pipeline
-                    , YCHR.Internal.CompileOrThrow
                     , YCHR.Internal.Compile.Names
                     , YCHR.Internal.Compile.Occurrences
                     , YCHR.Internal.Compile.Passive

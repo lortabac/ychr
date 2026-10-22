@@ -131,7 +131,7 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Convert (quote)
-import YCHR.Internal.CompileOrThrow (compileOrThrow)
+import YCHR.Internal.Compile.Pipeline (compileOrThrow)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
