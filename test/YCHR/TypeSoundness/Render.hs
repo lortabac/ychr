@@ -275,7 +275,7 @@ renderQuery :: Program -> Text
 renderQuery prog =
   T.intercalate ", " (map tell_ (NE.toList prog.goal.tells) ++ probeParts) <> "."
   where
-    tell_ (s, es) = "gen:" <> s.sigName <> args_ (map renderExpr es)
+    tell_ t = "gen:" <> t.sig.sigName <> args_ (map renderExpr t.args)
     probeParts =
       [ p.probeVar <> " is " <> renderExpr p.probeExpr
       | p <- prog.goal.probes
@@ -306,7 +306,7 @@ renderSkolemNote prog
         ++ [ "%     " <> skName s <> " := " <> renderSTy t
            | (s, t) <- Map.toList r.ruleSk.skBind
            ]
-        ++ [ "%     " <> n <> " : " <> renderSTy (stripSTy r.ruleSk t)
-           | (n, t) <- ruleVars r
+        ++ [ "%     " <> v.name <> " : " <> renderSTy (stripSTy r.ruleSk v.ty)
+           | v <- ruleVars r
            ]
     skName (Skolem i) = "T#" <> tshow i

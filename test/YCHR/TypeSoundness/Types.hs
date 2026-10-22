@@ -68,6 +68,8 @@ module YCHR.TypeSoundness.Types
     RuleHead (..),
     Rule (..),
     Probe (..),
+    Tell (..),
+    UnboundVar (..),
     Goal (..),
     Program (..),
 
@@ -83,10 +85,12 @@ module YCHR.TypeSoundness.Types
     renderSTy,
     findCtor,
     ctorFieldTys,
+    ctorFieldGTys,
     ruleHeadList,
     ruleHeads,
     minHeadStratum,
     headArgTys,
+    TypedVar (..),
     patVars,
     headVars,
     isTell,
@@ -860,10 +864,18 @@ data Rule = Rule
 data Probe = Probe {probeVar :: Text, probeTy :: GTy, probeExpr :: Expr}
   deriving (Eq, Show)
 
+-- | A constraint told with these arguments.
+data Tell = Tell {sig :: Sig, args :: [Expr]}
+  deriving (Eq, Show)
+
+-- | A query variable passed unbound into a position declared at 'ty'.
+data UnboundVar = UnboundVar {name :: Text, ty :: GTy}
+  deriving (Eq, Show)
+
 -- | The query a generated program is run with.
 data Goal = Goal
   { -- | The constraints told, with their arguments.
-    tells :: NonEmpty (Sig, [Expr]),
+    tells :: NonEmpty Tell,
     probes :: [Probe],
     -- | Query variables passed unbound into a 'MayBeUnbound' position,
     -- with the static type of the position they went into.
@@ -873,7 +885,7 @@ data Goal = Goal
     -- the run eventually bound the variable to has to inhabit the type
     -- the declaration gave that position. A variable still free at the
     -- end is fine — that is the mode axis, not this one.
-    unbounds :: [(Text, GTy)]
+    unbounds :: [UnboundVar]
   }
   deriving (Eq, Show)
 
@@ -993,6 +1005,13 @@ ctorFieldTys def args c = map (substD sub) c.ctorFields
   where
     sub = Map.fromList (zip def.adtParams args)
 
+-- | A constructor's field types at a ground instantiation of its
+-- type's parameters.
+ctorFieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
+ctorFieldGTys def args c = map (groundD sub) c.ctorFields
+  where
+    sub = Map.fromList (zip def.adtParams args)
+
 -- | All head occurrences, kept ones first for a simpagation.
 ruleHeadList :: RuleHead -> NonEmpty HeadC
 ruleHeadList rh = case rh of
@@ -1017,6 +1036,10 @@ headArgTys h = fmap (substD sub) (sigArgDTys h.headSig)
   where
     sub = Map.fromList (zip h.headSig.sigTvs (map SSk h.headSkolems))
 
+-- | A variable with its implementation-site type.
+data TypedVar = TypedVar {name :: Text, ty :: STy}
+  deriving (Eq, Show)
+
 -- | Every variable bound by a pattern, with its implementation-site
 -- type, in left-to-right order. Names may repeat:
 -- 'YCHR.TypeSoundness.Gen.maybeAlias' can rename one pattern variable
@@ -1027,9 +1050,9 @@ headArgTys h = fmap (substD sub) (sigArgDTys h.headSig)
 -- field, and an ill-shaped pattern is an 'error' rather than an empty
 -- result: this is what decides which variables get observed, so
 -- silently returning fewer would silently weaken the oracle.
-patVars :: SkolemEnv -> STy -> Pat -> [(Text, STy)]
+patVars :: SkolemEnv -> STy -> Pat -> [TypedVar]
 patVars env ty p = case p of
-  PVar n _ -> [(n, ty)]
+  PVar n _ -> [TypedVar n ty]
   PWild -> []
   PLit _ -> []
   PNil -> []
@@ -1056,7 +1079,7 @@ patVars env ty p = case p of
         )
 
 -- | 'patVars' over every argument of one head occurrence.
-headVars :: SkolemEnv -> HeadC -> [(Text, STy)]
+headVars :: SkolemEnv -> HeadC -> [TypedVar]
 headVars env h =
   concat (zipWith (patVars env) (NE.toList (headArgTys h)) (NE.toList h.pats))
 
@@ -1068,9 +1091,9 @@ isTell it = case it of
 
 -- | Every head-bound variable of a rule, deduplicated by name, under
 -- the rule's own final skolem state.
-ruleVars :: Rule -> [(Text, STy)]
+ruleVars :: Rule -> [TypedVar]
 ruleVars r =
-  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSk) (ruleHeads r))
+  nubBy (\a b -> a.name == b.name) (concatMap (headVars r.ruleSk) (ruleHeads r))
 
 -- | Whether each of a rule's variables may hold no value yet.
 varBoundness :: Rule -> Text -> Boundness
@@ -1085,6 +1108,6 @@ varBoundnessAtHead r n
   | otherwise = Ground
 
 -- | As 'ruleVars', but under the state matching alone establishes.
-ruleVarsAtHead :: Rule -> [(Text, STy)]
+ruleVarsAtHead :: Rule -> [TypedVar]
 ruleVarsAtHead r =
-  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSkHead) (ruleHeads r))
+  nubBy (\a b -> a.name == b.name) (concatMap (headVars r.ruleSkHead) (ruleHeads r))
