@@ -158,7 +158,7 @@ import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckGoals)
 import YCHR.Internal.Types (Constraint (..), Term (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..))
+import YCHR.Internal.VM (Callable (..), CallableKey, Name (..), Procedure (..))
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -524,7 +524,7 @@ prepareResolved resolved =
     { liftedGoals = resolved.liftedGoals,
       queryLambdas = resolved.queryLambdas,
       extraProcs = compileQueryLambdas resolved.queryLambdas,
-      extraCallables = buildCallables resolved.queryLambdas
+      extraCallables = [(c.key, c.procName) | c <- buildCallables resolved.queryLambdas]
     }
 
 -- | Run the 'liftedGoals' of a 'PreparedQuery' in the current session, in
@@ -579,7 +579,7 @@ runProgramWithQuery typeChecker cp hostCalls src = do
     (toSessionInput cp)
     hostCalls
     prep.extraProcs
-    prep.extraCallables
+    (map (uncurry Callable) prep.extraCallables)
     (executePreparedQuery prep.liftedGoals)
 
 -- ---------------------------------------------------------------------------

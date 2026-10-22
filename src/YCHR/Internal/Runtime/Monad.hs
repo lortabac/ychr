@@ -29,6 +29,9 @@ module YCHR.Internal.Runtime.Monad
     CallableRegistry,
     TellableRegistry,
     UnqualifiedTellableRegistry,
+    evaluableRegistry,
+    callableRegistry,
+    tellableRegistry,
   )
 where
 
@@ -43,6 +46,7 @@ import Data.IntSet qualified as IntSet
 -- selector in scope next to the list function (dev-docs/MICROHS_GAPS.md, gap 1).
 import Data.List qualified as List
 import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
@@ -105,6 +109,18 @@ type TellableRegistry = Map TellableKey VM.Name
 -- map order. The compiler already stores the program's tier in this
 -- shape.
 type UnqualifiedTellableRegistry = Map TellableKey VM.TellableResolution
+
+-- | Build an 'EvaluableRegistry' from a program's table.
+evaluableRegistry :: [VM.Evaluable] -> EvaluableRegistry
+evaluableRegistry entries = Map.fromList [(e.key, e.procName) | e <- entries]
+
+-- | Build a 'CallableRegistry' from a program's table.
+callableRegistry :: [VM.Callable] -> CallableRegistry
+callableRegistry entries = Map.fromList [(c.key, c.procName) | c <- entries]
+
+-- | Build a 'TellableRegistry' from a program's table.
+tellableRegistry :: [VM.Tellable] -> TellableRegistry
+tellableRegistry entries = Map.fromList [(t.key, t.procName) | t <- entries]
 
 -- | The host-side runtime monad.
 type Chr = ReaderT SessionEnv IO

@@ -47,8 +47,11 @@ module YCHR.Internal.VM.Types
     Program (..),
     Procedure (..),
     ProcKind (..),
+    Evaluable (..),
     EvaluableKey (..),
+    Callable (..),
     CallableKey (..),
+    Tellable (..),
     TellableKey (..),
     TellableResolution (..),
     funRefFunctor,
@@ -139,7 +142,7 @@ data Program = Program
     -- function takes first. See 'deepEvalValue' \/
     -- 'invokeByKey' in @YCHR.Internal.Runtime.Interpreter@ and
     -- @deep-eval-value@ in @scheme\/ychr\/runtime.sls@.
-    evaluables :: ![(EvaluableKey, Name)],
+    evaluables :: ![Evaluable],
     -- | Dispatch table for the @'$call'@ closure-apply construct. Maps
     -- a closure's 'CallableKey' (the shape of the closure value itself:
     -- its functor, its identity field, and its declared arity) to the
@@ -147,14 +150,14 @@ data Program = Program
     -- 'procedures'. One entry per user-defined function — every
     -- function reference a program can build — plus one per lifted
     -- lambda. Consulted by 'ApplyClosure'.
-    callables :: ![(CallableKey, Name)],
+    callables :: ![Callable],
     -- | Dispatch table for the dynamic @tell\/N@ construct 'TellTerm'.
     -- Maps a 'TellableKey' — the calling module, a goal term's functor
     -- and the arity it is told at — to the mangled name of that
     -- constraint's @tell_c@ procedure. Holds entries only for the
     -- modules that contain a 'TellTerm', so a program that never
     -- tells dynamically carries an empty table.
-    tellables :: ![(TellableKey, Name)],
+    tellables :: ![Tellable],
     -- | The second tier of the dynamic @tell\/N@ dispatch: the program's
     -- constraints keyed by a bare functor, with no module scope and the
     -- told arity on the key itself. Consulted only when the scoped
@@ -183,6 +186,14 @@ data Program = Program
   }
   deriving (Show, Eq)
 
+-- | One entry of 'Program.evaluables'.
+data Evaluable = Evaluable
+  { key :: !EvaluableKey,
+    -- | The procedure that implements the function.
+    procName :: !Name
+  }
+  deriving (Show, Eq)
+
 -- | Dispatch key for the @is@ deep-evaluator. Parallel in structure
 -- to 'YCHR.Internal.Types.Identifier', but carries the VM-encoded form of the
 -- functor (the same text stored on @VTerm@ values), so dispatch is
@@ -195,6 +206,14 @@ data EvaluableKey = EvaluableKey
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
+
+-- | One entry of 'Program.callables'.
+data Callable = Callable
+  { key :: !CallableKey,
+    -- | The procedure that implements the function or lambda.
+    procName :: !Name
+  }
+  deriving (Show, Eq)
 
 -- | Dispatch key for the @'$call'@ closure-apply construct: the key
 -- derived from the shape of a closure value applied at a given arity.
@@ -228,6 +247,14 @@ data CallableKey = CallableKey
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
+
+-- | One entry of 'Program.tellables'.
+data Tellable = Tellable
+  { key :: !TellableKey,
+    -- | The constraint's @tell_c@ procedure.
+    procName :: !Name
+  }
+  deriving (Show, Eq)
 
 -- | Dispatch key for the dynamic @tell\/N@ construct 'TellTerm'.
 --

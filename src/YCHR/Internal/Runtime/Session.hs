@@ -67,15 +67,18 @@ import YCHR.Internal.Runtime.Interpreter
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     SessionEnv (..),
+    callableRegistry,
+    evaluableRegistry,
     initSessionEnv,
     runChr,
+    tellableRegistry,
   )
 import YCHR.Internal.Runtime.Reactivation (drainQueue)
 import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..), Program (..))
+import YCHR.Internal.VM (Callable (..), CallableKey, Name (..), Procedure (..), Program (..))
 import YCHR.Internal.VM.Closure
   ( closureFailure,
     danglingCallables,
@@ -168,7 +171,7 @@ withCHRExtra ::
   SessionInput ->
   HostCallRegistry ->
   [Procedure] ->
-  [(CallableKey, Name)] ->
+  [Callable] ->
   Chr a ->
   IO a
 withCHRExtra si hc extraProcs extraCallables action
@@ -181,13 +184,13 @@ withCHRExtra si hc extraProcs extraCallables action
       -- ones, resolving the extras' calls against both name spaces; with
       -- no extras it returns the compiled program unchanged.
       let slotProgram = addProcedures si.slotProgram extraProcs
-          evaluableMap = Map.fromList si.program.evaluables
+          evaluableMap = evaluableRegistry si.program.evaluables
       -- Extras win, as in the procedure map: a query-time lambda can never
       -- collide with a compiled one (its lifted name is fresh), but the
       -- two merges then follow the same rule.
       let callableMap =
-            Map.fromList extraCallables
-              `Map.union` Map.fromList si.program.callables
+            callableRegistry extraCallables
+              `Map.union` callableRegistry si.program.callables
       env <-
         initSessionEnv
           si.program.typeNames
@@ -199,7 +202,7 @@ withCHRExtra si hc extraProcs extraCallables action
           hc
           evaluableMap
           callableMap
-          (Map.fromList si.program.tellables)
+          (tellableRegistry si.program.tellables)
           si.program.tellablesUnqualified
           si.exportMap
           si.exportedSet
@@ -223,7 +226,7 @@ withCHRExtra si hc extraProcs extraCallables action
 extraClosureFailure ::
   SessionInput ->
   [Procedure] ->
-  [(CallableKey, Name)] ->
+  [Callable] ->
   Maybe String
 extraClosureFailure si procs callables
   | null procs && null callables = Nothing
@@ -237,7 +240,8 @@ extraClosureFailure si procs callables
 -- function and host-call boundaries). Used by the REPL's @:trace@
 -- one-shot dispatch. The handler is bound for the duration of the
 -- action; the session and its mutable state are fresh, so no clear-up
--- on the way out is needed.
+-- on the way out is needed. Takes the callables as pairs, the shape
+-- 'YCHR.Run.PreparedQuery' exposes.
 withCHRExtraTraced ::
   SessionInput ->
   HostCallRegistry ->
@@ -247,7 +251,7 @@ withCHRExtraTraced ::
   Chr a ->
   IO a
 withCHRExtraTraced si hc extraProcs extraCallables handler action =
-  withCHRExtra si hc extraProcs extraCallables $ do
+  withCHRExtra si hc extraProcs (map (uncurry Callable) extraCallables) $ do
     env <- ask
     liftIO $ do
       writeIORef env.traceHandler (Just handler)

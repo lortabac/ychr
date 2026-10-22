@@ -286,7 +286,7 @@ formatTests =
       assertContains
         ( serializeProg
             ( mkProgWithCallables
-                [(funRefKey "prelude:double" 1, "func_prelude__double1")]
+                [Callable (funRefKey "prelude:double" 1) "func_prelude__double1"]
             )
         )
         "(callables (\"/\" \"prelude:double\" 1 \"func_prelude__double1\"))",
@@ -299,9 +299,9 @@ formatTests =
                 [mkProcedure "p" [] []]
                 []
                 []
-                [ ( TellableKey {scope = Just "m", functor = "m__c", arity = 2},
+                [ Tellable
+                    (TellableKey {scope = Just "m", functor = "m__c", arity = 2})
                     "tell_m__c2"
-                  )
                 ]
                 Map.empty
                 []
@@ -361,7 +361,7 @@ formatTests =
             [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
             []
             []
-            [(TellableKey {scope = Just "m", functor = "c", arity = 2}, "tell_m__c2")]
+            [Tellable (TellableKey {scope = Just "m", functor = "c", arity = 2}) "tell_m__c2"]
             Map.empty
             []
         ),
@@ -828,7 +828,7 @@ mkProg :: [Stmt] -> Program
 mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] [] Map.empty []
 
 -- | 'mkProg' with a non-empty callables table.
-mkProgWithCallables :: [(CallableKey, Name)] -> Program
+mkProgWithCallables :: [Callable] -> Program
 mkProgWithCallables callables =
   Program [] [] [mkProcedure "p" [] []] [] callables [] Map.empty []
 

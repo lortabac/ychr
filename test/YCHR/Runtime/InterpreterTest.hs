@@ -1276,7 +1276,7 @@ lamClosure = VTerm "__closure" [VAtom "m__lambda_0", VAtom "src", VInt 10]
 -- @p2@ to @1@ and @2@) through the given callables table, plus the two
 -- callee procedures the table can reach: @fun_proc@ returns its
 -- argument, @lam_proc@ adds its capture to its argument.
-closureProg :: [(CallableKey, Name)] -> Program
+closureProg :: [Callable] -> Program
 closureProg callables =
   Program
     { typeNames = [],
@@ -1299,7 +1299,7 @@ closureProg callables =
 
 -- | 'closureProg' with an unbound closure: @p@ allocates a fresh
 -- logical variable and applies it.
-unboundClosureProg :: [(CallableKey, Name)] -> Program
+unboundClosureProg :: [Callable] -> Program
 unboundClosureProg callables =
   (closureProg callables)
     { procedures =
@@ -1324,7 +1324,7 @@ closureApplyTests =
     [ testCase "a function reference reaches its table entry" $ do
         v <-
           interpret
-            (closureProg [(funKey, "fun_proc")])
+            (closureProg [Callable funKey "fun_proc"])
             baseHostCallRegistry
             "p"
             [funClosure]
@@ -1334,7 +1334,7 @@ closureApplyTests =
       testCase "a lifted lambda is called with its captures first" $ do
         v <-
           interpret
-            (closureProg [(lamKey, "lam_proc")])
+            (closureProg [Callable lamKey "lam_proc"])
             baseHostCallRegistry
             "p"
             [lamClosure]
@@ -1343,7 +1343,7 @@ closureApplyTests =
           _ -> assertFailure "unexpected value",
       testCase "a function reference applied at another arity misses" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "/" [VAtom "m:f", VInt 2]]
           >>= assertContains "call: no matching closure",
@@ -1352,13 +1352,13 @@ closureApplyTests =
         -- arity it is *applied* at selects the key; the table only holds
         -- the declared one.
         expectRuntimeError
-          (closureProg [(lamKey, "lam_proc")])
+          (closureProg [Callable lamKey "lam_proc"])
           "p2"
           [lamClosure]
           >>= assertContains "call: no matching closure",
       testCase "a data term with a closure-looking field is not a closure" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "pair" [VAtom "m:f", VInt 1]]
           >>= assertContains "call: no matching closure",
@@ -1367,7 +1367,7 @@ closureApplyTests =
         -- so a function-reference term whose identity and arity fields
         -- are bound variables still dispatches.
         let prog =
-              (closureProg [(funKey, "fun_proc")])
+              (closureProg [Callable funKey "fun_proc"])
                 { procedures =
                     [ mkProc
                         "p"
@@ -1384,20 +1384,20 @@ closureApplyTests =
           _ -> assertFailure "expected the bound header to dispatch",
       testCase "a non-term is not a closure" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VInt 5]
           >>= assertContains "call: no matching closure",
       testCase "a well-formed closure with an unknown identity misses" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "/" [VAtom "m:other", VInt 1]]
           >>= assertContains "call: no matching closure",
       testCase "an unbound closure is an instantiation error" $ do
         (kind, msg) <-
           expectRuntimeErrorKind
-            (unboundClosureProg [(funKey, "fun_proc")])
+            (unboundClosureProg [Callable funKey "fun_proc"])
             "p"
             []
         kind @?= InstantiationError

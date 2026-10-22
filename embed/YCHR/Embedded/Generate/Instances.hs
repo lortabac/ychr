@@ -73,7 +73,9 @@ import YCHR.Internal.VM.Types
   ( ArgIndex (..),
     BoolExpr (..),
     CallArg (..),
+    Callable (..),
     CallableKey (..),
+    Evaluable (..),
     EvaluableKey (..),
     HistoryIds,
     IdExpr (..),
@@ -84,6 +86,7 @@ import YCHR.Internal.VM.Types
     Program (..),
     StackFrame (..),
     Stmt (..),
+    Tellable (..),
     TellableKey (..),
     TellableResolution (..),
     ValExpr (..),
@@ -347,7 +350,13 @@ deriving instance Generic Stmt
 
 deriving instance Generic ProcKind
 
+deriving instance Generic Evaluable
+
 deriving instance Generic EvaluableKey
+
+deriving instance Generic Callable
+
+deriving instance Generic Tellable
 
 deriving instance Generic CallableKey
 
@@ -390,7 +399,16 @@ instance ToCode Stmt where
 instance ToCode ProcKind where
   toCode = genericToCode
 
+instance ToCode Evaluable where
+  toCode = genericToCode
+
 instance ToCode EvaluableKey where
+  toCode = genericToCode
+
+instance ToCode Callable where
+  toCode = genericToCode
+
+instance ToCode Tellable where
   toCode = genericToCode
 
 instance ToCode CallableKey where

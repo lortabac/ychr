@@ -290,7 +290,7 @@ programInfoSExpr infoName symTab vmp ops =
           ++ map callableRegistration vmp.program.callables
           ++ map tellableRegistration vmp.program.tellables
           ++ map
-            unqualifiedTellableRegistration
+            (uncurry unqualifiedTellableRegistration)
             (Map.toList vmp.program.tellablesUnqualified)
           ++ goalRegistrations symTab vmp
           ++ shortExportRegistrations vmp.exportedSet
@@ -481,8 +481,8 @@ indexPositionsSExpr positions =
 -- single entry of the program's evaluables table. The procedure
 -- identifier is the same mangled name bound by 'compileProcedure', so
 -- direct identifier reference resolves it in the library's scope.
-evaluableRegistration :: (EvaluableKey, Name) -> SExpr
-evaluableRegistration (key, procName) =
+evaluableRegistration :: Evaluable -> SExpr
+evaluableRegistration (Evaluable key procName) =
   SList
     [ SAtom "register-evaluable!",
       SAtom "%s",
@@ -498,8 +498,8 @@ evaluableRegistration (key, procName) =
 -- identifiers of their own), matching the atom a closure term carries
 -- at run time. The procedure identifier is the same mangled name bound
 -- by 'compileProcedure'.
-callableRegistration :: (CallableKey, Name) -> SExpr
-callableRegistration (key, procName) =
+callableRegistration :: Callable -> SExpr
+callableRegistration (Callable key procName) =
   SList
     [ SAtom "register-callable!",
       SAtom "%s",
@@ -514,8 +514,8 @@ callableRegistration (key, procName) =
 -- symbol a goal term carries at run time, as for
 -- 'callableRegistration'; the scope is a module name, compared as a
 -- string.
-tellableRegistration :: (TellableKey, Name) -> SExpr
-tellableRegistration (key, procName) = case key.scope of
+tellableRegistration :: Tellable -> SExpr
+tellableRegistration (Tellable key procName) = case key.scope of
   Just m ->
     SList
       [ SAtom "register-tellable!",
@@ -525,15 +525,15 @@ tellableRegistration (key, procName) = case key.scope of
         SInt (fromIntegral key.arity),
         SAtom procName.unName
       ]
-  Nothing -> unqualifiedTellableRegistration (key, UniqueTell procName)
+  Nothing -> unqualifiedTellableRegistration key (UniqueTell procName)
 
 -- | Emit @(register-tellable-anywhere! %s 'functor arity procedure
 -- ...)@ for one entry of the program's origin-less tellables table.
 -- One procedure name per candidate: the Scheme runtime treats more than
 -- one as the ambiguous pair, which is what the Haskell interpreter
 -- does with 'AmbiguousTell'.
-unqualifiedTellableRegistration :: (TellableKey, TellableResolution) -> SExpr
-unqualifiedTellableRegistration (key, resolution) =
+unqualifiedTellableRegistration :: TellableKey -> TellableResolution -> SExpr
+unqualifiedTellableRegistration key resolution =
   SList
     ( SAtom "register-tellable-anywhere!"
         : SAtom "%s"

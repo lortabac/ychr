@@ -48,14 +48,14 @@ import Data.Text qualified as T
 import YCHR.Internal.VM.Types
   ( BoolExpr (..),
     CallArg (..),
-    CallableKey,
-    EvaluableKey,
+    Callable (..),
+    Evaluable (..),
     IdExpr (..),
     Name (..),
     Procedure (..),
     Program (..),
     Stmt (..),
-    TellableKey,
+    Tellable (..),
     TellableResolution (..),
     ValExpr (..),
     historyIdsList,
@@ -155,18 +155,18 @@ danglingCalls known = dedup . concatMap procedureCalls
       CreateConstraint _ es -> concatMap valCalls es
 
 -- | The 'Program.evaluables' targets @known@ does not define.
-danglingEvaluables :: Set Name -> [(EvaluableKey, Name)] -> [Name]
-danglingEvaluables known entries = missingIn known (map snd entries)
+danglingEvaluables :: Set Name -> [Evaluable] -> [Name]
+danglingEvaluables known entries = missingIn known [e.procName | e <- entries]
 
 -- | The 'Program.callables' targets @known@ does not define. Exported
 -- for the union check @Session.withCHRExtra@ runs over query-time
 -- callables.
-danglingCallables :: Set Name -> [(CallableKey, Name)] -> [Name]
-danglingCallables known entries = missingIn known (map snd entries)
+danglingCallables :: Set Name -> [Callable] -> [Name]
+danglingCallables known entries = missingIn known [c.procName | c <- entries]
 
 -- | The 'Program.tellables' targets @known@ does not define.
-danglingTellables :: Set Name -> [(TellableKey, Name)] -> [Name]
-danglingTellables known entries = missingIn known (map snd entries)
+danglingTellables :: Set Name -> [Tellable] -> [Name]
+danglingTellables known entries = missingIn known [t.procName | t <- entries]
 
 -- | The 'Program.tellablesUnqualified' targets @known@ does not define.
 --

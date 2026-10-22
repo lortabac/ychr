@@ -70,6 +70,7 @@ import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.Runtime.Session (SessionInput, toSessionInput, withCHRExtra)
 import YCHR.Internal.StdLib (StdLib (..))
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
+import YCHR.Internal.VM (Callable (..))
 import YCHR.Run
   ( Error,
     PreparedQuery (..),
@@ -315,7 +316,7 @@ executeQuery pg prog prep warnings = do
         (toSessionInput prog)
         hostCalls
         prep.extraProcs
-        prep.extraCallables
+        (map (uncurry Callable) prep.extraCallables)
         (executePreparedQuery prep.liftedGoals)
   pure $ case executed of
     Left exc -> (pg, response statusError (warns ++ renderException exc))

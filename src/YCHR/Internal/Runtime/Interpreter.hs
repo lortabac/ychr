@@ -123,8 +123,11 @@ import YCHR.Internal.Runtime.Monad
     HostCallFn (..),
     HostCallRegistry,
     SessionEnv (..),
+    callableRegistry,
+    evaluableRegistry,
     initSessionEnv,
     runChr,
+    tellableRegistry,
   )
 import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Registry
@@ -282,8 +285,8 @@ liftChr action = InterpM (\_ -> action)
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
   let slotProgram = lowerProgram prog
-      evaluableMap = Map.fromList prog.evaluables
-      callableMap = Map.fromList prog.callables
+      evaluableMap = evaluableRegistry prog.evaluables
+      callableMap = callableRegistry prog.callables
   env <-
     initSessionEnv
       prog.typeNames
@@ -295,7 +298,7 @@ interpret prog hostCalls entryName args = do
       hostCalls
       evaluableMap
       callableMap
-      (Map.fromList prog.tellables)
+      (tellableRegistry prog.tellables)
       prog.tellablesUnqualified
       Map.empty
       mempty

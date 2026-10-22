@@ -443,7 +443,7 @@ callablesDispatchTests =
         assertEqual
           "distinct callables keys"
           (length prog.program.callables)
-          (Map.size (Map.fromList prog.program.callables)),
+          (Map.size (Map.fromList [(c.key, ()) | c <- prog.program.callables])),
       testCase "a function reference is keyed by flat name and arity" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         assertEqual
@@ -501,9 +501,9 @@ callablesDispatchTests =
         }
     lookupCallable :: CompiledProgram -> VM.CallableKey -> Maybe Text
     lookupCallable prog key =
-      case lookup key prog.program.callables of
-        Just (VM.Name n) -> Just n
-        Nothing -> Nothing
+      case [c.procName | c <- prog.program.callables, c.key == key] of
+        VM.Name n : _ -> Just n
+        [] -> Nothing
     isLiftedLambda :: D.Function -> Bool
     isLiftedLambda func = T.isPrefixOf "__lambda_" func.name.baseName
 
