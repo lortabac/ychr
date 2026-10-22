@@ -1050,11 +1050,11 @@ checkDeclContiguity openNames = go Set.empty Set.empty
     go _closed _active [] = []
     go closed active (ItemDirective dir : rest)
       | Just ds <- declListOf dir =
-          let names = [(fd.name, loc) | Ann (FunctionDecl fd) loc <- ds]
-              nonOpenNames = [n | n <- map fst names, n `Set.notMember` openNames]
+          let names = [Ann fd.name loc | Ann (FunctionDecl fd) loc <- ds]
+              nonOpenNames = [n.node | n <- names, n.node `Set.notMember` openNames]
               reopened =
                 [ noAnnPAt loc (DiscontiguousFunctionDecls n)
-                | (n, loc) <- names,
+                | Ann n loc <- names,
                   n `Set.notMember` openNames,
                   n `Set.member` closed,
                   n `Set.notMember` active
@@ -1573,9 +1573,8 @@ convertTypeExpr (Ann pexpr loc) = case pexpr of
 convertTypeDefinition :: Ann PExpr -> Conv (Maybe (Ann TypeDefinition))
 convertTypeDefinition (Ann pexpr loc) = case pexpr of
   -- name(Vars) ---> con1 ; con2 ; ...
-  Compound "--->" [typeHead, alts] -> case typeHeadShape typeHead.node of
-    Nothing -> failWith (AnnP MalformedTypeDefinition loc pexpr)
-    Just (tname, rawParams) -> case validateTypeParams rawParams of
+  Compound "--->" [typeHead, alts] -> case compoundView typeHead.node of
+    Compound tname rawParams -> case validateTypeParams rawParams of
       Left errs -> failWithAll errs
       Right tvars ->
         case partitionEithers
@@ -1589,11 +1588,13 @@ convertTypeDefinition (Ann pexpr loc) = case pexpr of
                   )
               )
           (errs, _) -> failWithAll errs
+    _ -> failWith (AnnP MalformedTypeDefinition loc pexpr)
   _ -> failWith (AnnP MalformedTypeDefinition loc pexpr)
-  where
-    typeHeadShape (Atom n) = Just (n, [])
-    typeHeadShape (Compound n vars) = Just (n, vars)
-    typeHeadShape _ = Nothing
+
+-- | View an atom as a compound with no arguments.
+compoundView :: PExpr -> PExpr
+compoundView (Atom n) = Compound n []
+compoundView e = e
 
 -- | Validate a type head's parameter list: every parameter must be a
 -- variable, and no variable may repeat. Rejecting outright keeps the
@@ -1674,8 +1675,8 @@ reservedMacroHeadNames =
 -- used (see "YCHR.Internal.Rename.Macro").
 convertMacroClause :: Ann PExpr -> Conv (Maybe NamedClause)
 convertMacroClause (Ann pexpr loc) = case pexpr of
-  Compound "--->" [macroHead, macroBody] -> case macroHeadShape macroHead.node of
-    Just (mname, rawParams)
+  Compound "--->" [macroHead, macroBody] -> case compoundView macroHead.node of
+    Compound mname rawParams
       | Set.notMember mname reservedMacroHeadNames ->
           case unfoldListStrict macroBody.node of
             Nothing -> failWith (AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node)
@@ -1684,10 +1685,6 @@ convertMacroClause (Ann pexpr loc) = case pexpr of
                in pure (Just (NamedClause mname (AnnP clause loc pexpr)))
     _ -> failWith (AnnP MalformedMacroHead macroHead.sourceLoc macroHead.node)
   _ -> failWith (AnnP MalformedMacroHead loc pexpr)
-  where
-    macroHeadShape (Atom n) = Just (n, [])
-    macroHeadShape (Compound n args) = Just (n, args)
-    macroHeadShape _ = Nothing
 
 -- | Convert a PExpr to a 'DataConstructor'. Returns 'Left' if the
 -- constructor or any of its argument types is malformed.
@@ -1711,18 +1708,17 @@ convertDataConstructor (Ann pexpr loc) = case pexpr of
 -- Returns 'Nothing' and a 'MalformedTopLevel' error when the input is
 -- not a recognized rule shape (named or unnamed @\<=\>@/@==\>@).
 convertRule :: Ann PExpr -> Conv (Maybe Rule)
-convertRule expr =
-  let (mName, ruleExpr) = case expr.node of
-        Compound "@" [Ann (Atom name) nameLoc, body] ->
-          (Just (Ann name nameLoc), body)
-        _ -> (Nothing, expr)
-      mkRule head_ gb =
-        let gab = splitGuardBody gb
-         in Just (Rule mName head_ gab.guard gab.body [])
-   in case ruleExpr.node of
-        Compound "<=>" [h, gb] -> (`mkRule` gb) <$> convertHead h
-        Compound "==>" [h, gb] -> (`mkRule` gb) <$> convertPropagationHead h
-        _ -> failWith (AnnP MalformedTopLevel expr.sourceLoc expr.node)
+convertRule expr = case expr.node of
+  Compound "@" [Ann (Atom name) nameLoc, body] -> named (Just (Ann name nameLoc)) body
+  _ -> named Nothing expr
+  where
+    named mName ruleExpr = case ruleExpr.node of
+      Compound "<=>" [h, gb] -> mkRule mName gb <$> convertHead h
+      Compound "==>" [h, gb] -> mkRule mName gb <$> convertPropagationHead h
+      _ -> failWith (AnnP MalformedTopLevel expr.sourceLoc expr.node)
+    mkRule mName gb head_ =
+      let gab = splitGuardBody gb
+       in Just (Rule mName head_ gab.guard gab.body [])
 
 -- | Convert the head of a simplification or simpagation rule. Malformed
 -- constraints are dropped from the resulting head and reported as errors.
@@ -1778,19 +1774,19 @@ goalList x = AnnP (map convertTerm (flattenComma x)) x.sourceLoc x.node
 -- expected @lhs [| guard] -> rhs@ shape.
 convertFunctionEquation :: Ann PExpr -> Conv (Maybe (AnnP FunctionEquation))
 convertFunctionEquation (Ann pexpr loc) = case pexpr of
-  Compound "->" [lhs, rhs] ->
-    let (pat, guardAnn) = case lhs.node of
-          -- Guarded: lhs_pattern | guard -> rhs
-          Compound "|" [p, guard_] -> (p, goalList guard_)
-          -- Unguarded: lhs_pattern -> rhs
-          _ -> (lhs, noAnnPAt lhs.sourceLoc [])
-     in case equationHead pat of
-          Just c ->
-            let rhsAnn = AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node
-                eqn = FunctionEquation c.name c.args guardAnn rhsAnn []
-             in pure (Just (AnnP eqn loc pexpr))
-          Nothing -> failWith (AnnP MalformedFunctionEquation loc pexpr)
+  Compound "->" [lhs, rhs] -> case lhs.node of
+    -- Guarded: lhs_pattern | guard -> rhs
+    Compound "|" [p, guard_] -> equation p (goalList guard_) rhs
+    -- Unguarded: lhs_pattern -> rhs
+    _ -> equation lhs (noAnnPAt lhs.sourceLoc []) rhs
   _ -> failWith (AnnP MalformedFunctionEquation loc pexpr)
+  where
+    equation pat guardAnn rhs = case equationHead pat of
+      Just c ->
+        let rhsAnn = AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node
+            eqn = FunctionEquation c.name c.args guardAnn rhsAnn []
+         in pure (Just (AnnP eqn loc pexpr))
+      Nothing -> failWith (AnnP MalformedFunctionEquation loc pexpr)
 
 -- | Flatten a function-equation RHS (or lambda body) on the top-level
 -- comma operator. Non-empty by construction.
