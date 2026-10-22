@@ -5,13 +5,12 @@
 -- Every @CallExpr@ a program carries must name one of the program's own
 -- procedures, and so must every target of its 'Program.evaluables',
 -- 'Program.callables' and 'Program.tellables' dispatch tables. The
--- compiler derives the procedure names, the call sites that name them,
--- and the tables' targets from the same function and constraint lists,
--- so a dangling target is a
--- compiler bug rather than anything a user program can produce. The
--- interpreter reports one at run time as @callProc: unknown procedure
--- \@name@, on whichever path reaches it first; this module lets the
--- compiler report it before the program runs.
+-- compiler derives the procedure names, the call sites that name them, and
+-- the tables' targets from the same function and constraint lists, so a
+-- dangling target is a compiler bug rather than anything a user program
+-- can produce. The interpreter reports one at run time as
+-- @callProc: unknown procedure \@name@, on whichever path reaches it
+-- first; this module lets the compiler report it before the program runs.
 --
 -- The check is run as an assertion, not as a user-facing diagnostic:
 -- see @YCHR.Internal.Compile.Pipeline.compileModules@ for the compiled
@@ -49,14 +48,15 @@ import Data.Text qualified as T
 import YCHR.Internal.VM.Types
   ( BoolExpr (..),
     CallArg (..),
-    CallableKey,
-    EvaluableKey,
+    Callable (..),
+    Evaluable (..),
     IdExpr (..),
+    IndexCondition (..),
     Name (..),
     Procedure (..),
     Program (..),
     Stmt (..),
-    TellableKey,
+    Tellable (..),
     TellableResolution (..),
     ValExpr (..),
     historyIdsList,
@@ -70,10 +70,10 @@ procedureNames procs = Set.fromList [p.name | p <- procs]
 -- | Every call target a compiled program carries that its own procedure
 -- table does not define: the @CallExpr@ sites of every body, then the
 -- 'Program.evaluables', 'Program.callables', 'Program.tellables' and
--- 'Program.tellablesUnqualified' targets. In
--- first-appearance order, without duplicates. An empty list means the
--- program is closed; 'closureFailure' turns a non-empty one into the
--- message a caller reports.
+-- 'Program.tellablesUnqualified' targets. In first-appearance order,
+-- without duplicates. An empty list means the program is closed;
+-- 'closureFailure' turns a non-empty one into the message a caller
+-- reports.
 danglingTargets :: Program -> [Name]
 danglingTargets prog =
   danglingCalls known prog.procedures
@@ -102,7 +102,7 @@ danglingCalls known = dedup . concatMap procedureCalls
           ++ concatMap stmtCalls thenStmts
           ++ concatMap stmtCalls elseStmts
       Foreach _ _ _ conds body ->
-        concatMap (valCalls . snd) conds ++ concatMap stmtCalls body
+        concatMap (valCalls . (.expectedValue)) conds ++ concatMap stmtCalls body
       Continue _ -> []
       Break _ -> []
       Return e -> valCalls e
@@ -155,18 +155,19 @@ danglingCalls known = dedup . concatMap procedureCalls
       IdVar _ -> []
       CreateConstraint _ es -> concatMap valCalls es
 
--- | The dispatch-table half of 'danglingTargets', split out for the
--- union check @Session.withCHRExtra@ runs over query-time callables.
-danglingEvaluables :: Set Name -> [(EvaluableKey, Name)] -> [Name]
-danglingEvaluables known entries = missingIn known (map snd entries)
+-- | The 'Program.evaluables' targets @known@ does not define.
+danglingEvaluables :: Set Name -> [Evaluable] -> [Name]
+danglingEvaluables known entries = missingIn known [e.procName | e <- entries]
 
--- | 'danglingEvaluables' over a program's callables table.
-danglingCallables :: Set Name -> [(CallableKey, Name)] -> [Name]
-danglingCallables known entries = missingIn known (map snd entries)
+-- | The 'Program.callables' targets @known@ does not define. Exported
+-- for the union check @Session.withCHRExtra@ runs over query-time
+-- callables.
+danglingCallables :: Set Name -> [Callable] -> [Name]
+danglingCallables known entries = missingIn known [c.procName | c <- entries]
 
 -- | The 'Program.tellables' targets @known@ does not define.
-danglingTellables :: Set Name -> [(TellableKey, Name)] -> [Name]
-danglingTellables known entries = missingIn known (map snd entries)
+danglingTellables :: Set Name -> [Tellable] -> [Name]
+danglingTellables known entries = missingIn known [t.procName | t <- entries]
 
 -- | The 'Program.tellablesUnqualified' targets @known@ does not define.
 --
@@ -181,6 +182,7 @@ danglingTellableResolutions known =
     resolutionTargets (UniqueTell procName) = [procName]
     resolutionTargets (AmbiguousTell _) = []
 
+-- | The names @known@ does not define, deduplicated.
 missingIn :: Set Name -> [Name] -> [Name]
 missingIn known = dedup . filter (`Set.notMember` known)
 

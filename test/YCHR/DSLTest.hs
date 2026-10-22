@@ -32,6 +32,7 @@ tests =
 -- Fixtures
 --------------------------------------------------------------------------------
 
+-- | Module @Order@: @leq/2@ with a reflexivity rule.
 orderModule :: Module
 orderModule =
   module' "Order"
@@ -39,6 +40,7 @@ orderModule =
     `defining` [ "refl" @: ([term "leq" [var "X", var "X"]] <=> [atom "true"])
                ]
 
+-- | Module @Logic@: transitivity over the imported @leq/2@.
 logicModule :: Module
 logicModule =
   module' "Logic"

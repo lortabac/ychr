@@ -1,5 +1,3 @@
-{-# LANGUAGE NumericUnderscores #-}
-
 module Main (main) where
 
 import Test.Tasty (Timeout, defaultMain, localOption, mkTimeout, testGroup)
@@ -38,23 +36,19 @@ import YCHR.TypeSoundnessTest qualified
 import YCHR.VM.ClosureTest qualified
 import YCHR.VM.SExprTest qualified
 
--- | Per-test wall-clock cap. Most of the suite runs in milliseconds, so
--- this only ever fires on a genuine non-termination — a type-checker
--- rule that builds a cyclic term, say, whose deref never returns.
--- Without it such a regression wedges the runner and reports a
--- suite-level failure that names no test.
+-- | Per-test wall-clock cap. Most tests run in milliseconds, so this
+-- only fires on a real hang, e.g. a type-checker rule that builds a
+-- cyclic term whose deref never returns. Without it a hang wedges the
+-- runner and the failure names no test.
 --
--- The cap is deliberately generous: "YCHR.TypeSoundness" runs two
--- 300-case hedgehog properties that take roughly 85s of CPU each (the
--- pair overlaps to about that wall-clock when the two run in parallel),
--- and `make test` now runs the other suites at the same time, so on a
--- few-core machine both legitimately run against several times their
--- CPU time. A 60s cap turned that contention into a false timeout for
--- both properties; 600s leaves ample headroom while still catching a
--- real hang.
+-- The cap is generous on purpose: "YCHR.TypeSoundness" runs two 300-case
+-- hedgehog properties at about 85s of CPU each, and `make test` runs the
+-- other suites at the same time, so on a few-core machine they can take
+-- several times their CPU time. A 60s cap gave false timeouts there.
 testTimeout :: Timeout
 testTimeout = mkTimeout 600_000_000
 
+-- | Run the whole Haskell test suite.
 main :: IO ()
 main = do
   golden <- YCHR.GoldenTest.tests

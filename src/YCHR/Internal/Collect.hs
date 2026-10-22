@@ -15,6 +15,9 @@
 --     into the single 'CollectedImport' so everything downstream sees
 --     only one kind of import.
 --
+--   * 'selfNamedLibraryImports' reports a module that imports the
+--     library of its own name.
+--
 --   * 'addLibraryPrelude' prepends a @prelude@ import to each library
 --     module (except the prelude itself).
 module YCHR.Internal.Collect
@@ -26,6 +29,9 @@ module YCHR.Internal.Collect
   )
 where
 
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify')
+import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -37,9 +43,13 @@ import YCHR.Internal.Parsed
 
 -- | Why import collection failed.
 data CollectError
-  = UnknownLibrary Text
-  | CircularLibraryImport [Text]
-  | SelfNamedLibraryImport Text
+  = -- | No bundled library has this name.
+    UnknownLibrary Text
+  | -- | Library import cycle: the libraries on the current path, in
+    -- sorted order (not import order), then the one that closes it.
+    CircularLibraryImport [Text]
+  | -- | A module imports the library of its own name.
+    SelfNamedLibraryImport Text
   | -- | Two user modules declare the same name. Carries the name and
     -- the file paths that declare it, in input order.
     DuplicateModuleName Text [FilePath]
@@ -65,9 +75,13 @@ resolveLibraryClosure includeStdlib stdlibMap userSeeds =
   let seeds =
         (if includeStdlib then map noAnnP (Map.keys stdlibMap) else [])
           ++ userSeeds
-   in case resolveAll stdlibMap Set.empty Set.empty seeds of
-        (_, libs, []) -> Right libs
-        (_, _, errs) -> Left errs
+   in case runWriter (evalStateT (resolveAll stdlibMap Set.empty seeds) Set.empty) of
+        (libs, []) -> Right libs
+        (_, errs) -> Left errs
+
+-- | The library walk: the set of fully processed libraries as state,
+-- errors as output.
+type Walk = StateT (Set Text) (Writer [Diagnostic CollectError])
 
 -- | DFS resolution of library dependencies.
 --
@@ -78,50 +92,27 @@ resolveLibraryClosure includeStdlib stdlibMap userSeeds =
 --   - Recursively resolve its own library imports.
 --   - Append to the result list (post-order ensures dependencies come first).
 --
--- The visited set is threaded through so that a library resolved by one
--- sibling is not re-resolved by the next.
-resolveAll ::
-  Map Text Module ->
-  Set Text ->
-  Set Text ->
-  [AnnP Text] ->
-  (Set Text, [Module], [Diagnostic CollectError])
-resolveAll _ visited _ [] = (visited, [], [])
-resolveAll stdlibMap visited path (ann : rest)
-  | Set.member name visited = resolveAll stdlibMap visited path rest
-  | Set.member name path =
-      let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-       in ( visited',
-            restMods,
-            noDiag
-              ( AnnP
-                  ( CircularLibraryImport
-                      ( Set.toList path
-                          ++ [name]
-                      )
-                  )
-                  ann.sourceLoc
-                  ann.parsed
-              )
-              : restErrs
-          )
-  | otherwise =
-      case Map.lookup name stdlibMap of
-        Nothing ->
-          let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-           in ( visited',
-                restMods,
-                noDiag (AnnP (UnknownLibrary name) ann.sourceLoc ann.parsed) : restErrs
-              )
-        Just m ->
-          let deps = libraryImports m
-              path' = Set.insert name path
-              (visited1, depMods, depErrs) = resolveAll stdlibMap visited path' deps
-              visited2 = Set.insert name visited1
-              (visited3, restMods, restErrs) = resolveAll stdlibMap visited2 path rest
-           in (visited3, depMods ++ [m] ++ restMods, depErrs ++ restErrs)
+-- The visited set is the state, so a library resolved by one sibling is
+-- not re-resolved by the next.
+resolveAll :: Map Text Module -> Set Text -> [AnnP Text] -> Walk [Module]
+resolveAll stdlibMap path = fmap concat . traverse resolveOne
   where
-    name = ann.node
+    resolveOne ann = do
+      visited <- get
+      step visited ann
+    step visited ann
+      | Set.member name visited = pure []
+      | Set.member name path =
+          report (CircularLibraryImport (Set.toList path ++ [name]))
+      | otherwise = case Map.lookup name stdlibMap of
+          Nothing -> report (UnknownLibrary name)
+          Just m -> do
+            depMods <- resolveAll stdlibMap (Set.insert name path) (libraryImports m)
+            modify' (Set.insert name)
+            pure (depMods ++ [m])
+      where
+        name = ann.node
+        report e = [] <$ lift (tell [noDiag (AnnP e ann.sourceLoc ann.parsed)])
 
 -- | Extract library import names from a module.
 libraryImports :: Module -> [AnnP Text]

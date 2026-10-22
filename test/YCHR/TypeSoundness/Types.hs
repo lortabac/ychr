@@ -68,6 +68,8 @@ module YCHR.TypeSoundness.Types
     RuleHead (..),
     Rule (..),
     Probe (..),
+    Tell (..),
+    UnboundVar (..),
     Goal (..),
     Program (..),
 
@@ -83,10 +85,12 @@ module YCHR.TypeSoundness.Types
     renderSTy,
     findCtor,
     ctorFieldTys,
+    ctorFieldGTys,
     ruleHeadList,
     ruleHeads,
     minHeadStratum,
     headArgTys,
+    TypedVar (..),
     patVars,
     headVars,
     isTell,
@@ -166,6 +170,8 @@ isSkTy t = case t of
   SSk _ -> True
   SCon _ _ -> False
 
+-- | A data constructor and its field types, in terms of its type's
+-- parameters.
 data CtorDef = CtorDef {ctorName :: Text, ctorFields :: [DTy]}
   deriving (Eq, Show)
 
@@ -225,7 +231,7 @@ separable:
     shared between head positions — "at every depth, not just at the
     top level" (§Evidence forms), so `list(T1)` merging with `list(T2)`
     has to merge `T1` with `T2`;
-  * later (stage 4) pin a skolem to a constructor application whose
+  * pin a skolem to a constructor application whose
     parameters are themselves *fresh skolems* — `T := box(beta)` —
     which is what a `GuardMatch` at a rigid scrutinee does.
 
@@ -238,6 +244,7 @@ queue, no residual solving and no overload resolution, because the
 generator *chooses* every instantiation rather than inferring it.
 -}
 
+-- | The skolem store. See Note [Skolems are one structural store].
 data SkolemEnv = SkolemEnv
   { skBind :: Map Skolem STy,
     skNext :: Int,
@@ -282,6 +289,7 @@ data PinSource
     PinTypePred
   deriving (Eq, Ord, Show)
 
+-- | A store with no skolems allocated.
 emptySkolems :: SkolemEnv
 emptySkolems =
   SkolemEnv
@@ -291,6 +299,7 @@ emptySkolems =
       skForce = Map.empty
     }
 
+-- | Allocate @n@ fresh, unbound skolems.
 freshSkolems :: Int -> SkolemEnv -> ([Skolem], SkolemEnv)
 freshSkolems n env =
   ( [Skolem i | i <- [env.skNext .. env.skNext + n - 1]],
@@ -435,6 +444,7 @@ resolveRt env t = case t of
       Nothing -> t
   _ -> t
 
+-- | Occurs check under the runtime view ('resolveRt').
 occursRt :: SkolemEnv -> Skolem -> STy -> Bool
 occursRt env s t = case resolveRt env t of
   SSk s' -> s == s'
@@ -477,6 +487,7 @@ pinSkolem src s t env
             skPinned = Map.insert s src env'.skPinned
           }
 
+-- | Occurs check under the checker bindings only.
 occurs :: SkolemEnv -> Skolem -> STy -> Bool
 occurs env s t = case resolveSTy env t of
   SSk s' -> s == s'
@@ -505,8 +516,8 @@ substD sub t = case t of
 --
 -- Not 'groundD' with an empty substitution: that falls back to a
 -- default for an unmapped parameter, so a position declared at a type
--- variable would come back looking like @int@. Two call sites needed
--- to know the difference and neither could get it from 'groundD'.
+-- variable would come back looking like @int@. Use this where the
+-- difference matters.
 groundDTy :: DTy -> Maybe GTy
 groundDTy t = case t of
   DVar _ -> Nothing
@@ -573,6 +584,7 @@ data Boundness = Ground | MayBeUnbound
 data TwoOrMore a = TwoOrMore a a [a]
   deriving (Eq, Show)
 
+-- | The elements, in order.
 twoOrMoreList :: TwoOrMore a -> [a]
 twoOrMoreList (TwoOrMore x y zs) = x : y : zs
 
@@ -603,6 +615,7 @@ data ClassFn = ClassFn
   }
   deriving (Eq, Show)
 
+-- | The instance types a class is declared at.
 classInstances :: ClassFn -> [GTy]
 classInstances c = twoOrMoreList c.cfInstances
 
@@ -635,6 +648,7 @@ data Sig = Sig
   }
   deriving (Eq, Show)
 
+-- | The declared types of a signature's arguments.
 sigArgDTys :: Sig -> NonEmpty DTy
 sigArgDTys s = fmap (.argTy) s.sigArgs
 
@@ -642,9 +656,11 @@ sigArgDTys s = fmap (.argTy) s.sigArgs
 -- Terms
 -- ---------------------------------------------------------------------------
 
+-- | A literal.
 data Lit = LInt Integer | LBool Bool
   deriving (Eq, Show)
 
+-- | A head pattern. 'PNil' and 'PCons' are list patterns.
 data Pat
   = PVar Text STy
   | PWild
@@ -654,9 +670,11 @@ data Pat
   | PCons Pat Pat
   deriving (Eq, Show)
 
+-- | An arithmetic operator: @+@, @-@, @*@.
 data ArithOp = Add | Sub | Mul
   deriving (Eq, Show)
 
+-- | An integer comparison: @<@, @>@, @>=@, @=<@.
 data CmpOp = CLt | CGt | CGe | CLe
   deriving (Eq, Show)
 
@@ -769,12 +787,15 @@ data STerm
   | SCtor Text [STerm]
   deriving (Eq, Show)
 
+-- | One rule-body goal.
 data BodyItem
   = -- | A body tell, with the instantiation the generator committed to
     -- for the callee's type parameters.
     BTell Sig (Map TvName STy) [Expr]
-  | BIs Text STy Expr
-  | BUnify Text STy STerm
+  | -- | @V is E@, with the type of @V@.
+    BIs Text STy Expr
+  | -- | @V = T@, with the type of @V@.
+    BUnify Text STy STerm
   | -- | Instrumentation: @host:ts_obs(Code, V…)@ in body position,
     -- result discarded.
     BObs Int [Expr]
@@ -800,6 +821,8 @@ data RuleHead
   | HSimpagate (NonEmpty HeadC) (NonEmpty HeadC)
   deriving (Eq, Show)
 
+-- | A generated rule, with the skolem and boundness facts its
+-- generation established.
 data Rule = Rule
   { ruleName :: Text,
     ruleHead :: RuleHead,
@@ -841,8 +864,18 @@ data Rule = Rule
 data Probe = Probe {probeVar :: Text, probeTy :: GTy, probeExpr :: Expr}
   deriving (Eq, Show)
 
+-- | A constraint told with these arguments.
+data Tell = Tell {sig :: Sig, args :: [Expr]}
+  deriving (Eq, Show)
+
+-- | A query variable passed unbound into a position declared at 'ty'.
+data UnboundVar = UnboundVar {name :: Text, ty :: GTy}
+  deriving (Eq, Show)
+
+-- | The query a generated program is run with.
 data Goal = Goal
-  { tells :: NonEmpty (Sig, [Expr]),
+  { -- | The constraints told, with their arguments.
+    tells :: NonEmpty Tell,
     probes :: [Probe],
     -- | Query variables passed unbound into a 'MayBeUnbound' position,
     -- with the static type of the position they went into.
@@ -852,10 +885,11 @@ data Goal = Goal
     -- the run eventually bound the variable to has to inhabit the type
     -- the declaration gave that position. A variable still free at the
     -- end is fine — that is the mode axis, not this one.
-    unbounds :: [(Text, GTy)]
+    unbounds :: [UnboundVar]
   }
   deriving (Eq, Show)
 
+-- | A whole generated program, plus its query.
 data Program = Program
   { adts :: [AdtDef],
     classes :: [ClassFn],
@@ -881,8 +915,10 @@ data ObsSite = ObsSite
   }
   deriving (Eq, Show)
 
+-- | What an instrumentation point checks.
 data ObsCheck
-  = ExpectPos [PosCheck]
+  = -- | Check each observed value, in order.
+    ExpectPos [PosCheck]
   | -- | This site must never be reached. Used for the catch-all
     -- equation of a generated class: arriving there means a
     -- bound-required operation was dispatched at a value whose type
@@ -925,22 +961,27 @@ data PosCheck
 -- Helpers
 -- ---------------------------------------------------------------------------
 
+-- | 'show' as 'Text'.
 tshow :: (Show a) => a -> Text
 tshow = T.pack . show
 
+-- | Render a type in source syntax.
 renderGTy :: GTy -> Text
 renderGTy (GTy c as) = renderApp (tyConName c) (map renderGTy as)
 
+-- | Render a type in source syntax.
 renderDTy :: DTy -> Text
 renderDTy t = case t of
   DVar (TvName v) -> v
   DCon c as -> renderApp (tyConName c) (map renderDTy as)
 
+-- | Render a type in source syntax, a skolem as @T#n@.
 renderSTy :: STy -> Text
 renderSTy t = case t of
   SSk (Skolem i) -> "T#" <> tshow i
   SCon c as -> renderApp (tyConName c) (map renderSTy as)
 
+-- | A type constructor's source name.
 tyConName :: TyCon -> Text
 tyConName c = case c of
   CInt -> "int"
@@ -948,10 +989,12 @@ tyConName c = case c of
   CList -> "list"
   CAdt def -> def.adtName
 
+-- | @f@ or @f(a, b)@.
 renderApp :: Text -> [Text] -> Text
 renderApp f [] = f
 renderApp f as = f <> "(" <> T.intercalate ", " as <> ")"
 
+-- | Look up a constructor of a type by name.
 findCtor :: AdtDef -> Text -> Maybe CtorDef
 findCtor def n = List.find (\c -> c.ctorName == n) (NE.toList def.adtCtors)
 
@@ -962,15 +1005,26 @@ ctorFieldTys def args c = map (substD sub) c.ctorFields
   where
     sub = Map.fromList (zip def.adtParams args)
 
+-- | A constructor's field types at a ground instantiation of its
+-- type's parameters.
+ctorFieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
+ctorFieldGTys def args c = map (groundD sub) c.ctorFields
+  where
+    sub = Map.fromList (zip def.adtParams args)
+
+-- | All head occurrences, kept ones first for a simpagation.
 ruleHeadList :: RuleHead -> NonEmpty HeadC
 ruleHeadList rh = case rh of
   HSimplify hs -> hs
   HPropagate hs -> hs
   HSimpagate ks rs -> ks <> rs
 
+-- | All head occurrences of a rule.
 ruleHeads :: Rule -> [HeadC]
 ruleHeads r = NE.toList (ruleHeadList r.ruleHead)
 
+-- | The lowest stratum in a rule's head. Its body may only tell
+-- strata below this.
 minHeadStratum :: Rule -> Int
 minHeadStratum r = minimum [h.headSig.stratum | h <- ruleHeads r]
 
@@ -982,6 +1036,10 @@ headArgTys h = fmap (substD sub) (sigArgDTys h.headSig)
   where
     sub = Map.fromList (zip h.headSig.sigTvs (map SSk h.headSkolems))
 
+-- | A variable with its implementation-site type.
+data TypedVar = TypedVar {name :: Text, ty :: STy}
+  deriving (Eq, Show)
+
 -- | Every variable bound by a pattern, with its implementation-site
 -- type, in left-to-right order. Names may repeat:
 -- 'YCHR.TypeSoundness.Gen.maybeAlias' can rename one pattern variable
@@ -992,9 +1050,9 @@ headArgTys h = fmap (substD sub) (sigArgDTys h.headSig)
 -- field, and an ill-shaped pattern is an 'error' rather than an empty
 -- result: this is what decides which variables get observed, so
 -- silently returning fewer would silently weaken the oracle.
-patVars :: SkolemEnv -> STy -> Pat -> [(Text, STy)]
+patVars :: SkolemEnv -> STy -> Pat -> [TypedVar]
 patVars env ty p = case p of
-  PVar n _ -> [(n, ty)]
+  PVar n _ -> [TypedVar n ty]
   PWild -> []
   PLit _ -> []
   PNil -> []
@@ -1020,10 +1078,12 @@ patVars env ty p = case p of
             ++ T.unpack (renderSTy ty)
         )
 
-headVars :: SkolemEnv -> HeadC -> [(Text, STy)]
+-- | 'patVars' over every argument of one head occurrence.
+headVars :: SkolemEnv -> HeadC -> [TypedVar]
 headVars env h =
   concat (zipWith (patVars env) (NE.toList (headArgTys h)) (NE.toList h.pats))
 
+-- | Is this body item a tell?
 isTell :: BodyItem -> Bool
 isTell it = case it of
   BTell {} -> True
@@ -1031,9 +1091,9 @@ isTell it = case it of
 
 -- | Every head-bound variable of a rule, deduplicated by name, under
 -- the rule's own final skolem state.
-ruleVars :: Rule -> [(Text, STy)]
+ruleVars :: Rule -> [TypedVar]
 ruleVars r =
-  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSk) (ruleHeads r))
+  nubBy (\a b -> a.name == b.name) (concatMap (headVars r.ruleSk) (ruleHeads r))
 
 -- | Whether each of a rule's variables may hold no value yet.
 varBoundness :: Rule -> Text -> Boundness
@@ -1048,6 +1108,6 @@ varBoundnessAtHead r n
   | otherwise = Ground
 
 -- | As 'ruleVars', but under the state matching alone establishes.
-ruleVarsAtHead :: Rule -> [(Text, STy)]
+ruleVarsAtHead :: Rule -> [TypedVar]
 ruleVarsAtHead r =
-  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSkHead) (ruleHeads r))
+  nubBy (\a b -> a.name == b.name) (concatMap (headVars r.ruleSkHead) (ruleHeads r))

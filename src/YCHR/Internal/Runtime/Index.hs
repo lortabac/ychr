@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | Per-argument indexes for the constraint store.
 --
 -- The /Indexing/ optimization of Van Weert, Wuille, Schrijvers and
@@ -18,9 +16,9 @@
 -- a subset. A suspension is therefore filed under a key only when its
 -- indexed argument was fully ground when it was stored
 -- ('GroundKey'), and every other suspension — an unbound variable, or
--- a compound term containing one — goes into that position's non-ground
--- fallback set ('posRest'). A lookup for a ground key yields the
--- bucket's slots plus the whole fallback set.
+-- a compound term containing one — goes into that position's
+-- non-ground fallback set (the @rest@ of a 'PosIndex'). A lookup for a
+-- ground key yields the bucket's slots plus the whole fallback set.
 --
 -- Two properties make that superset exact enough to be worth having:
 --
@@ -71,6 +69,8 @@ module YCHR.Internal.Runtime.Index
     emptyStoreIndex,
     indexThreshold,
     typeIndexed,
+    IndexEntry (..),
+    PositionKey (..),
     insertConstraints,
     candidateSlots,
 
@@ -140,8 +140,11 @@ floatKey x
 -- type: a bucket of store slots per ground key, plus the slots whose
 -- value at this position was not fully ground when they were stored.
 data PosIndex = PosIndex
-  { posBuckets :: !(Map GroundKey IntSet),
-    posRest :: !IntSet
+  { -- | Slots filed under each ground key.
+    buckets :: !(Map GroundKey IntSet),
+    -- | Slots whose argument was not fully ground. Every lookup gets
+    -- these too.
+    rest :: !IntSet
   }
   deriving (Show, Eq)
 
@@ -185,33 +188,46 @@ indexThreshold = 16
 typeIndexed :: ConstraintType -> StoreIndex -> Bool
 typeIndexed cType si = case cType of ConstraintType tidx -> IntMap.member tidx si
 
--- | Record stored suspensions in the index. Each element pairs a store
--- slot — the suspension's position in the type's store sequence — with
--- its /indexed/ argument positions and their keys, 'Nothing' when the
+-- | One stored suspension to file in the index: its store slot — its
+-- position in the type's store sequence — and the keys of its /indexed/
+-- argument positions.
+data IndexEntry = IndexEntry
+  { slot :: !Int,
+    keys :: ![PositionKey]
+  }
+  deriving (Show, Eq)
+
+-- | An indexed argument position and its key, 'Nothing' when the
 -- argument was not fully ground.
+data PositionKey = PositionKey
+  { position :: !Int,
+    key :: !(Maybe GroundKey)
+  }
+  deriving (Show, Eq)
+
+-- | Record stored suspensions in the index.
 --
--- A single store passes one element; the pass that crosses
+-- A single store passes one entry; the pass that crosses
 -- 'indexThreshold' passes the whole bucket.
-insertConstraints ::
-  ConstraintType ->
-  [(Int, [(Int, Maybe GroundKey)])] ->
-  StoreIndex ->
-  StoreIndex
+insertConstraints :: ConstraintType -> [IndexEntry] -> StoreIndex -> StoreIndex
 insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
   where
     ConstraintType tidx = cType
-    insertStore si (slot, entries) = List.foldl' (insertEntry slot) si entries
-    insertEntry slot si (pos, mkey) =
-      IntMap.alter (Just . insertAt slot pos mkey . fromMaybe IntMap.empty) tidx si
+    insertStore si e = List.foldl' (insertEntry e.slot) si e.keys
+    insertEntry slot si pk =
+      IntMap.alter
+        (Just . insertAt slot pk.position pk.key . fromMaybe IntMap.empty)
+        tidx
+        si
     insertAt slot pos mkey =
       IntMap.alter (Just . updateAt slot mkey . fromMaybe emptyPosIndex) pos
     updateAt slot mkey p = case mkey of
       Just key ->
         p
-          { posBuckets =
-              Map.insertWith IntSet.union key (IntSet.singleton slot) p.posBuckets
+          { buckets =
+              Map.insertWith IntSet.union key (IntSet.singleton slot) p.buckets
           }
-      Nothing -> p {posRest = IntSet.insert slot p.posRest}
+      Nothing -> p {rest = IntSet.insert slot p.rest}
 
 -- | The store slots that may hold a suspension whose argument at
 -- @pos@ is 'equal' to a value with key @key@, in ascending (store)
@@ -222,6 +238,6 @@ insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
 candidateSlots :: ConstraintType -> Int -> GroundKey -> StoreIndex -> IntSet
 candidateSlots cType pos key si = case IntMap.lookup tidx si >>= IntMap.lookup pos of
   Nothing -> IntSet.empty
-  Just p -> IntSet.union (Map.findWithDefault IntSet.empty key p.posBuckets) p.posRest
+  Just p -> IntSet.union (Map.findWithDefault IntSet.empty key p.buckets) p.rest
   where
     ConstraintType tidx = cType

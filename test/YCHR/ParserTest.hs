@@ -8,9 +8,11 @@ import Data.Text qualified as Text
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Parsec (ParseError)
+import YCHR.DSL (atom)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Parser
-  ( ModuleHeader (..),
+  ( Converted (..),
+    ModuleHeader (..),
     ParseValidationError (..),
     builtinOps,
     collectModuleHeader,
@@ -18,6 +20,7 @@ import YCHR.Internal.Parser
     parseModule,
     parseModuleWith,
   )
+import YCHR.TestHelpers (algebraicTD)
 
 -- | Parser tests: directives, rules, terms, operators, type declarations, and errors.
 tests :: TestTree
@@ -38,13 +41,13 @@ tests =
     ]
 
 -- | Parse a source string with no filename.
-p :: Text -> Either (ParseError) Module
-p src = fst <$> parseModule "" src
+p :: Text -> Either ParseError Module
+p src = (.value) <$> parseModule "" src
 
 -- | Parse and return only the validation errors, with each error's
 -- variant extracted (location/origin discarded).
-pErrs :: Text -> Either (ParseError) [ParseValidationError]
-pErrs src = map (.node) . snd <$> parseModule "" src
+pErrs :: Text -> Either ParseError [ParseValidationError]
+pErrs src = map (.node) . (.errors) <$> parseModule "" src
 
 -- | A module's macros as @(name, arity, [(params, body)])@, with the
 -- source annotations dropped.
@@ -53,10 +56,6 @@ macroShapes m =
   [ (d.node.name, d.node.arity, [(c.node.params, c.node.body) | c <- d.node.clauses])
   | d <- m.macros
   ]
-
--- | An atom, as the parser represents it.
-atom :: Text -> Term
-atom n = CompoundTerm (Unqualified n) []
 
 -- | Strip source locations from a Rule for structural comparison.
 stripRuleLoc :: Rule -> Rule
@@ -1010,6 +1009,7 @@ moduleTests =
           Left e -> assertFailure (show e)
     ]
 
+-- | The classic @leq@ handler, as a parser fixture.
 leqSource :: Text
 leqSource =
   Text.unlines
@@ -1097,11 +1097,11 @@ errorTests =
 -- ---------------------------------------------------------------------------
 
 -- | Helper: collect operators from a module header.
-ops :: Text -> Either (ParseError) [OpDecl]
+ops :: Text -> Either ParseError [OpDecl]
 ops src = (.exportOps) <$> collectModuleHeader "" src
 
 -- | Helper: collect imports from a module header.
-hdrImports :: Text -> Either (ParseError) [Import]
+hdrImports :: Text -> Either ParseError [Import]
 hdrImports src = map (.node) . (.headerImports) <$> collectModuleHeader "" src
 
 firstPassTests :: TestTree
@@ -1162,15 +1162,11 @@ withFirstRule extract m = case m.rules of
   [] -> assertFailure "expected at least one rule, got none"
   (r : _) -> pure (extract r)
 
+-- | The type definitions of a parsed module, locations stripped.
 typeDefsOf :: Text -> IO [TypeDefinition]
 typeDefsOf src = parseAndExtract p extract src
   where
     extract m = pure (map (normalizeTypeDefLoc . (.node)) m.typeDecls)
-
--- | Build an algebraic type definition positionally (the constructors
--- are wrapped in the 'Algebraic' 'TypeKind').
-algebraicTD :: Name -> [Text] -> [DataConstructor] -> SourceLoc -> TypeDefinition
-algebraicTD n vs cs loc = TypeDefinition n vs (Algebraic cs) loc
 
 -- | Strip the source location from a parsed 'TypeDefinition' so test
 -- expected values can omit line/column numbers.
@@ -1183,6 +1179,7 @@ normalizeTypeDefLoc td =
       loc = dummyLoc
     }
 
+-- | The body of the module's first rule.
 bodyOf :: Text -> IO [Term]
 bodyOf src = parseAndExtract p (withFirstRule (.body.node)) src
 
@@ -1193,7 +1190,10 @@ bodyOfWithLt :: Text -> IO [Term]
 bodyOfWithLt src = case mergeOps builtinOps [OpDecl 700 Xfx "<"] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
   Right table ->
-    parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src
+    parseAndExtract
+      (fmap (.value) . parseModuleWith table "")
+      (withFirstRule (.body.node))
+      src
 
 -- | Like 'bodyOf', but parses with @\\==@ added as a 700 xfx operator, the
 -- fixity the prelude declares, so a body can use the disequality operator
@@ -1202,10 +1202,15 @@ bodyOfWithBackslashEq :: Text -> IO [Term]
 bodyOfWithBackslashEq src = case mergeOps builtinOps [OpDecl 700 Xfx "\\=="] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
   Right table ->
-    parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src
+    parseAndExtract
+      (fmap (.value) . parseModuleWith table "")
+      (withFirstRule (.body.node))
+      src
 
+-- | The head of the module's first rule.
 headOf :: Text -> IO Head
 headOf src = parseAndExtract p (withFirstRule (.head.node)) src
 
+-- | The guard of the module's first rule.
 guardOf :: Text -> IO [Term]
 guardOf src = parseAndExtract p (withFirstRule (.guard.node)) src

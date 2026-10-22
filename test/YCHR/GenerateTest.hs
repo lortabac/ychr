@@ -34,7 +34,7 @@ import YCHR.Embedded.Generate.Emit
 import YCHR.Embedded.Generate.Instances ()
 import YCHR.Embedded.Generate.ToCode (toCode)
 import YCHR.Internal.Loc (SourceLoc (..))
-import YCHR.Internal.PExpr (OpTable, PExpr (..), mkOpTable, opTableEntries)
+import YCHR.Internal.PExpr (OpDecl (..), OpTable, PExpr (..), mkOpTable, opTableEntries)
 import YCHR.Internal.Parser (parseTermWith)
 import YCHR.Internal.Runtime.Session (SessionInput (..))
 import YCHR.Internal.StdLib (StdLib (..))
@@ -105,65 +105,65 @@ tests =
       testGroup
         "hoist"
         [ testCase "splits a list longer than the chunk size" $ do
-            let (body, bindings) =
+            let hoisted =
                   hoist
                     (EmitOptions {chunkSize = 2, maxBindingBytes = 1000000})
                     (CList [CInt 1, CInt 2, CInt 3, CInt 4, CInt 5])
-            length bindings @?= 3
-            renderCode body @?= "concat [generated_0, generated_1, generated_2]",
+            length hoisted.bindings @?= 3
+            renderCode hoisted.body @?= "concat [generated_0, generated_1, generated_2]",
           testCase "lifts an oversized expression to its own binding" $ do
-            let (body, bindings) =
+            let hoisted =
                   hoist
                     (EmitOptions {chunkSize = 100, maxBindingBytes = 5})
                     (CApp (CName "f") [CString "abcdef"])
-            length bindings @?= 1
-            body @?= CName "generated_0",
+            length hoisted.bindings @?= 1
+            hoisted.body @?= CName "generated_0",
           testCase "leaves an empty list in place" $ do
-            let (body, bindings) =
+            let hoisted =
                   hoist defaultEmitOptions (CList [])
-            length bindings @?= 0
-            body @?= CList []
+            length hoisted.bindings @?= 0
+            hoisted.body @?= CList []
         ],
       testGroup
         "emitted modules"
         [ testCase "the standard library module names every library" $ do
             let StdLib modules = Embedded.stdlib
                 emitted = emitStdLib defaultEmitOptions Embedded.stdlib
-            emitted.modulePath @?= "YCHR/Embedded/Generated/StdLib.hs"
+            emitted.path @?= "YCHR/Embedded/Generated/StdLib.hs"
             assertContains
-              (emitted.moduleSource)
+              (emitted.source)
               "module YCHR.Embedded.Generated.StdLib (stdlib) where"
-            assertContains (emitted.moduleSource) "stdlib :: StdLib"
+            assertContains (emitted.source) "stdlib :: StdLib"
             mapM_
               ( \name ->
                   assertContains
-                    (emitted.moduleSource)
+                    (emitted.source)
                     (renderCode (CString (T.unpack name)))
               )
               (Map.keys modules)
             assertBool
               "the module is substantial"
-              (length (emitted.moduleSource) > 100000),
+              (length (emitted.source) > 100000),
           testCase "the type-checker module rebuilds through mkSessionInput" $ do
             let emitted = emitTypeChecker defaultEmitOptions Embedded.typeCheckerProgram
-            emitted.modulePath @?= "YCHR/Embedded/Generated/TypeCheck.hs"
+            emitted.path @?= "YCHR/Embedded/Generated/TypeCheck.hs"
             assertContains
-              (emitted.moduleSource)
+              (emitted.source)
               "module YCHR.Embedded.Generated.TypeCheck (typeCheckerProgram) where"
-            assertContains (emitted.moduleSource) "typeCheckerProgram :: SessionInput"
-            assertContains (emitted.moduleSource) "Session.mkSessionInput"
-            assertContains (emitted.moduleSource) "VM.Program"
+            assertContains (emitted.source) "typeCheckerProgram :: SessionInput"
+            assertContains (emitted.source) "Session.mkSessionInput"
+            assertContains (emitted.source) "VM.Program"
             -- The operator table is not derivable from the VM program, so
             -- the module rebuilds it from an emitted mkOpTable literal.
-            assertContains (emitted.moduleSource) "PExpr.mkOpTable"
+            assertContains (emitted.source) "PExpr.mkOpTable"
             assertBool
               "the module is substantial"
-              (length (emitted.moduleSource) > 100000),
+              (length (emitted.source) > 100000),
           testCase "the emitted operator table parses like the table it came from" $ do
             let table = Embedded.typeCheckerProgram.opTable
                 rebuilt =
                   mkOpTable
-                    [(fix, [(ty, name)]) | (fix, ty, name) <- opTableEntries table]
+                    [(fix, [(ty, name)]) | OpDecl fix ty name <- opTableEntries table]
             mapM_
               (sameParse table rebuilt)
               ["1 + 1", "1 + 1.5", "a = b", "f(X, Y)", "X is 2 * 3"]
@@ -184,12 +184,14 @@ tests =
         ]
     ]
 
+-- | The generated stdlib and type-checker modules.
 emittedModules :: [GeneratedModule]
 emittedModules =
   [ emitStdLib defaultEmitOptions Embedded.stdlib,
     emitTypeChecker defaultEmitOptions Embedded.typeCheckerProgram
   ]
 
+-- | Assert that no binding body is longer than the budget.
 checkBudget :: Int -> GeneratedModule -> Assertion
 checkBudget budget emitted =
   assertBool
@@ -198,11 +200,11 @@ checkBudget budget emitted =
         ++ "-character budget: "
         ++ show (take 5 oversized)
         ++ " in "
-        ++ emitted.modulePath
+        ++ emitted.path
     )
     (null oversized)
   where
-    oversized = filter (> budget) (bindingBodyLengths emitted.moduleSource)
+    oversized = filter (> budget) (bindingBodyLengths emitted.source)
 
 -- | The rendered length of every top-level binding body, which
 -- 'YCHR.Embedded.Generate.Emit' writes as one line indented by two
@@ -211,10 +213,11 @@ bindingBodyLengths :: String -> [Int]
 bindingBodyLengths source =
   [length line - 2 | line <- lines source, "  " `isPrefixOf` line]
 
+-- | Assert that every referenced @generated_N@ name is defined.
 checkDangling :: GeneratedModule -> Assertion
 checkDangling emitted = do
-  let definitions = definedNames emitted.moduleSource
-      references = generatedNamesIn emitted.moduleSource
+  let definitions = definedNames emitted.source
+      references = generatedNamesIn emitted.source
       dangling = filter (`notElem` definitions) references
   assertBool
     ("referenced but never defined: " ++ show (take 5 dangling))
@@ -243,12 +246,14 @@ generatedNamesIn source
             else ("generated_" ++ digits) : generatedNamesIn rest
   | otherwise = generatedNamesIn (drop 1 source)
 
+-- | Is this exactly @generated_@ followed by digits?
 isGeneratedName :: String -> Bool
 isGeneratedName name =
   "generated_" `isPrefixOf` name
     && let digits = drop (length ("generated_" :: String)) name
         in not (null digits) && all isDigit digits
 
+-- | Assert that the generated source contains @needle@.
 assertContains :: String -> String -> IO ()
 assertContains haystack needle =
   assertBool

@@ -43,12 +43,18 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Internal.Constructors (ConEnv, buildConEnv, canonicalizeCon, lookupCon)
+import YCHR.Internal.Constructors
+  ( ConEnv,
+    buildConEnv,
+    canonicalizeCon,
+    lookupCon,
+  )
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( DataConstructor (..),
+    FunSignature (..),
     Name,
     Term (..),
     TypeDefinition (..),
@@ -103,9 +109,8 @@ checkFunction conEnv typeMap fd
   | fd.isOpen = []
   | [sig] <- fd.signatures,
     AnnP _ loc origin : _ <- fd.equations =
-      let (argTys, _) = sig
-          classify = colTypeOf conEnv typeMap
-          colTypes = map classify argTys
+      let classify = colTypeOf typeMap
+          colTypes = map classify sig.argTypes
           -- Only equations without a user guard count as covering.
           matrix =
             [ zipWith (termToPat conEnv typeMap) colTypes eq.args
@@ -119,15 +124,17 @@ checkFunction conEnv typeMap fd
             -- declared algebraic type. An all-wildcard witness means the
             -- non-exhaustiveness stems entirely from non-enumerable columns
             -- (e.g. an @int@ argument with no catch-all, or a function whose
-            -- every equation is guarded), which we deliberately do not flag.
+            -- every equation is guarded), which is not flagged.
             Just witness
               | any hasCon witness ->
-                  let warning = NonExhaustiveMatch displayName (witnessCall fd witness)
+                  let warning =
+                        NonExhaustiveMatch displayName (witnessCall fd witness)
                    in [Diagnostic (Just label) (AnnP warning loc origin) []]
             _ -> []
   | otherwise = []
   where
-    displayName = flattenName (qualifiedToName fd.name) <> "/" <> T.pack (show fd.arity)
+    displayName =
+      flattenName (qualifiedToName fd.name) <> "/" <> T.pack (show fd.arity)
     label = "function " <> displayName
 
 -- | Build the witness call term @f(w1, …, wn)@ from a witness pattern
@@ -137,6 +144,7 @@ witnessCall :: R.FunctionDef -> [Pat] -> Term
 witnessCall fd witness =
   CompoundTerm (qualifiedToName fd.name) (map patToTerm witness)
 
+-- | Turn a witness pattern back into a term for the warning message.
 patToTerm :: Pat -> Term
 patToTerm PWild = Wildcard
 patToTerm (PCon name sub) = CompoundTerm name (map patToTerm sub)
@@ -156,14 +164,14 @@ hasCon (PCon _ _) = True
 -- declared algebraic type is enumerable; everything else (type
 -- variables, built-in @int@\/@float@\/@string@, opaque types, unknown
 -- names) is 'OtherCol'.
-colTypeOf :: ConEnv -> Map Name TypeDefinition -> TypeExpr -> ColType
-colTypeOf _ typeMap (TypeCon name _) =
+colTypeOf :: Map Name TypeDefinition -> TypeExpr -> ColType
+colTypeOf typeMap (TypeCon name _) =
   case Map.lookup name typeMap of
     Just td -> case td.kind of
       Algebraic cs -> AlgCol cs
       Opaque -> OtherCol
     Nothing -> OtherCol
-colTypeOf _ _ (TypeVar _) = OtherCol
+colTypeOf _ (TypeVar _) = OtherCol
 
 -- | Reduce a pattern term against the declared type of its position.
 -- Constructors of the position's algebraic type survive (recursing into
@@ -178,18 +186,18 @@ termToPat conEnv typeMap (AlgCol cs) term = case term of
   CompoundTerm name sub ->
     let canonical = canonicalizeCon conEnv name
      in case lookupCon conEnv canonical of
-          Just (_, dc)
+          Just dc
             -- The constructor must belong to this position's type and be
             -- applied at its declared arity; otherwise the program is
-            -- type-incorrect (diagnosed elsewhere) and we stay
-            -- conservative with a wildcard.
+            -- type-incorrect (diagnosed elsewhere), so stay conservative
+            -- with a wildcard.
             | dc.conName `elem` [c.conName | c <- cs],
               length sub == length dc.conArgs ->
                 PCon dc.conName (zipWith subPat dc.conArgs sub)
           _ -> PWild
   _ -> PWild
   where
-    subPat ty = termToPat conEnv typeMap (colTypeOf conEnv typeMap ty)
+    subPat ty = termToPat conEnv typeMap (colTypeOf typeMap ty)
 
 -- ---------------------------------------------------------------------------
 -- Maranget usefulness / missing-pattern search

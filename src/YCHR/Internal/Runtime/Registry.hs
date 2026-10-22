@@ -41,6 +41,8 @@ module YCHR.Internal.Runtime.Registry
 where
 
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -217,8 +219,7 @@ baseHostCallRegistry =
         _ -> pure True
     termVariablesPred = HostCallFn $ \case
       [v] -> do
-        (vars, _) <- collectVars Set.empty v
-        pure (valueList vars)
+        valueList <$> collectVars [v]
       _ -> runtimeErrorS "term_variables: expected 1 argument"
     compoundToList = HostCallFn $ \case
       [VTerm f args] -> pure (valueList (VAtom f : args))
@@ -315,56 +316,46 @@ isNonvar = not . isVar
 -- Preserves sharing: the same original variable always maps to the same
 -- fresh variable across the entire copied term.
 copyTerm :: Value -> Chr Value
-copyTerm val = fst <$> go Map.empty val
+copyTerm val = evalStateT (go val) Map.empty
   where
-    go cache v = do
-      v' <- deref v
+    go :: Value -> StateT (Map.Map VarId Value) Chr Value
+    go v = do
+      v' <- lift (deref v)
       case v' of
         VVar _ -> do
-          mid <- getVarId v'
+          mid <- lift (getVarId v')
           case mid of
-            Just vid -> case Map.lookup vid cache of
-              Just fresh -> pure (fresh, cache)
-              Nothing -> do
-                fresh <- newVar
-                pure (fresh, Map.insert vid fresh cache)
-            Nothing -> pure (v', cache)
-        VTerm f args -> do
-          (args', cache') <- goMany cache args
-          pure (VTerm f args', cache')
-        other -> pure (other, cache)
+            Just vid ->
+              gets (Map.lookup vid) >>= \case
+                Just fresh -> pure fresh
+                Nothing -> do
+                  fresh <- lift newVar
+                  modify' (Map.insert vid fresh)
+                  pure fresh
+            Nothing -> pure v'
+        VTerm f args -> VTerm f <$> traverse go args
+        other -> pure other
 
-    goMany cache [] = pure ([], cache)
-    goMany cache (x : xs) = do
-      (x', cache') <- go cache x
-      (xs', cache'') <- goMany cache' xs
-      pure (x' : xs', cache'')
-
--- | Collect all unique unbound variables in a term, traversing into
--- compound term arguments. Returns the collected variables and the
--- updated set of seen 'VarId's.
-collectVars ::
-  Set.Set VarId ->
-  Value ->
-  Chr ([Value], Set.Set VarId)
-collectVars seen v = do
-  v' <- deref v
-  case v' of
-    VVar _ -> do
-      mid <- getVarId v'
-      case mid of
-        Just vid
-          | Set.member vid seen -> pure ([], seen)
-          | otherwise -> pure ([v'], Set.insert vid seen)
-        Nothing -> pure ([], seen)
-    VTerm _ args -> collectVarsMany seen args
-    _ -> pure ([], seen)
+-- | Collect all unique unbound variables in a list of terms, in order
+-- of first occurrence, traversing into compound term arguments.
+collectVars :: [Value] -> Chr [Value]
+collectVars vals = evalStateT (concat <$> traverse go vals) Set.empty
   where
-    collectVarsMany s [] = pure ([], s)
-    collectVarsMany s (x : xs) = do
-      (vars, s') <- collectVars s x
-      (rest, s'') <- collectVarsMany s' xs
-      pure (vars ++ rest, s'')
+    go :: Value -> StateT (Set.Set VarId) Chr [Value]
+    go v = do
+      v' <- lift (deref v)
+      case v' of
+        VVar _ -> do
+          mid <- lift (getVarId v')
+          case mid of
+            Just vid -> do
+              seen <- gets (Set.member vid)
+              if seen
+                then pure []
+                else [v'] <$ modify' (Set.insert vid)
+            Nothing -> pure []
+        VTerm _ args -> concat <$> traverse go args
+        _ -> pure []
 
 -- | Monadic version of 'all'. Short-circuits on the first 'False'.
 allM :: (Monad m) => (a -> m Bool) -> [a] -> m Bool
@@ -384,8 +375,8 @@ isListFunctor f =
 
 -- | Build a Prolog-style list (@[H|T]@) from a Haskell list of values.
 --
--- The empty list is represented as the atom @[]@, and cons cells as
--- @.(H, T)@ compound terms.
+-- Uses the canonical spelling: the empty list is the atom
+-- @prelude__[]@ and a cons cell is a @prelude__.(H, T)@ compound.
 valueList :: [Value] -> Value
 valueList [] = VAtom "prelude__[]"
 valueList (x : xs) = VTerm "prelude__." [x, valueList xs]

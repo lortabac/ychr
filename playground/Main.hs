@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications #-}
 
 -- | Native harness for the playground bridge.
 --
@@ -28,11 +27,12 @@ module Main (main) where
 import Control.Exception (SomeException, displayException, try)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import System.Environment (lookupEnv)
 import System.Exit (exitFailure)
 import System.IO (hFlush, hPutStr, stdout)
+import YCHR.Internal.Resources (resourceRoot)
 import YCHR.Playground
   ( Playground,
+    Step (..),
     initPlayground,
     reload,
     response,
@@ -43,7 +43,7 @@ import YCHR.Playground
 
 main :: IO ()
 main = do
-  root <- resolveRoot
+  root <- resourceRoot
   result <- initPlayground root
   case result of
     Left err -> do
@@ -51,15 +51,6 @@ main = do
       hFlush stdout
       exitFailure
     Right pg -> readCommand pg
-
--- | The resource root: @$YCHR_LIB_DIR@ when set, otherwise the current
--- directory — the same convention @YCHR.Internal.Resources@ uses.
-resolveRoot :: IO FilePath
-resolveRoot = do
-  env <- lookupEnv "YCHR_LIB_DIR"
-  pure $ case env of
-    Just dir | not (null dir) -> dir
-    _ -> "."
 
 -- | Read commands until @:quit@. The playground is threaded explicitly,
 -- so the loaded program survives a failed reload exactly as it does in
@@ -76,12 +67,24 @@ readCommand pg = do
     [] -> readCommand pg
     (":quit" : _) -> pure ()
     (":load" : rest) -> case rest of
-      [] -> emit (pg, response statusError "usage: :load FILE\n")
+      [] ->
+        emit
+          Step
+            { playground = pg,
+              output = response statusError "usage: :load FILE\n"
+            }
       (file : _) -> do
         contents <- try @SomeException (TIO.readFile file)
         case contents of
           Left exc ->
-            emit (pg, response statusError ("Error: " ++ displayException exc ++ "\n"))
+            emit
+              Step
+                { playground = pg,
+                  output =
+                    response
+                      statusError
+                      ("Error: " ++ displayException exc ++ "\n")
+                }
           Right text -> run (reload pg text)
     (":text" : _) -> do
       src <- readProgramText
@@ -95,16 +98,15 @@ readCommand pg = do
 
 -- | Run an operation, print its response with the framing line the tests
 -- split on, and continue with the updated state.
-run :: IO (Playground, String) -> IO ()
-run act = do
-  (pg', out) <- act
-  emit (pg', out)
+run :: IO Step -> IO ()
+run act = act >>= emit
 
-emit :: (Playground, String) -> IO ()
-emit (pg, out) = do
-  hPutStr stdout (out ++ "\n---\n")
+-- | Print a response and its framing line, then read the next command.
+emit :: Step -> IO ()
+emit result = do
+  hPutStr stdout (result.output ++ "\n---\n")
   hFlush stdout
-  readCommand pg
+  readCommand result.playground
 
 -- | Program text terminated by a line containing only @.@.
 readProgramText :: IO String

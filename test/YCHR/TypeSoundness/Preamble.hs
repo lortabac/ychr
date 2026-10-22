@@ -6,7 +6,8 @@
 -- The source text and the Haskell-side tables that describe it live
 -- together here because they have to agree; see 'preamble'.
 module YCHR.TypeSoundness.Preamble
-  ( colorDef,
+  ( -- * Fixed types
+    colorDef,
     shapeDef,
     fixedAdts,
     baseTys,
@@ -14,6 +15,9 @@ module YCHR.TypeSoundness.Preamble
     gBool,
     gList,
     gAdt,
+
+    -- * Predicate library
+    FnSig (..),
     libFnSig,
     libFnName,
     preamble,
@@ -47,18 +51,23 @@ shapeDef =
           :| [CtorDef "rect" [DCon CInt [], DCon CInt []]]
     }
 
+-- | The algebraic types every module defines.
 fixedAdts :: [AdtDef]
 fixedAdts = [colorDef, shapeDef]
 
+-- | @int@.
 gInt :: GTy
 gInt = GTy CInt []
 
+-- | @bool@.
 gBool :: GTy
 gBool = GTy CBool []
 
+-- | @list(T)@.
 gList :: GTy -> GTy
 gList t = GTy CList [t]
 
+-- | An algebraic type applied to its arguments.
 gAdt :: AdtDef -> [GTy] -> GTy
 gAdt def args = GTy (CAdt def) args
 
@@ -67,20 +76,24 @@ gAdt def args = GTy (CAdt def) args
 baseTys :: [GTy]
 baseTys = [gInt, gBool, gList gInt, gAdt colorDef [], gAdt shapeDef []]
 
+-- | A library predicate's argument and result types.
+data FnSig = FnSig {args :: [GTy], result :: GTy}
+
 -- | Argument and result types of each library predicate. Every one is
 -- monomorphic: the polymorphism under test comes from generated
 -- declarations, not from the fixture.
-libFnSig :: LibFn -> ([GTy], GTy)
+libFnSig :: LibFn -> FnSig
 libFnSig fn = case fn of
-  FnLt -> ([gInt, gInt], gBool)
-  FnLte -> ([gInt, gInt], gBool)
-  FnSameInt -> ([gInt, gInt], gBool)
-  FnIsZero -> ([gInt], gBool)
-  FnIsNil -> ([gList gInt], gBool)
-  FnLen -> ([gList gInt], gInt)
-  FnIsRed -> ([gAdt colorDef []], gBool)
-  FnArea -> ([gAdt shapeDef []], gInt)
+  FnLt -> FnSig [gInt, gInt] gBool
+  FnLte -> FnSig [gInt, gInt] gBool
+  FnSameInt -> FnSig [gInt, gInt] gBool
+  FnIsZero -> FnSig [gInt] gBool
+  FnIsNil -> FnSig [gList gInt] gBool
+  FnLen -> FnSig [gList gInt] gInt
+  FnIsRed -> FnSig [gAdt colorDef []] gBool
+  FnArea -> FnSig [gAdt shapeDef []] gInt
 
+-- | The source name of each library predicate.
 libFnName :: LibFn -> Text
 libFnName fn = case fn of
   FnLt -> "lt"

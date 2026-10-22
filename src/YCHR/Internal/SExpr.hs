@@ -6,7 +6,7 @@
 --
 -- @
 -- sexpr  = atom | int | float | string | list
--- atom   = [a-zA-Z_][a-zA-Z0-9_-]*
+-- atom   = (alnum | [_.-])+   (any token that is not a number)
 -- int    = [-]?[0-9]+
 -- float  = [-]?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)?
 -- string = '"' (escape | [^"\\])* '"'
@@ -21,7 +21,7 @@ module YCHR.Internal.SExpr
   )
 where
 
-import Data.Char (isAlpha, isAlphaNum)
+import Data.Char (isAlphaNum)
 import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'concatMap'; the shim supplies it
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
@@ -95,7 +95,8 @@ pList :: Parser SExpr
 pList = SList <$> between (char '(' *> sc) (char ')') (many pSExpr)
 
 pString :: Parser SExpr
-pString = SString . T.pack <$> (char '"' *> P.manyTill charLiteral (try (char '"')))
+pString =
+  SString . T.pack <$> (char '"' *> P.manyTill charLiteral (try (char '"')))
 
 pAtomOrInt :: Parser SExpr
 pAtomOrInt = do
@@ -124,7 +125,3 @@ isAtomChar c = isAlphaNum c || c == '_' || c == '-' || c == '.'
 -- | Whitespace consumer (spaces + line comments starting with @;@).
 sc :: Parser ()
 sc = space space1 (skipLineComment ";")
-
--- | Check if the first character is valid for an atom start.
-_isAtomStart :: Char -> Bool
-_isAtomStart c = isAlpha c || c == '_'

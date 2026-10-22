@@ -1,6 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 -- | Logical variables, compound terms, unification, and equality.
 --
 -- This module provides the foundational layer of the CHR Haskell runtime:

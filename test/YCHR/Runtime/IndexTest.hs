@@ -14,14 +14,11 @@ import Data.Foldable (toList)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (isSubsequenceOf)
-import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Index
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Store
   ( Suspension (..),
     candidateSuspensions,
@@ -44,6 +41,7 @@ import YCHR.Internal.Types (ConstraintType (..), Name (..))
 import YCHR.Internal.VM
   ( ArgIndex (..),
     BoolExpr (..),
+    IndexCondition (..),
     Literal (..),
     ProcKind (..),
     Procedure (..),
@@ -51,6 +49,7 @@ import YCHR.Internal.VM
     Stmt (..),
     ValExpr (..),
   )
+import YCHR.TestHelpers (emptyProgram, runChrIn)
 
 -- | Store indexes: ground keys, candidate narrowing, and indexable positions.
 tests :: TestTree
@@ -71,49 +70,31 @@ tests =
 -- | A session that indexes argument 0 of 'ConstraintType' 0, the
 -- arrangement every candidate test below assumes.
 runIndexEnv :: Chr a -> IO a
-runIndexEnv action = do
-  env <-
-    initSessionEnv
-      (replicate 2 (Unqualified ""))
-      []
-      []
-      (IntMap.fromList [(0, IntSet.singleton 0)])
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runIndexEnv =
+  runChrIn
+    emptySessionConfig
+      { Config.typeNames = replicate 2 (Unqualified ""),
+        Config.indexPositions = IntMap.fromList [(0, IntSet.singleton 0)]
+      }
 
 -- | A program whose single procedure has the given body.
 programWith :: [Stmt] -> Program
 programWith stmts =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      procedures =
+  emptyProgram
+    { procedures =
         [ Procedure
             { name = "p",
               params = [],
               body = stmts,
               procKind = PKTell (ConstraintType 0)
             }
-        ],
-      evaluables = [],
-      callables = [],
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = []
+        ]
     }
 
 -- | A 'Foreach' with one condition on argument @pos@.
 foreach :: ConstraintType -> Word -> [Stmt] -> Stmt
 foreach cType pos body =
-  Foreach "L" cType "susp" [(ArgIndex pos, Lit (IntLit 0))] body
+  Foreach "L" cType "susp" [IndexCondition (ArgIndex pos) (Lit (IntLit 0))] body
 
 -- ---------------------------------------------------------------------------
 -- Keys
@@ -208,12 +189,15 @@ stateTests =
         let si =
               insertConstraints
                 (ConstraintType 0)
-                [(3, [(0, Just (KInt 1))])]
+                [IndexEntry 3 [PositionKey 0 (Just (KInt 1))]]
                 emptyStoreIndex
          in candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.singleton 3,
       testCase "an unkeyable value lands in the fallback set of every key" $
         let si =
-              insertConstraints (ConstraintType 0) [(4, [(0, Nothing)])] emptyStoreIndex
+              insertConstraints
+                (ConstraintType 0)
+                [IndexEntry 4 [PositionKey 0 Nothing]]
+                emptyStoreIndex
          in do
               candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.singleton 4
               candidateSlots (ConstraintType 0) 0 (KInt 99) si @?= IntSet.singleton 4,
@@ -221,15 +205,20 @@ stateTests =
         let si =
               insertConstraints
                 (ConstraintType 0)
-                [(5, [(0, Just (KInt 1))])]
+                [IndexEntry 5 [PositionKey 0 (Just (KInt 1))]]
                 emptyStoreIndex
          in candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= IntSet.empty,
       testCase "entries accumulate per type and position" $
-        let type1 = insertConstraints (ConstraintType 1) [(2, [(0, Just (KInt 1))])]
+        let type1 =
+              insertConstraints
+                (ConstraintType 1)
+                [IndexEntry 2 [PositionKey 0 (Just (KInt 1))]]
             si =
               insertConstraints
                 (ConstraintType 0)
-                [(0, [(0, Just (KInt 1)), (1, Nothing)]), (1, [(0, Just (KInt 1))])]
+                [ IndexEntry 0 [PositionKey 0 (Just (KInt 1)), PositionKey 1 Nothing],
+                  IndexEntry 1 [PositionKey 0 (Just (KInt 1))]
+                ]
                 $ type1 emptyStoreIndex
          in do
               candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.fromList [0, 1]
@@ -238,7 +227,11 @@ stateTests =
               candidateSlots (ConstraintType 0) 0 (KInt 2) si @?= IntSet.empty,
       testCase "a type is indexed exactly once a store is filed for it" $
         let empty = emptyStoreIndex
-            one = insertConstraints (ConstraintType 0) [(0, [(0, Just (KInt 1))])] empty
+            one =
+              insertConstraints
+                (ConstraintType 0)
+                [IndexEntry 0 [PositionKey 0 (Just (KInt 1))]]
+                empty
          in do
               typeIndexed (ConstraintType 0) empty @?= False
               typeIndexed (ConstraintType 1) empty @?= False

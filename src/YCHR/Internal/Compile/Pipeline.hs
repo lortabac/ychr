@@ -3,8 +3,10 @@
 -- | The compilation pipeline: parsing, renaming, resolving, desugaring,
 -- and compiling CHR modules to VM programs.
 --
--- Separate from "YCHR.Run" so that 'compileModules' can be imported by
--- the type-checker TH splice without creating a circular dependency.
+-- Separate from "YCHR.Run" so that lower layers (the runtime session,
+-- the type checker's own compilation in
+-- "YCHR.Internal.TypeCheck.Compiled") can use it without an import
+-- cycle.
 module YCHR.Internal.Compile.Pipeline
   ( -- * Compilation
     Error (..),
@@ -17,10 +19,11 @@ module YCHR.Internal.Compile.Pipeline
     compileModules,
     compileFiles,
     compileParsedModules,
+    compileOrThrow,
   )
 where
 
-import Control.Exception (Exception)
+import Control.Exception (Exception, throwIO)
 import Data.Bifunctor (first)
 import Data.IntMap.Strict (IntMap)
 import Data.IntSet (IntSet)
@@ -90,6 +93,7 @@ import YCHR.Internal.Rename
     RenameError,
     RenameInputs (..),
     RenameWarning,
+    Renamed (..),
     buildExportEnv,
     buildQueryRenameEnv,
     renameProgram,
@@ -127,18 +131,26 @@ import YCHR.Internal.VM.Index (indexablePositions)
 -- you may match on, plus a value you render — not a structure to
 -- destructure.
 data Error
-  = ParseError FilePath ParseError
-  | ParseValidationErrors [AnnP ParseValidationError]
+  = -- | A file failed to parse.
+    ParseError FilePath ParseError
+  | -- | Parsed terms that are not valid CHR items.
+    ParseValidationErrors [AnnP ParseValidationError]
   | -- | Errors from expanding declaration macros (@:- macro_decls@),
     -- including conversion errors in generated clauses. If there are
     -- also plain 'ParseValidationErrors', they're reported here too.
     DeclMacroErrors [Diagnostic DeclMacroError]
-  | CollectErrors [Diagnostic CollectError]
-  | RenameErrors [Diagnostic RenameError]
-  | DesugarErrors [Diagnostic DesugarError]
-  | ResolveErrors [Diagnostic ResolveError]
-  | CompileErrors [Diagnostic CompileError]
-  | OperatorConflict (AnnP Text)
+  | -- | Errors from collecting modules and library imports.
+    CollectErrors [Diagnostic CollectError]
+  | -- | Errors from the renamer.
+    RenameErrors [Diagnostic RenameError]
+  | -- | Errors from desugaring, lambda lifting and inlining.
+    DesugarErrors [Diagnostic DesugarError]
+  | -- | Errors from the resolve phase (flattening, declaration checks).
+    ResolveErrors [Diagnostic ResolveError]
+  | -- | Errors from the CHR-to-VM compiler.
+    CompileErrors [Diagnostic CompileError]
+  | -- | Two operator declarations that cannot live in one table.
+    OperatorConflict (AnnP Text)
   | -- | Type errors detected when checking a goal or query before
     -- execution. The compiled program itself was well-typed; the
     -- diagnostics here pertain only to the user-submitted goal.
@@ -218,14 +230,18 @@ instance Exception Error
 -- As with 'Error', the payloads are internal types; match on the
 -- constructor, render the value.
 data Warning
-  = RenameWarnings [Diagnostic RenameWarning]
-  | ExhaustivenessWarnings [Diagnostic ExhaustivenessWarning]
-  | TypeCheckWarnings [Diagnostic TypeCheckWarning]
+  = -- | Warnings from the renamer.
+    RenameWarnings [Diagnostic RenameWarning]
+  | -- | Functions whose equations are not exhaustive.
+    ExhaustivenessWarnings [Diagnostic ExhaustivenessWarning]
+  | -- | Warnings from the type checker.
+    TypeCheckWarnings [Diagnostic TypeCheckWarning]
   deriving (Show)
 
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
-  { program :: Program,
+  { -- | The VM program.
+    program :: Program,
     -- | 'program' in the Haskell interpreter's slot phase
     -- ('YCHR.Internal.Interpreter.Slots'): the same procedures with every
     -- local variable resolved to a per-procedure integer slot, which is
@@ -246,10 +262,16 @@ data CompiledProgram = CompiledProgram
     -- so rebuilding it per session is visible on a short goal, while
     -- compile-only users never need it.
     indexPositions :: IntMap IntSet,
+    -- | What each unqualified exported name resolves to, for goals.
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
+    -- | Every exported name, qualified.
     exportedSet :: Set Types.QualifiedIdentifier,
+    -- | The constraint-type indices the program was compiled against.
     symbolTable :: SymbolTable,
+    -- | Every module of the program, libraries included.
     allModules :: [CollectedModule],
+    -- | The operator table queries are parsed with: the built-in
+    -- operators plus every loaded module's exported ones.
     opTable :: OpTable,
     -- | All functions in the desugared program (for call dispatch in queries).
     allFunctions :: [D.Function],
@@ -280,21 +302,26 @@ data CompiledProgram = CompiledProgram
 
 -- | The clauses declaration macros spliced into one module, with the
 -- input file the module came from. For @--dump-splices@; see
--- 'YCHR.Internal.Display.renderSplices'. 'spliceItems' holds only the
+-- 'YCHR.Internal.Display.renderSplices'. 'items' holds only the
 -- generated items (a non-empty 'expansion'); user-written clauses are
 -- not in it.
 data ModuleSplices = ModuleSplices
-  { spliceModule :: Text,
-    spliceFile :: FilePath,
-    spliceItems :: [SourceItem]
+  { -- | The module's name.
+    moduleName :: Text,
+    -- | The input file it came from.
+    file :: FilePath,
+    -- | The generated items.
+    items :: [SourceItem]
   }
 
 -- | What an unqualified name in a goal resolves to, given everything the
 -- program exports. 'AmbiguousExport' carries the competing module names so
 -- a diagnostic can list them; resolving it requires the caller to qualify.
 data ExportResolution
-  = UniqueExport Types.QualifiedName
-  | AmbiguousExport [Text]
+  = -- | Exactly one module exports it.
+    UniqueExport Types.QualifiedName
+  | -- | Several do; carries their module names.
+    AmbiguousExport [Text]
   deriving (Show, Eq)
 
 -- | Compile CHR modules from in-memory source text.
@@ -393,9 +420,9 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
       -- Only modules that actually spliced something get a dump block.
       spliceDump =
         [ ModuleSplices
-            { spliceModule = scopeName scope,
-              spliceFile = fp,
-              spliceItems = em.splices
+            { moduleName = scopeName scope,
+              file = fp,
+              items = em.splices
             }
         | (fp, scope, em) <- zip3 (map fst inputs) userScopes expanded,
           not (null em.splices)
@@ -410,9 +437,11 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
   finalizeCompilation
     libraryMods
     opExports
-    trailingLoc
-    (map fst inputs)
-    spliceDump
+    SourceInfo
+      { trailingLocs = trailingLoc,
+        inputPaths = map fst inputs,
+        splices = spliceDump
+      }
     parsed
 
 -- | Compile already-parsed modules. This is the entry point used by
@@ -452,7 +481,33 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
-  finalizeCompilation libraryMods opExports Map.empty [] [] parsed
+  finalizeCompilation libraryMods opExports noSourceInfo parsed
+
+-- | What compiling from source text knows about the user modules beyond
+-- the modules themselves. DSL-built input has none of it
+-- ('noSourceInfo').
+data SourceInfo = SourceInfo
+  { -- | Trailing-location map for the renamer's "use_module after
+    -- non-import" check.
+    trailingLocs :: Map Text (Maybe SourceLoc),
+    -- | The input file each user module came from, positionally aligned
+    -- with the user modules.
+    inputPaths :: [FilePath],
+    -- | The clauses declaration macros spliced into the input modules.
+    splices :: [ModuleSplices]
+  }
+
+-- | The 'SourceInfo' of DSL-built input: no files, no directives.
+noSourceInfo :: SourceInfo
+noSourceInfo = SourceInfo {trailingLocs = Map.empty, inputPaths = [], splices = []}
+
+-- | 'compileParsedModules' with the whole standard library, throwing the
+-- 'Error' and dropping the warnings. Shared by "YCHR.DSL" and
+-- "YCHR.Convert".
+compileOrThrow :: StdLib -> [Module] -> IO CompiledProgram
+compileOrThrow stdlib modules = case compileParsedModules stdlib True modules of
+  Left err -> throwIO err
+  Right (cp, _warnings) -> pure cp
 
 -- | Shared post-parse, post-library-resolution pipeline: rename, resolve,
 -- desugar, lambda-lift, compile, and assemble the resulting
@@ -463,21 +518,12 @@ finalizeCompilation ::
   [Module] ->
   -- | Per-module operator exports (stdlib + user).
   Map Text [OpDecl] ->
-  -- | Trailing-location map for the renamer's
-  -- "use_module after non-import" check. Empty for DSL-built input.
-  Map Text (Maybe SourceLoc) ->
-  -- | The input file each user module came from, positionally aligned
-  -- with the user modules. Empty for DSL-built input, which has no
-  -- files of its own.
-  [FilePath] ->
-  -- | The clauses declaration macros spliced into the input modules.
-  -- Empty for DSL-built input, which has no directives.
-  [ModuleSplices] ->
+  SourceInfo ->
   -- | User modules (parsed).
   [Module] ->
   Either Error (CompiledProgram, [Warning])
-finalizeCompilation libraryMods opExports trailingLocMap inputPaths splicesToDump parsed = do
-  checkDuplicateModules inputPaths parsed
+finalizeCompilation libraryMods opExports sources parsed = do
+  checkDuplicateModules sources.inputPaths parsed
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
   -- providers for every name the library exports and make each use
@@ -508,40 +554,34 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths splicesToDum
       exportEnv = buildExportEnv allMods
       exportMap =
         Map.fromList
-          [ (Types.UnqualifiedIdentifier n a, toResolution n ms)
-          | ((n, a), ms) <- toListExport exportEnv
+          [ (k, toResolution k.localName ms)
+          | (k, ms) <- toListExport exportEnv
           ]
       exportedSet =
         Set.fromList
-          [ Types.QualifiedIdentifier m n a
-          | ((n, a), ms) <- toListExport exportEnv,
+          [ Types.QualifiedIdentifier m k.localName k.arity
+          | (k, ms) <- toListExport exportEnv,
             m <- ms
           ]
       renameInputs =
         RenameInputs
           { operatorExports = opExports,
-            trailingLoc = trailingLocMap
+            trailingLoc = sources.trailingLocs
           }
-  (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
-  resolved <- first ResolveErrors (resolveProgram renamed)
+  renamed <- first RenameErrors (renameProgram renameInputs allMods)
+  resolved <- first ResolveErrors (resolveProgram renamed.result)
   desugared <- first DesugarErrors (desugarProgram resolved)
-  let (desugaredLifted, liftErrs) = liftAllLambdas desugared
-  case liftErrs of
-    [] -> pure ()
-    _ -> Left (DesugarErrors liftErrs)
+  desugaredLifted <- first DesugarErrors (liftAllLambdas desugared)
   -- After lambda lifting, so a lambda inside a disjunct is already a
   -- closure over the enclosing scope by the time the branch moves out.
   -- 'desugaredProgram' below keeps the /pre/-lowering AST, because the
   -- type checker has to see each branch in the rule it was written in.
   let desugared' = lowerDisjunctions desugaredLifted
-  let (desugaredInlined, inlineErrs) = inlineFunctions desugared'
-  case inlineErrs of
-    [] -> pure ()
-    _ -> Left (DesugarErrors inlineErrs)
+  desugaredInlined <- first DesugarErrors (inlineFunctions desugared')
   let symTab = extractSymbolTable desugaredInlined
       exhaustWarnings = checkExhaustiveness resolved
       warnings =
-        [RenameWarnings renameWarnings | not (null renameWarnings)]
+        [RenameWarnings renamed.warnings | not (null renamed.warnings)]
           ++ [ExhaustivenessWarnings exhaustWarnings | not (null exhaustWarnings)]
   prog <- first CompileErrors (compile desugaredInlined symTab)
   -- Assert the procedure-name closure invariant: every call the
@@ -553,9 +593,9 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths splicesToDum
   case closureFailure "compileModules" (danglingTargets prog) of
     Just msg -> error msg
     Nothing -> pure ()
-  -- The query parser uses the union of every user module's operator
-  -- visibility, so a query at the REPL can use any operator any user
-  -- module declares.
+  -- The query parser uses the union of every loaded module's exported
+  -- operators, so a query at the REPL can use any operator any module
+  -- exports.
   queryTable <- case mergeOps builtinOps (concat (Map.elems opExports)) of
     Left conflict -> Left (OperatorConflict (noAnnP conflict))
     Right t -> Right t
@@ -580,7 +620,7 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths splicesToDum
           queryFunctionVisibility = buildQueryFunctionVisibility allMods,
           queryRenameEnv = buildQueryRenameEnv allMods,
           desugaredProgram = desugared,
-          splices = splicesToDump
+          splices = sources.splices
         },
       warnings
     )

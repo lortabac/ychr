@@ -10,6 +10,7 @@ module YCHR.Internal.Display
     -- * Displaying
     displaySrcLoc,
     displayMsgWithSrcLoc,
+    MsgBlock (..),
     renderSplices,
 
     -- * Error codes
@@ -73,7 +74,11 @@ import YCHR.Internal.Rename.Macro
   )
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.TypeCheck (TypeCheckError (..), TypeCheckWarning (..))
+import YCHR.Internal.TypeCheck
+  ( ConstructorDecl (..),
+    TypeCheckError (..),
+    TypeCheckWarning (..),
+  )
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (StackFrame (..))
 
@@ -118,12 +123,12 @@ renderSplices = intercalate "\n" . map renderModule
     renderModule ms =
       unlines
         ( ( "% splices for "
-              ++ ms.spliceFile
+              ++ ms.file
               ++ " (module "
-              ++ T.unpack ms.spliceModule
+              ++ T.unpack ms.moduleName
               ++ ")"
           )
-            : renderItems Nothing ms.spliceItems
+            : renderItems Nothing ms.items
         )
     -- A nested use's clauses stay under the outermost use's comment, so
     -- the key is the chain's last step (chains are innermost first).
@@ -135,7 +140,9 @@ renderSplices = intercalate "\n" . map renderModule
       chain ->
         let step = last chain
             originLine = ["% " ++ renderStep step | prev /= Just step]
-         in originLine ++ (prettyPExprSrc si.term.node ++ ".") : renderItems (Just step) rest
+         in originLine
+              ++ (prettyPExprSrc si.term.node ++ ".")
+              : renderItems (Just step) rest
     renderStep :: ExpansionStep -> String
     renderStep step =
       T.unpack step.macroModule
@@ -169,22 +176,14 @@ severityColor SevStackTrace = Cyan
 -- ast_node
 -- @
 --
--- The macro-expansion chain ('ctxLines', from 'Diagnostic.diagContext')
--- is empty for every diagnostic except a 'RenameError'\/'RenameWarning'
--- raised inside a @:- macro@ expansion; every other 'Display' instance
--- always passes @[]@. See docs/reference/macros.md §Diagnostics.
-displayMsgWithSrcLoc ::
-  ErrorCode ->
-  Severity ->
-  String ->
-  P.SourceLoc ->
-  Maybe String ->
-  Maybe String ->
-  [String] ->
-  String
-displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode ctxLines =
-  let col = severityColor sev
-      lbl = severityLabel sev
+-- The macro-expansion chain ('MsgBlock.context', from
+-- @Diagnostic.context@) is empty for every diagnostic except one raised
+-- inside a macro expansion. See docs/reference/macros.md §Diagnostics.
+displayMsgWithSrcLoc :: MsgBlock -> String
+displayMsgWithSrcLoc block =
+  let msg = block.message
+      col = severityColor block.severity
+      lbl = severityLabel block.severity
       c = setSGRCode [SetColor Foreground Vivid col]
       r = setSGRCode [Reset]
    in c
@@ -194,9 +193,9 @@ displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode ctxLines =
         ++ r
         ++ "\n"
         ++ setSGRCode [SetConsoleIntensity BoldIntensity]
-        ++ displaySrcLoc loc
+        ++ displaySrcLoc block.loc
         ++ ": "
-        ++ displayErrorCode code
+        ++ displayErrorCode block.code
         ++ "\n"
         ++ maybe
           ""
@@ -208,9 +207,9 @@ displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode ctxLines =
                 ++ r
                 ++ "\n"
           )
-          maybeLabel
+          block.label
         ++ msg
-        ++ concatMap (\cl -> "\n  " ++ cl) ctxLines
+        ++ concatMap (\cl -> "\n  " ++ cl) block.context
         ++ maybe
           ""
           ( \n ->
@@ -223,9 +222,43 @@ displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode ctxLines =
                 ++ n
                 ++ setSGRCode [SetItalicized False]
           )
-          maybeNode
+          block.node
         ++ "\n"
         ++ r
+
+-- | One diagnostic block, as 'displayMsgWithSrcLoc' renders it.
+data MsgBlock = MsgBlock
+  { code :: ErrorCode,
+    severity :: Severity,
+    message :: String,
+    loc :: P.SourceLoc,
+    -- | Shown as @<<label>>@ under the location line.
+    label :: Maybe String,
+    -- | Source snippet, shown in italics after the message.
+    node :: Maybe String,
+    -- | Macro-expansion chain, one line each.
+    context :: [String]
+  }
+
+-- | Render a located diagnostic. Every 'Diagnostic' instance below is
+-- this with its own severity, code and message function.
+displayDiagnostic ::
+  Severity ->
+  (e -> ErrorCode) ->
+  (e -> String) ->
+  Diagnostic e ->
+  String
+displayDiagnostic sev codeOf msgOf (Diagnostic lbl (AnnP err loc origin) ctx) =
+  displayMsgWithSrcLoc
+    MsgBlock
+      { code = codeOf err,
+        severity = sev,
+        message = msgOf err,
+        loc = loc,
+        label = fmap T.unpack lbl,
+        node = Just (prettyPExprSrc origin),
+        context = map T.unpack ctx
+      }
 
 -- | Join multiple error messages. Each message is expected to end with
 -- a newline, so a single @\"\\n\"@ separator produces a blank line between
@@ -239,9 +272,9 @@ displayErrors = intercalate "\n"
 withHint :: String -> String -> String
 withHint msg hint = msg ++ "\n  Hint: " ++ hint
 
--- | Render a macro's qualified name as @mod:name@, for 'renameErrorMsg'.
-macroQn :: Types.QualifiedName -> String
-macroQn qn = T.unpack (Types.flattenName (Types.qualifiedToName qn))
+-- | Render a qualified name as @mod:name@.
+displayQualifiedName :: Types.QualifiedName -> String
+displayQualifiedName qn = T.unpack (Types.flattenName (Types.qualifiedToName qn))
 
 -- | Convert a parsec 'Text.Parsec.Pos.SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
@@ -477,13 +510,15 @@ runtimeErrorCode = ErrorCode 60001
 instance Display (P.AnnP ParseValidationError) where
   displayMsg (AnnP err loc origin) =
     displayMsgWithSrcLoc
-      (parseValidationErrorCode err)
-      SevError
-      (parseValidationErrorMsg err)
-      loc
-      Nothing
-      (Just (prettyPExprSrc origin))
-      []
+      MsgBlock
+        { code = parseValidationErrorCode err,
+          severity = SevError,
+          message = parseValidationErrorMsg err,
+          loc = loc,
+          label = Nothing,
+          node = Just (prettyPExprSrc origin),
+          context = []
+        }
 
 parseValidationErrorMsg :: ParseValidationError -> String
 parseValidationErrorMsg (DiscontiguousEquations name) =
@@ -645,15 +680,7 @@ parseValidationErrorMsg (DuplicateTypeParameter v) =
     "type parameters must be distinct variables"
 
 instance Display (Diagnostic ResolveError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (resolveErrorCode err)
-      SevError
-      (resolveErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError resolveErrorCode resolveErrorMsg
 
 resolveErrorMsg :: ResolveError -> String
 resolveErrorMsg (ConstraintHasEquations name) =
@@ -908,15 +935,7 @@ refiningViolationMsg (RefiningRepeatedParameter v) =
   )
 
 instance Display (Diagnostic CollectError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (collectErrorCode err)
-      SevError
-      (collectErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError collectErrorCode collectErrorMsg
 
 collectErrorMsg :: CollectError -> String
 collectErrorMsg (UnknownLibrary name) =
@@ -947,15 +966,7 @@ collectErrorMsg (DuplicateModuleName name paths) =
     "a module name may be declared in exactly one input; give the modules distinct names"
 
 instance Display (Diagnostic DeclMacroError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (declMacroErrorCode err)
-      SevError
-      (declMacroErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError declMacroErrorCode declMacroErrorMsg
 
 declMacroErrorMsg :: DeclMacroError -> String
 declMacroErrorMsg (MacroDeclsForbiddenClause form) =
@@ -979,15 +990,7 @@ declMacroErrorMsg (DeclMacroRenameError e) = renameErrorMsg e
 declMacroErrorMsg (DeclMacroParseError e) = parseValidationErrorMsg e
 
 instance Display (Diagnostic RenameError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (renameErrorCode err)
-      SevError
-      (renameErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError renameErrorCode renameErrorMsg
 
 renameErrorMsg :: RenameError -> String
 renameErrorMsg (AmbiguousName name arity candidates) =
@@ -1100,14 +1103,19 @@ renameErrorMsg (DuplicateMacro name arity) =
 renameErrorMsg (MacroKindMismatch qn arity kind) = case kind of
   P.GoalMacro ->
     withHint
-      ("Goal macro '" ++ macroQn qn ++ "/" ++ show arity ++ "' used as a directive")
+      ( "Goal macro '"
+          ++ displayQualifiedName qn
+          ++ "/"
+          ++ show arity
+          ++ "' used as a directive"
+      )
       ( "a goal macro (':- macro') is used in a goal position; a directive"
           ++ " can only use a declaration macro (':- macro_decls')"
       )
   P.DeclMacro ->
     withHint
       ( "Declaration macro '"
-          ++ macroQn qn
+          ++ displayQualifiedName qn
           ++ "/"
           ++ show arity
           ++ "' used in a goal position"
@@ -1120,7 +1128,7 @@ renameErrorMsg (MacroKindMismatch qn arity kind) = case kind of
 renameErrorMsg (MacroNameCollision qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' collides with a constraint or function of the same name"
@@ -1129,7 +1137,7 @@ renameErrorMsg (MacroNameCollision qn arity) =
 renameErrorMsg (MacroOutsideGoalPosition qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' used outside a goal position"
@@ -1164,7 +1172,7 @@ renameErrorMsg (UnsupportedTellArity arity) =
 renameErrorMsg (MacroCycle qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' expansion has no finite form"
@@ -1175,7 +1183,7 @@ renameErrorMsg (MacroCycle qn arity) =
 renameErrorMsg (NoMatchingMacroClause qn args) =
   withHint
     ( "No clause of macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show (length args)
         ++ "' matches the use '"
@@ -1188,7 +1196,7 @@ renameErrorMsg (NoMatchingMacroClause qn args) =
 renameErrorMsg (MacroExpansionTooDeep qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "': nested expansions exceed the depth limit of "
@@ -1211,7 +1219,7 @@ renameErrorMsg (MacroEmptyHead part) =
 renameErrorMsg (MacroExpansionTooLarge qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "': one use causes more than "
@@ -1286,7 +1294,7 @@ renameErrorMsg GuardOutsideAggregateGoal =
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint
     ( "Macro '"
-        ++ macroQn macroName
+        ++ displayQualifiedName macroName
         ++ "/"
         ++ show macroArity
         ++ "' refers to '"
@@ -1303,12 +1311,15 @@ renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
 renameErrorMsg (MacroInvalidInHead qn arity) =
   withHint
     ( "Macro '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
-        ++ "' expands to something other than a conjunction of constraints in head position"
+        ++ "' expands to something other than a conjunction of constraints"
+        ++ " in head position"
     )
-    "a rule head is a conjunction of constraints; move the macro use into the body instead"
+    ( "a rule head is a conjunction of constraints;"
+        ++ " move the macro use into the body instead"
+    )
 renameErrorMsg (UnknownExportedConstructor modName tyName tyArity conName) =
   "Module '"
     ++ T.unpack modName
@@ -1417,15 +1428,7 @@ renameErrorMsg (TypeShadowsImport name arity provider) =
     "rename the local type or narrow the import list"
 
 instance Display (Diagnostic RenameWarning) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (renameWarningCode err)
-      SevWarning
-      (renameWarningMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevWarning renameWarningCode renameWarningMsg
 
 renameWarningMsg :: RenameWarning -> String
 renameWarningMsg (UndeclaredDataConstructor name) =
@@ -1443,7 +1446,7 @@ renameWarningMsg (UnusedMacroParameter qn param) =
     ( "Macro parameter '"
         ++ T.unpack param
         ++ "' of '"
-        ++ macroQn qn
+        ++ displayQualifiedName qn
         ++ "' is not used"
     )
     ( "the corresponding argument is dropped; write '_' or prefix the"
@@ -1451,15 +1454,11 @@ renameWarningMsg (UnusedMacroParameter qn param) =
     )
 
 instance Display (Diagnostic ExhaustivenessWarning) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (exhaustivenessWarningCode err)
+  displayMsg =
+    displayDiagnostic
       SevWarning
-      (exhaustivenessWarningMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+      exhaustivenessWarningCode
+      exhaustivenessWarningMsg
 
 exhaustivenessWarningMsg :: ExhaustivenessWarning -> String
 exhaustivenessWarningMsg (NonExhaustiveMatch name witness) =
@@ -1472,21 +1471,13 @@ exhaustivenessWarningMsg (NonExhaustiveMatch name witness) =
     "add an equation for the missing case, or a catch-all variable/wildcard pattern"
 
 instance Display (Diagnostic ConstraintUseError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (constraintUseErrorCode err)
-      SevError
-      (constraintUseErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError constraintUseErrorCode constraintUseErrorMsg
 
 constraintUseErrorMsg :: ConstraintUseError -> String
 constraintUseErrorMsg (ConstraintUseViolation qn arity use role) =
   withHint
     ( "'"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "/"
         ++ show arity
         ++ "' is declared "
@@ -1513,15 +1504,7 @@ constraintUseErrorMsg (ConstraintUseViolation qn arity use role) =
           ++ " or change its ':- constraint_use' declaration"
 
 instance Display (Diagnostic DesugarError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (desugarErrorCode err)
-      SevError
-      (desugarErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError desugarErrorCode desugarErrorMsg
 
 desugarErrorMsg :: DesugarError -> String
 desugarErrorMsg (UnexpectedBodyExpr e) =
@@ -1562,16 +1545,18 @@ desugarErrorMsg (NonVariableIsInFunctionBody e) =
 desugarErrorMsg (InlineNotSingleEquation qn n) =
   withHint
     ( "':- inline' function '"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "' has "
         ++ show n
         ++ " equations"
     )
-    "an inline substitution has no way to try equations in order; it must have exactly one"
+    ( "an inline substitution has no way to try equations in order;"
+        ++ " it must have exactly one"
+    )
 desugarErrorMsg (InlineGuardedEquation qn) =
   withHint
     ( "':- inline' function '"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "' has a guarded equation"
     )
     ( "an inlined equation cannot have a guard, including one synthesized from a"
@@ -1581,7 +1566,7 @@ desugarErrorMsg (InlineGuardedEquation qn) =
 desugarErrorMsg (InlineStatefulEquation qn) =
   withHint
     ( "':- inline' function '"
-        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ displayQualifiedName qn
         ++ "' has statements before its return value"
     )
     "an inlined equation's body must be a single expression"
@@ -1593,15 +1578,7 @@ desugarErrorMsg (InlineCycle names) =
     "remove ':- inline' from at least one function on the cycle"
 
 instance Display (Diagnostic CompileError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (compileErrorCode err)
-      SevError
-      (compileErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError compileErrorCode compileErrorMsg
 
 compileErrorMsg :: CompileError -> String
 compileErrorMsg (UnknownConstraintType name) =
@@ -1634,15 +1611,7 @@ compileErrorMsg AggregateResultNotMaybe =
     )
 
 instance Display (Diagnostic TypeCheckError) where
-  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (typeCheckErrorCode err)
-      SevError
-      (typeCheckErrorMsg err)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevError typeCheckErrorCode typeCheckErrorMsg
 
 typeCheckErrorMsg :: TypeCheckError -> String
 typeCheckErrorMsg (InconsistentTypes t1 t2) =
@@ -1680,7 +1649,7 @@ typeCheckErrorMsg (DuplicateConstructor conName decls) =
   "Data constructor '"
     ++ T.unpack conName
     ++ "' is declared in multiple types: "
-    ++ intercalate ", " [T.unpack t ++ "/" ++ show a | (t, a) <- decls]
+    ++ intercalate ", " [T.unpack d.typeName ++ "/" ++ show d.arity | d <- decls]
 typeCheckErrorMsg (ConstructorArityMismatch conName usedArity declaredArity) =
   "Data constructor '"
     ++ T.unpack conName
@@ -1742,15 +1711,7 @@ typeCheckErrorMsg (UndeterminedInstance con ty) =
     )
 
 instance Display (Diagnostic TypeCheckWarning) where
-  displayMsg (Diagnostic lbl (AnnP warn loc origin) ctx) =
-    displayMsgWithSrcLoc
-      (typeCheckWarningCode warn)
-      SevWarning
-      (typeCheckWarningMsg warn)
-      loc
-      (fmap T.unpack lbl)
-      (Just (prettyPExprSrc origin))
-      (map T.unpack ctx)
+  displayMsg = displayDiagnostic SevWarning typeCheckWarningCode typeCheckWarningMsg
 
 typeCheckWarningMsg :: TypeCheckWarning -> String
 typeCheckWarningMsg (InaccessibleBranch t1 t2) =
@@ -1772,9 +1733,9 @@ typeCheckWarningMsg (AggregateGoalInaccessible t1 t2) =
     )
     "fix the goal, or drop the aggregate if zero matches is what you want"
 
+-- | Render a name as @name@ or @mod:name@.
 displayName :: Types.Name -> String
-displayName (Types.Unqualified n) = T.unpack n
-displayName (Types.Qualified m n) = T.unpack m ++ ":" ++ T.unpack n
+displayName = T.unpack . Types.flattenName
 
 -- | Display a single parse error using our 'displayMsgWithSrcLoc' format.
 displayParseError :: PE.ParseError -> String
@@ -1788,7 +1749,16 @@ displayParseError err =
       msg = case dropWhile (/= '\n') raw of
         ('\n' : rest) -> dropWhile (== '\n') rest
         other -> other
-   in displayMsgWithSrcLoc parseErrorCode SevError msg loc Nothing Nothing []
+   in displayMsgWithSrcLoc
+        MsgBlock
+          { code = parseErrorCode,
+            severity = SevError,
+            message = msg,
+            loc = loc,
+            label = Nothing,
+            node = Nothing,
+            context = []
+          }
 
 instance Display Warning where
   displayMsg (RenameWarnings ws) = displayErrors (map displayMsg ws)
@@ -1807,101 +1777,109 @@ instance Display Error where
   displayMsg (TypeErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (OperatorConflict (AnnP name loc origin)) =
     displayMsgWithSrcLoc
-      operatorConflictCode
-      SevError
-      ( withHint
-          ( "Operator conflict: '"
-              ++ T.unpack name
-              ++ "' is declared with a different fixity or associativity"
-              ++ " than an existing operator"
-          )
-          ( "re-export the existing declaration instead of redeclaring it,"
-              ++ " or rename this one"
-          )
-      )
-      loc
-      Nothing
-      (Just (prettyPExprSrc origin))
-      []
+      MsgBlock
+        { code = operatorConflictCode,
+          severity = SevError,
+          message =
+            withHint
+              ( "Operator conflict: '"
+                  ++ T.unpack name
+                  ++ "' is declared with a different fixity or associativity"
+                  ++ " than an existing operator"
+              )
+              ( "re-export the existing declaration instead of redeclaring it,"
+                  ++ " or rename this one"
+              ),
+          loc = loc,
+          label = Nothing,
+          node = Just (prettyPExprSrc origin),
+          context = []
+        }
   displayMsg (LambdasInLiveQuery loc origin) =
     displayMsgWithSrcLoc
-      lambdasInLiveQueryCode
-      SevError
-      ( withHint
-          ( "Anonymous lambdas (fun(...) -> ... end) are not supported"
-              ++ " in live REPL sessions"
-          )
-          ( "lift the lambda into a named :- function declaration in a file"
-              ++ " and reload the session"
-          )
-      )
-      loc
-      (Just "live session")
-      (Just (prettyPExprSrc origin))
-      []
+      MsgBlock
+        { code = lambdasInLiveQueryCode,
+          severity = SevError,
+          message =
+            withHint
+              ( "Anonymous lambdas (fun(...) -> ... end) are not supported"
+                  ++ " in live REPL sessions"
+              )
+              ( "lift the lambda into a named :- function declaration in a file"
+                  ++ " and reload the session"
+              ),
+          loc = loc,
+          label = Just "live session",
+          node = Just (prettyPExprSrc origin),
+          context = []
+        }
   displayMsg (LambdasInSchemeDriver lam) =
     displayMsgWithSrcLoc
-      lambdasInSchemeDriverCode
-      SevError
-      ( withHint
-          ( "Anonymous lambdas (fun(...) -> ... end) are not supported"
-              ++ " in goal arguments to `ychr gen-driver`"
-          )
-          ( "the driver only imports an already-generated library, which"
-              ++ " has no procedure for this lambda: lift it into a named"
-              ++ " :- function declaration in the program and pass"
-              ++ " `fun name/arity` instead"
-          )
-      )
-      P.dummyLoc
-      (Just "<query>")
-      (Just (prettyTermSrc lam))
-      []
+      MsgBlock
+        { code = lambdasInSchemeDriverCode,
+          severity = SevError,
+          message =
+            withHint
+              ( "Anonymous lambdas (fun(...) -> ... end) are not supported"
+                  ++ " in goal arguments to `ychr gen-driver`"
+              )
+              ( "the driver only imports an already-generated library, which"
+                  ++ " has no procedure for this lambda: lift it into a named"
+                  ++ " :- function declaration in the program and pass"
+                  ++ " `fun name/arity` instead"
+              ),
+          loc = P.dummyLoc,
+          label = Just "<query>",
+          node = Just (prettyTermSrc lam),
+          context = []
+        }
   displayMsg (GoalNotAConstraint c reason) =
     displayMsgWithSrcLoc
-      goalNotAConstraintCode
-      SevError
-      ( withHint
-          ( case reason of
-              NoSuchConstraint ->
-                "Goal '" ++ nameArity ++ "' is not a declared constraint"
-              AmbiguousConstraint ms ->
-                "Goal '"
-                  ++ nameArity
-                  ++ "' is ambiguous: exported by "
-                  ++ intercalate ", " (map T.unpack ms)
-              ConstraintNotExported qn ->
-                "Goal '"
-                  ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
-                  ++ "/"
-                  ++ show (length c.args)
-                  ++ "' is not exported by its module"
-              NotAConstraintItem qn ->
-                "Goal '"
-                  ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
-                  ++ "/"
-                  ++ show (length c.args)
-                  ++ "' names a function, not a constraint"
-              MacroNotSingleGoal ->
-                "Goal '"
-                  ++ nameArity
-                  ++ "' is a macro that does not expand to exactly one goal"
-          )
-          ( case reason of
-              MacroNotSingleGoal ->
-                "macro expands to several goals or none; run it as a query in the"
-                  ++ " REPL or the multi-goal query API instead of `ychr run -g`"
-              _ ->
-                "`ychr run -g GOAL` accepts only a single declared constraint."
-                  ++ " For expression goals like `1 + 1` or `X is E`,"
-                  ++ " conjunctions like `a, b`, or function calls,"
-                  ++ " use `ychr repl` instead — or wrap them in a helper constraint."
-          )
-      )
-      P.dummyLoc
-      (Just "<query>")
-      Nothing
-      []
+      MsgBlock
+        { code = goalNotAConstraintCode,
+          severity = SevError,
+          message =
+            withHint
+              ( case reason of
+                  NoSuchConstraint ->
+                    "Goal '" ++ nameArity ++ "' is not a declared constraint"
+                  AmbiguousConstraint ms ->
+                    "Goal '"
+                      ++ nameArity
+                      ++ "' is ambiguous: exported by "
+                      ++ intercalate ", " (map T.unpack ms)
+                  ConstraintNotExported qn ->
+                    "Goal '"
+                      ++ displayQualifiedName qn
+                      ++ "/"
+                      ++ show (length c.args)
+                      ++ "' is not exported by its module"
+                  NotAConstraintItem qn ->
+                    "Goal '"
+                      ++ displayQualifiedName qn
+                      ++ "/"
+                      ++ show (length c.args)
+                      ++ "' names a function, not a constraint"
+                  MacroNotSingleGoal ->
+                    "Goal '"
+                      ++ nameArity
+                      ++ "' is a macro that does not expand to exactly one goal"
+              )
+              ( case reason of
+                  MacroNotSingleGoal ->
+                    "macro expands to several goals or none; run it as a query in the"
+                      ++ " REPL or the multi-goal query API instead of `ychr run -g`"
+                  _ ->
+                    "`ychr run -g GOAL` accepts only a single declared constraint."
+                      ++ " For expression goals like `1 + 1` or `X is E`,"
+                      ++ " conjunctions like `a, b`, or function calls,"
+                      ++ " use `ychr repl` instead — or wrap them in a helper constraint."
+              ),
+          loc = P.dummyLoc,
+          label = Just "<query>",
+          node = Nothing,
+          context = []
+        }
     where
       nameArity = T.unpack (Types.flattenName c.name) ++ "/" ++ show (length c.args)
   displayMsg (RuntimeError msg stack) = displayErrors (renderFrames msg stack)
@@ -1910,30 +1888,36 @@ instance Display Error where
       -- still produce a runtime-error block, just anchored at 'dummyLoc'.
       renderFrames m [] =
         [ displayMsgWithSrcLoc
-            runtimeErrorCode
-            SevRuntimeError
-            m
-            P.dummyLoc
-            Nothing
-            Nothing
-            []
+            MsgBlock
+              { code = runtimeErrorCode,
+                severity = SevRuntimeError,
+                message = m,
+                loc = P.dummyLoc,
+                label = Nothing,
+                node = Nothing,
+                context = []
+              }
         ]
       renderFrames m (top : rest) = renderTop top m : map renderRest rest
       renderTop frame m =
         displayMsgWithSrcLoc
-          runtimeErrorCode
-          SevRuntimeError
-          m
-          frame.frameSourceLoc
-          (Just (T.unpack frame.frameLabel))
-          (Just (T.unpack frame.frameSourceCode))
-          []
+          MsgBlock
+            { code = runtimeErrorCode,
+              severity = SevRuntimeError,
+              message = m,
+              loc = frame.sourceLoc,
+              label = Just (T.unpack frame.label),
+              node = Just (T.unpack frame.sourceCode),
+              context = []
+            }
       renderRest frame =
         displayMsgWithSrcLoc
-          runtimeErrorCode
-          SevStackTrace
-          ""
-          frame.frameSourceLoc
-          (Just (T.unpack frame.frameLabel))
-          (Just (T.unpack frame.frameSourceCode))
-          []
+          MsgBlock
+            { code = runtimeErrorCode,
+              severity = SevStackTrace,
+              message = "",
+              loc = frame.sourceLoc,
+              label = Just (T.unpack frame.label),
+              node = Just (T.unpack frame.sourceCode),
+              context = []
+            }

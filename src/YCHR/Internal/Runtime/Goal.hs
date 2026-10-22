@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Decoding a host-call argument into constraint tells.
@@ -18,6 +17,7 @@
 -- a @false@ result or a failed search branch.
 module YCHR.Internal.Runtime.Goal
   ( -- * Decoding goals
+    ResolvedTell (..),
     goalConstraints,
     altGoalConstraints,
     tellGoalConstraint,
@@ -58,6 +58,13 @@ import YCHR.Internal.Types qualified as Types
 altName :: Types.Name
 altName = Types.Qualified "search" "alt"
 
+-- | A constraint tell whose name is already resolved: the qualified
+-- constraint name and the arguments to tell it with.
+data ResolvedTell = ResolvedTell
+  { constraint :: !Types.Name,
+    args :: ![Value]
+  }
+
 -- | How a goal's constraint names are resolved.
 data GoalScope
   = -- | Through the program's exports, the way a caller-supplied goal
@@ -77,12 +84,12 @@ data GoalScope
 -- @who@ prefixes any error message with the host call's name, so the
 -- diagnostic points at @solve@ or @run_chr_session@ rather than at
 -- this shared helper.
-goalConstraints :: String -> Value -> Chr [(Types.Name, [Value])]
+goalConstraints :: String -> Value -> Chr [ResolvedTell]
 goalConstraints = goalTells ExportedOnly
 
 -- | 'goalConstraints' for one alternative of a choice point, which
 -- reaches constraints no module exports. See 'AnyDeclared'.
-altGoalConstraints :: String -> Value -> Chr [(Types.Name, [Value])]
+altGoalConstraints :: String -> Value -> Chr [ResolvedTell]
 altGoalConstraints = goalTells AnyDeclared
 
 -- | The constraint a query goal's dynamic @tell(G, A1, …, Ak)@ tells:
@@ -92,7 +99,7 @@ altGoalConstraints = goalTells AnyDeclared
 -- tellables table instead ('YCHR.Internal.Runtime.Interpreter.tellTerm'),
 -- because it is scoped to the module the rule was written in; the
 -- failure kinds are the same.
-tellGoalConstraint :: Value -> [Value] -> Chr (Types.Name, [Value])
+tellGoalConstraint :: Value -> [Value] -> Chr ResolvedTell
 tellGoalConstraint v extras = do
   v' <- deref v
   case v' of
@@ -102,7 +109,7 @@ tellGoalConstraint v extras = do
     VVar _ -> tellUnboundError
     _ -> tellNotAGoalError
 
-goalTells :: GoalScope -> String -> Value -> Chr [(Types.Name, [Value])]
+goalTells :: GoalScope -> String -> Value -> Chr [ResolvedTell]
 goalTells scope who v = do
   elems <- listElems v
   case elems of
@@ -112,14 +119,14 @@ goalTells scope who v = do
 -- | One goal. A @;@ compound becomes a tell of @search:alt@ over its
 -- flattened alternatives, so a disjunction reaches the driver as an
 -- ordinary choice point; anything else is a single constraint.
-oneGoal :: GoalScope -> String -> Value -> Chr [(Types.Name, [Value])]
+oneGoal :: GoalScope -> String -> Value -> Chr [ResolvedTell]
 oneGoal scope who v = do
   v' <- deref v
   case v' of
     VTerm f [_, _] | isSemicolonFunctor f -> do
       alts <- semicolonAlts v'
       requireTellProc who altName 1
-      pure [(altName, [valueList alts])]
+      pure [ResolvedTell altName [valueList alts]]
     _ -> (: []) <$> goalConstraint scope who v'
 
 -- | Flatten the right spine of a @;@ compound. @;@ is @xfy@, so
@@ -142,7 +149,7 @@ isSemicolonFunctor f = f == ";"
 -- | One goal: a compound or atom whose (mangled) functor names a
 -- constraint. Arguments are passed through untouched so unbound
 -- out-variables reach the forked session live.
-goalConstraint :: GoalScope -> String -> Value -> Chr (Types.Name, [Value])
+goalConstraint :: GoalScope -> String -> Value -> Chr ResolvedTell
 goalConstraint scope who v = do
   v' <- deref v
   case v' of
@@ -157,7 +164,7 @@ goalConstraint scope who v = do
 -- 'YCHR.Internal.Runtime.Session.tellConstraint'. Failing here (rather
 -- than inside the forked session) keeps "unknown constraint" a caller
 -- error.
-resolveGoal :: GoalScope -> String -> T.Text -> [Value] -> Chr (Types.Name, [Value])
+resolveGoal :: GoalScope -> String -> T.Text -> [Value] -> Chr ResolvedTell
 resolveGoal scope who f args = do
   SessionEnv {exportMap, exportedSet} <- ask
   resolved <- case (scope, functorName f) of
@@ -169,7 +176,7 @@ resolveGoal scope who f args = do
       Left err -> runtimeErrorS (who ++ ": " ++ err)
       Right qname -> pure qname
   requireTellProc who resolved arity
-  pure (resolved, args)
+  pure (ResolvedTell resolved args)
   where
     arity = length args
     functorName mangled = case decodeName mangled [] of

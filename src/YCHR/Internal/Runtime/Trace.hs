@@ -11,15 +11,16 @@
 --
 -- The search driver ("YCHR.Internal.Runtime.Search") emits its own
 -- six: entering and leaving a search, selecting a choice point,
--- trying an alternative, reaching a solution, and backtracking. Without them a trace of a
--- search reads as a @kill@ followed by an unexplained @reactivate@ of
--- the same constraint, with nothing to say the branch in between was
--- abandoned and its state rolled back.
+-- trying an alternative, reaching a solution, and backtracking.
+-- Without them a trace of a search reads as a @kill@ followed by an
+-- unexplained @reactivate@ of the same constraint, with nothing to say
+-- the branch in between was abandoned and its state rolled back.
 --
--- 'SessionEnv' carries a @Maybe (TraceEvent -> IO ())@ handler; when
--- @Nothing@, the cost of tracing is a single pointer test inside the
--- interpreter's emission helper. The REPL's @:trace@ command installs
--- 'defaultTraceHandler' for the duration of one query.
+-- 'YCHR.Internal.Runtime.Monad.SessionEnv' holds an optional
+-- 'TraceHandler'; when there is none, the cost of tracing is one
+-- 'Data.IORef.IORef' read and a branch in the interpreter's emission
+-- helper. The REPL's @:trace@ command installs 'defaultTraceHandler'
+-- for the duration of one query.
 module YCHR.Internal.Runtime.Trace
   ( -- * Events
     TraceEvent (..),
@@ -55,62 +56,68 @@ type TraceHandler = Int -> TraceEvent -> IO ()
 -- constructs these only when tracing is on; pretty-printing lives in
 -- the handler so different consumers can render differently.
 data TraceEvent
-  = -- | Entering @tell_c@. Carries the constraint type name and the
+  = -- | Entering @tell_c@: the constraint type name and the
     -- (already-dereferenced) argument terms.
-    TETell {ctype :: !Text, args :: ![Term]}
-  | -- | Entering @activate_c@.
-    TEActivate {ctype :: !Text, sid :: !SuspensionId, args :: ![Term]}
-  | -- | Entering @occurrence_c_j@.
-    TETryOccurrence {ctype :: !Text, occNum :: !Int, ruleName :: !Text}
-  | -- | Partner constraint matched in a 'Foreach'.
-    TEPartner {ctype :: !Text, sid :: !SuspensionId, args :: ![Term]}
-  | -- | Propagation history rejected the candidate combination.
-    TEHistoryHit {ruleName :: !Text, sids :: ![SuspensionId]}
-  | -- | Rule fires. Emitted at 'AddHistory' for propagation rules;
-    -- simplification rules without history also reach a unique
-    -- @kill@/@store@ sequence so the absence is visible via depth.
-    TEFire {ruleName :: !Text, sids :: ![SuspensionId]}
-  | -- | A constraint is added to the store.
-    TEStore {sid :: !SuspensionId, ctype :: !Text, args :: ![Term]}
+    TETell !Text ![Term]
+  | -- | Entering @activate_c@: type name, suspension, arguments.
+    TEActivate !Text !SuspensionId ![Term]
+  | -- | Entering @occurrence_c_j@: type name, occurrence number, rule
+    -- name.
+    TETryOccurrence !Text !Int !Text
+  | -- | Partner constraint matched in a 'Foreach': type name,
+    -- suspension, arguments.
+    TEPartner !Text !SuspensionId ![Term]
+  | -- | Propagation history rejected the candidate combination: rule
+    -- name and the matched suspensions.
+    TEHistoryHit !Text ![SuspensionId]
+  | -- | Rule fires: rule name and the matched suspensions. Emitted at
+    -- 'AddHistory' for propagation rules; simplification rules without
+    -- history also reach a unique @kill@/@store@ sequence so the
+    -- absence is visible via depth.
+    TEFire !Text ![SuspensionId]
+  | -- | A constraint is added to the store: suspension, type name,
+    -- arguments.
+    TEStore !SuspensionId !Text ![Term]
   | -- | A constraint is removed from the store.
-    TEKill {sid :: !SuspensionId}
-  | -- | A constraint is being reactivated from the queue.
-    TEReactivate {sid :: !SuspensionId, ctype :: !Text, args :: ![Term]}
+    TEKill !SuspensionId
+  | -- | A constraint is being reactivated from the queue: suspension,
+    -- type name, arguments.
+    TEReactivate !SuspensionId !Text ![Term]
   | -- | A successful 'BUnify'. Carries the two operand terms (as they
     -- looked before the unify) and the number of constraints that
     -- the runtime enqueued for reactivation as a result.
-    TEUnify {lhs :: !Term, rhs :: !Term, reactivated :: !Int}
-  | -- | Call into a user-defined function (or lifted lambda). For
-    -- lambdas, @fname@ contains the synthesised @module:__lambda_N@
-    -- name; the formatter renders these as @lambda#N@.
-    TECallFunction {fname :: !Text, args :: ![Term]}
+    TEUnify !Term !Term !Int
+  | -- | Call into a user-defined function (or lifted lambda): its name
+    -- and arguments. For lambdas the name is the synthesised
+    -- @module:__lambda_N@; the formatter renders these as @lambda#N@.
+    TECallFunction !Text ![Term]
   | -- | Function or lambda returned the given value.
-    TEReturn {value :: !Term}
+    TEReturn !Term
   | -- | A host-language call (arithmetic, comparisons, prelude
-    -- primitives, etc.). Emitted once per call with both inputs and
-    -- result.
-    TECallHost {hname :: !Text, args :: ![Term], result :: !Term}
-  | -- | Entering a search ('YCHR.Internal.Runtime.Search'). @sname@ is
+    -- primitives, etc.): name, arguments, result. Emitted once per
+    -- call.
+    TECallHost !Text ![Term] !Term
+  | -- | Entering a search ('YCHR.Internal.Runtime.Search'). The name is
     -- the driving host call: @solve@, @findall@ or @fold_solutions@.
-    TESearchEnter {sname :: !Text}
+    TESearchEnter !Text
   | -- | A choice point was selected at quiescence: the @alt\/1@
     -- suspension the driver took, and the alternative goals in the
     -- order they will be tried.
-    TEChoice {sid :: !SuspensionId, alts :: ![Term]}
-  | -- | Trying one alternative of the current choice point. @altNum@
-    -- is 1-based, @altCount@ the total, and @goal@ the goal about to
-    -- be told.
-    TETryAlt {altNum :: !Int, altCount :: !Int, goal :: !Term}
+    TEChoice !SuspensionId ![Term]
+  | -- | Trying one alternative of the current choice point: its 1-based
+    -- number, the total, and the goal about to be told.
+    TETryAlt !Int !Int !Term
   | -- | The current branch was abandoned. Everything it did — bindings,
     -- store, history, reactivation queue — has been undone by the time
     -- this is emitted, which is what the surrounding @kill@ and
     -- @reactivate@ events would otherwise leave unsaid.
-    TEBacktrack {reason :: !BacktrackReason}
+    TEBacktrack !BacktrackReason
   | -- | Quiescence with no choice point left: the current state is a
     -- solution.
     TESolution
-  | -- | A search finished, with the outcome that ended it.
-    TESearchExit {sname :: !Text, outcome :: !SearchOutcome}
+  | -- | A search finished: the host call's name and the outcome that
+    -- ended it.
+    TESearchExit !Text !SearchOutcome
   deriving (Show)
 
 -- | How a search ended. Reported by 'TESearchExit', and the result the

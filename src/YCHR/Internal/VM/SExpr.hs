@@ -7,14 +7,23 @@
 -- external backends (Erlang, Python, Clojure, etc.) and as a
 -- compilation cache artifact.
 --
--- Example:
+-- Example: the classic four-rule @leq@ module, trimmed (@...@ marks
+-- left-out entries). The counts include the prelude: its 10
+-- @tell_list@ constraints and 20 anonymous rules.
 --
 -- @
--- (program 1
---   (procedure "tell_leq" ("X" "Y")
---     (let-id "id" (create-constraint 0 (var "X") (var "Y")))
---     (store (id-var "id"))
---     (expr-stmt (call-expr "activate_leq" (arg-id (id-var "id"))))))
+-- (vm-program (version 3)
+--   (program 11 (type-names (qualified "leq" "leq") ...)
+--     24 (rule-names "__rule_0" ... "__rule_19"
+--                    "reflexivity" "antisymmetry" "idempotence" "transitivity")
+--     (evaluables ...) (callables ...) (tellables ...)
+--     (tellables-unqualified ...) (inert-types ...)
+--     (procedure "tell_leq__leq2" ("$X_0" "$X_1") (tell 0)
+--       (let-id "active" (create-constraint 0 (var "$X_0") (var "$X_1")))
+--       (expr-stmt (call-expr "activate_leq__leq2" (arg-id (id-var "active")))))
+--     ...)
+--   (exports ...)
+--   (symbol-table ...))
 -- @
 --
 -- A serialized unit opens with a @(version N)@ header naming the VM
@@ -54,8 +63,11 @@ import YCHR.Internal.VM.Types
 
 -- | A VM program bundled with metadata needed by external backends.
 data VMProgram = VMProgram
-  { program :: Program,
+  { -- | The program itself.
+    program :: Program,
+    -- | Every exported name, qualified.
     exportedSet :: Set Types.QualifiedIdentifier,
+    -- | The constraint-type indices the program uses.
     symbolTable :: Types.SymbolTable
   }
   deriving (Show, Eq)
@@ -165,18 +177,20 @@ programToSExpr prog =
         : SList (SAtom "tellables" : map tellableEntryToSExpr prog.tellables)
         : SList
           ( SAtom "tellables-unqualified"
-              : map tellableResolutionToSExpr (Map.toList prog.tellablesUnqualified)
+              : map
+                (uncurry tellableResolutionToSExpr)
+                (Map.toList prog.tellablesUnqualified)
           )
         : SList (SAtom "inert-types" : map constraintTypeToSExpr prog.inertTypes)
         : map procedureToSExpr prog.procedures
     )
 
-evaluableEntryToSExpr :: (EvaluableKey, Name) -> SExpr
-evaluableEntryToSExpr (key, procName) =
+evaluableEntryToSExpr :: Evaluable -> SExpr
+evaluableEntryToSExpr (Evaluable key procName) =
   SList [nameToSExpr key.functor, SInt (fromIntegral key.arity), nameToSExpr procName]
 
-callableEntryToSExpr :: (CallableKey, Name) -> SExpr
-callableEntryToSExpr (key, procName) =
+callableEntryToSExpr :: Callable -> SExpr
+callableEntryToSExpr (Callable key procName) =
   SList
     [ nameToSExpr key.functor,
       nameToSExpr key.identity,
@@ -184,8 +198,8 @@ callableEntryToSExpr (key, procName) =
       nameToSExpr procName
     ]
 
-tellableEntryToSExpr :: (TellableKey, Name) -> SExpr
-tellableEntryToSExpr (key, procName) =
+tellableEntryToSExpr :: Tellable -> SExpr
+tellableEntryToSExpr (Tellable key procName) =
   SList
     [ tellableScopeToSExpr key.scope,
       nameToSExpr key.functor,
@@ -209,8 +223,8 @@ tellableScopeAnyAtom = "any"
 -- proc-name fields are one per candidate. The common case is one; two
 -- mean the pair is ambiguous and the runtime must report it rather than
 -- choose.
-tellableResolutionToSExpr :: (TellableKey, TellableResolution) -> SExpr
-tellableResolutionToSExpr (key, resolution) =
+tellableResolutionToSExpr :: TellableKey -> TellableResolution -> SExpr
+tellableResolutionToSExpr key resolution =
   SList
     ( tellableScopeToSExpr Nothing
         : nameToSExpr key.functor
@@ -275,7 +289,10 @@ stmtToSExpr (Foreach lbl ct sv conds body) =
       labelToSExpr lbl,
       constraintTypeToSExpr ct,
       nameToSExpr sv,
-      SList [SList [SInt (fromIntegral i), valExprToSExpr e] | (ArgIndex i, e) <- conds],
+      SList
+        [ SList [SInt (fromIntegral i), valExprToSExpr e]
+        | IndexCondition (ArgIndex i) e <- conds
+        ],
       SList (map stmtToSExpr body)
     ]
 stmtToSExpr (Continue lbl) = SList [SAtom "continue", labelToSExpr lbl]
@@ -294,11 +311,11 @@ stmtToSExpr (TellTerm sc g es) =
 stmtToSExpr (PushFrame frame) =
   SList
     [ SAtom "push-frame",
-      SString frame.frameLabel,
-      SInt (fromIntegral frame.frameSourceLoc.line),
-      SInt (fromIntegral frame.frameSourceLoc.col),
-      SString (T.pack frame.frameSourceLoc.file),
-      SString frame.frameSourceCode
+      SString frame.label,
+      SInt (fromIntegral frame.sourceLoc.line),
+      SInt (fromIntegral frame.sourceLoc.col),
+      SString (T.pack frame.sourceLoc.file),
+      SString frame.sourceCode
     ]
 
 valExprToSExpr :: ValExpr -> SExpr
@@ -438,12 +455,12 @@ checkDeclaredCount what declared actual
 
 vmProgramFromSExpr :: SExpr -> Err VMProgram
 vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
-  (version, body) <- headerVersion rest
+  header <- headerVersion rest
   -- Check the version before descending.  A unit written in a format
   -- this reader does not know has to be diagnosed as that, not by
   -- whatever unknown construct it happens to hit first.
-  checkVMVersion version
-  case body of
+  checkVMVersion header.version
+  case header.body of
     [progS, SList (SAtom "exports" : exportSexprs), stS] -> do
       prog <- programFromSExpr progS
       exports <- traverse identFromSExpr exportSexprs
@@ -454,7 +471,7 @@ vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
             exportedSet = Set.fromList exports,
             symbolTable = st
           }
-    _ -> case firstVersionHeader body of
+    _ -> case firstVersionHeader header.body of
       Just v -> err ("duplicate (version N) header in vm-program: " <> printSExpr v)
       Nothing ->
         err
@@ -469,9 +486,9 @@ vmProgramFromSExpr s = err ("expected (vm-program ...), got: " <> printSExpr s)
 -- pre-versioning format, which no version-aware binary supports.  A
 -- @(version ...)@ that is present but not first is a malformed header
 -- rather than an absent one, and says so.
-headerVersion :: [SExpr] -> Err (Maybe Integer, [SExpr])
+headerVersion :: [SExpr] -> Err VersionHeader
 headerVersion (SList (SAtom "version" : args) : rest) = case args of
-  [SInt n] -> pure (Just n, rest)
+  [SInt n] -> pure VersionHeader {version = Just n, body = rest}
   _ -> err ("expected (version N), got: " <> printSExpr (SList (SAtom "version" : args)))
 headerVersion rest = case firstVersionHeader rest of
   Just v ->
@@ -479,7 +496,14 @@ headerVersion rest = case firstVersionHeader rest of
       ( "the (version N) header must be the first child of vm-program, got: "
           <> printSExpr v
       )
-  Nothing -> pure (Nothing, rest)
+  Nothing -> pure VersionHeader {version = Nothing, body = rest}
+
+-- | A @vm-program@'s children, split by 'headerVersion'.
+data VersionHeader = VersionHeader
+  { version :: Maybe Integer,
+    -- | The children after the header.
+    body :: [SExpr]
+  }
 
 -- | The first @(version ...)@ among a @vm-program@'s children, if any.
 firstVersionHeader :: [SExpr] -> Maybe SExpr
@@ -584,29 +608,19 @@ programFromSExpr
     -- dispatch table, and an absent @inert-types@ is a hint no result
     -- depends on.
     --
-    -- This is not a general back-compatibility promise for older text.
-    -- A stale dump is fenced off before the reader gets here: the
+    -- This is not a back-compatibility promise for older text: the
     -- @(version N)@ header is checked first, so any unit not written in
-    -- 'vmVersion' — including one predating keyed @'$call'@ dispatch,
-    -- with its @(call-dispatch N)@ procedures and their gone proc-kind
-    -- — is rejected at the version gate, not at a construct.
-    let (clSexprs, rest') = case rest of
-          SList (SAtom "callables" : cls) : rs -> (cls, rs)
-          rs -> ([], rs)
-    cls <- traverse callableEntryFromSExpr clSexprs
-    let (tlSexprs, rest'') = case rest' of
-          SList (SAtom "tellables" : tls) : rs -> (tls, rs)
-          rs -> ([], rs)
-    tls <- traverse tellableEntryFromSExpr tlSexprs
-    let (tuSexprs, rest''') = case rest'' of
-          SList (SAtom "tellables-unqualified" : tus) : rs -> (tus, rs)
-          rs -> ([], rs)
-    tus <- Map.fromList <$> traverse tellableUnqualifiedEntryFromSExpr tuSexprs
-    let (itSexprs, procs) = case rest''' of
-          SList (SAtom "inert-types" : its) : ps -> (its, ps)
-          ps -> ([], ps)
-    its <- traverse constraintTypeFromSExpr itSexprs
-    ps <- traverse procedureFromSExpr procs
+    -- 'vmVersion' is rejected at the version gate, not at some unknown
+    -- construct.
+    let clSection = optionalSection "callables" rest
+    cls <- traverse callableEntryFromSExpr clSection.items
+    let tlSection = optionalSection "tellables" clSection.rest
+    tls <- traverse tellableEntryFromSExpr tlSection.items
+    let tuSection = optionalSection "tellables-unqualified" tlSection.rest
+    tus <- Map.fromList <$> traverse tellableUnqualifiedEntryFromSExpr tuSection.items
+    let itSection = optionalSection "inert-types" tuSection.rest
+    its <- traverse constraintTypeFromSExpr itSection.items
+    ps <- traverse procedureFromSExpr itSection.rest
     pure
       Program
         { typeNames = tns,
@@ -620,43 +634,65 @@ programFromSExpr
         }
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)
 
-evaluableEntryFromSExpr :: SExpr -> Err (EvaluableKey, Name)
+-- | An optional @(tag items...)@ section at the head of a list of
+-- s-expressions, and what follows it.
+data Section = Section
+  { -- | The section's items; empty when the section is absent.
+    items :: [SExpr],
+    rest :: [SExpr]
+  }
+
+-- | Split off the optional @(tag ...)@ section at the head of the list.
+optionalSection :: Text -> [SExpr] -> Section
+optionalSection tag (SList (SAtom t : xs) : rest)
+  | t == tag = Section {items = xs, rest = rest}
+optionalSection _ rest = Section {items = [], rest = rest}
+
+evaluableEntryFromSExpr :: SExpr -> Err Evaluable
 evaluableEntryFromSExpr (SList [fSexpr, SInt arity, pSexpr]) = do
   functor <- nameFromSExpr fSexpr
   procName <- nameFromSExpr pSexpr
-  pure (EvaluableKey {functor = functor, arity = fromInteger arity}, procName)
+  pure
+    Evaluable
+      { key = EvaluableKey {functor = functor, arity = fromInteger arity},
+        procName = procName
+      }
 evaluableEntryFromSExpr s = err ("expected evaluable entry, got: " <> printSExpr s)
 
-callableEntryFromSExpr :: SExpr -> Err (CallableKey, Name)
+callableEntryFromSExpr :: SExpr -> Err Callable
 callableEntryFromSExpr (SList [fSexpr, iSexpr, SInt arity, pSexpr]) = do
   functor <- nameFromSExpr fSexpr
   identity <- nameFromSExpr iSexpr
   procName <- nameFromSExpr pSexpr
   pure
-    ( CallableKey
-        { functor = functor,
-          identity = identity,
-          arity = fromInteger arity
-        },
-      procName
-    )
+    Callable
+      { key =
+          CallableKey
+            { functor = functor,
+              identity = identity,
+              arity = fromInteger arity
+            },
+        procName = procName
+      }
 callableEntryFromSExpr s = err ("expected callable entry, got: " <> printSExpr s)
 
 -- | Parse a 'tellableEntryToSExpr' under @fromScope@, which turns the
 -- entry's scope field into a module name or 'Nothing'. The two tiers
 -- share one shape, so one parser serves both.
-tellableEntryFromSExprWith :: (SExpr -> Err (Maybe Text)) -> SExpr -> Err (TellableKey, Name)
+tellableEntryFromSExprWith ::
+  (SExpr -> Err (Maybe Text)) -> SExpr -> Err Tellable
 tellableEntryFromSExprWith fromScope (SList [scSexpr, fSexpr, SInt arity, pSexpr]) = do
   scope <- fromScope scSexpr
   functor <- nameFromSExpr fSexpr
   procName <- nameFromSExpr pSexpr
   pure
-    ( TellableKey {scope = scope, functor = functor, arity = fromInteger arity},
-      procName
-    )
+    Tellable
+      { key = TellableKey {scope = scope, functor = functor, arity = fromInteger arity},
+        procName = procName
+      }
 tellableEntryFromSExprWith _ s = err ("expected tellable entry, got: " <> printSExpr s)
 
-tellableEntryFromSExpr :: SExpr -> Err (TellableKey, Name)
+tellableEntryFromSExpr :: SExpr -> Err Tellable
 tellableEntryFromSExpr = tellableEntryFromSExprWith (fmap Just . textFromSExpr)
 
 -- | Parse one @(tellables-unqualified ...)@ child: the same shape as a
@@ -883,10 +919,10 @@ callArgFromSExpr (SList [SAtom "arg-val", e]) = AVal <$> valExprFromSExpr e
 callArgFromSExpr (SList [SAtom "arg-id", e]) = AId <$> idExprFromSExpr e
 callArgFromSExpr s = err ("expected call argument, got: " <> printSExpr s)
 
-condFromSExpr :: SExpr -> Err (ArgIndex, ValExpr)
+condFromSExpr :: SExpr -> Err IndexCondition
 condFromSExpr (SList [SInt i, e]) = do
   pos <- nonNegative "foreach condition index" i
-  (ArgIndex pos,) <$> valExprFromSExpr e
+  IndexCondition (ArgIndex pos) <$> valExprFromSExpr e
 condFromSExpr s = err ("expected (index expr), got: " <> printSExpr s)
 
 nameFromSExpr :: SExpr -> Err Name

@@ -2,6 +2,104 @@
 
 ## Unreleased
 
+Internal record fields drop their type prefixes.
+
+- **Breaking:** in `YCHR.Internal.Compile.Types`, `AggregatePlan`'s
+  `plan*` fields lose the prefix (`planIndex` is now `position`),
+  `GoalOccurrence`'s `goalIndex`, `goalActiveIndex`, `goalAll`,
+  `goalEnclosing` and `goalLevelShared` are now `aggregateIndex`,
+  `activeIndex`, `conjuncts`, `enclosing` and `levelShared`, and
+  `ResultMatch`'s `resultTests`/`resultBinds` are `tests`/`binds`.
+- **Breaking:** `YCHR.Internal.VM.StackFrame` (the payload of
+  `Error`'s `RuntimeError`) has fields `label`, `sourceLoc` and
+  `sourceCode` instead of `frameLabel`, `frameSourceLoc` and
+  `frameSourceCode`.
+- **Breaking:** `YCHR.Internal.Compile.Pipeline.ModuleSplices` has
+  fields `moduleName`, `file` and `items` instead of `spliceModule`,
+  `spliceFile` and `spliceItems`.
+- **Breaking:** `YCHR.Internal.Diagnostic.Diagnostic` has fields
+  `label`, `annotation` and `context` instead of `diagLabel`,
+  `diagAnnotation` and `diagContext`.
+- **Breaking:** `YCHR.Internal.Runtime.Trace.TraceEvent` (what a
+  `withTraceHandler` handler gets) has positional constructors and no
+  field names. The fields were partial.
+- **Breaking:** `YCHR.Internal.Runtime.Index.PosIndex` has fields
+  `buckets` and `rest`, and `YCHR.Internal.Constructors.ConEnv` has
+  `constructors` and `aliases`.
+- **Breaking:** `YCHR.Internal.Repl.runRepl` takes one `ReplOptions`
+  record instead of positional arguments.
+- **Breaking:** the query-pipeline part of `YCHR.Run` (not covered by
+  the PVP) returns records instead of pairs. `prepareGoal` and
+  `prepareGoalTerm` return a `PreparedGoal` (`constraint`, `warnings`),
+  `resolveQueryTellOrThrow` returns a `QueryTell` (`name`, `args`), and
+  `prepareQuery` and `prepareQueryUnchecked` return a `PreparedQuery`
+  whose new `warnings` field holds what used to be the pair's second
+  half.
+
+Internal modules use records instead of tuples and long argument
+lists. All of these are **Breaking** for code importing
+`YCHR.Internal.*`:
+
+- Front end:
+  - `Parser.parseModule`, `parseModuleWith` and `parseRule` return
+    `Converted {value, errors}`.
+  - `convertSourceItems` is a `Writer [ChainedError]`.
+  - `OpDecl` moved to `PExpr` (`Parsed` re-exports it).
+  - `PExpr.mergeOps`, `opTableEntries` and the `OpTable` name maps use
+    `OpDecl`.
+  - `parseLeadingTerms` returns `LeadingTerms`.
+  - `Parser.builtinDirectives` is a `Set UnqualifiedIdentifier`.
+- Renamer:
+  - `Rename.renameProgram`, `renameQueryArgsWith` and
+    `renameQueryGoalsWith` return `Renamed {result, warnings}`.
+  - `Rename.Types` envs are keyed by `UnqualifiedIdentifier`, and
+    `Rename.Types.importListPermits` replaces
+    `Rename.Macro.importListPermitsMacro`.
+  - `Rename.Macro` exports the expansion step shared with declaration
+    macros (`expandStep`, `MacroUse`, `MacroState`).
+  - `selectClause` returns a `ClauseMatch`, which `instantiateClause`
+    and `instantiateBody` take.
+  - `primitivesIn` returns `[Identifier]` and `qualifiedRefsIn`
+    `[UnqualifiedIdentifier]`.
+  - `DeclMacroEnv` and `MacroScope` use identifier records and
+    `CollectedImport`.
+- Resolve and desugar:
+  - Function signatures are `[FunSignature]`.
+  - `nameVisibility` and `FunVisibility` are keyed by
+    `UnqualifiedIdentifier`.
+  - `liftAllLambdas`, `liftQueryLambdas` (now returning `LiftedQuery`)
+    and `inlineFunctions` return `Either`.
+  - `Constructors.lookupCon`, `buildConMap` and `ConEnv.constructors`
+    give the `DataConstructor` only.
+- Compiler and VM:
+  - `VM.Program.evaluables`, `callables` and `tellables` are lists of
+    `Evaluable`, `Callable` and `Tellable` (`{key, procName}`) records
+    instead of pairs; the `build*` and `VM.Closure.dangling*` functions
+    follow.
+  - `Foreach` conditions are `IndexCondition` records, moved from
+    `Compile.Types` to `VM.Types`; the slot AST's `SForeach` carries
+    `SIndexCondition`s.
+  - `ResultMatch.binds` is `[ResultBind]`.
+  - `AggregatePlan.nested` is `[AggregatePlan]`.
+  - The s-expression format is unchanged.
+- Runtime:
+  - `initSessionEnv` takes a `SessionConfig` (`emptySessionConfig`,
+    `programSessionConfig`).
+  - The propagation history is a `Set Runtime.Monad.HistoryKey`.
+  - `Index.insertConstraints` takes `IndexEntry`s.
+  - `Runtime.Goal.goalConstraints`, `altGoalConstraints` and
+    `tellGoalConstraint` return `ResolvedTell`.
+  - `Store.getAllStoredConstraints` returns `StoredGroup`s.
+  - `Registry.collectVars` takes a list of values and returns their
+    variables.
+  - `Interpreter.suspensionView` is gone.
+- Display and type checking:
+  - `Display.displayMsgWithSrcLoc` takes a `MsgBlock`.
+  - `Pretty.prettyFunctionDecl` takes the desugared function.
+  - `DuplicateConstructor` carries `ConstructorDecl`s.
+  - The new `YCHR.Internal.ProgramCheck` runs the type checker and the
+    `constraint_use` check together.
+
 A constraint's type parameters only take *determined* types
 ([docs/reference/type-system.md](docs/reference/type-system.md#determined-types)).
 This closes a hole in the multi-head merge: with `leq(T, T)`, the tells
@@ -82,8 +180,8 @@ inside aggregate goals, so the predefined aggregates nest
 - A nested `takemin`/`takemax` is an error (`AggregateNestedTake`,
   YCHR-40004).
 - **Breaking:** `YCHR.Internal.Compile.Types.AggregatePlan` has new
-  `planPath` and `planNested` fields, `GoalOccurrence` a new
-  `goalLevelShared` field, and `Compile.Names.aggregateProcName` takes
+  `path` and `nested` fields, `GoalOccurrence` a new
+  `levelShared` field, and `Compile.Names.aggregateProcName` takes
   a path (`[Int]`) instead of an index.
 
 The selection aggregates `argmin/2`, `argmax/2`, `takemin/2` and
@@ -102,7 +200,7 @@ The selection aggregates `argmin/2`, `argmax/2`, `takemin/2` and
 - A program that only uses selection forms does not need
   `maybe:just/1` (YCHR-40005).
 - **Breaking:** `YCHR.Internal.Compile.Types.AggregatePlan` has a new
-  `planKind` field.
+  `kind` field.
 - Scheme runtime: a constraint whose type has an indexed position, stored
   while its store is still below the index threshold, now registers as an
   observer of its variables. Binding one of them used to not reactivate

@@ -1,15 +1,23 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Meta-level host call registry.
+-- | Meta-level host calls, and the bridge between runtime values and
+-- terms.
 --
--- Provides host functions that require access to modules outside the
--- interpreter, such as the pretty-printer and @read_term_from_string@.
+-- The host calls here need modules the interpreter does not import,
+-- such as the pretty-printer and the term parser
+-- (@read_term_from_string@).
 module YCHR.Internal.Meta
-  ( metaHostCallRegistry,
+  ( -- * Host calls
+    metaHostCallRegistry,
+
+    -- * Values and terms
     valueToTerm,
     termToValue,
     decodeName,
+    decodeMangled,
+
+    -- * Function references
     FunRefLookup (..),
     lookupFunRef,
     flatToName,
@@ -24,7 +32,7 @@ import Data.Char (chr)
 import Data.Foldable (toList)
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
-import Data.Text (Text, pack)
+import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'breakOn'; the shim supplies it
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
 import Data.Text.Shim qualified as T
@@ -34,7 +42,12 @@ import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (CallableRegistry, Chr, SessionEnv (..))
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
-import YCHR.Internal.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
+import YCHR.Internal.Runtime.Store
+  ( StoredGroup (..),
+    Suspension (..),
+    getAllStoredConstraints,
+    isSuspAlive,
+  )
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, getVarId, newVar)
 import YCHR.Internal.Types (Term (..), flattenName)
@@ -77,13 +90,15 @@ valueToTerm aliases v = do
 -- back into its source character.
 decodeName :: Text -> [Term] -> Term
 decodeName s args = case decodeMangled s of
-  Just (m, n) ->
-    CompoundTerm (Types.Qualified (decodeEscapes m) (decodeEscapes n)) args
+  Just qn ->
+    let m = decodeEscapes qn.moduleName
+        n = decodeEscapes qn.baseName
+     in CompoundTerm (Types.Qualified m n) args
   Nothing -> CompoundTerm (Types.Unqualified (decodeEscapes s)) args
 
--- | Inverse of 'Compile.Names.vmName'. Returns @Just (mod, base)@ when
--- the input is a qualified mangled name, @Nothing@ when it is
--- unqualified.
+-- | Inverse of 'Compile.Names.vmName'. Returns the module and base
+-- parts when the input is a qualified mangled name, @Nothing@ when it
+-- is unqualified. Both parts stay mangled.
 --
 -- The encoding @encodeText m \<\> "__" \<\> encodeText n@ is injective
 -- because 'encodeText' never emits @__@ in its output (non-ASCII chars
@@ -93,11 +108,11 @@ decodeName s args = case decodeMangled s of
 --
 -- A leading @__@ (e.g. compiler-internal @__lambda_3@) yields an empty
 -- module prefix, which the caller treats as unqualified.
-decodeMangled :: Text -> Maybe (Text, Text)
+decodeMangled :: Text -> Maybe Types.QualifiedName
 decodeMangled s = case T.breakOn "__" s of
   (_, rest) | T.null rest -> Nothing
   (m, _) | T.null m -> Nothing
-  (m, rest) -> Just (m, T.drop 2 rest)
+  (m, rest) -> Just (Types.QualifiedName m (T.drop 2 rest))
 
 -- | The local part of a mangled name: the @n@ of a qualified @m__n@,
 -- and the whole thing when there is no module prefix. Escapes are left
@@ -105,7 +120,7 @@ decodeMangled s = case T.breakOn "__" s of
 -- input and two base names compare equal exactly when their source
 -- spellings do ('YCHR.Internal.Compile.Names.encodeText' is injective).
 baseOfMangled :: Text -> Text
-baseOfMangled s = maybe s snd (decodeMangled s)
+baseOfMangled s = maybe s (.baseName) (decodeMangled s)
 
 -- | Replace every @%%u\<6 hex digits\>@ escape in @s@ with the
 -- corresponding character (inverse of 'Compile.Names.encodeText''s
@@ -187,7 +202,7 @@ metaHostCallRegistry =
         HostCallFn $ \case
           [arg] -> do
             s <- prettyValue arg
-            pure (VText (pack s))
+            pure (VText (T.pack s))
           _ -> runtimeErrorS "write_term_to_string: expected 1 argument"
       ),
       ( Name "read_term_from_string",
@@ -230,7 +245,9 @@ metaHostCallRegistry =
               VAtom a -> pure (VAtom (baseOfMangled a))
               VVar _ ->
                 instantiationErrorS
-                  "name_base: argument is not sufficiently instantiated (unbound variable)"
+                  ( "name_base: argument is not sufficiently instantiated"
+                      ++ " (unbound variable)"
+                  )
               _ -> runtimeErrorS "name_base: expected an atom"
           args ->
             runtimeErrorS $
@@ -238,8 +255,8 @@ metaHostCallRegistry =
       )
     ]
   where
-    renderGroup (tyName, susps) =
-      fmap concat . traverse (renderSusp tyName) . toList $ susps
+    renderGroup g =
+      fmap concat . traverse (renderSusp g.typeName) . toList $ g.suspensions
     renderSusp tyName susp@Suspension {args = sargs} = do
       alive <- isSuspAlive susp
       if not alive
@@ -247,8 +264,8 @@ metaHostCallRegistry =
         else do
           argTerms <- traverse (valueToTerm Map.empty) sargs
           pure [prettyTerm (CompoundTerm tyName argTerms)]
-    suspsOfGroup (tyName, susps) =
-      fmap concat . traverse (suspAsValue tyName) . toList $ susps
+    suspsOfGroup g =
+      fmap concat . traverse (suspAsValue g.typeName) . toList $ g.suspensions
     suspAsValue tyName susp@Suspension {args = sargs} = do
       alive <- isSuspAlive susp
       if not alive
@@ -283,12 +300,11 @@ metaHostCallRegistry =
 -- the synthetic @\<query\>@ module the renamer builds for top-level
 -- goals: a bare name matches any loaded module's function of that base
 -- and arity, and two matches are the same 'AmbiguousName' situation the
--- compiler reports. A qualified @module:name@ is accepted too (the
--- string reader is the only place that accepts one, since a source
--- @fun module:name\/arity@ is a separate pre-existing gap), which is
--- also the way to disambiguate. Both spellings let the reader name a
--- function the /calling/ module could not see; the reader has no module
--- context to narrow that with.
+-- compiler reports. A qualified @module:name@ is accepted too, and is
+-- the way to disambiguate. (A qualified @fun module:name\/arity@ in
+-- source is not supported yet; only the reader takes one.) Both
+-- spellings let the reader name a function the /calling/ module could
+-- not see; the reader has no module context to narrow that with.
 --
 -- The reader does not implement @quote\/1@, so @fun@ is resolved in
 -- every position, inside a @quote(\...)@ compound included. A
@@ -299,15 +315,15 @@ metaHostCallRegistry =
 -- into the canonical @'/'("module:name", arity)@ shape, which
 -- 'termToValue' then turns into a function-reference closure. Every
 -- other term — including a malformed @fun@ shape such as @fun X\/1@ — is
--- left as data, exactly as before.
+-- left as it is.
 resolveFunRefs :: Term -> Chr Term
 resolveFunRefs t = case funRefShape t of
-  Just (name, refArity) -> do
-    flat <- resolveFunRefName name refArity
+  Just ref -> do
+    flat <- resolveFunRefName ref.name ref.arity
     pure
       ( CompoundTerm
           (Types.Unqualified "/")
-          [CompoundTerm (Types.Unqualified flat) [], IntTerm refArity]
+          [CompoundTerm (Types.Unqualified flat) [], IntTerm ref.arity]
       )
   Nothing -> case t of
     CompoundTerm name args -> CompoundTerm name <$> traverse resolveFunRefs args
@@ -315,19 +331,25 @@ resolveFunRefs t = case funRefShape t of
 
 -- | The name and arity of a well-formed surface @fun name\/arity@, or
 -- 'Nothing' for any other term (a malformed @fun@ shape included).
-funRefShape :: Term -> Maybe (Types.Name, Integer)
+funRefShape :: Term -> Maybe FunRef
 funRefShape (CompoundTerm (Types.Unqualified "fun") [inner]) = slashShape inner
 funRefShape _ = Nothing
 
 -- | The @name\/arity@ argument of a @fun@: a two-argument @'/'@ whose
 -- arity is a non-negative integer literal and whose name is a literal
 -- atom, unqualified or qualified.
-slashShape :: Term -> Maybe (Types.Name, Integer)
+slashShape :: Term -> Maybe FunRef
 slashShape (CompoundTerm (Types.Unqualified "/") [nameTerm, IntTerm refArity])
   | refArity >= 0,
     Just name <- funRefName nameTerm =
-      Just (name, refArity)
+      Just FunRef {name = name, arity = refArity}
 slashShape _ = Nothing
+
+-- | A surface @fun name\/arity@: the name as written, and its arity.
+data FunRef = FunRef
+  { name :: Types.Name,
+    arity :: Integer
+  }
 
 -- | The surface name inside a @fun name\/arity@, when it is a literal
 -- atom (unqualified or qualified). A variable, or any other shape, is
@@ -419,9 +441,4 @@ baseOfFlat s = case T.breakOn ":" s of
 
 -- | The surface spelling of a function reference, for diagnostics.
 refLabel :: Types.Name -> Integer -> String
-refLabel name refArity = T.unpack (surfaceName name) ++ "/" ++ show refArity
-
--- | A name as the user wrote it: @foo@ or @module:foo@.
-surfaceName :: Types.Name -> Text
-surfaceName (Types.Unqualified b) = b
-surfaceName (Types.Qualified m b) = m <> ":" <> b
+refLabel name refArity = T.unpack (flattenName name) ++ "/" ++ show refArity

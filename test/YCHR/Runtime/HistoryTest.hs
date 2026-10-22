@@ -3,17 +3,12 @@
 module YCHR.Runtime.HistoryTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
-import Data.IntMap.Strict qualified as IntMap
-import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.History
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Types (SuspensionId (..))
 import YCHR.Internal.VM (RuleId (..))
+import YCHR.TestHelpers (runChrEmpty)
 
 -- | Propagation-history tests: 'addHistory', distinctness, and the remaining bookkeeping.
 tests :: TestTree
@@ -25,31 +20,12 @@ tests =
       miscTests
     ]
 
-runHistoryEnv :: Chr a -> IO a
-runHistoryEnv action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
-
 addTests :: TestTree
 addTests =
   testGroup
     "addHistory"
     [ testCase "same entry -> notInHistory returns False" $ do
-        r <- runHistoryEnv $ do
+        r <- runChrEmpty $ do
           addHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
           notInHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
         r @?= False
@@ -60,17 +36,17 @@ distinctionTests =
   testGroup
     "distinctness"
     [ testCase "different rule name -> True" $ do
-        r <- runHistoryEnv $ do
+        r <- runChrEmpty $ do
           addHistory (RuleId 1) [SuspensionId 0]
           notInHistory (RuleId 2) [SuspensionId 0]
         r @?= True,
       testCase "different IDs -> True" $ do
-        r <- runHistoryEnv $ do
+        r <- runChrEmpty $ do
           addHistory (RuleId 1) [SuspensionId 0]
           notInHistory (RuleId 1) [SuspensionId 1]
         r @?= True,
       testCase "different ID order -> True" $ do
-        r <- runHistoryEnv $ do
+        r <- runChrEmpty $ do
           addHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
           notInHistory (RuleId 1) [SuspensionId 1, SuspensionId 0]
         r @?= True
@@ -81,7 +57,7 @@ miscTests =
   testGroup
     "misc"
     [ testCase "multiple independent entries" $ do
-        runHistoryEnv $ do
+        runChrEmpty $ do
           addHistory (RuleId 1) [SuspensionId 0]
           addHistory (RuleId 2) [SuspensionId 1]
           r1 <- notInHistory (RuleId 1) [SuspensionId 0]
@@ -91,7 +67,7 @@ miscTests =
           liftIO $ r2 @?= False
           liftIO $ r3 @?= True,
       testCase "empty ID list works" $ do
-        runHistoryEnv $ do
+        runChrEmpty $ do
           r1 <- notInHistory (RuleId 1) []
           liftIO $ r1 @?= True
           addHistory (RuleId 1) []

@@ -1,6 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 -- | Guards the uniqueness of error codes (@YCHR-NNNNN@).
@@ -67,7 +64,7 @@ import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..)
 import YCHR.Internal.Rename.Macro (PrimitiveOperand (..))
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.TypeCheck (TypeCheckError (..))
+import YCHR.Internal.TypeCheck (ConstructorDecl (..), TypeCheckError (..))
 import YCHR.Internal.Types (ConstraintUse (..), Name, QualifiedName, Term)
 
 -- ---------------------------------------------------------------------------
@@ -130,28 +127,38 @@ deriving instance Data DesugarError
 
 deriving instance Data CompileError
 
+deriving instance Data ConstructorDecl
+
 deriving instance Data TypeCheckError
 
 -- ---------------------------------------------------------------------------
 -- Code collection
 -- ---------------------------------------------------------------------------
 
+-- | An error code number and the name of what assigns it (a constructor
+-- or a constant).
+data CodeEntry = CodeEntry
+  { label :: String,
+    code :: Int
+  }
+
 -- | Enumerate every constructor of an error type and pair its name with the
 -- code number its @*ErrorCode@ function assigns. 'fromConstr' builds a value
 -- with bottom payloads, which is safe because the @*ErrorCode@ functions
 -- match only on the constructor.
-enumCodes :: forall e. (Data e) => (e -> ErrorCode) -> [(String, Int)]
+enumCodes :: forall e. (Data e) => (e -> ErrorCode) -> [CodeEntry]
 enumCodes f =
-  [ (show c, n)
+  [ CodeEntry {label = show c, code = n}
   | c <- dataTypeConstrs (dataTypeOf (undefined :: e)),
     let ErrorCode n = f (fromConstr c)
   ]
 
 -- | 'enumCodes', skipping the named constructors.
-enumCodesExcept :: forall e. (Data e) => [String] -> (e -> ErrorCode) -> [(String, Int)]
-enumCodesExcept skip f = [(c, n) | (c, n) <- enumCodes f, c `notElem` skip]
+enumCodesExcept :: forall e. (Data e) => [String] -> (e -> ErrorCode) -> [CodeEntry]
+enumCodesExcept skip f = [e | e <- enumCodes f, e.label `notElem` skip]
 
-constructorCodes :: [(String, Int)]
+-- | The codes of every enumerable error and warning constructor.
+constructorCodes :: [CodeEntry]
 constructorCodes =
   concat
     [ enumCodes collectErrorCode,
@@ -170,19 +177,20 @@ constructorCodes =
     ]
 
 -- | Codes not attached to an enumerable constructor (see "YCHR.Internal.Display").
-standaloneCodes :: [(String, Int)]
+standaloneCodes :: [CodeEntry]
 standaloneCodes =
-  [ ("parseErrorCode", n parseErrorCode),
-    ("operatorConflictCode", n operatorConflictCode),
-    ("lambdasInLiveQueryCode", n lambdasInLiveQueryCode),
-    ("lambdasInSchemeDriverCode", n lambdasInSchemeDriverCode),
-    ("goalNotAConstraintCode", n goalNotAConstraintCode),
-    ("runtimeErrorCode", n runtimeErrorCode)
+  [ entry "parseErrorCode" parseErrorCode,
+    entry "operatorConflictCode" operatorConflictCode,
+    entry "lambdasInLiveQueryCode" lambdasInLiveQueryCode,
+    entry "lambdasInSchemeDriverCode" lambdasInSchemeDriverCode,
+    entry "goalNotAConstraintCode" goalNotAConstraintCode,
+    entry "runtimeErrorCode" runtimeErrorCode
   ]
   where
-    n (ErrorCode k) = k
+    entry l (ErrorCode k) = CodeEntry {label = l, code = k}
 
-allCodes :: [(String, Int)]
+-- | Every error code, by name.
+allCodes :: [CodeEntry]
 allCodes = constructorCodes ++ standaloneCodes
 
 -- | Codes deliberately shared by more than one error. Every entry needs a
@@ -198,7 +206,7 @@ intentionalShared =
 -- assign it.
 codesByNumber :: Map.Map Int [String]
 codesByNumber =
-  Map.fromListWith (++) [(n, [label]) | (label, n) <- allCodes]
+  Map.fromListWith (++) [(e.code, [e.label]) | e <- allCodes]
 
 -- ---------------------------------------------------------------------------
 -- Tests

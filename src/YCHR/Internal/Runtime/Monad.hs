@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | The 'Chr' monad and the 'SessionEnv' it reads from.
 --
 -- 'Chr' is the host-side runtime monad: a 'ReaderT' over a record of
@@ -18,6 +16,10 @@ module YCHR.Internal.Runtime.Monad
 
     -- * Session environment
     SessionEnv (..),
+    HistoryKey (..),
+    SessionConfig (..),
+    emptySessionConfig,
+    programSessionConfig,
     initSessionEnv,
     ForkStore (..),
     forkSearchSessionEnv,
@@ -31,6 +33,9 @@ module YCHR.Internal.Runtime.Monad
     CallableRegistry,
     TellableRegistry,
     UnqualifiedTellableRegistry,
+    evaluableRegistry,
+    callableRegistry,
+    tellableRegistry,
   )
 where
 
@@ -45,14 +50,21 @@ import Data.IntSet qualified as IntSet
 -- selector in scope next to the list function (dev-docs/MICROHS_GAPS.md, gap 1).
 import Data.List qualified as List
 import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
-import YCHR.Internal.Interpreter.Slots (SlotProc, SlotProgram (..))
+import YCHR.Internal.Interpreter.Slots
+  ( SlotProc,
+    SlotProgram (..),
+    emptySlotProgram,
+    lowerProgram,
+  )
 import YCHR.Internal.PExpr (OpTable)
+import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Index (StoreIndex, emptyStoreIndex)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
 import YCHR.Internal.Runtime.Types
@@ -66,6 +78,7 @@ import YCHR.Internal.Runtime.Types
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (CallableKey, EvaluableKey, RuleId, StackFrame, TellableKey)
 import YCHR.Internal.VM qualified as VM
+import YCHR.Internal.VM.Index (indexablePositions)
 
 -- | The runtime call stack (newest frame first), used for error reporting.
 type CallStack = [StackFrame]
@@ -108,6 +121,18 @@ type TellableRegistry = Map TellableKey VM.Name
 -- shape.
 type UnqualifiedTellableRegistry = Map TellableKey VM.TellableResolution
 
+-- | Build an 'EvaluableRegistry' from a program's table.
+evaluableRegistry :: [VM.Evaluable] -> EvaluableRegistry
+evaluableRegistry entries = Map.fromList [(e.key, e.procName) | e <- entries]
+
+-- | Build a 'CallableRegistry' from a program's table.
+callableRegistry :: [VM.Callable] -> CallableRegistry
+callableRegistry entries = Map.fromList [(c.key, c.procName) | c <- entries]
+
+-- | Build a 'TellableRegistry' from a program's table.
+tellableRegistry :: [VM.Tellable] -> TellableRegistry
+tellableRegistry entries = Map.fromList [(t.key, t.procName) | t <- entries]
+
 -- | The host-side runtime monad.
 type Chr = ReaderT SessionEnv IO
 
@@ -117,6 +142,14 @@ type Chr = ReaderT SessionEnv IO
 newtype HostCallFn = HostCallFn
   { runHostCall :: [Value] -> Chr Value
   }
+
+-- | A propagation history entry: a rule and the constraint ids it
+-- fired with.
+data HistoryKey = HistoryKey
+  { rule :: !RuleId,
+    ids :: ![SuspensionId]
+  }
+  deriving (Eq, Ord)
 
 -- | The mutable session state plus the immutable program-level lookups
 -- the runtime needs. All long-lived state lives here; per-procedure
@@ -165,11 +198,13 @@ data SessionEnv = SessionEnv
     -- | Counter for the next suspension id.
     storeNextId :: !(IORef Int),
     -- | Propagation history: which rules have fired with which id tuples.
-    history :: !(IORef (Set (RuleId, [SuspensionId]))),
+    history :: !(IORef (Set HistoryKey)),
     -- | Queue of constraint ids pending reactivation (filled by 'unify',
     -- drained by 'DrainReactivationQueue').
     reactQueue :: !(IORef (Seq SuspensionId)),
-    -- | Interpreter call stack (newest first), capped in length.
+    -- | Interpreter call stack (newest first). Not capped here: it is
+    -- cut to 'YCHR.Internal.Runtime.Error.maxCallStackDepth' when an
+    -- error reports it.
     callStack :: !(IORef CallStack),
     -- | All known procedures, lowered to the interpreter's slot phase.
     -- A ref only because a search fork copies the table into a fresh
@@ -250,77 +285,124 @@ data SessionEnv = SessionEnv
     traceDepth :: !(IORef Int)
   }
 
--- | Build a fresh 'SessionEnv' for a compiled program.
+-- | What 'initSessionEnv' needs to build a session.
+--
+-- The fields are lazy on purpose: a caller overrides some of them with
+-- a record update, and the replaced value is then never computed.
+data SessionConfig = SessionConfig
+  { -- | Constraint type names, indexed by 'Types.ConstraintType'.
+    typeNames :: [Types.Name],
+    -- | Rule display names, indexed by 'RuleId'.
+    ruleNames :: [Text],
+    -- | The inert constraint types ('VM.Program'.'inertTypes').
+    inertTypes :: [Types.ConstraintType],
+    -- | The positions the store indexes; see 'SessionEnv.indexPositions'.
+    indexPositions :: IntMap IntSet,
+    -- | The operator table for @read_term_from_string@.
+    opTable :: OpTable,
+    -- | The procedures, in the interpreter's slot phase.
+    slotProgram :: SlotProgram,
+    hostCalls :: HostCallRegistry,
+    evaluables :: EvaluableRegistry,
+    callables :: CallableRegistry,
+    tellables :: TellableRegistry,
+    tellablesUnqualified :: UnqualifiedTellableRegistry,
+    exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
+    exportedSet :: Set Types.QualifiedIdentifier
+  }
+
+-- | A session with no program: no types, no procedures, no host calls,
+-- empty tables, and 'YCHR.Internal.Parser.builtinOps' for the operator
+-- table. Unit tests build their sessions from it.
+emptySessionConfig :: SessionConfig
+emptySessionConfig =
+  SessionConfig
+    { typeNames = [],
+      ruleNames = [],
+      inertTypes = [],
+      indexPositions = IntMap.empty,
+      opTable = builtinOps,
+      slotProgram = emptySlotProgram,
+      hostCalls = Map.empty,
+      evaluables = Map.empty,
+      callables = Map.empty,
+      tellables = Map.empty,
+      tellablesUnqualified = Map.empty,
+      exportMap = Map.empty,
+      exportedSet = Set.empty
+    }
+
+-- | The config a VM program alone determines. The slot program and the
+-- indexable positions are derived here; a caller that has them cached
+-- ('YCHR.Internal.Runtime.Session.SessionInput') overrides them, and the
+-- lazy fields mean the derivation then never runs. Host calls, the
+-- operator table and the export maps are not part of a 'VM.Program' and
+-- keep their 'emptySessionConfig' values.
+programSessionConfig :: VM.Program -> SessionConfig
+programSessionConfig prog =
+  emptySessionConfig
+    { typeNames = prog.typeNames,
+      ruleNames = prog.ruleNames,
+      inertTypes = prog.inertTypes,
+      indexPositions = indexablePositions prog,
+      slotProgram = lowerProgram prog,
+      evaluables = evaluableRegistry prog.evaluables,
+      callables = callableRegistry prog.callables,
+      tellables = tellableRegistry prog.tellables,
+      tellablesUnqualified = prog.tellablesUnqualified
+    }
+
+-- | Build a fresh 'SessionEnv'.
 --
 -- The procedure table arrives as a 'SlotProgram' — the phase the
 -- interpreter runs — and is split into the name-keyed view the
 -- name-based entry points use and the index-keyed one a resolved call
--- target reads. The indexable positions come from
--- 'YCHR.Internal.Runtime.Index.indexablePositions' applied to the same
--- program; a caller that has no program in hand (a unit test building a
--- session by hand) passes 'YCHR.Internal.Interpreter.Slots.emptySlotProgram'
--- and gets an empty procedure table, and
--- 'YCHR.Internal.Parser.builtinOps' for the operator table.
-initSessionEnv ::
-  [Types.Name] ->
-  [Text] ->
-  [Types.ConstraintType] ->
-  IntMap IntSet ->
-  OpTable ->
-  SlotProgram ->
-  HostCallRegistry ->
-  EvaluableRegistry ->
-  CallableRegistry ->
-  TellableRegistry ->
-  UnqualifiedTellableRegistry ->
-  Map Types.UnqualifiedIdentifier ExportResolution ->
-  Set Types.QualifiedIdentifier ->
-  IO SessionEnv
-initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl tl tlu expMap expSet =
-  do
-    vc <- newIORef (VarId 0)
-    let typeCount = List.length typeNames
-        emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
-        typeNameMap = IntMap.fromList (zip [0 ..] typeNames)
-        ruleNameMap = IntMap.fromList (zip [0 ..] rNames)
-    bt <- newIORef emptyStore
-    sx <- newIORef emptyStoreIndex
-    bi <- newIORef IntMap.empty
-    ni <- newIORef 0
-    hi <- newIORef Set.empty
-    rq <- newIORef Seq.empty
-    cs <- newIORef []
-    pmRef <- newIORef slotProgram.slotProcedures
-    th <- newIORef Nothing
-    td <- newIORef 0
-    pure
-      SessionEnv
-        { varCounter = vc,
-          storeByType = bt,
-          storeIndex = sx,
-          storeTypeNames = typeNameMap,
-          indexPositions = indexable,
-          inertTypes = IntSet.fromList [i | Types.ConstraintType i <- inert],
-          ruleNames = ruleNameMap,
-          storeById = bi,
-          storeNextId = ni,
-          history = hi,
-          reactQueue = rq,
-          callStack = cs,
-          procMap = pmRef,
-          procEntries = slotProgram.slotProcEntries,
-          hostCalls = hc,
-          evaluables = ev,
-          callables = cl,
-          tellables = tl,
-          tellablesUnqualified = tlu,
-          opTable = ops,
-          exportMap = expMap,
-          exportedSet = expSet,
-          trail = Nothing,
-          traceHandler = th,
-          traceDepth = td
-        }
+-- target reads.
+initSessionEnv :: SessionConfig -> IO SessionEnv
+initSessionEnv cfg = do
+  vc <- newIORef (VarId 0)
+  let typeCount = List.length cfg.typeNames
+      emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
+      typeNameMap = IntMap.fromList (zip [0 ..] cfg.typeNames)
+      ruleNameMap = IntMap.fromList (zip [0 ..] cfg.ruleNames)
+  bt <- newIORef emptyStore
+  sx <- newIORef emptyStoreIndex
+  bi <- newIORef IntMap.empty
+  ni <- newIORef 0
+  hi <- newIORef Set.empty
+  rq <- newIORef Seq.empty
+  cs <- newIORef []
+  pmRef <- newIORef cfg.slotProgram.slotProcedures
+  th <- newIORef Nothing
+  td <- newIORef 0
+  pure
+    SessionEnv
+      { varCounter = vc,
+        storeByType = bt,
+        storeIndex = sx,
+        storeTypeNames = typeNameMap,
+        indexPositions = cfg.indexPositions,
+        inertTypes = IntSet.fromList [i | Types.ConstraintType i <- cfg.inertTypes],
+        ruleNames = ruleNameMap,
+        storeById = bi,
+        storeNextId = ni,
+        history = hi,
+        reactQueue = rq,
+        callStack = cs,
+        procMap = pmRef,
+        procEntries = cfg.slotProgram.slotProcEntries,
+        hostCalls = cfg.hostCalls,
+        evaluables = cfg.evaluables,
+        callables = cfg.callables,
+        tellables = cfg.tellables,
+        tellablesUnqualified = cfg.tellablesUnqualified,
+        opTable = cfg.opTable,
+        exportMap = cfg.exportMap,
+        exportedSet = cfg.exportedSet,
+        trail = Nothing,
+        traceHandler = th,
+        traceDepth = td
+      }
 
 -- | Where a search fork's store starts.
 data ForkStore
@@ -338,9 +420,9 @@ data ForkStore
 -- its own store references (empty or copied from the caller's, by
 -- 'ForkStore'), an empty reactivation queue and call stack, and a
 -- trail guaranteed to be installed. The caller's pending reactivations
--- stay with the caller. The procedure map is copied
--- into a new 'IORef' — a defensive copy with no writer today, since the
--- one point that adds procedures is
+-- stay with the caller. The procedure map is copied into a new 'IORef'.
+-- The copy is defensive: nothing writes to it, since the one point that
+-- adds procedures is
 -- 'YCHR.Internal.Runtime.Session.withCHRExtra', which builds a fresh
 -- session before this one exists. The index-keyed table ('procEntries')
 -- is shared as it is for the same reason: nothing extends the table

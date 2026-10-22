@@ -127,20 +127,17 @@ module YCHR.DSL
   )
 where
 
-import Control.Exception (throwIO)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Convert (quote)
+import YCHR.Internal.Compile.Pipeline (compileOrThrow)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.StdLib (StdLib)
 import YCHR.Run
-  ( CompiledProgram,
-    Warning,
-    compileParsedModules,
-    runProgramWithGoalDSL,
+  ( runProgramWithGoalDSL,
   )
 
 -- ---------------------------------------------------------------------------
@@ -230,62 +227,33 @@ exporting m ds = case m.exports of
 
 -- | Function declaration: @:- function name/arity@.
 function :: Text -> Int -> Declaration
-function name arity =
-  FunctionDecl
-    FunctionDeclBody
-      { name = name,
-        arity = arity,
-        argTypes = Nothing,
-        returnType = Nothing,
-        isOpen = False,
-        kind = DKFunction,
-        requiring = Nothing,
-        refining = Nothing
-      }
+function = functionDecl False DKFunction
 
 -- | Open-function declaration: @:- open_function name/arity@ (extensible
 -- from other modules via 'withExtensions').
 openFunction :: Text -> Int -> Declaration
-openFunction name arity =
-  FunctionDecl
-    FunctionDeclBody
-      { name = name,
-        arity = arity,
-        argTypes = Nothing,
-        returnType = Nothing,
-        isOpen = True,
-        kind = DKFunction,
-        requiring = Nothing,
-        refining = Nothing
-      }
+openFunction = functionDecl True DKFunction
 
 -- | Class declaration: @:- class name/arity@ (multi-signature overloading).
 class_ :: Text -> Int -> Declaration
-class_ name arity =
-  FunctionDecl
-    FunctionDeclBody
-      { name = name,
-        arity = arity,
-        argTypes = Nothing,
-        returnType = Nothing,
-        isOpen = False,
-        kind = DKClass,
-        requiring = Nothing,
-        refining = Nothing
-      }
+class_ = functionDecl False DKClass
 
 -- | Open-class declaration: @:- open_class name/arity@ (extensible with
 -- signatures and equations from other modules).
 openClass :: Text -> Int -> Declaration
-openClass name arity =
+openClass = functionDecl True DKClass
+
+-- | Untyped function or class declaration. The 'Bool' is @isOpen@.
+functionDecl :: Bool -> FunctionDeclKind -> Text -> Int -> Declaration
+functionDecl open kind name arity =
   FunctionDecl
     FunctionDeclBody
       { name = name,
         arity = arity,
         argTypes = Nothing,
         returnType = Nothing,
-        isOpen = True,
-        kind = DKClass,
+        isOpen = open,
+        kind = kind,
         requiring = Nothing,
         refining = Nothing
       }
@@ -559,12 +527,14 @@ instance Num Term where
   abs x = CompoundTerm (Unqualified "abs") [x]
   signum x = CompoundTerm (Unqualified "sign") [x]
 
+-- | Arithmetic compounds: @+@, @-@, @*@, @/@.
 (.+), (.-), (.*), (./) :: Term -> Term -> Term
 l .+ r = CompoundTerm (Unqualified "+") [l, r]
 l .- r = CompoundTerm (Unqualified "-") [l, r]
 l .* r = CompoundTerm (Unqualified "*") [l, r]
 l ./ r = CompoundTerm (Unqualified "/") [l, r]
 
+-- | Comparison goals: @<@, @=<@, @>@, @>=@, @==@, @\\==@.
 (.<), (.<=), (.>), (.>=), (.==), (.\==) :: Term -> Term -> Term
 l .< r = CompoundTerm (Unqualified "<") [l, r]
 l .<= r = CompoundTerm (Unqualified "=<") [l, r]
@@ -593,8 +563,3 @@ runDSLWithHostCallRegistry ::
 runDSLWithHostCallRegistry stdlib hostCalls modules goal = do
   cp <- compileOrThrow stdlib modules
   runProgramWithGoalDSL cp hostCalls (termToConstraint goal)
-
-compileOrThrow :: StdLib -> [Module] -> IO CompiledProgram
-compileOrThrow stdlib modules = case compileParsedModules stdlib True modules of
-  Left err -> throwIO err
-  Right (cp, _warnings :: [Warning]) -> pure cp

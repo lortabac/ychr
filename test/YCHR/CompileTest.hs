@@ -12,12 +12,11 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCase, (@?=))
-import YCHR.Embedded (stdlib)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM qualified as VM
-import YCHR.Run (compileModules)
+import YCHR.TestHelpers (compileOrFail, funRefKey, leqSource)
 
 -- | The VM code 'YCHR.Internal.Compile.compile' emits for representative CHR programs.
 tests :: TestTree
@@ -41,11 +40,6 @@ tests =
 -- Shared helpers
 -- ---------------------------------------------------------------------------
 
-compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules stdlib False inputs of
-  Left err -> assertFailure $ show err
-  Right (cp, _) -> pure cp
-
 -- | Find the (single) Foreach statement reachable from a list of
 -- statements. All compiler-generated occurrence procedures contain at
 -- most one top-level Foreach per partner level; for the leqSource rules
@@ -61,7 +55,8 @@ findForeach (s : rest) = case s of
       Nothing -> findForeach rest
   _ -> findForeach rest
 
-foreachConditions :: VM.Stmt -> [(VM.ArgIndex, VM.ValExpr)]
+-- | The index conditions of a @Foreach@.
+foreachConditions :: VM.Stmt -> [VM.IndexCondition]
 foreachConditions (VM.Foreach _ _ _ conds _) = conds
 foreachConditions _ = error "foreachConditions: not a Foreach"
 
@@ -128,7 +123,7 @@ findAggregateProcedure prog userRules userIdx aggIdx =
 assertForeachConditions ::
   CompiledProgram ->
   Text ->
-  [(VM.ArgIndex, VM.ValExpr)] ->
+  [VM.IndexCondition] ->
   IO ()
 assertForeachConditions prog procName expected =
   case findProcedure prog procName of
@@ -136,21 +131,6 @@ assertForeachConditions prog procName expected =
     Just p -> case findForeach p.body of
       Nothing -> assertFailure $ "no Foreach in " ++ show procName
       Just f -> foreachConditions f @?= expected
-
--- ---------------------------------------------------------------------------
--- LEQ surface source (duplicated from RunTest so this module is
--- self-contained — both files exercise leq.chr but for different reasons).
--- ---------------------------------------------------------------------------
-
-leqSource :: Text
-leqSource =
-  ":- module(order, [leq/2]).\n\
-  \:- chr_constraint leq/2.\n\
-  \\n\
-  \reflexivity @ leq(X, X) <=> true.\n\
-  \antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n\
-  \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
-  \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
 
 -- ---------------------------------------------------------------------------
 -- Foreach index-condition pushdown
@@ -169,7 +149,9 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_2"
-          [(VM.ArgIndex 1, VM.Var "$X_0"), (VM.ArgIndex 0, VM.Var "$X_1")],
+          [ VM.IndexCondition (VM.ArgIndex 1) (VM.Var "$X_0"),
+            VM.IndexCondition (VM.ArgIndex 0) (VM.Var "$X_1")
+          ],
       testCase "leq idempotence: active occurrence's partner args constrained" $ do
         -- idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
         -- Occurrence 5 (the kept head) is elided as subsumed by the
@@ -178,7 +160,9 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_4"
-          [(VM.ArgIndex 0, VM.Var "$X_0"), (VM.ArgIndex 1, VM.Var "$X_1")],
+          [ VM.IndexCondition (VM.ArgIndex 0) (VM.Var "$X_0"),
+            VM.IndexCondition (VM.ArgIndex 1) (VM.Var "$X_1")
+          ],
       testCase "leq transitivity: single shared variable lifted" $ do
         -- transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
         -- Each occurrence has exactly one HNF equality on the partner.
@@ -186,11 +170,11 @@ indexConditionPushdownTests =
         assertForeachConditions
           prog
           "occurrence_order__leq2_6"
-          [(VM.ArgIndex 1, VM.Var "$X_0")]
+          [VM.IndexCondition (VM.ArgIndex 1) (VM.Var "$X_0")]
         assertForeachConditions
           prog
           "occurrence_order__leq2_7"
-          [(VM.ArgIndex 0, VM.Var "$X_1")],
+          [VM.IndexCondition (VM.ArgIndex 0) (VM.Var "$X_1")],
       testCase "leq reflexivity: no partners, equality stays residual" $ do
         -- reflexivity @ leq(X, X) <=> true.
         -- The Foreach is absent (single-headed rule), and the residual
@@ -375,6 +359,7 @@ boolPatternTests =
 -- Soft-guard wrapping
 -- ---------------------------------------------------------------------------
 
+-- | A program with a user guard and a non-linear head.
 softGuardSource :: Text
 softGuardSource =
   ":- module(m, [g/1, eq/2]).\n\
@@ -446,7 +431,7 @@ callablesDispatchTests =
         assertEqual
           "distinct callables keys"
           (length prog.program.callables)
-          (Map.size (Map.fromList prog.program.callables)),
+          (Map.size (Map.fromList [(c.key, ()) | c <- prog.program.callables])),
       testCase "a function reference is keyed by flat name and arity" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         assertEqual
@@ -490,12 +475,6 @@ callablesDispatchTests =
           (any (hasApplyClosure . (.body)) prog.program.procedures)
     ]
   where
-    funRefKey identity arity =
-      VM.CallableKey
-        { functor = VM.funRefFunctor,
-          identity = identity,
-          arity = arity
-        }
     lambdaKey identity arity =
       VM.CallableKey
         { functor = VM.lambdaClosureFunctor,
@@ -504,9 +483,9 @@ callablesDispatchTests =
         }
     lookupCallable :: CompiledProgram -> VM.CallableKey -> Maybe Text
     lookupCallable prog key =
-      case lookup key prog.program.callables of
-        Just (VM.Name n) -> Just n
-        Nothing -> Nothing
+      case [c.procName | c <- prog.program.callables, c.key == key] of
+        VM.Name n : _ -> Just n
+        [] -> Nothing
     isLiftedLambda :: D.Function -> Bool
     isLiftedLambda func = T.isPrefixOf "__lambda_" func.name.baseName
 
@@ -523,7 +502,7 @@ hasApplyClosure = any goStmt
       VM.AssignId _ e -> goId e
       VM.If c ts es -> goBool c || any goStmt ts || any goStmt es
       VM.Foreach _ _ _ conds body ->
-        any (goVal . snd) conds || any goStmt body
+        any (goVal . (.expectedValue)) conds || any goStmt body
       VM.Continue _ -> False
       VM.Break _ -> False
       VM.Return e -> goVal e
@@ -705,7 +684,9 @@ aggregateFoldTests =
               ( \b -> case b of
                   VM.BUnify (VM.Var n) _ ->
                     assertBool
-                      ("bunify binds something that is not an out-cell: " ++ show n.unName)
+                      ( "bunify binds something that is not an out-cell: "
+                          ++ show n.unName
+                      )
                       ("aggregate_out_" `T.isPrefixOf` n.unName)
                   other -> assertFailure ("unexpected bunify shape: " ++ show other)
               )
@@ -851,11 +832,13 @@ foreachLabels = concatMap go
     go (VM.DrainReactivationQueue _ b) = foreachLabels b
     go _ = []
 
+-- | Is this an id comparison against an aggregate's goal suspension?
 isSuspDistinct :: VM.BoolExpr -> Bool
 isSuspDistinct (VM.BIdEqual (VM.IdVar a) (VM.IdVar b)) =
   any ("$aggregate_susp_" `T.isPrefixOf`) [a.unName, b.unName]
 isSuspDistinct _ = False
 
+-- | Is this a @Store@?
 isStoreStmt :: VM.Stmt -> Bool
 isStoreStmt (VM.Store _) = True
 isStoreStmt _ = False
@@ -1085,6 +1068,7 @@ takeminSource =
   \\n\
   \m(M) \\ takemin(D, job(M, D, J)) <=> run(J).\n"
 
+-- | Is this a @Kill@?
 isKillStmt :: VM.Stmt -> Bool
 isKillStmt (VM.Kill _) = True
 isKillStmt _ = False
@@ -1118,7 +1102,9 @@ selectionTests =
               ( \b -> case b of
                   VM.BUnify (VM.Var n) _ ->
                     assertBool
-                      ("bunify binds something that is not an out-cell: " ++ show n.unName)
+                      ( "bunify binds something that is not an out-cell: "
+                          ++ show n.unName
+                      )
                       ("aggregate_out_" `T.isPrefixOf` n.unName)
                   other -> assertFailure ("unexpected bunify shape: " ++ show other)
               )
@@ -1138,7 +1124,8 @@ selectionTests =
           Just p -> do
             let stmts = nestedStmts p.body
                 label = VM.Label "selection_loop_0_0"
-                selected = VM.Kill (VM.IdVar "$selection_id_0_0")
+                selId = VM.IdVar "$selection_id_0_0"
+                selected = VM.Kill selId
                 position x = lookup x (zip stmts [0 :: Int ..])
             assertBool "expected the relocation loop" (label `elem` foreachLabels p.body)
             case (position (VM.Break label), position selected) of
@@ -1146,8 +1133,8 @@ selectionTests =
                 assertBool "the break must come before the kill" (b < k)
               other -> assertFailure ("missing break or kill: " ++ show other)
             callsTo "occurrence_selt__job3_1" p.body
-              @?= [ VM.AId (VM.IdVar "$selection_id_0_0")
-                      : [ VM.AVal (VM.FieldArg (VM.IdVar "$selection_id_0_0") (VM.ArgIndex i))
+              @?= [ VM.AId selId
+                      : [ VM.AVal (VM.FieldArg selId (VM.ArgIndex i))
                         | i <- [0, 1, 2]
                         ]
                       ++ [VM.AVal (VM.Lit (VM.BoolLit True))]
@@ -1192,10 +1179,12 @@ conditionCalls :: VM.Name -> [VM.Stmt] -> Int
 conditionCalls name body =
   length [() | VM.BFromVal (VM.CallExpr n _) <- ifConditions body, n == name]
 
+-- | Is this a @BSoftGuard@?
 isSoftWrap :: VM.BoolExpr -> Bool
 isSoftWrap (VM.BSoftGuard _) = True
 isSoftWrap _ = False
 
+-- | Is this a @BIdEqual@?
 isIdTest :: VM.BoolExpr -> Bool
 isIdTest (VM.BIdEqual _ _) = True
 isIdTest _ = False

@@ -1,6 +1,3 @@
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE TypeOperators #-}
-
 -- | Turning values into 'Code'.
 --
 -- 'ToCode' is the emitter's one class. Every type the generated

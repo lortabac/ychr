@@ -1,7 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | The search driver: @solve\/1@, @findall\/2@, @fold_solutions\/4@
 -- and @fail\/0@, the host calls behind @library(search)@ — and
@@ -64,11 +62,11 @@
 --
 -- Two mechanisms, split by what a session reference actually holds:
 --
---   * The store, the suspension map, the propagation history and the
---     reactivation queue are single references over /persistent/
---     structures, so a 'StoreSnapshot' is four pointer reads and
---     restoring it is four pointer writes, whatever the store
---     contains.
+--   * The store, its index, the suspension map, the propagation
+--     history and the reactivation queue are single references over
+--     /persistent/ structures, so a 'StoreSnapshot' is five pointer
+--     reads and restoring it is five pointer writes, whatever the
+--     store contains.
 --   * Variable cells and suspension flags are individual references,
 --     reachable only by walking and shared across forks besides.
 --     Those go on the trail ("YCHR.Internal.Runtime.Trail"), recorded
@@ -100,7 +98,6 @@ import Data.Maybe (listToMaybe)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import YCHR.Internal.Compile.Names (runtimeName)
 import YCHR.Internal.Meta (metaHostCallRegistry)
@@ -111,7 +108,8 @@ import YCHR.Internal.Runtime.Error
     runtimeErrorS,
   )
 import YCHR.Internal.Runtime.Goal
-  ( altGoalConstraints,
+  ( ResolvedTell (..),
+    altGoalConstraints,
     altName,
     goalConstraints,
     listElems,
@@ -127,6 +125,7 @@ import YCHR.Internal.Runtime.Monad
   ( CallStack,
     Chr,
     ForkStore (..),
+    HistoryKey,
     SessionEnv (..),
     forkSearchSessionEnv,
     runChr,
@@ -162,7 +161,7 @@ import YCHR.Internal.Runtime.Types
 import YCHR.Internal.Runtime.Var (deref, unify)
 import YCHR.Internal.Types (ConstraintType (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Name (..), RuleId)
+import YCHR.Internal.VM (Name (..))
 
 -- | Registry providing @solve\/1@, @findall\/2@, @fold_solutions\/4@
 -- and @fail\/0@, plus the @meta@ library's @run_chr_session\/1@ and
@@ -226,7 +225,7 @@ data StoreSnapshot = StoreSnapshot
   { byType :: !(IntMap (Seq Suspension)),
     byId :: !(IntMap Suspension),
     indexes :: !StoreIndex,
-    history :: !(Set (RuleId, [SuspensionId])),
+    history :: !(Set HistoryKey),
     queue :: !(Seq SuspensionId)
   }
 
@@ -286,8 +285,8 @@ restoreBranchState st = do
 -- The scan cursor is deliberately /not/ in here: it is per branch, not
 -- per search, so it is a parameter of 'searchFrom' instead.
 data SearchCtx = SearchCtx
-  { -- | The store index holding @search:alt@ constraints. Resolved
-    -- once per search rather than per quiescence. 'Nothing' when the
+  { -- | The constraint type of @search:alt@. Resolved once per
+    -- search rather than per quiescence. 'Nothing' when the
     -- program never declares @alt\/1@, in which case the goal simply
     -- has no choice points and quiescence is a solution.
     altType :: !(Maybe ConstraintType),
@@ -336,11 +335,10 @@ data Choice = Choice
 -- points from @cursor@ onwards in the @alt@ type's store sequence.
 --
 -- 'AltDone' means 'onSolution' ended the search, one way or the
--- other. 'AltFailed' means
--- this subtree yielded no such end, and carries why — which the caller
--- reports and a nesting caller propagates, so the reason a trace shows
--- is the one that actually happened at the bottom rather than a
--- summary invented on the way up.
+-- other. 'AltFailed' means this subtree yielded no such end, and
+-- carries why — which the caller reports and a nesting caller
+-- propagates, so the reason a trace shows is the one that actually
+-- happened at the bottom rather than a summary invented on the way up.
 searchFrom :: SearchCtx -> StoreSlot -> Chr AltOutcome
 searchFrom ctx cursor =
   findChoice ctx cursor >>= \case
@@ -354,7 +352,7 @@ searchFrom ctx cursor =
       emitTrace $ do
         gs <- snapshotValues choice.goals
         pure (TEChoice choice.sid gs)
-      tryAlternatives ctx choice (zip [1 ..] choice.goals)
+      tryAlternatives ctx choice 1 choice.goals
 
 -- | How one alternative turned out.
 data AltOutcome
@@ -383,10 +381,11 @@ data StopKind
 
 -- | Try each alternative of one choice point in list order, undoing
 -- the branch between attempts. Exhausting them fails the choice point,
--- which fails whatever branch contains it.
-tryAlternatives :: SearchCtx -> Choice -> [(Int, Value)] -> Chr AltOutcome
-tryAlternatives _ _ [] = pure (AltFailed BRExhausted)
-tryAlternatives ctx choice ((altNum, goal) : rest) = do
+-- which fails whatever branch contains it. @altNum@ is the 1-based
+-- number of the first alternative in the list, for the trace.
+tryAlternatives :: SearchCtx -> Choice -> Int -> [Value] -> Chr AltOutcome
+tryAlternatives _ _ _ [] = pure (AltFailed BRExhausted)
+tryAlternatives ctx choice altNum (goal : rest) = do
   saved <- saveBranchState
   emitTrace $ do
     g <- snapshotValue goal
@@ -404,7 +403,7 @@ tryAlternatives ctx choice ((altNum, goal) : rest) = do
     -- still a runtime error and escapes the search — 'withoutFailure'
     -- catches 'SearchFailure' and nothing else.
     tells <- altGoalConstraints "alt" goal
-    mapM_ (uncurry tellResolvedConstraint) tells
+    mapM_ tellResolved tells
     -- Past this choice, not from the front: this one is killed just
     -- above, and everything before it is already dead — see
     -- 'findChoice' for why. Each alternative gets the same starting
@@ -419,7 +418,7 @@ tryAlternatives ctx choice ((altNum, goal) : rest) = do
       -- the time a reader sees it, the bindings, store, history and
       -- queue are back to what they were at the choice point.
       emitTrace (pure (TEBacktrack reason))
-      tryAlternatives ctx choice rest
+      tryAlternatives ctx choice (altNum + 1) rest
 
 -- | Run a branch, mapping a branch failure to an outcome. Runtime
 -- errors are left alone: they are not failures and must escape the
@@ -480,7 +479,7 @@ readChoice sid idx goalsVal =
       runtimeErrorS
         "alt/1: argument must be a proper list of alternative goals"
 
--- | Resolve the store index that holds choice points, by inverting the
+-- | Resolve the constraint type of choice points, by inverting the
 -- session's constraint-type names. 'Nothing' when the program never
 -- declares @alt\/1@.
 altTypeOf :: SessionEnv -> Maybe ConstraintType
@@ -508,14 +507,14 @@ runSearch ::
 runSearch who mode goalArg onSolution = do
   goals <- goalConstraints who goalArg
   prepared <- prepareSearch goals
-  (exit, kept) <- driveSearch who mode prepared onSolution
-  commitGoalVars who prepared kept
-  pure exit
+  result <- driveSearch who mode prepared onSolution
+  commitGoalVars who prepared result.committed
+  pure result.outcome
 
 -- | A resolved goal and its variables, collected in the calling
 -- session.
-data PreparedGoal = PreparedGoal
-  { goals :: ![(Types.Name, [Value])],
+data PreparedSearch = PreparedSearch
+  { goals :: ![ResolvedTell],
     -- | The unbound variables reachable from the goal at entry: the
     -- only thing a commit keeps.
     goalVars :: ![Value]
@@ -523,15 +522,14 @@ data PreparedGoal = PreparedGoal
 
 -- | Collect the goal's variables, before the fork exists: they are the
 -- unbound variables reachable from the goal /at entry/.
-prepareSearch :: [(Types.Name, [Value])] -> Chr PreparedGoal
+prepareSearch :: [ResolvedTell] -> Chr PreparedSearch
 prepareSearch goals = do
-  vars <- collectAll Set.empty (concatMap snd goals)
-  pure (PreparedGoal {goals = goals, goalVars = vars})
-  where
-    collectAll _ [] = pure []
-    collectAll seen (v : vs) = do
-      (found, seen') <- collectVars seen v
-      (found ++) <$> collectAll seen' vs
+  vars <- collectVars (concatMap (\t -> t.args) goals)
+  pure (PreparedSearch {goals = goals, goalVars = vars})
+
+-- | Tell a goal that is already resolved.
+tellResolved :: ResolvedTell -> Chr ()
+tellResolved t = tellResolvedConstraint t.constraint t.args
 
 -- | Reject a commit that would bind a goal variable a live stored
 -- constraint of the calling session observes. A commit binds goal
@@ -578,9 +576,9 @@ checkUnwatched who vars = do
 driveSearch ::
   String ->
   ForkStore ->
-  PreparedGoal ->
+  PreparedSearch ->
   Chr SolutionStep ->
-  Chr (SearchOutcome, Maybe [Value])
+  Chr DriveResult
 driveSearch who mode prepared onSolution = do
   env <- ask
   sub <- liftIO (forkSearchSessionEnv mode env)
@@ -600,23 +598,31 @@ driveSearch who mode prepared onSolution = do
       body = do
         emitTrace (pure (TESearchEnter label))
         outcome <- withoutFailure $ do
-          mapM_ (uncurry tellResolvedConstraint) prepared.goals
+          mapM_ tellResolved prepared.goals
           searchFrom ctx cursor
-        (exit, kept) <- case outcome of
+        result <- case outcome of
           AltDone StopKeeping -> do
             -- Read before the unwind below takes the solution away.
             vals <- mapM resolveValue prepared.goalVars
-            pure (SearchCommitted, Just vals)
-          AltDone StopUndoing -> pure (SearchStopped, Nothing)
-          AltFailed _ -> pure (SearchExhausted, Nothing)
-        emitTrace (pure (TESearchExit label exit))
-        pure (exit, kept)
+            pure (DriveResult SearchCommitted (Just vals))
+          AltDone StopUndoing -> pure (DriveResult SearchStopped Nothing)
+          AltFailed _ -> pure (DriveResult SearchExhausted Nothing)
+        emitTrace (pure (TESearchExit label result.outcome))
+        pure result
   liftIO $ do
     base <- runChr trailMark sub
     -- Every exception, not only 'RuntimeErrorThrown': a 'CopyStore'
     -- fork's kills write the caller's own suspension flags, so an exit
     -- that skipped this would leave the caller's constraints dead.
     runChr body sub `finally` runChr (unwindTo base) sub
+
+-- | How 'driveSearch' ended, and on a commit the goal variables'
+-- values in the solution ('Just' exactly when the outcome is
+-- 'SearchCommitted').
+data DriveResult = DriveResult
+  { outcome :: !SearchOutcome,
+    committed :: !(Maybe [Value])
+  }
 
 -- | The second half of a commit, in the calling session once the search
 -- has unwound: check that no goal variable is watched
@@ -628,7 +634,7 @@ driveSearch who mode prepared onSolution = do
 -- The bindings land on the caller's trail if it has one. The observers
 -- 'unify' returns are dropped: the check ruled out a live one, and this
 -- is not a rule body, so there is no drain to hand them to.
-commitGoalVars :: String -> PreparedGoal -> Maybe [Value] -> Chr ()
+commitGoalVars :: String -> PreparedSearch -> Maybe [Value] -> Chr ()
 commitGoalVars _ _ Nothing = pure ()
 commitGoalVars who prepared (Just vals) = do
   checkUnwatched who prepared.goalVars
@@ -687,11 +693,10 @@ hostRunChrSessionEp _ =
 -- base mark on every exit, so a failed sub-session leaves no half-made
 -- bindings behind.
 --
--- The cost of the one distinct behaviour is that @false@ does not
--- distinguish a bug in the goal from a deliberate failure. That was
--- already this call's contract, and it is bounded by the caller
--- getting a boolean it has to test — unlike search itself, where the
--- same conflation would silently turn a bug into a dead end.
+-- The price is that @false@ does not tell a bug in the goal from a
+-- deliberate failure. That is acceptable here because the caller gets a
+-- boolean it has to test — unlike search itself, where the same
+-- conflation would silently turn a bug into a dead end.
 --
 -- Only 'RuntimeErrorThrown' is caught. A 'SearchFailure' — from
 -- @search:fail\/0@ in the goal, or from an exhausted choice point —
@@ -711,9 +716,9 @@ hostRunChrSession [goalArg] = do
         driveSearch "run_chr_session" FreshStore prepared (pure StepCommit)
   outcome <- liftIO (try (runChr search env))
   case outcome of
-    Right (exit, kept) -> do
-      commitGoalVars "run_chr_session" prepared kept
-      pure (VBool (exit == SearchCommitted))
+    Right result -> do
+      commitGoalVars "run_chr_session" prepared result.committed
+      pure (VBool (result.outcome == SearchCommitted))
     Left (_ :: RuntimeErrorThrown) -> pure (VBool False)
 hostRunChrSession _ = runtimeErrorS "run_chr_session: expected 1 argument"
 
@@ -773,24 +778,31 @@ hostFoldSolutions [template, goalArg, f, acc0] = do
         -- 'withoutFailure', which backtracks with the accumulator
         -- untouched — exactly a 'StepContinue'.
         result <- applyClosure f [copied, acc]
-        (step, acc') <- readStep result
-        liftIO (writeIORef accRef acc')
-        pure step
+        reply <- readStep result
+        liftIO (writeIORef accRef reply.acc)
+        pure reply.step
   _ <- runSearch "fold_solutions" CopyStore goalArg onSolution
   liftIO (readIORef accRef)
 hostFoldSolutions _ = runtimeErrorS "fold_solutions: expected 4 arguments"
+
+-- | What a fold's step function answered: the driver's decision and
+-- the new accumulator.
+data StepReply = StepReply
+  { step :: !SolutionStep,
+    acc :: !Value
+  }
 
 -- | Read the @step(A)@ a fold's step function returned, as the
 -- driver's own decision plus the new accumulator. Anything else is a
 -- runtime error: a fold whose step function answers with a bare value
 -- has no way to say what to do next.
-readStep :: Value -> Chr (SolutionStep, Value)
+readStep :: Value -> Chr StepReply
 readStep v =
   deref v >>= \case
     VTerm functor [acc]
-      | functor == stepContinue -> pure (StepContinue, acc)
-      | functor == stepStop -> pure (StepStop, acc)
-      | functor == stepCommit -> pure (StepCommit, acc)
+      | functor == stepContinue -> pure (StepReply StepContinue acc)
+      | functor == stepStop -> pure (StepReply StepStop acc)
+      | functor == stepCommit -> pure (StepReply StepCommit acc)
     other -> do
       t <- snapshotValue other
       runtimeErrorS

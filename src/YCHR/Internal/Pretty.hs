@@ -2,10 +2,12 @@
 
 -- | Pretty-printing utilities for CHR terms and binding maps.
 module YCHR.Internal.Pretty
-  ( -- * Pretty-printing functions
+  ( -- * Runtime values
     prettyTerm,
     prettyBindings,
     prettyQueryResult,
+
+    -- * Source text
     prettyTermSrc,
     prettyConstraintSrc,
     prettyHeadSrc,
@@ -14,8 +16,9 @@ module YCHR.Internal.Pretty
     renderAtom,
     termToPExpr,
 
-    -- * Declaration pretty-printers
+    -- * Declarations (REPL @:info@)
     DeclKind (..),
+    declKindKeyword,
     prettyQualifiedName,
     prettyConstraintDecl,
     prettyFunctionDecl,
@@ -30,6 +33,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Loc (Ann (..), noAnn)
 import YCHR.Internal.PExpr qualified as PE
 import YCHR.Internal.Parsed qualified as P
@@ -38,12 +42,14 @@ import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     DataConstructor (..),
+    FunSignature (..),
     Name (..),
     QualifiedName (..),
     Term (..),
     TypeDefinition (..),
     TypeExpr (..),
     TypeKind (..),
+    unqualifiedText,
   )
 -- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
 import Prelude hiding (head)
@@ -52,28 +58,27 @@ import Prelude hiding (head)
 -- Operator table for source pretty-printing
 -- ---------------------------------------------------------------------------
 
--- | Operator table for source pretty-printing.
--- Extends 'builtinOps' with the standard arithmetic\/comparison operators
--- from the builtins library.
+-- | Operator table for source pretty-printing: 'builtinOps' plus the
+-- prelude's arithmetic and comparison operators.
 prettyOps :: PE.OpTable
 prettyOps = case PE.mergeOps builtinOps stdArithOps of
   Right t -> t
   Left _ -> builtinOps
   where
     stdArithOps =
-      [ (200, PE.Fy, "-"),
-        (500, PE.Yfx, "+"),
-        (500, PE.Yfx, "-"),
-        (400, PE.Yfx, "*"),
-        (400, PE.Yfx, "div"),
-        (400, PE.Yfx, "mod"),
-        (400, PE.Yfx, "rem"),
-        (700, PE.Xfx, "<"),
-        (700, PE.Xfx, ">"),
-        (700, PE.Xfx, ">="),
-        (700, PE.Xfx, "=<"),
-        (700, PE.Xfx, "=="),
-        (700, PE.Xfx, "\\==")
+      [ PE.OpDecl 200 PE.Fy "-",
+        PE.OpDecl 500 PE.Yfx "+",
+        PE.OpDecl 500 PE.Yfx "-",
+        PE.OpDecl 400 PE.Yfx "*",
+        PE.OpDecl 400 PE.Yfx "div",
+        PE.OpDecl 400 PE.Yfx "mod",
+        PE.OpDecl 400 PE.Yfx "rem",
+        PE.OpDecl 700 PE.Xfx "<",
+        PE.OpDecl 700 PE.Xfx ">",
+        PE.OpDecl 700 PE.Xfx ">=",
+        PE.OpDecl 700 PE.Xfx "=<",
+        PE.OpDecl 700 PE.Xfx "==",
+        PE.OpDecl 700 PE.Xfx "\\=="
       ]
 
 -- ---------------------------------------------------------------------------
@@ -114,10 +119,9 @@ constraintToPExpr (Constraint (Qualified m name) args) =
 
 -- | Convert a parsed 'P.Head' to a 'PE.PExpr'.
 --
--- The aggregates are not rendered: this is the source-fragment printer
--- used for diagnostics, and a head reaching it has been through the
--- renamer only in the tests that exercise it. An aggregate's spelling
--- there is its expansion, not the macro the user wrote.
+-- This printer is for diagnostics on parsed heads. Aggregates are not
+-- rendered: after the renamer an aggregate is its expansion, not what
+-- the user wrote.
 headToPExpr :: P.Head -> PE.PExpr
 headToPExpr (P.Simplification cs _) = commaSepPExpr (map constraintToPExpr cs)
 headToPExpr (P.Propagation cs _) = commaSepPExpr (map constraintToPExpr cs)
@@ -287,6 +291,7 @@ data DeclKind
   | DKOpenClass
   deriving (Show, Eq)
 
+-- | The directive keyword of a declaration kind.
 declKindKeyword :: DeclKind -> String
 declKindKeyword DKFunction = "function"
 declKindKeyword DKOpenFunction = "open_function"
@@ -305,13 +310,9 @@ typeExprToPExpr :: TypeExpr -> PE.PExpr
 typeExprToPExpr (TypeVar v) = PE.Var v
 typeExprToPExpr (TypeCon (Unqualified ".") args) =
   PE.Compound "." (map (noAnn . typeExprToPExpr) args)
-typeExprToPExpr (TypeCon name []) = PE.Atom (typeConBaseName name)
+typeExprToPExpr (TypeCon name []) = PE.Atom (unqualifiedText name)
 typeExprToPExpr (TypeCon name args) =
-  PE.Compound (typeConBaseName name) (map (noAnn . typeExprToPExpr) args)
-
-typeConBaseName :: Name -> Text
-typeConBaseName (Unqualified n) = n
-typeConBaseName (Qualified _ n) = n
+  PE.Compound (unqualifiedText name) (map (noAnn . typeExprToPExpr) args)
 
 -- | Render a 'TypeExpr' as valid surface-language source text.
 prettyTypeExpr :: TypeExpr -> String
@@ -338,11 +339,7 @@ prettyFunSig name argTys retTy =
 -- the bound's base name (qualified-name module is dropped to match
 -- the surface @requiring@ form).
 prettyBoundSig :: BoundSig -> String
-prettyBoundSig b =
-  let baseName = case b.name of
-        Unqualified n -> n
-        Qualified _ n -> n
-   in prettyFunSig baseName b.argTypes b.returnType
+prettyBoundSig b = prettyFunSig (unqualifiedText b.name) b.argTypes b.returnType
 
 -- | Render a list of bounds as the @requiring B1, B2, ..., Bn@ trailer
 -- (no leading space, no trailing period). Empty input renders as the
@@ -385,36 +382,32 @@ prettyConstraintDecl qn arity mArgTys bounds = case mArgTys of
 -- dropped. A @refining@ clause is only valid on a closed
 -- single-signature @:- function@, which is the only place it is
 -- emitted.
-prettyFunctionDecl ::
-  QualifiedName ->
-  Int ->
-  [([TypeExpr], TypeExpr)] ->
-  [BoundSig] ->
-  Maybe TypeExpr ->
-  DeclKind ->
-  String
-prettyFunctionDecl qn arity sigs bounds refined kind =
-  let keyword = declKindKeyword kind
+prettyFunctionDecl :: D.Function -> DeclKind -> String
+prettyFunctionDecl f kind =
+  let qn = f.name
+      arity = f.arity
+      sigs = f.signatures
+      keyword = declKindKeyword kind
       isFunction = kind == DKFunction || kind == DKOpenFunction
-      reqStr = if isFunction then prettyRequiring bounds else ""
-      refStr = if kind == DKFunction then prettyRefining refined else ""
+      reqStr = if isFunction then prettyRequiring f.requiring else ""
+      refStr = if kind == DKFunction then prettyRefining f.refining else ""
    in case sigs of
         [] ->
           -- An unsignatured function declaration falls back to the
           -- @name/arity@ form. This shape is not currently produced by
           -- the resolver but is handled here so the printer is total.
           ":- " ++ keyword ++ " " ++ renderAtom qn.baseName ++ "/" ++ show arity ++ "."
-        [(argTys, retTy)] ->
+        [sig] ->
           ":- "
             ++ keyword
             ++ " "
-            ++ prettyFunSig qn.baseName argTys retTy
+            ++ prettyFunSig qn.baseName sig.argTypes sig.returnType
             ++ reqStr
             ++ refStr
             ++ "."
         _ ->
-          let oneSig (argTys, retTy) =
-                "    (" ++ prettyFunSig qn.baseName argTys retTy ++ ")"
+          let oneSig sig =
+                "    (" ++ prettyFunSig qn.baseName sig.argTypes sig.returnType ++ ")"
            in ":- "
                 ++ keyword
                 ++ "\n"
@@ -431,7 +424,7 @@ prettyFunctionDecl qn arity sigs bounds refined kind =
 -- @'.'(H, T)@.
 prettyTypeDecl :: TypeDefinition -> String
 prettyTypeDecl td =
-  let tname = renderAtom (typeConBaseName td.name)
+  let tname = renderAtom (unqualifiedText td.name)
       head_ = case td.typeVars of
         [] -> tname
         vs -> tname ++ "(" ++ intercalate ", " (map T.unpack vs) ++ ")"
@@ -446,9 +439,7 @@ prettyTypeDecl td =
 
 ctorToString :: DataConstructor -> String
 ctorToString c =
-  let baseName = case c.conName of
-        Unqualified n -> n
-        Qualified _ n -> n
+  let baseName = unqualifiedText c.conName
       pexpr = case c.conArgs of
         [] -> PE.Atom baseName
         args -> PE.Compound baseName (map (noAnn . typeExprToPExpr) args)

@@ -47,8 +47,11 @@ module YCHR.Internal.VM.Types
     Program (..),
     Procedure (..),
     ProcKind (..),
+    Evaluable (..),
     EvaluableKey (..),
+    Callable (..),
     CallableKey (..),
+    Tellable (..),
     TellableKey (..),
     TellableResolution (..),
     funRefFunctor,
@@ -56,6 +59,7 @@ module YCHR.Internal.VM.Types
 
     -- * Statements
     Stmt (..),
+    IndexCondition (..),
 
     -- * Expressions
     ValExpr (..),
@@ -95,11 +99,11 @@ import YCHR.Internal.Types qualified as Types
 -- The interpreter maintains a stack of these for error reporting.
 data StackFrame = StackFrame
   { -- | Human-readable label (e.g. @"rule transitivity"@ or @"function factorial\/1"@).
-    frameLabel :: Text,
+    label :: Text,
     -- | Source file location.
-    frameSourceLoc :: SourceLoc,
+    sourceLoc :: SourceLoc,
     -- | Pretty-printed source code (from the parsed expression).
-    frameSourceCode :: Text
+    sourceCode :: Text
   }
   deriving (Show, Eq)
 
@@ -139,23 +143,22 @@ data Program = Program
     -- function takes first. See 'deepEvalValue' \/
     -- 'invokeByKey' in @YCHR.Internal.Runtime.Interpreter@ and
     -- @deep-eval-value@ in @scheme\/ychr\/runtime.sls@.
-    evaluables :: ![(EvaluableKey, Name)],
+    evaluables :: ![Evaluable],
     -- | Dispatch table for the @'$call'@ closure-apply construct. Maps
     -- a closure's 'CallableKey' (the shape of the closure value itself:
     -- its functor, its identity field, and its declared arity) to the
     -- mangled name of the procedure that implements it in
     -- 'procedures'. One entry per user-defined function — every
     -- function reference a program can build — plus one per lifted
-    -- lambda. Consulted by 'ApplyClosure'; the runtime never scans a
-    -- chain of branches to resolve a callable.
-    callables :: ![(CallableKey, Name)],
+    -- lambda. Consulted by 'ApplyClosure'.
+    callables :: ![Callable],
     -- | Dispatch table for the dynamic @tell\/N@ construct 'TellTerm'.
     -- Maps a 'TellableKey' — the calling module, a goal term's functor
     -- and the arity it is told at — to the mangled name of that
     -- constraint's @tell_c@ procedure. Holds entries only for the
     -- modules that contain a 'TellTerm', so a program that never
     -- tells dynamically carries an empty table.
-    tellables :: ![(TellableKey, Name)],
+    tellables :: ![Tellable],
     -- | The second tier of the dynamic @tell\/N@ dispatch: the program's
     -- constraints keyed by a bare functor, with no module scope and the
     -- told arity on the key itself. Consulted only when the scoped
@@ -184,16 +187,34 @@ data Program = Program
   }
   deriving (Show, Eq)
 
+-- | One entry of 'Program.evaluables'.
+data Evaluable = Evaluable
+  { key :: !EvaluableKey,
+    -- | The procedure that implements the function.
+    procName :: !Name
+  }
+  deriving (Show, Eq)
+
 -- | Dispatch key for the @is@ deep-evaluator. Parallel in structure
 -- to 'YCHR.Internal.Types.Identifier', but carries the VM-encoded form of the
 -- functor (the same text stored on @VTerm@ values), so dispatch is
 -- a direct map lookup with no need to invert
 -- 'YCHR.Internal.Compile.Names.encodeText'.
 data EvaluableKey = EvaluableKey
-  { functor :: !Name,
+  { -- | The VM-encoded functor.
+    functor :: !Name,
+    -- | The function's arity.
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
+
+-- | One entry of 'Program.callables'.
+data Callable = Callable
+  { key :: !CallableKey,
+    -- | The procedure that implements the function or lambda.
+    procName :: !Name
+  }
+  deriving (Show, Eq)
 
 -- | Dispatch key for the @'$call'@ closure-apply construct: the key
 -- derived from the shape of a closure value applied at a given arity.
@@ -228,6 +249,14 @@ data CallableKey = CallableKey
   }
   deriving (Show, Eq, Ord)
 
+-- | One entry of 'Program.tellables'.
+data Tellable = Tellable
+  { key :: !TellableKey,
+    -- | The constraint's @tell_c@ procedure.
+    procName :: !Name
+  }
+  deriving (Show, Eq)
+
 -- | Dispatch key for the dynamic @tell\/N@ construct 'TellTerm'.
 --
 -- The functor is the VM-encoded text found on a @VTerm@ or @VAtom@ —
@@ -247,7 +276,9 @@ data TellableKey = TellableKey
   { -- | The module the rule body containing the tell was written in,
     -- or 'Nothing' for the origin-less tier.
     scope :: !(Maybe Text),
+    -- | The goal's VM-encoded functor.
     functor :: !Name,
+    -- | The total arity, appended arguments included.
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
@@ -286,7 +317,7 @@ lambdaClosureFunctor = Name (T.pack "__closure")
 -- Note: @reactivate_all@ (paper §5.1–5.2) is not generated.  YCHR
 -- implements the /Selective Constraint Reactivation/ optimization
 -- (paper §5.3, observer pattern): 'Store' registers constraints as
--- observers of their arguments, 'Unify' populates the reactivation
+-- observers of their arguments, 'BUnify' populates the reactivation
 -- queue for affected constraints, and 'DrainReactivationQueue'
 -- processes only those constraints.
 data Procedure = Procedure
@@ -296,10 +327,10 @@ data Procedure = Procedure
     params :: [Name],
     -- | Body statements
     body :: [Stmt],
-    -- | Structural classification of the procedure. The compiler sets
-    -- this at the (single) construction site; the interpreter reads it
-    -- to label trace events without re-parsing the mangled name.
-    -- Backends that don't care about tracing simply ignore the field.
+    -- | Structural classification of the procedure, set by the compiler
+    -- when it builds the procedure. The interpreter reads it to label
+    -- trace events without re-parsing the mangled name. Backends that
+    -- don't trace ignore it.
     procKind :: !ProcKind
   }
   deriving (Show, Eq)
@@ -351,17 +382,17 @@ data Stmt
     -- @Foreach label constraintType suspVar indexConditions body@
     --
     -- Iterates over all stored constraints of the given type that
-    -- satisfy the index conditions. Each condition @(i, expr)@ requires
-    -- that argument @i@ of the constraint is 'Equal' to @expr@.
+    -- satisfy the index conditions. Each 'IndexCondition' requires
+    -- that its argument of the constraint is 'BEqual' to its value.
     --
     -- The current constraint suspension is bound to @suspVar@ in each
-    -- iteration; references it via 'IdVar' inside the body, and use
+    -- iteration; reference it via 'IdVar' inside the body, and use
     -- 'FieldArg'/'FieldType' to access its fields.
     --
     -- The iterator must satisfy the robustness, correctness,
     -- completeness, and weak termination properties as specified
     -- in the CHR compilation literature.
-    Foreach Label ConstraintType Name [(ArgIndex, ValExpr)] [Stmt]
+    Foreach Label ConstraintType Name [IndexCondition] [Stmt]
   | -- | Jump to the next iteration of the labeled 'Foreach' loop.
     Continue Label
   | -- | Exit the labeled 'Foreach' loop.
@@ -395,7 +426,7 @@ data Stmt
     -- @DrainReactivationQueue suspVar body@
     --
     -- Iterates over the reactivation queue (populated as a side
-    -- effect of 'Unify'), binding each pending constraint suspension
+    -- effect of 'BUnify'), binding each pending constraint suspension
     -- to @suspVar@ (referenced via 'IdVar') and executing @body@.
     -- The body typically dispatches to the appropriate @activate_c@
     -- procedure based on constraint type.
@@ -456,8 +487,7 @@ data ValExpr
     -- closure's 'CallableKey' — and calls the procedure it maps to
     -- with any captured values the closure carries, followed by the
     -- arguments. @'$call'(F, A1, …, An)@ compiles to exactly this
-    -- lookup and call; no per-arity dispatcher scans a chain of
-    -- branches.
+    -- lookup and call.
     --
     -- An unbound closure is an instantiation error (so a rule guard
     -- soft-fails and retries after reactivation), and any other value
@@ -467,8 +497,9 @@ data ValExpr
   | -- | The @is@-with-variable-RHS case: evaluate the nested expression
     -- in deep-deref mode and then walk the resulting 'Value',
     -- evaluating any compound subterm whose @(functor, arity)@ names
-    -- a declared evaluable. Emitted only by 'compileBodyGoal' for
-    -- @D.BodyIs v expr@ when @expr@ is syntactically a variable; this
+    -- a declared evaluable. Emitted only for an @is@ (in a rule body or
+    -- a function body) whose right-hand side is syntactically a
+    -- variable; this
     -- is the marker that makes the walker fire for @R is X@ without
     -- affecting guards or other 'EvalDeep' use sites. See the
     -- "Variable RHS in @is@" subsection of the type-system reference.
@@ -555,12 +586,10 @@ data BoolExpr
 
 -- | Constraint-identifier-producing expressions.
 --
--- Constraint identifiers are produced in only three ways: by
--- 'CreateConstraint', by referencing an id-bound variable
+-- Constraint identifiers are produced in only two ways: by
+-- 'CreateConstraint', or by referencing an id-bound variable
 -- ('IdVar' — populated by the parameter list, 'Foreach',
--- 'DrainReactivationQueue', or a 'LetId' binding), or by
--- a procedure that returns one (currently no such procedure
--- is generated, but the constructor is reserved).
+-- 'DrainReactivationQueue', or a 'LetId' binding).
 data IdExpr
   = -- | Reference to an id-bound variable (local or parameter).
     IdVar Name
@@ -640,6 +669,14 @@ historyIdsList (HistoryIds ids) = ids
 -- fresh tuple.
 historyIdsFromSerialized :: [IdExpr] -> HistoryIds
 historyIdsFromSerialized = HistoryIds
+
+-- | One index condition of a 'Foreach': argument @argIndex@ of the
+-- constraint must be 'BEqual' to @expectedValue@.
+data IndexCondition = IndexCondition
+  { argIndex :: !ArgIndex,
+    expectedValue :: !ValExpr
+  }
+  deriving (Show, Eq)
 
 -- | Variable or procedure name.
 newtype Name = Name {unName :: Text}

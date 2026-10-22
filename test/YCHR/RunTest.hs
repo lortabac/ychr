@@ -3,6 +3,7 @@
 module YCHR.RunTest (tests) where
 
 import Control.Exception (SomeException, fromException, try)
+import Data.Either (isLeft)
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -42,7 +43,7 @@ import YCHR.Run
     toSessionInput,
     withCHR,
   )
-import YCHR.TestHelpers (countAliveByType, expectErrorContaining)
+import YCHR.TestHelpers (compileOrFail, countAliveByType, expectErrorContaining, leqSource)
 
 -- | End-to-end 'YCHR.Run' tests: compiling and running surface programs and queries.
 tests :: TestTree
@@ -60,35 +61,14 @@ tests =
       uncheckedQueryTests
     ]
 
--- ---------------------------------------------------------------------------
--- Shared helpers
--- ---------------------------------------------------------------------------
-
-compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules stdlib False inputs of
-  Left err -> assertFailure $ show err
-  Right (cp, _) -> pure cp
-
--- ---------------------------------------------------------------------------
--- LEQ surface source
--- ---------------------------------------------------------------------------
-
-leqSource :: Text
-leqSource =
-  ":- module(order, [leq/2]).\n\
-  \:- chr_constraint leq/2.\n\
-  \\n\
-  \reflexivity @ leq(X, X) <=> true.\n\
-  \antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n\
-  \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
-  \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
-
+-- | The constraint type of a declared constraint. Errors if absent.
 lookupType :: CompiledProgram -> Identifier -> ConstraintType
 lookupType prog ident =
   case lookupSymbol ident prog.symbolTable of
     Just ct -> ct
     Nothing -> error $ "constraint type not found: " ++ show ident
 
+-- | The @leq@ handler needs no host calls.
 leqHostCalls :: HostCallRegistry
 leqHostCalls = Map.empty
 
@@ -162,6 +142,7 @@ leqTests =
 -- Fibonacci surface source
 -- ---------------------------------------------------------------------------
 
+-- | Fibonacci over host-call arithmetic.
 fibSource :: Text
 fibSource =
   ":- module(fib, [fib/2]).\n\
@@ -172,22 +153,23 @@ fibSource =
   \rec @ fib(N, R) <=> N1 is host:'-'(N, 1), N2 is host:'-'(N, 2), \
   \fib(N1, R1), fib(N2, R2), Tmp is host:'+'(R1, R2), R = Tmp.\n"
 
-extractIntArgs :: String -> [Value] -> (Integer, Integer)
-extractIntArgs _ [VInt a, VInt b] = (a, b)
-extractIntArgs context vals =
-  error $
-    context ++ ": expected 2 Int arguments, got " ++ show (length vals)
+-- | A binary host call over two integers.
+intBinOp :: String -> (Integer -> Integer -> Integer) -> HostCallFn
+intBinOp context op = HostCallFn $ \args -> case args of
+  [VInt a, VInt b] -> pure (VInt (op a b))
+  vals ->
+    error $
+      context ++ ": expected 2 Int arguments, got " ++ show (length vals)
 
+-- | Integer @+@ and @-@ for 'fibSource'.
 fibHostCalls :: HostCallRegistry
 fibHostCalls =
   Map.fromList
     [ ( VM.Name "+",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "+" args in pure (VInt (a + b))
+        intBinOp "+" (+)
       ),
       ( VM.Name "-",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "-" args in pure (VInt (a - b))
+        intBinOp "-" (-)
       )
     ]
 
@@ -206,6 +188,7 @@ fibTests =
 -- Query visibility
 -- ---------------------------------------------------------------------------
 
+-- | A module that exports nothing.
 hiddenSource :: Text
 hiddenSource =
   ":- module(secret, []).\n\
@@ -213,6 +196,7 @@ hiddenSource =
   \\n\
   \hidden(X) <=> true.\n"
 
+-- | A module that exports @visible/1@ but not @internal/1@.
 exportedSource :: Text
 exportedSource =
   ":- module(pub, [visible/1]).\n\
@@ -222,6 +206,7 @@ exportedSource =
   \visible(X) <=> true.\n\
   \internal(X) <=> true.\n"
 
+-- | A macro that expands to two goals.
 macroConjunctionSource :: Text
 macroConjunctionSource =
   ":- module(mac, [macro(both/1)]).\n\
@@ -229,6 +214,7 @@ macroConjunctionSource =
   \:- chr_constraint b/1.\n\
   \:- macro both(X) ---> [a(X), b(X)].\n"
 
+-- | A macro that expands to one goal.
 macroSingleGoalSource :: Text
 macroSingleGoalSource =
   ":- module(mac1, [result/2, macro(single/2)]).\n\
@@ -237,6 +223,7 @@ macroSingleGoalSource =
   \\n\
   \result(X, R) <=> R = X.\n"
 
+-- | A macro that expands to no goals.
 macroZeroGoalSource :: Text
 macroZeroGoalSource =
   ":- module(mac0, [macro(nothing/0)]).\n\
@@ -261,6 +248,7 @@ macroBranchErrorSource =
   \tree(s(X)) ---> [tree(X), tree(X)].\n\
   \r(_) <=> tree(s(s(s(s(s(s(s(s(s(s(0))))))))))).\n"
 
+-- | One of two modules exporting the same @foo/1@.
 ambiguousSourceA :: Text
 ambiguousSourceA =
   ":- module(modA, [foo/1]).\n\
@@ -268,16 +256,13 @@ ambiguousSourceA =
   \\n\
   \foo(X) <=> true.\n"
 
+-- | The other module exporting @foo/1@.
 ambiguousSourceB :: Text
 ambiguousSourceB =
   ":- module(modB, [foo/1]).\n\
   \:- chr_constraint foo/1.\n\
   \\n\
   \foo(X) <=> true.\n"
-
-isLeft :: Either a b -> Bool
-isLeft (Left _) = True
-isLeft _ = False
 
 visibilityTests :: TestTree
 visibilityTests =
@@ -327,11 +312,12 @@ visibilityTests =
 -- Goal-argument warnings
 -- ---------------------------------------------------------------------------
 
--- | Two @paint@ constraints over the same constructors. @exported@
--- exports its type, so a host goal naming @red@ canonicalizes and the
--- rule fires; @hidden@ does not, so the same goal warns and no rule
--- matches. The pair is what makes the warning worth surfacing: it is
--- the only signal that an otherwise successful run did nothing.
+-- | This module and 'goalWarningHiddenSource' each declare a constraint
+-- over a constructor type. @exported@ exports its type, so a host goal
+-- naming @red@ canonicalizes and the rule fires; @hidden@ does not, so a
+-- goal naming @dark@ warns and no rule matches. The pair is what makes
+-- the warning worth surfacing: it is the only signal that an otherwise
+-- successful run did nothing.
 goalWarningSource :: Text
 goalWarningSource =
   ":- module(exported, [paint/2, type(col/0)]).\n\
@@ -339,6 +325,7 @@ goalWarningSource =
   \:- chr_constraint paint(col, any).\n\
   \paint(red, R) <=> R = 1.\n"
 
+-- | The @hidden@ module of 'goalWarningSource'.
 goalWarningHiddenSource :: Text
 goalWarningHiddenSource =
   ":- module(hidden, [shade/2]).\n\
@@ -352,6 +339,7 @@ ctorGoal :: Text -> Text -> Constraint
 ctorGoal c ctor =
   Constraint (Unqualified c) [CompoundTerm (Unqualified ctor) [], VarTerm "R"]
 
+-- | 'ctorGoal' for @paint@.
 paintGoal :: Text -> Constraint
 paintGoal = ctorGoal "paint"
 
@@ -385,6 +373,7 @@ goalWarningTests =
 -- the 'Display' instance on @GoalNotAConstraint@), plus one end-to-end
 -- check on the displayed message.
 
+-- | The rejection, or a test failure on success.
 leftRejection :: Either GoalRejection b -> IO GoalRejection
 leftRejection (Left r) = pure r
 leftRejection (Right _) = assertFailure "expected Left, got Right"
@@ -504,7 +493,8 @@ queryErrorTests =
               assertFailure $
                 "expected Error, got non-Error exception: " ++ show exc
           Right _ ->
-            assertFailure "expected an exception for a macro goal expanding to several goals",
+            assertFailure
+              "expected an exception for a macro goal expanding to several goals",
       testCase "runProgramWithGoal: macro expanding to no goals is rejected" $ do
         cp <- compileOrFail [("mac0.chr", macroZeroGoalSource)]
         outcome <-
@@ -529,7 +519,8 @@ queryErrorTests =
       testCase "a branching recursive macro reports a nested error once" $
         case compileModules stdlib False [("branch.chr", macroBranchErrorSource)] of
           Left (RenameErrors errs) -> length errs @?= 1
-          Left other -> assertFailure ("expected rename errors, got: " ++ displayMsg other)
+          Left other ->
+            assertFailure ("expected rename errors, got: " ++ displayMsg other)
           Right _ -> assertFailure "expected a NoMatchingMacroClause error",
       testCase "UnusedMacroParameter: only for a used-once, non-underscore variable" $
         case compileModules stdlib False [("macu.chr", macroUnusedParamSource)] of
@@ -601,6 +592,7 @@ queryErrorTests =
 -- Arity overloading
 -- ---------------------------------------------------------------------------
 
+-- | Two constraints that share a name: @foo/1@ and @foo/2@.
 arityOverloadSource :: Text
 arityOverloadSource =
   ":- module(m, [foo/1, foo/2]).\n\
@@ -640,6 +632,7 @@ arityOverloadTests =
 -- All cases assert on the final bindings or on the thrown exception —
 -- no store/history introspection.
 
+-- | A constraint and a function for the query-body cases.
 qbodySource :: Text
 qbodySource =
   ":- module(qbody, [keep/1, fun triple/1]).\n\
@@ -648,16 +641,15 @@ qbodySource =
   \triple(X) -> host:'*'(X, 3).\n\
   \keep(_) <=> true.\n"
 
+-- | Integer @+@ and @*@.
 qbodyHostCalls :: HostCallRegistry
 qbodyHostCalls =
   Map.fromList
     [ ( VM.Name "+",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "+" args in pure (VInt (a + b))
+        intBinOp "+" (+)
       ),
       ( VM.Name "*",
-        HostCallFn $ \args ->
-          let (a, b) = extractIntArgs "*" args in pure (VInt (a * b))
+        intBinOp "*" (*)
       )
     ]
 
@@ -757,6 +749,7 @@ queryBodyTests =
 -- construct 'BFromVal'. The rule frame must be live during guard evaluation
 -- for that source location to resolve.
 
+-- | A rule whose guard returns an integer.
 guardNonBoolSource :: Text
 guardNonBoolSource =
   ":- module(guardbug, [p/1]).\n\
@@ -826,10 +819,10 @@ uncheckedQueryTests =
           Left exc ->
             assertFailure $
               "expected prepareQueryUnchecked to prepare the goal, got: " ++ show exc
-          Right (prepared, ws) -> do
+          Right prepared -> do
             assertBool
               "expected the query to be prepared"
               (not (null prepared.liftedGoals))
             assertBool "expected no type-check warnings" $
-              null [() | TypeCheckWarnings _ <- ws]
+              null [() | TypeCheckWarnings _ <- prepared.warnings]
     ]

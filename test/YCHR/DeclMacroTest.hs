@@ -65,7 +65,7 @@ moduleNamed n cp = case [m | m <- cp.allModules, m.name == n] of
 -- | Compile modules, expecting rename errors.
 renameErrors :: [(FilePath, Text)] -> IO [RenameError]
 renameErrors inputs = case compileModules stdlib False inputs of
-  Left (RenameErrors es) -> pure [d.diagAnnotation.node | d <- es]
+  Left (RenameErrors es) -> pure [d.annotation.node | d <- es]
   Left e -> assertFailure ("unexpected error:\n" ++ displayMsg e)
   Right _ -> assertFailure "expected a rename error"
 
@@ -83,8 +83,9 @@ declErrors inputs = case compileModules stdlib False inputs of
   Left e -> assertFailure ("unexpected error:\n" ++ displayMsg e)
   Right _ -> assertFailure "expected a declaration-macro error"
 
+-- | The errors, without their locations.
 errNodes :: [Diagnostic DeclMacroError] -> [DeclMacroError]
-errNodes = map (\d -> d.diagAnnotation.node)
+errNodes = map (\d -> d.annotation.node)
 
 -- | The user module @m@ of a compiled program.
 userModule :: CompiledProgram -> IO CollectedModule
@@ -92,9 +93,11 @@ userModule cp = case [m | m <- cp.allModules, m.name == "m"] of
   (m : _) -> pure m
   [] -> assertFailure "module m not found"
 
+-- | A module's declared constraints as @(name, arity)@.
 constraintNames :: CollectedModule -> [(Text, Int)]
 constraintNames m = [(cd.name, cd.arity) | Ann (ConstraintDecl cd) _ <- m.decls]
 
+-- | Assert that @needle@ occurs in @hay@.
 assertContains :: String -> String -> Assertion
 assertContains needle hay =
   assertBool ("expected " ++ show needle ++ " in:\n" ++ hay) (needle `isInfixOf` hay)
@@ -260,7 +263,7 @@ expansionTests =
         (_, ws) <-
           compileAllOk
             [("m.chr", ":- module(m).\n:- macro_decls d(X) ---> [].\n:- d(1).\n")]
-        [w.diagAnnotation.node | RenameWarnings rws <- ws, w <- rws]
+        [w.annotation.node | RenameWarnings rws <- ws, w <- rws]
           @?= [UnusedMacroParameter (QualifiedName "m" "d") "X"],
       testCase "a qualified use of an imported macro" $ do
         let provider =
@@ -318,7 +321,9 @@ diagnosticTests =
       testCase "a non-callable directive is malformed" $ do
         es <- declErrors [("m.chr", ":- module(m).\n:- 42.\n:- \"s\".\n")]
         errNodes es
-          @?= [DeclMacroParseError MalformedTopLevel, DeclMacroParseError MalformedTopLevel],
+          @?= [ DeclMacroParseError MalformedTopLevel,
+                DeclMacroParseError MalformedTopLevel
+              ],
       testCase "an import list hides a declaration macro" $ do
         let p1 =
               src
@@ -326,10 +331,14 @@ diagnosticTests =
                   ":- macro_decls d ---> [].",
                   ":- macro_decls e ---> []."
                 ]
-            user = src [":- module(m).", ":- use_module(p, [macro(e/0)]).", ":- d.", ":- p:d."]
+            user =
+              src
+                [":- module(m).", ":- use_module(p, [macro(e/0)]).", ":- d.", ":- p:d."]
         es <- declErrors [("p.chr", p1), ("m.chr", user)]
         errNodes es
-          @?= [UnknownDirective "d" 0, DeclMacroRenameError (NotExportedByModule "p" "d" 0)],
+          @?= [ UnknownDirective "d" 0,
+                DeclMacroRenameError (NotExportedByModule "p" "d" 0)
+              ],
       testCase "a goal and a declaration macro with one key, then used" $ do
         es <-
           declErrors
@@ -358,8 +367,8 @@ diagnosticTests =
             ]
         case es of
           [d] -> do
-            d.diagAnnotation.node @?= MacroDeclsForbiddenClause "use_module"
-            let chain = concatMap T.unpack d.diagContext
+            d.annotation.node @?= MacroDeclsForbiddenClause "use_module"
+            let chain = concatMap T.unpack d.context
             assertContains "m:inner/1" chain
             assertContains "m:outer/0" chain
           other -> assertFailure (show (errNodes other)),
@@ -520,7 +529,7 @@ diagnosticTests =
           Right _ -> assertFailure "expected a kind mismatch",
       testCase "a goal macro and a declaration macro with one key are duplicates" $ do
         es <-
-          map (.diagAnnotation.node)
+          map (.annotation.node)
             <$> declErrors
               [ ( "m.chr",
                   src
@@ -621,8 +630,8 @@ diagnosticTests =
             [("m.chr", ":- module(m).\n:- macro_decls bad ---> [not_a_clause].\n:- bad.\n")]
         case es of
           [d] -> do
-            d.diagAnnotation.node @?= DeclMacroParseError MalformedTopLevel
-            assertContains "in the expansion of m:bad/0" (concatMap T.unpack d.diagContext)
+            d.annotation.node @?= DeclMacroParseError MalformedTopLevel
+            assertContains "in the expansion of m:bad/0" (concatMap T.unpack d.context)
           other -> assertFailure (show (errNodes other)),
       testCase "a renaming error in a generated rule shows the chain" $
         case compileModules
@@ -670,9 +679,9 @@ spliceTests =
             )
         case cp.splices of
           [ ModuleSplices
-              { spliceModule = modName,
-                spliceFile = file,
-                spliceItems = items
+              { moduleName = modName,
+                file = file,
+                items = items
               }
             ] -> do
               modName @?= "m"

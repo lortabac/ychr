@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Tests for the interpreter's slot phase
@@ -25,6 +24,7 @@ import YCHR.Internal.VM
     BoolExpr (..),
     CallArg (..),
     IdExpr (..),
+    IndexCondition (..),
     Literal (..),
     Name,
     ProcKind (..),
@@ -34,6 +34,7 @@ import YCHR.Internal.VM
     ValExpr (..),
     mkHistoryIds,
   )
+import YCHR.TestHelpers (emptyProgram, mkProc)
 
 -- | Interpreter slot assignment: scoping, shadowing, and totality on unbound names.
 tests :: TestTree
@@ -50,39 +51,25 @@ tests =
 -- Fixtures
 -- ---------------------------------------------------------------------------
 
-mkProc :: Name -> [Name] -> [Stmt] -> Procedure
-mkProc n ps body =
-  Procedure
-    { name = n,
-      params = ps,
-      body = body,
-      procKind = PKReactivateDispatch
-    }
-
--- | The lowered form of a procedure lowered on its own: a program is
--- built for it so that it gets the index a program would give it (the
--- phase no longer exposes a way to lower a procedure without one).
+-- | The lowered form of a procedure lowered on its own. The phase only
+-- lowers whole programs, so a one-procedure program is built for it.
 lowerSingle :: [Name] -> [Stmt] -> SlotProc
 lowerSingle params body =
-  case Map.lookup "p" (lowerProgram (programWith [mkProc "p" params body])).slotProcedures of
+  case Map.lookup "p" lowered.slotProcedures of
     Just p -> p
     Nothing -> error "lowerSingle: fixture procedure missing"
+  where
+    lowered = lowerProgram (programWith [mkProc "p" params body])
 
 -- | The lowered body of a procedure with the given parameters and body.
 lowerBody :: [Name] -> [Stmt] -> [SlotStmt]
 lowerBody params body = (lowerSingle params body).slotProcBody
 
+-- | A program with the given procedures and nothing else.
 programWith :: [Procedure] -> Program
 programWith procs =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      procedures = procs,
-      evaluables = [],
-      callables = [],
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = []
+  emptyProgram
+    { procedures = procs
     }
 
 -- | A program whose only procedure is the given one.
@@ -144,14 +131,14 @@ slotTests =
               "l"
               (ConstraintType 0)
               "s"
-              [(ArgIndex 1, Var "a")]
+              [IndexCondition (ArgIndex 1) (Var "a")]
               [Return (Lit (IntLit 0))]
           ]
           @?= [ SForeach
                   "l"
                   (ConstraintType 0)
                   1
-                  [(ArgIndex 1, SVar 0 "a")]
+                  [SIndexCondition (ArgIndex 1) (SVar 0 "a")]
                   [SReturn (SLit (IntLit 0))]
               ],
       testCase "DrainReactivationQueue introduces its variable" $
@@ -164,7 +151,10 @@ slotTests =
           @?= [ SDrainReactivationQueue
                   0
                   [ SExprStmt
-                      (SCallExpr (ProcName "reactivate_dispatch") [SCallId (SIdVar 0 "q")])
+                      ( SCallExpr
+                          (ProcName "reactivate_dispatch")
+                          [SCallId (SIdVar 0 "q")]
+                      )
                   ]
               ],
       testCase "a Tell procedure's fresh id keeps its slot through the call" $
@@ -177,7 +167,8 @@ slotTests =
             Store (IdVar "active")
           ]
           @?= [ SLetId 1 (SCreateConstraint (ConstraintType 7) [SVar 0 "X"]),
-                SExprStmt (SCallExpr (ProcName "activate_c") [SCallId (SIdVar 1 "active")]),
+                SExprStmt
+                  (SCallExpr (ProcName "activate_c") [SCallId (SIdVar 1 "active")]),
                 SStore (SIdVar 1 "active")
               ],
       testCase "the slot count is the arity when the body binds nothing" $

@@ -22,7 +22,7 @@
 --   * what the computed result is matched against, as a 'ResultMatch': the
 --     tests the pattern has to pass and the bindings that follow them.
 --
---   * the plans of the aggregates nested in a goal ('planNested').
+--   * the plans of the aggregates nested in a goal ('nested').
 --
 --   * the diagnostics for a form this compiler does not allow (a nested
 --     @takemin@\/@takemax@), and for a program whose aggregators cannot
@@ -55,6 +55,8 @@ module YCHR.Internal.Compile.Aggregate
   )
 where
 
+import Control.Monad (zipWithM)
+import Control.Monad.Trans.State.Strict (State, evalState, get, put)
 import Control.Monad.Trans.Writer.CPS (Writer, tell)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
@@ -120,19 +122,19 @@ planAggregate ruleIdx rule path a = do
   nested <- planNestedAggregates ruleIdx rule path a.goal
   pure
     AggregatePlan
-      { planIndex = case reverse path of
+      { position = case reverse path of
           i : _ -> i
           [] -> 0,
-        planPath = path,
-        planKind = a.kind,
-        planProcName = aggregateProcName ruleIdx path,
-        planAgg = a.agg,
-        planElement = a.element,
-        planGoal = a.goal,
-        planShared = shared,
-        planBind = a.aggBinds,
-        planResultMatch = resultMatch,
-        planNested = nested
+        path = path,
+        kind = a.kind,
+        procName = aggregateProcName ruleIdx path,
+        agg = a.agg,
+        element = a.element,
+        goal = a.goal,
+        shared = shared,
+        bind = a.aggBinds,
+        resultMatch = resultMatch,
+        nested = nested
       }
   where
     shared = a.aggShared
@@ -156,7 +158,7 @@ planNestedAggregates ::
   D.Rule ->
   [Int] ->
   [D.AggregateConjunct] ->
-  Writer [Diagnostic CompileError] [(Int, AggregatePlan)]
+  Writer [Diagnostic CompileError] [AggregatePlan]
 planNestedAggregates ruleIdx rule path = go 0
   where
     go _ [] = pure []
@@ -166,14 +168,14 @@ planNestedAggregates ruleIdx rule path = go 0
               aggregateMentionedVars n
                 `Set.difference` Set.fromList n.aggShared
                 `Set.difference` Set.fromList n.aggBinds
-            tooEarly =
-              locals `Set.intersection` aggregateGoalLocals [r | r <- rest, not (isNested r)]
+            laterLocals = aggregateGoalLocals [r | r <- rest, not (isNested r)]
+            tooEarly = locals `Set.intersection` laterLocals
         tell
           [ Diagnostic label (AnnP (UnboundVariable v) loc origin) []
           | v <- Set.toAscList tooEarly
           ]
         plan <- planAggregate ruleIdx rule (path ++ [j]) n
-        ((j, plan) :) <$> go (j + 1) rest
+        (plan :) <$> go (j + 1) rest
       _ -> go (j + 1) rest
 
     isNested (D.AggNested _) = True
@@ -217,12 +219,12 @@ checkLocalEscapes rule plans = case Set.toAscList escaped of
     -- visible goal variables.
     locals =
       Set.unions
-        [ aggregateGoalLocals p.planGoal
-            `Set.difference` Set.fromList p.planShared
-            `Set.difference` Set.fromList p.planBind
+        [ aggregateGoalLocals p.goal
+            `Set.difference` Set.fromList p.shared
+            `Set.difference` Set.fromList p.bind
         | p <- plans
         ]
-    visible = Set.fromList [v | p <- plans, isSelectionPlan p, v <- p.planBind]
+    visible = Set.fromList [v | p <- plans, isSelectionPlan p, v <- p.bind]
     escaped =
       (locals `Set.difference` visible)
         `Set.intersection` ( guardVars rule.guard.node
@@ -277,10 +279,8 @@ aggregateResultTypeDeclared typeDefs = any declaresMaybe typeDefs
 
 -- | @library(maybe)@'s type and the constructor the protocol needs. Both
 -- are qualified with their declaring module, which the renamer fixes.
-maybeTypeName :: Types.Name
+maybeTypeName, justConName :: Types.Name
 maybeTypeName = Types.Qualified "maybe" "maybe"
-
-justConName :: Types.Name
 justConName = Types.Qualified "maybe" "just"
 
 -- ---------------------------------------------------------------------------
@@ -314,38 +314,38 @@ aggregateResultMatch ::
   (Text -> Maybe ValExpr) ->
   Term ->
   ResultMatch
-aggregateResultMatch payload resolve term = fst (go Map.empty [] term)
+aggregateResultMatch payload resolve term = evalState (go [] term) Map.empty
   where
     at [] = payload
     at path = List.foldl' (\e i -> GetArg e i) payload path
 
-    -- @bound@ maps each variable the pattern has already bound to the
+    -- The state maps each variable the pattern has already bound to the
     -- path it was bound at, so a repeated variable is tested against the
     -- first occurrence instead of being bound twice (which would be two
     -- independent unifications of the same name).
-    go :: Map.Map Text [Word] -> [Word] -> Term -> (ResultMatch, Map.Map Text [Word])
-    go bound path t = case t of
-      Wildcard -> (mempty, bound)
+    go :: [Word] -> Term -> State (Map.Map Text [Word]) ResultMatch
+    go path t = case t of
+      Wildcard -> pure mempty
       VarTerm v -> case resolve v of
-        Just e -> (test (BEqual e (at path)), bound)
-        Nothing -> case Map.lookup v bound of
-          Just first -> (test (BEqual (at first) (at path)), bound)
-          Nothing -> (ResultMatch [] [(v, at path)], Map.insert v path bound)
-      IntTerm n -> (test (BEqual (Lit (IntLit n)) (at path)), bound)
-      FloatTerm f -> (test (BEqual (Lit (FloatLit f)) (at path)), bound)
-      TextTerm s -> (test (BEqual (Lit (TextLit s)) (at path)), bound)
+        Just e -> pure (test (BEqual e (at path)))
+        Nothing -> do
+          bound <- get
+          case Map.lookup v bound of
+            Just first -> pure (test (BEqual (at first) (at path)))
+            Nothing -> do
+              put (Map.insert v path bound)
+              pure (ResultMatch [] [ResultBind {var = v, value = at path}])
+      IntTerm n -> pure (test (BEqual (Lit (IntLit n)) (at path)))
+      FloatTerm f -> pure (test (BEqual (Lit (FloatLit f)) (at path)))
+      TextTerm s -> pure (test (BEqual (Lit (TextLit s)) (at path)))
       CompoundTerm name [] ->
-        (test (BEqual (Lit (AtomLit (functorAtom name))) (at path)), bound)
-      CompoundTerm name args ->
-        let step (rm, b) (i, arg) =
-              let (rm', b') = go b (path ++ [i]) arg
-               in (rm <> rm', b')
-            (argsMatch, bound') =
-              List.foldl' step (mempty, bound) (zip [0 ..] args)
-         in ( test (BMatchTerm (at path) (vmName name) (fromIntegral (length args)))
-                <> argsMatch,
-              bound'
-            )
+        pure (test (BEqual (Lit (AtomLit (functorAtom name))) (at path)))
+      CompoundTerm name args -> do
+        argsMatch <- zipWithM (\i arg -> go (path ++ [i]) arg) [0 ..] args
+        pure
+          ( test (BMatchTerm (at path) (vmName name) (fromIntegral (length args)))
+              <> mconcat argsMatch
+          )
 
     test b = ResultMatch [b] []
 

@@ -3,7 +3,6 @@
 module YCHR.RenameTest (tests) where
 
 import Data.Map.Strict qualified as Map
-import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 -- Brings 'CollectedModule''s field labels into scope (qualified) so that
@@ -22,9 +21,11 @@ import YCHR.Internal.Rename
   ( RenameError (..),
     RenameInputs (..),
     RenameWarning (..),
+    Renamed (..),
     defaultRenameInputs,
   )
 import YCHR.Internal.Rename qualified as Rn
+import YCHR.TestHelpers (algebraicTD)
 
 -- | Test-local wrapper that forwards to 'Rn.renameProgram' with empty
 -- rename inputs (no operator-export map and no trailing-loc map). It
@@ -34,17 +35,8 @@ import YCHR.Internal.Rename qualified as Rn
 -- existing tests concise.
 renameProgram ::
   [Module] ->
-  Either
-    [Diagnostic RenameError]
-    ( [CollectedModule],
-      [Diagnostic RenameWarning]
-    )
+  Either [Diagnostic RenameError] (Renamed [CollectedModule])
 renameProgram = Rn.renameProgram defaultRenameInputs . rewriteImports
-
--- | Build an algebraic type definition positionally (the constructors
--- are wrapped in the 'Algebraic' 'TypeKind').
-algebraicTD :: Name -> [Text] -> [DataConstructor] -> SourceLoc -> TypeDefinition
-algebraicTD n vs cs loc = TypeDefinition n vs (Algebraic cs) loc
 
 -- | Renamer tests: cross-module name resolution, visibility, imports, exports, warnings.
 tests :: TestTree
@@ -70,8 +62,8 @@ tests =
 singleRule :: Module -> IO Rule
 singleRule m = do
   renamed <- case renameProgram [m] of
-    Right ([r], _) -> return r
-    Right (mods, _) ->
+    Right (Renamed [r] _) -> return r
+    Right (Renamed mods _) ->
       assertFailure $ "expected 1 renamed module, got " ++ show (length mods)
     Left errs -> assertFailure $ "unexpected errors: " ++ show errs
   case renamed.rules of
@@ -353,8 +345,8 @@ alreadyQualifiedTests =
                 `importing` ["Order"]
                 `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedM) <- case renameProgram [modOrder, modM] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedM.rules of
@@ -380,8 +372,8 @@ alreadyQualifiedTests =
                 `importing` ["A", "B"]
                 `defining` [[qterm "A" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renamedC <- case renameProgram [modA, modB, modC] of
-          Right ([_, _, c], _) -> return c
-          Right (mods, _) ->
+          Right (Renamed [_, _, c] _) -> return c
+          Right (Renamed mods _) ->
             assertFailure $ "expected 3 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedC.rules of
@@ -575,7 +567,9 @@ headTypeTests =
                 `defining` [[term "leq" [var "X", var "Y"]] ==> [atom "true"]]
         rule <- singleRule m
         rule.head.node
-          @?= Propagation [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]] [],
+          @?= Propagation
+            [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "Simpagation kept and removed both renamed" $ do
         let m =
               module' "M"
@@ -616,8 +610,8 @@ multiModuleTests =
                                   )
                            ]
         (renamedOrder, renamedLogic) <- case renameProgram [modOrder, modLogic] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         (renamedOrder.rules, renamedLogic.rules)
@@ -669,7 +663,7 @@ multiModuleTests =
         -- the import-collapse that 'rewriteImports' performs), so the
         -- expected output is just the collected form of the input.
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right (rewriteImports [m], [])
+         in renameProgram [m] @?= Right (Renamed (rewriteImports [m]) [])
     ]
 
 --------------------------------------------------------------------------------
@@ -717,8 +711,8 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
@@ -761,7 +755,9 @@ exportTests =
                 `defining` [[term "gt" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule modA
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]] [],
+          @?= Simplification
+            [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]]
+            [],
       testCase "no module directive exports all constraints" $ do
         -- A has modExports = Nothing (no directive); B can see all of A's constraints
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -770,8 +766,8 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
@@ -803,7 +799,7 @@ exportTests =
 -- | Rename a program and return the warnings (failing on errors).
 warningsOf :: [Module] -> IO [Diagnostic RenameWarning]
 warningsOf mods = case renameProgram mods of
-  Right (_, ws) -> pure ws
+  Right (Renamed _ ws) -> pure ws
   Left errs -> assertFailure $ "unexpected errors: " ++ show errs
 
 warningTests :: TestTree
@@ -905,10 +901,10 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
       testCase "no warning inside quote(...) quoting in body position" $ do
-        -- Regression for the BUGS.md case 'store(quote(plus(X, 3)))': the
-        -- quote/1 quoting form should keep its argument opaque, so neither
-        -- 'quote' itself nor any undeclared functor inside should produce
-        -- an 'UndeclaredDataConstructor' warning.
+        -- 'store(quote(plus(X, 3)))': the quote/1 quoting form keeps its
+        -- argument opaque, so neither 'quote' itself nor any undeclared
+        -- functor inside should produce an 'UndeclaredDataConstructor'
+        -- warning.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -962,13 +958,11 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [],
       testCase "lambda passed directly as a tell-side constraint argument is not warned" $ do
-        -- Regression for BUGS.md "Spurious 'Undeclared data constructor'
-        -- warnings for 'fun' and '->'". A lambda is a first-class value;
-        -- its synthetic '->' and 'fun' functors are surface syntax, not
-        -- data constructors, so they must not reach
-        -- 'warnUnknownDataCon'. The lambda body is a bare variable so the
-        -- test isolates the surface-syntax bug without pulling in prelude
-        -- functions that this minimal DSL module doesn't import.
+        -- A lambda is a first-class value: its synthetic '->' and 'fun'
+        -- functors are surface syntax, not data constructors, so they must
+        -- not reach 'warnUnknownDataCon'. The lambda body is a bare
+        -- variable so the test needs no prelude functions, which this
+        -- minimal DSL module doesn't import.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -979,9 +973,8 @@ warningTests =
         ws @?= [],
       testCase "lambda bound via '=' then passed is not warned" $ do
         -- The bind-then-pass form ('F = fun(...) -> ... end, c(F)')
-        -- must stay warning-free under the simplified pipeline: the
-        -- lambda arm fires in every non-quoted mode and '=' carries no
-        -- special workaround.
+        -- stays warning-free: the lambda arm fires in every non-quoted
+        -- mode, with no special case for '='.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -1091,14 +1084,14 @@ warningTests =
                     ]
                 }
         case renameProgram [m] of
-          Right ([renamed], _) -> case renamed.typeDecls of
+          Right (Renamed [renamed] _) -> case renamed.typeDecls of
             [Ann td _] -> do
               td.name @?= Qualified "M" "tree"
               case typeConstructors td of
                 [dc] -> dc.conName @?= Qualified "M" "leaf"
                 dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
-          Right (mods, _) ->
+          Right (Renamed mods _) ->
             assertFailure $ "expected 1 module, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
       testCase "type references resolved across modules" $ do
@@ -1136,14 +1129,14 @@ warningTests =
                     ]
                 }
         case renameProgram [modA, modB] of
-          Right ([_, renamedB], _) -> case renamedB.typeDecls of
+          Right (Renamed [_, renamedB] _) -> case renamedB.typeDecls of
             [Ann td _] -> case typeConstructors td of
               [dc] -> case dc.conArgs of
                 [TypeCon colorName []] -> colorName @?= Qualified "A" "color"
                 args -> assertFailure $ "unexpected constructor args: " ++ show args
               dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
-          Right (mods, _) ->
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
     ]
@@ -1182,7 +1175,7 @@ importListTests =
                 }
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modOrder, modLogic] of
-          Right ([_, renamedLogic], _) -> case renamedLogic.rules of
+          Right (Renamed [_, renamedLogic] _) -> case renamedLogic.rules of
             [rule] ->
               rule.head.node
                 @?= Simplification
@@ -1194,7 +1187,7 @@ importListTests =
                   ]
                   []
             rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-          Right (mods, _) ->
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
       testCase "name NOT in import list is not resolved" $ do

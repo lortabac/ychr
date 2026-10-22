@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-
 -- | Constraint store for the CHR Haskell runtime.
 --
 -- Manages constraint suspensions: creation, storage, killing, liveness
@@ -13,6 +11,7 @@
 module YCHR.Internal.Runtime.Store
   ( -- * Types
     Suspension (..),
+    StoredGroup (..),
 
     -- * Operations
     createConstraint,
@@ -45,6 +44,8 @@ import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import YCHR.Internal.Runtime.Index
   ( GroundKey,
+    IndexEntry (..),
+    PositionKey (..),
     candidateSlots,
     indexThreshold,
     insertConstraints,
@@ -83,7 +84,8 @@ createConstraint cType cArgs = do
   aliveRef <- liftIO $ newIORef True
   storedRef <- liftIO $ newIORef False
   let susp = Suspension sid cType cArgs aliveRef storedRef
-  liftIO $ modifyIORef' storeById (IntMap.insert (let SuspensionId n = sid in n) susp)
+  let SuspensionId n = sid
+  liftIO $ modifyIORef' storeById (IntMap.insert n susp)
   pure sid
 
 -- | Add a constraint to the type-indexed store; unless its type is
@@ -112,8 +114,8 @@ createConstraint cType cArgs = do
 -- argument walk that registers observers is the same one that computes
 -- an indexed argument's ground key ('addObserverAndKey'), so a store
 -- pays one traversal per argument, not two — and only once the type's
--- bucket is big enough to be worth indexing at all ('indexThreshold'),
--- below which this is the pre-index path exactly.
+-- bucket is big enough to be worth indexing at all ('indexThreshold').
+-- Below that it only registers observers and appends.
 storeConstraint :: SuspensionId -> Chr Bool
 storeConstraint sid = do
   susp <- lookupSusp sid
@@ -142,8 +144,7 @@ storeConstraint sid = do
       if IntSet.null positions
         then do
           -- No position of this type is ever looked up through an
-          -- index, so this is the pre-index path exactly: the observer
-          -- registration, and nothing else.
+          -- index: register observers, append, done.
           registerObservers
           liftIO $ modifyIORef' storeByType append
           pure True
@@ -157,16 +158,16 @@ storeConstraint sid = do
               worthIndexing = slot + 1 >= indexThreshold || typeIndexed cType si
           if not worthIndexing
             then do
-              -- Too small to be worth indexing: still the pre-index
-              -- path, and the whole bucket is filed in one pass later
-              -- if it grows past the threshold.
+              -- Too small to be worth indexing: same as above. The
+              -- whole bucket is filed in one pass later if it grows
+              -- past the threshold.
               registerObservers
               liftIO $ modifyIORef' storeByType append
               pure True
             else do
-              -- One traversal per argument: register the observers
-              -- (what this did before the index existed), and at an
-              -- indexed position also build the argument's ground key.
+              -- One traversal per argument: register the observers, and
+              -- at an indexed position also build the argument's ground
+              -- key.
               let walk (j, arg)
                     | IntSet.member j positions =
                         if observe then addObserverAndKey sid arg else groundKey arg
@@ -177,24 +178,29 @@ storeConstraint sid = do
                   -- were registered when they were stored, so only
                   -- their keys are wanted here.
                   indexedPositions = IntSet.toAscList positions
-                  entriesOf s =
-                    zip indexedPositions
+                  keysOf s =
+                    zipWith PositionKey indexedPositions
                       <$> traverse (\j -> groundKey (suspArg s j)) indexedPositions
-                  withEntries (s, s') = fmap ((,) s) (entriesOf s')
+                  backlogEntry s s' = IndexEntry s <$> keysOf s'
               backlog <-
                 if typeIndexed cType si
                   then pure []
-                  else traverse withEntries (zip [0 ..] (toList owned))
+                  else sequence (zipWith backlogEntry [0 ..] (toList owned))
               keys <- traverse walk (zip [0 ..] susp.args)
-              let entries =
-                    [(j, key) | (j, key) <- zip [0 ..] keys, IntSet.member j positions]
+              let entry =
+                    IndexEntry
+                      slot
+                      [ PositionKey j key
+                      | (j, key) <- zip [0 ..] keys,
+                        IntSet.member j positions
+                      ]
               liftIO $ do
                 modifyIORef' storeByType append
                 -- The index is a persistent value behind one reference,
                 -- like the store it describes, so a search snapshot
                 -- restores the two together
                 -- ('YCHR.Internal.Runtime.Search').
-                let stores = backlog ++ [(slot, entries)]
+                let stores = backlog ++ [entry]
                 modifyIORef' storeIndex (insertConstraints cType stores)
               pure True
 
@@ -275,7 +281,7 @@ indexedPositionsFor cType = do
 --
 -- A type the store has not indexed — no position of it is ever looked
 -- up, or its bucket has not reached 'indexThreshold' — is answered by
--- the whole bucket, which is the pre-index behaviour exactly. So is a
+-- the whole bucket, the same answer as 'getStoreSnapshot'. So is a
 -- candidate set that is not smaller than the bucket: the index has to
 -- prune to be worth the per-candidate bookkeeping it adds. Between them
 -- those two fallbacks keep the index a win-or-neutral change however
@@ -284,10 +290,8 @@ candidateSuspensions :: ConstraintType -> Int -> GroundKey -> Chr [Suspension]
 candidateSuspensions cType pos key = do
   SessionEnv {storeByType, storeIndex} <- ask
   let ConstraintType idx = cType
-  (snapshot, si) <- liftIO $ do
-    bt <- readIORef storeByType
-    sx <- readIORef storeIndex
-    pure (IntMap.findWithDefault Seq.empty idx bt, sx)
+  snapshot <- liftIO $ IntMap.findWithDefault Seq.empty idx <$> readIORef storeByType
+  si <- liftIO $ readIORef storeIndex
   let slots = candidateSlots cType pos key si
   if not (typeIndexed cType si) || IntSet.size slots >= Seq.length snapshot
     then pure (toList snapshot)
@@ -298,17 +302,26 @@ candidateSuspensions cType pos key = do
           Just susp <- [Seq.lookup slot snapshot]
         ]
 
--- | Return a snapshot of every constraint type in the store, paired with
--- its source name and the sequence of stored suspensions. Types are
+-- | The stored suspensions of one constraint type, with the type's
+-- source name.
+data StoredGroup = StoredGroup
+  { -- | The constraint type's source name.
+    typeName :: Name,
+    -- | Its suspensions in store order, dead ones included.
+    suspensions :: Seq Suspension
+  }
+
+-- | Return a snapshot of every constraint type in the store, with its
+-- source name and the sequence of stored suspensions. Types are
 -- returned in 'ConstraintType' index order. The returned 'Seq's are
 -- immutable snapshots; callers still need to filter out dead suspensions
 -- via 'isSuspAlive'.
-getAllStoredConstraints :: Chr [(Name, Seq Suspension)]
+getAllStoredConstraints :: Chr [StoredGroup]
 getAllStoredConstraints = do
   SessionEnv {storeByType, storeTypeNames} <- ask
   storeMap <- liftIO (readIORef storeByType)
   pure
-    [ (name, IntMap.findWithDefault Seq.empty i storeMap)
+    [ StoredGroup name (IntMap.findWithDefault Seq.empty i storeMap)
     | (i, name) <- IntMap.toAscList storeTypeNames
     ]
 

@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Tests for "YCHR.Internal.Desugar.Inline".
@@ -27,8 +26,8 @@ import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Parsed (AnnP (..))
-import YCHR.Internal.Parser (parseModule)
-import YCHR.Internal.Rename (defaultRenameInputs, renameProgram)
+import YCHR.Internal.Parser (Converted (..), parseModule)
+import YCHR.Internal.Rename (Renamed (..), defaultRenameInputs, renameProgram)
 import YCHR.Internal.Resolve (resolveProgram)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types (QualifiedName (..))
@@ -39,15 +38,15 @@ import YCHR.Internal.Types (QualifiedName (..))
 -- whichever stage raised it.
 inlinedProgram :: Text -> IO D.Program
 inlinedProgram src = do
-  (m, parseErrs) <- case parseModule "<inline-test>" src of
+  Converted m parseErrs <- case parseModule "<inline-test>" src of
     Left err -> assertFailure ("parse error: " ++ show err)
     Right ok -> pure ok
   case parseErrs of
     [] -> pure ()
     errs -> assertFailure ("unexpected parse-validation errors: " ++ show errs)
   renamed <- case renameProgram defaultRenameInputs (rewriteImports [m]) of
-    Right (mods, []) -> pure mods
-    Right (_, warnings) ->
+    Right (Renamed mods []) -> pure mods
+    Right (Renamed _ warnings) ->
       assertFailure ("unexpected rename warnings: " ++ show (map diagMsg warnings))
     Left errs -> assertFailure ("unexpected rename errors: " ++ show (map diagMsg errs))
   resolved <- case resolveProgram renamed of
@@ -56,18 +55,18 @@ inlinedProgram src = do
   desugared <- case desugarProgram resolved of
     Right p -> pure p
     Left errs -> assertFailure ("unexpected desugar errors: " ++ show (map diagMsg errs))
-  let (lifted, liftErrs) = liftAllLambdas desugared
-  case liftErrs of
-    [] -> pure ()
-    errs -> assertFailure ("unexpected lambda-lift errors: " ++ show (map diagMsg errs))
-  let (inlined, inlineErrs) = inlineFunctions lifted
-  case inlineErrs of
-    [] -> pure inlined
-    errs -> assertFailure ("unexpected inline errors: " ++ show (map diagMsg errs))
+  lifted <- case liftAllLambdas desugared of
+    Right p -> pure p
+    Left errs ->
+      assertFailure ("unexpected lambda-lift errors: " ++ show (map diagMsg errs))
+  case inlineFunctions lifted of
+    Right p -> pure p
+    Left errs -> assertFailure ("unexpected inline errors: " ++ show (map diagMsg errs))
   where
     diagMsg :: (Display (Diagnostic e)) => Diagnostic e -> String
     diagMsg = displayMsg
 
+-- | A name in module @m@.
 qn :: Text -> QualifiedName
 qn = QualifiedName "m"
 

@@ -1,5 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-
 -- | Collected AST: the module representation produced by the collect
 -- phase ('YCHR.Internal.Collect.rewriteImports') and consumed by 'YCHR.Internal.Rename'
 -- and 'YCHR.Internal.Resolve'.
@@ -22,6 +20,7 @@ module YCHR.Internal.Collected
   ( CollectedModule (..),
     CollectedImport (..),
     collectedFromParsed,
+    collectedImport,
   )
 where
 
@@ -94,6 +93,8 @@ collectedFromParsed m =
       macros = m.macros,
       exports = m.exports
     }
-  where
-    collectedImport (ModuleImport n il) = CollectedImport n il
-    collectedImport (LibraryImport n il) = CollectedImport n il
+
+-- | Drop the library-vs-module tag of an import.
+collectedImport :: Import -> CollectedImport
+collectedImport (ModuleImport n il) = CollectedImport n il
+collectedImport (LibraryImport n il) = CollectedImport n il

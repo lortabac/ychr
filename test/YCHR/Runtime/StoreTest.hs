@@ -5,19 +5,15 @@ module YCHR.Runtime.StoreTest (tests) where
 import Control.Exception (evaluate)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
-import Data.IntMap.Strict qualified as IntMap
-import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
-import YCHR.Internal.Parser (builtinOps)
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (Chr, SessionConfig, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Store
 import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Internal.Types (ConstraintType (..), Name (..))
-import YCHR.TestHelpers (countAliveIn, expectErrorContaining)
+import YCHR.TestHelpers (countAliveIn, expectErrorContaining, runChrIn)
 
 -- | Constraint-store tests: storing, iterating and killing suspensions, and observers.
 tests :: TestTree
@@ -35,26 +31,10 @@ tests =
 -- | A 100-slot session is large enough for every test in this module
 -- (which use ConstraintType 0/1 and check ConstraintType 99 once).
 runStoreEnv :: Chr a -> IO a
-runStoreEnv action = do
-  env <-
-    initSessionEnv
-      (replicate 100 (Unqualified ""))
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runStoreEnv = runChrIn storeConfig
 
--- | Run an action and pair the result with the observer IDs accumulated
--- by the final 'unify' (or an empty list if no 'unify' happened).
+-- | 'runStoreEnv' for an action that returns the observer ids a
+-- 'unify' reported.
 runStoreObservers :: Chr [SuspensionId] -> IO [SuspensionId]
 runStoreObservers = runStoreEnv
 
@@ -62,23 +42,11 @@ runStoreObservers = runStoreEnv
 -- one type in the session skips observer registration and its
 -- neighbours do not.
 runInertStoreEnv :: Chr a -> IO a
-runInertStoreEnv action = do
-  env <-
-    initSessionEnv
-      (replicate 100 (Unqualified ""))
-      []
-      [ConstraintType 1]
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runInertStoreEnv = runChrIn storeConfig {Config.inertTypes = [ConstraintType 1]}
+
+-- | A session with 100 constraint types.
+storeConfig :: SessionConfig
+storeConfig = emptySessionConfig {Config.typeNames = replicate 100 (Unqualified "")}
 
 createTests :: TestTree
 createTests =

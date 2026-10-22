@@ -11,7 +11,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Internal.Loc (noAnn)
 import YCHR.Internal.PExpr
-import YCHR.TestHelpers (strip)
+import YCHR.TestHelpers (genStringContent, strip)
 
 -- ---------------------------------------------------------------------------
 -- Operator table
@@ -57,7 +57,7 @@ genSafeAtom = Gen.filter isOk $ do
     isOk s =
       s `notElem` wordOps
         && not ("__" `Text.isInfixOf` s)
-    wordOps = [name | (_, ty, name) <- opTableEntries testOps, not (isSymOp ty name)]
+    wordOps = [d.opName | d <- opTableEntries testOps, not (isSymOp d.opType d.opName)]
     -- The real symbol set (`YCHR.Internal.PExpr.symbolChars`), kept in
     -- sync here: `\` is a symbol character (the prelude's disequality
     -- operator and the simpagation operator both use it).
@@ -132,18 +132,6 @@ genLambda sub = do
           noAnn body
         ]
     )
-
--- | Generate a string literal body.
-genStringContent :: Gen Text
-genStringContent =
-  Text.pack
-    <$> Gen.list
-      (Range.linear 0 10)
-      ( Gen.choice
-          [ Gen.alphaNum,
-            Gen.element [' ', '"', '\\', '\n', '\t']
-          ]
-      )
 
 -- | Generate a non-operator PExpr (no operators in structure).
 genPExpr :: Gen PExpr
@@ -224,6 +212,7 @@ genPExprFull =
 -- Properties
 -- ---------------------------------------------------------------------------
 
+-- | Pretty-printing a term and parsing it back gives the same term.
 prop_roundtrip :: OpTable -> Gen PExpr -> Property
 prop_roundtrip ops gen = property $ do
   expr <- forAll gen
@@ -238,7 +227,8 @@ prop_roundtrip ops gen = property $ do
 -- Test tree
 -- ---------------------------------------------------------------------------
 
--- | Hedgehog round-trips: parsing then pretty-printing 'PExpr' with and without operators.
+-- | Hedgehog round-trips: pretty-print a 'PExpr', then parse it back,
+-- with and without operators.
 tests :: TestTree
 tests =
   testGroup

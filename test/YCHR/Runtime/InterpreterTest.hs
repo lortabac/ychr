@@ -1,20 +1,16 @@
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.Runtime.InterpreterTest (tests) where
 
 import Control.Exception (try)
 import Control.Monad.IO.Class (liftIO)
-import Data.IntMap.Strict qualified as IntMap
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (SlotProgram, emptySlotProgram, lowerProgram)
+import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.Loc (dummyLoc)
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Error (RuntimeErrorKind (..), RuntimeErrorThrown (..))
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
@@ -24,14 +20,23 @@ import YCHR.Internal.Runtime.Interpreter
     callProc,
     interpret,
   )
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
-import YCHR.TestHelpers (countAliveByType)
+import YCHR.TestHelpers
+  ( countAliveByType,
+    emptyProgram,
+    histIds,
+    mkProc,
+    runChrEmpty,
+    runChrIn,
+  )
 
--- | Interpreter tests: evaluation, primitives, type predicates, closures, and errors.
+-- | Interpreter tests: evaluation, primitives, type predicates,
+-- closures, and errors.
 tests :: TestTree
 tests =
   testGroup
@@ -51,68 +56,18 @@ tests =
 -- Session helpers
 -- ---------------------------------------------------------------------------
 
--- | Run a Chr action with an empty session (no procedures, no types,
--- no host calls). Useful for tests that exercise primitives that only
--- need 'Unify' / store / queue, where the session is set up just to
--- give them a place to live.
-runChrEmpty :: Chr a -> IO a
-runChrEmpty action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
-
 -- | Like 'runChrEmpty' but with the base host-call registry available.
 runChrBase :: Chr a -> IO a
-runChrBase action = do
-  env <-
-    initSessionEnv
-      []
-      []
-      []
-      IntMap.empty
-      builtinOps
-      emptySlotProgram
-      baseHostCallRegistry
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrBase = runChrIn emptySessionConfig {Config.hostCalls = baseHostCallRegistry}
 
 -- | Run a Chr action against the LEQ session.
 runChrLeq :: Chr a -> IO a
-runChrLeq action = do
-  env <-
-    initSessionEnv
-      [Types.Unqualified "leq"]
-      []
-      []
-      IntMap.empty
-      builtinOps
-      leqSlotProgram
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Map.empty
-      Set.empty
-  runChr action env
+runChrLeq =
+  runChrIn
+    emptySessionConfig
+      { Config.typeNames = [Types.Unqualified "leq"],
+        Config.slotProgram = leqSlotProgram
+      }
 
 -- ---------------------------------------------------------------------------
 -- Runtime-error trigger tests
@@ -121,53 +76,35 @@ runChrLeq action = do
 -- | Run a single-procedure VM program and expect a 'RuntimeErrorThrown',
 -- returning its message.
 expectRuntimeError :: Program -> Name -> [Value] -> IO String
-expectRuntimeError prog entry args = snd <$> expectRuntimeErrorKind prog entry args
+expectRuntimeError prog entry args = (.message) <$> expectRuntimeErrorKind prog entry args
+
+-- | The kind and message of a thrown 'RuntimeErrorThrown'.
+data RuntimeFailure = RuntimeFailure
+  { kind :: RuntimeErrorKind,
+    message :: String
+  }
 
 -- | 'expectRuntimeError', also returning the error's 'RuntimeErrorKind'
 -- so a test can pin whether a failure delays a rule guard or aborts.
 expectRuntimeErrorKind ::
-  Program -> Name -> [Value] -> IO (RuntimeErrorKind, String)
+  Program -> Name -> [Value] -> IO RuntimeFailure
 expectRuntimeErrorKind = expectRuntimeErrorKindWith Map.empty
 
 -- | 'expectRuntimeErrorKind' with a host-call registry, for programs
 -- whose failure comes from a primitive rather than the interpreter.
 expectRuntimeErrorKindWith ::
-  HostCallRegistry -> Program -> Name -> [Value] -> IO (RuntimeErrorKind, String)
+  HostCallRegistry -> Program -> Name -> [Value] -> IO RuntimeFailure
 expectRuntimeErrorKindWith registry prog entry args = do
   outcome <- try @RuntimeErrorThrown (interpret prog registry entry args)
   case outcome of
-    Left (RuntimeErrorThrown kind msg _stack) -> pure (kind, msg)
+    Left (RuntimeErrorThrown kind msg _stack) -> pure (RuntimeFailure kind msg)
     Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
 
+-- | A program with one procedure and nothing else.
 singleProc :: Name -> [Name] -> [Stmt] -> Program
 singleProc procName params body =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      procedures = [mkProc procName params body],
-      evaluables = [],
-      callables = [],
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = []
-    }
-
--- | A propagation-history tuple in head-position order, the way
--- 'YCHR.Internal.Compile.buildHistoryIds' builds one.
-histIds :: [IdExpr] -> HistoryIds
-histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
-
--- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
--- isn't observable by the interpreter tests (they exercise call /
--- store / unify behaviour, not tracing), so a single neutral
--- 'PKReactivateDispatch' keeps the test fixtures terse.
-mkProc :: Name -> [Name] -> [Stmt] -> Procedure
-mkProc n ps body =
-  Procedure
-    { name = n,
-      params = ps,
-      body = body,
-      procKind = PKReactivateDispatch
+  emptyProgram
+    { procedures = [mkProc procName params body]
     }
 
 errorPathTests :: TestTree
@@ -234,9 +171,9 @@ errorPathTests =
       testCase "reading a value slot as a constraint id errors as unbound" $ do
         -- A hand-built program can bind a name in value position and
         -- read it as an id. The slot phase gives both the same slot, so
-        -- the environment holds a value cell where an id is expected;
-        -- that is the same recoverable error the old id map reported
-        -- for a slot it never saw, rather than a wrong id.
+        -- the environment holds a value cell where an id is expected.
+        -- That is reported as an unbound id variable, not read as a
+        -- wrong id.
         let prog =
               singleProc
                 "p"
@@ -279,7 +216,7 @@ errorPathTests =
 
 -- | Run @host(args)@ for its effect, with a fresh unbound variable
 -- available as @v@, and report the kind and message of the failure.
-hostFailure :: Name -> [ValExpr] -> IO (RuntimeErrorKind, String)
+hostFailure :: Name -> [ValExpr] -> IO RuntimeFailure
 hostFailure host args =
   expectRuntimeErrorKindWith
     baseHostCallRegistry
@@ -298,25 +235,31 @@ hostFailure host args =
 -- classification a rule guard catches.
 assertInstantiation :: Name -> [ValExpr] -> IO ()
 assertInstantiation host args = do
-  (kind, msg) <- hostFailure host args
+  failure <- hostFailure host args
   assertBool
     ( "expected InstantiationError from "
         ++ show host
         ++ ", got "
-        ++ show kind
+        ++ show failure.kind
         ++ ": "
-        ++ msg
+        ++ failure.message
     )
-    (kind == InstantiationError)
+    (failure.kind == InstantiationError)
 
 -- | Assert that a host call fails as a general error — fatal in every
 -- position, guards included.
 assertGeneral :: Name -> [ValExpr] -> IO ()
 assertGeneral host args = do
-  (kind, msg) <- hostFailure host args
+  failure <- hostFailure host args
   assertBool
-    ("expected GeneralError from " ++ show host ++ ", got " ++ show kind ++ ": " ++ msg)
-    (kind == GeneralError)
+    ( "expected GeneralError from "
+        ++ show host
+        ++ ", got "
+        ++ show failure.kind
+        ++ ": "
+        ++ failure.message
+    )
+    (failure.kind == GeneralError)
 
 -- | Assert that a host call /succeeds/ on an unbound argument with the
 -- given boolean result: the primitive is total on unbound values and
@@ -401,10 +344,10 @@ errorKindTests =
                       BoolExprStmt (BFromVal (Var "v")),
                       Return (Lit (BoolLit False))
                     ]
-            (kind, msg) <- expectRuntimeErrorKind prog "p" []
-            kind @?= InstantiationError
-            assertBool ("expected 'not sufficiently instantiated' in: " ++ msg) $
-              "not sufficiently instantiated" `isInfixOf` msg,
+            failure <- expectRuntimeErrorKind prog "p" []
+            failure.kind @?= InstantiationError
+            assertBool ("expected 'not sufficiently instantiated' in: " ++ failure.message) $
+              "not sufficiently instantiated" `isInfixOf` failure.message,
           testCase "a bound non-boolean guard result is a general error" $ do
             let prog =
                   singleProc
@@ -413,10 +356,10 @@ errorKindTests =
                     [ BoolExprStmt (BFromVal (Lit (IntLit 42))),
                       Return (Lit (BoolLit False))
                     ]
-            (kind, msg) <- expectRuntimeErrorKind prog "p" []
-            kind @?= GeneralError
-            assertBool ("expected 'did not evaluate to a boolean' in: " ++ msg) $
-              "did not evaluate to a boolean" `isInfixOf` msg,
+            failure <- expectRuntimeErrorKind prog "p" []
+            failure.kind @?= GeneralError
+            assertBool ("expected 'did not evaluate to a boolean' in: " ++ failure.message) $
+              "did not evaluate to a boolean" `isInfixOf` failure.message,
           testCase "a variable bound to a boolean is accepted" $ do
             let prog =
                   singleProc
@@ -463,12 +406,13 @@ softGuardBranch prelude cond = do
     VInt 0 -> pure False
     _ -> assertFailure "expected an integer branch marker"
 
+-- | A stack frame whose label and source text are the given text.
 frame :: Text -> StackFrame
 frame label =
   StackFrame
-    { frameLabel = label,
-      frameSourceLoc = dummyLoc,
-      frameSourceCode = label
+    { label = label,
+      sourceLoc = dummyLoc,
+      sourceCode = label
     }
 
 -- | 'BSoftGuard' is the VM form behind rule-guard delaying: an
@@ -497,8 +441,8 @@ softGuardTests =
                     [],
                   Return (Lit (IntLit 0))
                 ]
-        (kind, _) <- expectRuntimeErrorKindWith baseHostCallRegistry prog "p" []
-        kind @?= GeneralError,
+        failure <- expectRuntimeErrorKindWith baseHostCallRegistry prog "p" []
+        failure.kind @?= GeneralError,
       testCase "a decidable guard is unaffected" $ do
         yes <-
           softGuardBranch [] (BFromVal (HostCall ">" [Lit (IntLit 1), Lit (IntLit 0)]))
@@ -518,10 +462,8 @@ softGuardTests =
         -- afterwards must report only the frame pushed by @p@, because
         -- every procedure call restores the saved stack on the way out.
         let prog =
-              Program
-                { typeNames = [],
-                  ruleNames = [],
-                  procedures =
+              emptyProgram
+                { procedures =
                     [ mkProc
                         "p"
                         []
@@ -537,18 +479,13 @@ softGuardTests =
                           LetVal "v" NewVar,
                           Return (Var "v")
                         ]
-                    ],
-                  evaluables = [],
-                  callables = [],
-                  tellables = [],
-                  tellablesUnqualified = Map.empty,
-                  inertTypes = []
+                    ]
                 }
         outcome <-
           try @RuntimeErrorThrown (interpret prog baseHostCallRegistry "p" [])
         case outcome of
           Left (RuntimeErrorThrown _ _ stack) ->
-            map (.frameLabel) stack @?= ["caller"]
+            map (.label) stack @?= ["caller"]
           Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
     ]
 
@@ -591,19 +528,16 @@ bindParamsTests =
 -- LEQ VM program
 -- ---------------------------------------------------------------------------
 
+-- | The type of @leq/2@, the only constraint of 'leqProgram'.
 leqType :: ConstraintType
 leqType = ConstraintType 0
 
+-- | The leq handler, written by hand in VM form.
 leqProgram :: Program
 leqProgram =
-  Program
+  emptyProgram
     { typeNames = [Types.Unqualified "leq"],
       ruleNames = ["transitivity"],
-      evaluables = [],
-      callables = [],
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = [],
       procedures =
         [ tellLeq,
           activateLeq,
@@ -618,10 +552,12 @@ leqProgram =
         ]
     }
 
+-- | 'leqProgram' after the slot phase.
 leqSlotProgram :: SlotProgram
 leqSlotProgram =
   lowerProgram leqProgram
 
+-- | @tell_leq2@: create the suspension and activate it.
 tellLeq :: Procedure
 tellLeq =
   mkProc
@@ -632,6 +568,8 @@ tellLeq =
       ExprStmt (CallExpr "activate_leq2" [AId (IdVar "id")])
     ]
 
+-- | @activate_leq2@: try each occurrence in turn, stopping once the
+-- constraint is gone.
 activateLeq :: Procedure
 activateLeq =
   mkProc
@@ -659,6 +597,7 @@ activateLeq =
   where
     occCallArgs = [AId (IdVar "id"), AVal (Var "X"), AVal (Var "Y")]
 
+-- | Reflexivity: @leq(X, X) <=> true@.
 occurrenceLeq1 :: Procedure
 occurrenceLeq1 =
   mkProc
@@ -673,6 +612,7 @@ occurrenceLeq1 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Antisymmetry, active as the second head.
 occurrenceLeq2 :: Procedure
 occurrenceLeq2 =
   mkProc
@@ -712,6 +652,7 @@ occurrenceLeq2 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Antisymmetry, active as the first head.
 occurrenceLeq3 :: Procedure
 occurrenceLeq3 =
   mkProc
@@ -751,6 +692,7 @@ occurrenceLeq3 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Idempotence, active as the removed head.
 occurrenceLeq4 :: Procedure
 occurrenceLeq4 =
   mkProc
@@ -785,6 +727,7 @@ occurrenceLeq4 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Idempotence, active as the kept head.
 occurrenceLeq5 :: Procedure
 occurrenceLeq5 =
   mkProc
@@ -817,6 +760,7 @@ occurrenceLeq5 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Transitivity, active as the second head.
 occurrenceLeq6 :: Procedure
 occurrenceLeq6 =
   mkProc
@@ -860,6 +804,7 @@ occurrenceLeq6 =
       Return (Lit (BoolLit False))
     ]
 
+-- | Transitivity, active as the first head.
 occurrenceLeq7 :: Procedure
 occurrenceLeq7 =
   mkProc
@@ -903,6 +848,7 @@ occurrenceLeq7 =
       Return (Lit (BoolLit False))
     ]
 
+-- | @reactivate_dispatch@: reactivate a leq suspension.
 reactivateDispatch :: Procedure
 reactivateDispatch =
   mkProc
@@ -918,6 +864,7 @@ reactivateDispatch =
 -- Test helpers
 -- ---------------------------------------------------------------------------
 
+-- | Tell @leq(x, y)@.
 callTellLeq :: Value -> Value -> Chr Value
 callTellLeq x y =
   callProc "tell_leq2" [CVal x, CVal y]
@@ -984,6 +931,7 @@ leqTests =
 -- EvalDeep tests
 -- ---------------------------------------------------------------------------
 
+-- | A registry with just integer @+@ and @*@.
 arithCalls :: HostCallRegistry
 arithCalls =
   Map.fromList
@@ -999,17 +947,12 @@ arithCalls =
       )
     ]
 
+-- | A program whose @calc(x)@ returns the given expression, evaluated
+-- with 'EvalDeep'.
 makeCalcProc :: ValExpr -> Program
 makeCalcProc body =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      evaluables = [],
-      callables = [],
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = [],
-      procedures =
+  emptyProgram
+    { procedures =
         [ mkProc
             "calc"
             ["x"]
@@ -1019,9 +962,11 @@ makeCalcProc body =
         ]
     }
 
+-- | Run 'makeCalcProc' on one argument.
 runCalc :: ValExpr -> Value -> IO Value
 runCalc body x = interpret (makeCalcProc body) arithCalls "calc" [x]
 
+-- | The integer in a 'VInt', failing the test otherwise.
 expectInt :: Value -> IO Integer
 expectInt (VInt n) = pure n
 expectInt _ = assertFailure "expected VInt _"
@@ -1193,6 +1138,7 @@ typePredicateTests =
 -- =.. (univ) tests
 -- ---------------------------------------------------------------------------
 
+-- | Call a one-argument host call from the base registry.
 callHostCall1 :: Name -> Value -> IO Value
 callHostCall1 name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name
@@ -1253,12 +1199,10 @@ lamClosure = VTerm "__closure" [VAtom "m__lambda_0", VAtom "src", VInt 10]
 -- @p2@ to @1@ and @2@) through the given callables table, plus the two
 -- callee procedures the table can reach: @fun_proc@ returns its
 -- argument, @lam_proc@ adds its capture to its argument.
-closureProg :: [(CallableKey, Name)] -> Program
+closureProg :: [Callable] -> Program
 closureProg callables =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      procedures =
+  emptyProgram
+    { procedures =
         [ mkProc "p" ["f"] [Return (ApplyClosure (Var "f") [Lit (IntLit 1)])],
           mkProc
             "p2"
@@ -1267,16 +1211,12 @@ closureProg callables =
           mkProc "fun_proc" ["a"] [Return (Var "a")],
           mkProc "lam_proc" ["cap", "a"] [Return (HostCall "+" [Var "cap", Var "a"])]
         ],
-      evaluables = [],
-      callables = callables,
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = []
+      callables = callables
     }
 
 -- | 'closureProg' with an unbound closure: @p@ allocates a fresh
 -- logical variable and applies it.
-unboundClosureProg :: [(CallableKey, Name)] -> Program
+unboundClosureProg :: [Callable] -> Program
 unboundClosureProg callables =
   (closureProg callables)
     { procedures =
@@ -1301,7 +1241,7 @@ closureApplyTests =
     [ testCase "a function reference reaches its table entry" $ do
         v <-
           interpret
-            (closureProg [(funKey, "fun_proc")])
+            (closureProg [Callable funKey "fun_proc"])
             baseHostCallRegistry
             "p"
             [funClosure]
@@ -1311,7 +1251,7 @@ closureApplyTests =
       testCase "a lifted lambda is called with its captures first" $ do
         v <-
           interpret
-            (closureProg [(lamKey, "lam_proc")])
+            (closureProg [Callable lamKey "lam_proc"])
             baseHostCallRegistry
             "p"
             [lamClosure]
@@ -1320,7 +1260,7 @@ closureApplyTests =
           _ -> assertFailure "unexpected value",
       testCase "a function reference applied at another arity misses" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "/" [VAtom "m:f", VInt 2]]
           >>= assertContains "call: no matching closure",
@@ -1329,13 +1269,13 @@ closureApplyTests =
         -- arity it is *applied* at selects the key; the table only holds
         -- the declared one.
         expectRuntimeError
-          (closureProg [(lamKey, "lam_proc")])
+          (closureProg [Callable lamKey "lam_proc"])
           "p2"
           [lamClosure]
           >>= assertContains "call: no matching closure",
       testCase "a data term with a closure-looking field is not a closure" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "pair" [VAtom "m:f", VInt 1]]
           >>= assertContains "call: no matching closure",
@@ -1344,7 +1284,7 @@ closureApplyTests =
         -- so a function-reference term whose identity and arity fields
         -- are bound variables still dispatches.
         let prog =
-              (closureProg [(funKey, "fun_proc")])
+              (closureProg [Callable funKey "fun_proc"])
                 { procedures =
                     [ mkProc
                         "p"
@@ -1361,24 +1301,24 @@ closureApplyTests =
           _ -> assertFailure "expected the bound header to dispatch",
       testCase "a non-term is not a closure" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VInt 5]
           >>= assertContains "call: no matching closure",
       testCase "a well-formed closure with an unknown identity misses" $
         expectRuntimeError
-          (closureProg [(funKey, "fun_proc")])
+          (closureProg [Callable funKey "fun_proc"])
           "p"
           [VTerm "/" [VAtom "m:other", VInt 1]]
           >>= assertContains "call: no matching closure",
       testCase "an unbound closure is an instantiation error" $ do
-        (kind, msg) <-
+        failure <-
           expectRuntimeErrorKind
-            (unboundClosureProg [(funKey, "fun_proc")])
+            (unboundClosureProg [Callable funKey "fun_proc"])
             "p"
             []
-        kind @?= InstantiationError
-        assertContains "not sufficiently instantiated" msg
+        failure.kind @?= InstantiationError
+        assertContains "not sufficiently instantiated" failure.message
     ]
   where
     assertContains needle haystack =

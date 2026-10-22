@@ -37,11 +37,13 @@ module YCHR.Internal.Parser
     parseTerm,
     parseTermWith,
     parseRule,
+    Converted (..),
 
     -- * Module conversion with provenance
     parseModuleTermsWith,
     defaultModuleNameForSource,
     SourceItem (..),
+    ChainedError (..),
     convertSourceItems,
     scanModuleTerms,
     builtinDirectives,
@@ -65,10 +67,13 @@ module YCHR.Internal.Parser
   )
 where
 
+import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.Either (partitionEithers)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
+import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'last'; the shim supplies it
@@ -76,9 +81,15 @@ import Data.Text (Text)
 import Data.Text.Shim qualified as Text
 import System.FilePath (takeBaseName)
 import Text.Parsec (ParseError)
-import YCHR.Internal.PExpr (PExpr (Atom, Compound, Str, Var))
+import YCHR.Internal.PExpr
+  ( LeadingTerms (..),
+    PExpr (Atom, Compound, Str, Var),
+    mergeOps,
+    opTableEntries,
+  )
 import YCHR.Internal.PExpr qualified as P
 import YCHR.Internal.Parsed
+import YCHR.Internal.Types (UnqualifiedIdentifier (..))
 
 -- * Operator tables
 
@@ -146,35 +157,16 @@ builtinOps =
       (P.maxPrec + 1, [(P.Fx, "end")])
     ]
 
--- | Merge user-defined operators into an existing table.
--- Returns 'Left' with the conflicting operator name if a naming conflict is
--- found (same operator name at a different fixity or type).
-mergeOps :: OpTable -> [OpDecl] -> Either Text OpTable
-mergeOps base decls =
-  P.mergeOps base [(d.fixity, d.opType, d.opName) | d <- decls]
-
--- | List all operator entries in an 'OpTable' as @(fixity, type, name)@
--- triples. The order is unspecified.
-opTableEntries :: OpTable -> [(Int, P.OpType, Text)]
-opTableEntries = P.opTableEntries
-
 -- * Public parsing functions
 
 -- | Parse a CHR module from source text using the built-in operator table.
 --
 -- The first argument is the source file name (used in error messages only).
-parseModule ::
-  String ->
-  Text ->
-  Either ParseError (Module, [AnnP ParseValidationError])
+parseModule :: String -> Text -> Either ParseError (Converted Module)
 parseModule = parseModuleWith builtinOps
 
 -- | Parse a CHR module from source text using a custom operator table.
-parseModuleWith ::
-  OpTable ->
-  String ->
-  Text ->
-  Either ParseError (Module, [AnnP ParseValidationError])
+parseModuleWith :: OpTable -> String -> Text -> Either ParseError (Converted Module)
 parseModuleWith table sourceName src = do
   terms <- P.parseTerms table sourceName src
   pure (convertModule (defaultModuleNameForSource sourceName) terms)
@@ -279,19 +271,16 @@ parseQueryWith table sourceName src =
 -- | Parse a single CHR rule from surface-language 'Text'.
 --
 -- The outer 'Left' is a parsec parse error. On parse success, the
--- 'Maybe' is 'Nothing' if the parsed term is not a rule shape (a
+-- value is 'Nothing' if the parsed term is not a rule shape (a
 -- 'MalformedTopLevel' error is emitted in that case); otherwise it
--- contains the parsed 'Rule' and any 'MalformedConstraint' errors
--- collected from its head.
+-- is the parsed 'Rule', and the errors are any 'MalformedConstraint'
+-- errors collected from its head.
 --
 -- The source name (first argument) is used in error messages only.
-parseRule ::
-  String ->
-  Text ->
-  Either ParseError (Maybe Rule, [AnnP ParseValidationError])
+parseRule :: String -> Text -> Either ParseError (Converted (Maybe Rule))
 parseRule sourceName src = do
   term <- P.parseTerm builtinOps sourceName src
-  pure (convertRule term)
+  pure (runConv (convertRule term))
 
 -- * Module headers
 
@@ -334,15 +323,6 @@ data ModuleHeader = ModuleHeader
   }
   deriving (Show, Eq)
 
--- | Information extracted from a leading @:- module(...)@ directive.
--- Private to 'collectModuleHeader'.
-data ModuleDirectiveInfo = ModuleDirectiveInfo
-  { name :: Text,
-    loc :: SourceLoc,
-    origin :: PExpr,
-    exportOps :: [OpDecl]
-  }
-
 -- | Collect a 'ModuleHeader' from a source file using the minimal first-pass
 -- operator table.
 --
@@ -351,68 +331,59 @@ data ModuleDirectiveInfo = ModuleDirectiveInfo
 -- @:- module(...)@ or @:- use_module(...)@.
 collectModuleHeader :: String -> Text -> Either ParseError ModuleHeader
 collectModuleHeader sourceName src = do
-  (terms, tloc) <- P.parseLeadingTerms firstPassTable sourceName src
+  LeadingTerms terms tloc <- P.parseLeadingTerms firstPassTable sourceName src
   let (modPart, rest1) = case terms of
-        (t : ts) | Just i <- asModuleDirective t -> (Just i, ts)
+        (t : ts) | Just md <- asModuleDirective t -> (Just md, ts)
         _ -> (Nothing, terms)
-      (imps, leftover) = takeImports rest1
+      (importTerms, leftover) = span isImport rest1
       finalLoc = case leftover of
         [] -> tloc
         (Ann _ loc : _) -> Just loc
-      info = case modPart of
-        Just i -> i
-        Nothing ->
-          ModuleDirectiveInfo
+      info =
+        fromMaybe
+          ModuleDirective
             { name = defaultModuleNameForSource sourceName,
               loc = dummyLoc,
               origin = Atom "",
-              exportOps = []
+              exports = Nothing
             }
+          modPart
   pure
     ModuleHeader
       { modName = info.name,
         modLoc = info.loc,
         modOrigin = info.origin,
-        exportOps = info.exportOps,
-        headerImports = imps,
+        exportOps = [op | OperatorDecl op <- fromMaybe [] info.exports],
+        headerImports = mapMaybe toImport importTerms,
         trailingLoc = finalLoc
       }
   where
     asModuleDirective (Ann (Compound ":-" [body]) loc)
       | Compound "module" [Ann (Atom name) _, exports] <- body.node =
           Just
-            ModuleDirectiveInfo
+            ModuleDirective
               { name,
                 loc,
                 origin = body.node,
-                exportOps = extractOpDeclsFromPExpr exports.node
+                exports = Just (map OperatorDecl (extractOpDeclsFromPExpr exports.node))
               }
       | Compound "module" [Ann (Atom name) _] <- body.node =
-          Just
-            ModuleDirectiveInfo
-              { name,
-                loc,
-                origin = body.node,
-                exportOps = []
-              }
+          Just ModuleDirective {name, loc, origin = body.node, exports = Nothing}
     asModuleDirective _ = Nothing
 
-    takeImports [] = ([], [])
+    isImport (Ann (Compound ":-" [Ann (Compound "use_module" args) _]) _) =
+      length args `elem` [1, 2]
+    isImport _ = False
+
     -- Malformed @use_module@ directives are silently skipped here; the full
     -- parse path emits 'MalformedImport' for them via 'convertDirective'.
-    takeImports all_@(Ann (Compound ":-" [body]) loc : rest) = case body.node of
+    toImport (Ann (Compound ":-" [body]) loc) = case body.node of
       Compound "use_module" [imp] ->
-        let (more, leftover) = takeImports rest
-         in case convertImport loc body.node imp of
-              Right ann -> (ann : more, leftover)
-              Left _ -> (more, leftover)
+        either (const Nothing) Just (convertImport loc body.node imp)
       Compound "use_module" [imp, importList] ->
-        let (more, leftover) = takeImports rest
-         in case convertImportWithList loc body.node imp importList of
-              Right (ann, _) -> (ann : more, leftover)
-              Left _ -> (more, leftover)
-      _ -> ([], all_)
-    takeImports rest = ([], rest)
+        (runConv (convertImportWithList loc body.node imp importList)).value
+      _ -> Nothing
+    toImport _ = Nothing
 
 -- | Build the per-module operator table for a user module.
 --
@@ -571,9 +542,42 @@ unfoldListStrict _ = Nothing
 
 -- ** Module conversion
 
+-- | Validation errors, collected in source order.
+type Conv = Writer [AnnP ParseValidationError]
+
+-- | Report an error and give 'Nothing'.
+failWith :: AnnP ParseValidationError -> Conv (Maybe a)
+failWith e = Nothing <$ tell [e]
+
+-- | Report errors and give 'Nothing'.
+failWithAll :: [AnnP ParseValidationError] -> Conv (Maybe a)
+failWithAll errs = Nothing <$ tell errs
+
+-- | A conversion result and its errors.
+data Converted a = Converted
+  { -- | The converted value.
+    value :: a,
+    -- | Validation errors, in source order.
+    errors :: [AnnP ParseValidationError]
+  }
+
+-- | Run a conversion.
+runConv :: Conv a -> Converted a
+runConv c = let (a, errs) = runWriter c in Converted a errs
+
+-- | A @:- module(Name)@ or @:- module(Name, Exports)@ directive.
+data ModuleDirective = ModuleDirective
+  { name :: Text,
+    loc :: SourceLoc,
+    -- | The @module(...)@ term, for diagnostics.
+    origin :: PExpr,
+    -- | The export list, or 'Nothing' if there is none.
+    exports :: Maybe [Declaration]
+  }
+
 -- | Internal directive type.
 data Directive
-  = DirModule Text SourceLoc PExpr (Maybe [Declaration])
+  = DirModule ModuleDirective
   | DirImport (AnnP Import)
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
@@ -608,9 +612,19 @@ data ModuleItem
   = ItemDirective Directive
   | ItemRule Rule
   | ItemEquation (AnnP FunctionEquation)
-  | -- | A top-level @Head ---> [Goals].@ macro clause, with its macro's
-    -- name. The arity is the number of head patterns.
-    ItemMacroClause Text (AnnP MacroClause)
+  | -- | A top-level @Head ---> [Goals].@ macro clause.
+    ItemMacroClause NamedClause
+
+-- | A macro clause with its macro's name.
+data NamedClause = NamedClause
+  { name :: Text,
+    clause :: AnnP MacroClause
+  }
+
+-- | The name and arity of a clause's macro. The arity is the number of
+-- head patterns.
+clauseKey :: NamedClause -> UnqualifiedIdentifier
+clauseKey nc = UnqualifiedIdentifier nc.name (length nc.clause.node.params)
 
 -- | Validation error detected during module conversion.
 data ParseValidationError
@@ -722,11 +736,12 @@ data ParseValidationError
 -- malformed constraints).
 --
 -- Items whose conversion fails entirely are dropped from the resulting
--- module; their errors are still returned in the second component.
-convertModule :: Text -> [Ann PExpr] -> (Module, [AnnP ParseValidationError])
+-- module; their errors are still returned.
+convertModule :: Text -> [Ann PExpr] -> Converted Module
 convertModule defaultName terms =
-  let (m, errs) = convertSourceItems defaultName [SourceItem t [] | t <- terms]
-   in (m, map fst errs)
+  let items = [SourceItem t [] | t <- terms]
+      (m, errs) = runWriter (convertSourceItems defaultName items)
+   in Converted m [e.parseError | e <- errs]
 
 -- | A top-level term to convert, with the macro chain that generated
 -- it (empty if the user wrote it).
@@ -735,73 +750,64 @@ data SourceItem = SourceItem
     expansion :: [ExpansionStep]
   }
 
+-- | A conversion error with the macro chain of its item.
+data ChainedError = ChainedError
+  { -- | The error.
+    parseError :: AnnP ParseValidationError,
+    -- | The macro chain of the item (empty if the user wrote it).
+    expansion :: [ExpansionStep]
+  }
+
 -- | 'convertModule' for terms with a chain. Rules and equations keep
 -- their item's chain, and each error comes with it. Module-wide errors
 -- (contiguity, macro grouping, duplicate headers) get no chain.
-convertSourceItems ::
-  Text ->
-  [SourceItem] ->
-  (Module, [(AnnP ParseValidationError, [ExpansionStep])])
-convertSourceItems defaultName srcItems =
-  let itemResults =
-        [ (withExpansion si.expansion <$> mi, [(e, si.expansion) | e <- errs])
-        | si <- srcItems,
-          let (mi, errs) = convertModuleItem si.term
-        ]
-      items = [i | (Just i, _) <- itemResults]
-      itemErrors = concatMap snd itemResults
-      dirs = [d | ItemDirective d <- items]
-      rules = [r | ItemRule r <- items]
-      eqs = [e | ItemEquation e <- items]
-      moduleDirs = [(n, l, p, e) | DirModule n l p e <- dirs]
-      (modName_, modNameLoc_, modExports_) = case moduleDirs of
-        ((n, l, p, Just decls) : _) -> (n, l, Just (AnnP decls l p))
-        ((n, l, _, Nothing) : _) -> (n, l, Nothing)
-        [] -> (defaultName, dummyLoc, Nothing)
-      modImports_ = [n | DirImport n <- dirs]
-      modDecls_ =
-        concat [ds | DirConstraintDecl ds <- dirs]
-          ++ concat [ds | DirFunctionDecl ds <- dirs]
-          ++ concat [ds | DirOpenFunctionDecl ds <- dirs]
-          ++ concat [ds | DirClassDecl ds <- dirs]
-          ++ concat [ds | DirOpenClassDecl ds <- dirs]
-      modExtensionTypes_ = concat [ds | DirExtendClassTypeDecl ds <- dirs]
-      modTypeDecls_ = concat [ds | DirTypeDecl ds <- dirs]
-      modExtensions_ = [e | ItemDirective (DirExtendFunctionEqn e) <- items]
-      modClassExtensions_ = [e | ItemDirective (DirExtendClassEqn e) <- items]
-      modInlines_ = concat [ds | DirInlineDecl ds <- dirs]
-      modConstraintUses_ = concat [ds | DirConstraintUseDecl ds <- dirs]
-      (modMacros_, macroErrors) = groupMacroClauses items
+convertSourceItems :: Text -> [SourceItem] -> Writer [ChainedError] Module
+convertSourceItems defaultName srcItems = do
+  items <- catMaybes <$> traverse convertItem srcItems
+  let dirs = [d | ItemDirective d <- items]
+      moduleDirs = [md | DirModule md <- dirs]
+      header = listToMaybe moduleDirs
+      (modMacros_, macroErrors) = runWriter (groupMacroClauses items)
       openNames =
         Set.fromList $
           [fd.name | DirOpenFunctionDecl ds <- dirs, Ann (FunctionDecl fd) _ <- ds]
             ++ [fd.name | DirOpenClassDecl ds <- dirs, Ann (FunctionDecl fd) _ <- ds]
-      contiguityErrors = checkContiguity openNames items
       duplicateModuleHeaderErrors =
-        [ AnnP (DuplicateModuleHeader n) l p
-        | (n, l, p, _) <- drop 1 moduleDirs
-        ]
-      mod_ =
-        Module
-          { name = modName_,
-            nameLoc = modNameLoc_,
-            imports = modImports_,
-            decls = modDecls_,
-            extensionTypes = modExtensionTypes_,
-            typeDecls = modTypeDecls_,
-            rules = rules,
-            equations = eqs,
-            extensions = modExtensions_,
-            classExtensions = modClassExtensions_,
-            inlines = modInlines_,
-            constraintUses = modConstraintUses_,
-            macros = modMacros_,
-            exports = modExports_
-          }
-   in ( mod_,
-        itemErrors
-          ++ map (,[]) (contiguityErrors ++ macroErrors ++ duplicateModuleHeaderErrors)
-      )
+        [AnnP (DuplicateModuleHeader md.name) md.loc md.origin | md <- drop 1 moduleDirs]
+  tell
+    [ ChainedError e []
+    | e <- checkContiguity openNames items ++ macroErrors ++ duplicateModuleHeaderErrors
+    ]
+  pure
+    Module
+      { name = maybe defaultName (.name) header,
+        nameLoc = maybe dummyLoc (.loc) header,
+        imports = [n | DirImport n <- dirs],
+        decls =
+          concat [ds | DirConstraintDecl ds <- dirs]
+            ++ concat [ds | DirFunctionDecl ds <- dirs]
+            ++ concat [ds | DirOpenFunctionDecl ds <- dirs]
+            ++ concat [ds | DirClassDecl ds <- dirs]
+            ++ concat [ds | DirOpenClassDecl ds <- dirs],
+        extensionTypes = concat [ds | DirExtendClassTypeDecl ds <- dirs],
+        typeDecls = concat [ds | DirTypeDecl ds <- dirs],
+        rules = [r | ItemRule r <- items],
+        equations = [e | ItemEquation e <- items],
+        extensions = [e | DirExtendFunctionEqn e <- dirs],
+        classExtensions = [e | DirExtendClassEqn e <- dirs],
+        inlines = concat [ds | DirInlineDecl ds <- dirs],
+        constraintUses = concat [ds | DirConstraintUseDecl ds <- dirs],
+        macros = modMacros_,
+        exports = do
+          md <- header
+          decls <- md.exports
+          pure (AnnP decls md.loc md.origin)
+      }
+  where
+    convertItem si = do
+      let (mi, errs) = runWriter (convertModuleItem si.term)
+      tell [ChainedError e si.expansion | e <- errs]
+      pure (withExpansion si.expansion <$> mi)
 
 -- | Put a chain on an item's rules and equations.
 withExpansion :: [ExpansionStep] -> ModuleItem -> ModuleItem
@@ -809,8 +815,10 @@ withExpansion [] item = item
 withExpansion chain item = case item of
   ItemRule r -> ItemRule (setRule r)
   ItemEquation e -> ItemEquation (setEq <$> e)
-  ItemDirective (DirExtendFunctionEqn e) -> ItemDirective (DirExtendFunctionEqn (setEq <$> e))
-  ItemDirective (DirExtendClassEqn e) -> ItemDirective (DirExtendClassEqn (setEq <$> e))
+  ItemDirective (DirExtendFunctionEqn e) ->
+    ItemDirective (DirExtendFunctionEqn (setEq <$> e))
+  ItemDirective (DirExtendClassEqn e) ->
+    ItemDirective (DirExtendClassEqn (setEq <$> e))
   _ -> item
   where
     -- Positional: a record update of 'expansion' would be ambiguous
@@ -821,7 +829,8 @@ withExpansion chain item = case item of
 -- | Read just the name, exports, imports and macros of a module from
 -- its terms. Errors are ignored here; full conversion reports them.
 scanModuleTerms :: Text -> [Ann PExpr] -> Module
-scanModuleTerms defaultName terms = fst (convertModule defaultName (filter relevant terms))
+scanModuleTerms defaultName terms =
+  (convertModule defaultName (filter relevant terms)).value
   where
     relevant t = case t.node of
       Compound ":-" [Ann body _] -> case body of
@@ -832,27 +841,27 @@ scanModuleTerms defaultName terms = fst (convertModule defaultName (filter relev
 
 -- | Built-in directives (name, arity). Any other directive is a
 -- declaration-macro use. Declaration macros can't use these keys.
-builtinDirectives :: Set.Set (Text, Int)
+builtinDirectives :: Set UnqualifiedIdentifier
 builtinDirectives =
   Set.fromList
-    [ ("module", 1),
-      ("module", 2),
-      ("use_module", 1),
-      ("use_module", 2),
-      ("chr_constraint", 1),
-      ("chr_type", 1),
-      ("opaque_type", 1),
-      ("function", 1),
-      ("open_function", 1),
-      ("class", 1),
-      ("open_class", 1),
-      ("extend_function", 1),
-      ("extend_class", 1),
-      ("extend_class_type", 1),
-      ("inline", 1),
-      ("constraint_use", 1),
-      ("macro", 1),
-      ("macro_decls", 1)
+    [ UnqualifiedIdentifier "module" 1,
+      UnqualifiedIdentifier "module" 2,
+      UnqualifiedIdentifier "use_module" 1,
+      UnqualifiedIdentifier "use_module" 2,
+      UnqualifiedIdentifier "chr_constraint" 1,
+      UnqualifiedIdentifier "chr_type" 1,
+      UnqualifiedIdentifier "opaque_type" 1,
+      UnqualifiedIdentifier "function" 1,
+      UnqualifiedIdentifier "open_function" 1,
+      UnqualifiedIdentifier "class" 1,
+      UnqualifiedIdentifier "open_class" 1,
+      UnqualifiedIdentifier "extend_function" 1,
+      UnqualifiedIdentifier "extend_class" 1,
+      UnqualifiedIdentifier "extend_class_type" 1,
+      UnqualifiedIdentifier "inline" 1,
+      UnqualifiedIdentifier "constraint_use" 1,
+      UnqualifiedIdentifier "macro" 1,
+      UnqualifiedIdentifier "macro_decls" 1
     ]
 
 -- | Name of a directive's term (empty if it has none).
@@ -865,8 +874,9 @@ directiveName body = case body of
 -- | Is @T@ in @:- T@ a built-in directive?
 isBuiltinDirective :: PExpr -> Bool
 isBuiltinDirective body = case body of
-  Atom n -> Set.member (n, 0) builtinDirectives
-  Compound n args -> Set.member (n, length args) builtinDirectives
+  Atom n -> Set.member (UnqualifiedIdentifier n 0) builtinDirectives
+  Compound n args ->
+    Set.member (UnqualifiedIdentifier n (length args)) builtinDirectives
   _ -> False
 
 -- | Group a module's macro definitions and clauses into 'MacroDef's.
@@ -883,36 +893,47 @@ isBuiltinDirective body = case body of
 --   'YCHR.Internal.Rename.DuplicateMacro': a one-line definition cannot
 --   have further clauses.
 -- * Any other clause is 'UndeclaredMacroClause', and is dropped.
-groupMacroClauses :: [ModuleItem] -> ([AnnP MacroDef], [AnnP ParseValidationError])
-groupMacroClauses items =
-  (filter allowed (defined ++ orphanDefs), undeclared ++ builtinNameErrors)
+groupMacroClauses :: [ModuleItem] -> Conv [AnnP MacroDef]
+groupMacroClauses items = do
+  tell undeclared
+  tell builtinNameErrors
+  pure (filter allowed (defined ++ orphanDefs))
   where
-    clauseKey n c = (n, length c.node.params)
-    declaredKeys = Set.fromList [(k.node.name, k.node.arity) | k <- decls]
+    declaredKeys =
+      Set.fromList [UnqualifiedIdentifier k.node.name k.node.arity | k <- decls]
     decls = concat [ks | ItemDirective (DirMacroDecl ks) <- items]
     oneLineDefs = [d | ItemDirective (DirMacro d) <- items]
-    oneLineKeys = Set.fromList [(d.node.name, d.node.arity) | d <- oneLineDefs]
-    clauses = [(clauseKey n c, n, c) | ItemMacroClause n c <- items]
-    clausesOf k = [c | (k', _, c) <- clauses, k' == k]
+    oneLineKeys =
+      Set.fromList [UnqualifiedIdentifier d.node.name d.node.arity | d <- oneLineDefs]
+    clauses = [nc | ItemMacroClause nc <- items]
+    clausesOf k = [nc.clause | nc <- clauses, clauseKey nc == k]
+
+    -- One-line definitions ('Left') and declared keys ('Right'), in
+    -- item order.
+    entries =
+      concat
+        [ case d of
+            DirMacro def -> [Left def]
+            DirMacroDecl ks -> map Right ks
+            _ -> []
+        | ItemDirective d <- items
+        ]
 
     -- Definitions and declarations in item order; a repeated
     -- declaration gets no clauses.
-    defined = goDefs Set.empty items
+    defined = goDefs Set.empty entries
     goDefs _ [] = []
-    goDefs seen (ItemDirective (DirMacro d) : rest) = d : goDefs seen rest
-    goDefs seen (ItemDirective (DirMacroDecl ks) : rest) =
-      let step (acc, sn) (AnnP k l p) =
-            let key = (k.name, k.arity)
-                cs = if Set.member key sn then [] else clausesOf key
-             in (acc ++ [AnnP (MacroDef k.kind k.name k.arity cs) l p], Set.insert key sn)
-          (ds, seen') = foldl step ([], seen) ks
-       in ds ++ goDefs seen' rest
-    goDefs seen (_ : rest) = goDefs seen rest
+    goDefs seen (Left d : rest) = d : goDefs seen rest
+    goDefs seen (Right (AnnP k l p) : rest) =
+      let key = UnqualifiedIdentifier k.name k.arity
+          cs = if Set.member key seen then [] else clausesOf key
+       in AnnP (MacroDef k.kind k.name k.arity cs) l p : goDefs (Set.insert key seen) rest
 
     -- A declaration macro can't take a built-in directive's key. Drop
     -- it (and any extra clauses); its clauses still count as declared.
     isBuiltinDeclMacro d =
-      d.kind == DeclMacro && Set.member (d.name, d.arity) builtinDirectives
+      d.kind == DeclMacro
+        && Set.member (UnqualifiedIdentifier d.name d.arity) builtinDirectives
     allowed d = not (isBuiltinDeclMacro d.node)
     builtinNameErrors =
       [ AnnP (DeclMacroBuiltinDirective d.node.name d.node.arity) d.sourceLoc d.parsed
@@ -923,23 +944,31 @@ groupMacroClauses items =
     orphanKeys =
       nubOrd
         [ k
-        | (k, _, _) <- clauses,
+        | nc <- clauses,
+          let k = clauseKey nc,
           Set.notMember k declaredKeys,
           Set.member k oneLineKeys
         ]
     -- Clauses for a one-line definition take its kind.
     oneLineKind k =
-      case [d.node.kind | d <- oneLineDefs, (d.node.name, d.node.arity) == k] of
+      case [ d.node.kind
+           | d <- oneLineDefs,
+             UnqualifiedIdentifier d.node.name d.node.arity == k
+           ] of
         (kd : _) -> kd
         [] -> GoalMacro
     orphanDefs =
       [ AnnP (MacroDef (oneLineKind k) n a cs) first.sourceLoc first.parsed
-      | k@(n, a) <- orphanKeys,
+      | k@(UnqualifiedIdentifier n a) <- orphanKeys,
         cs@(first : _) <- [clausesOf k]
       ]
     undeclared =
-      [ AnnP (uncurry UndeclaredMacroClause k) c.sourceLoc c.parsed
-      | (k, _, c) <- clauses,
+      [ AnnP
+          (UndeclaredMacroClause k.localName k.arity)
+          nc.clause.sourceLoc
+          nc.clause.parsed
+      | nc <- clauses,
+        let k = clauseKey nc,
         Set.notMember k declaredKeys,
         Set.notMember k oneLineKeys
       ]
@@ -953,7 +982,7 @@ groupMacroClauses items =
 -- | Check that equations for non-open functions are contiguous.
 -- Returns an error for each function whose equations are separated by
 -- other items.
-checkContiguity :: Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+checkContiguity :: Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
 checkContiguity openNames items =
   checkEquationContiguity openNames items
     ++ checkDeclContiguity openNames items
@@ -967,14 +996,18 @@ checkMacroClauseContiguity :: [ModuleItem] -> [AnnP ParseValidationError]
 checkMacroClauseContiguity = go Set.empty Nothing
   where
     go _closed _prev [] = []
-    go closed prev (ItemMacroClause n c : rest) =
-      let k = (n, length c.node.params)
+    go closed prev (ItemMacroClause nc : rest) =
+      let k = clauseKey nc
+          c = nc.clause
        in case prev of
             Just p | p == k -> go closed prev rest
             _ ->
               let closed' = maybe closed (`Set.insert` closed) prev
                   errs =
-                    [ AnnP (uncurry DiscontiguousMacroClauses k) c.sourceLoc c.parsed
+                    [ AnnP
+                        (DiscontiguousMacroClauses k.localName k.arity)
+                        c.sourceLoc
+                        c.parsed
                     | k `Set.member` closed'
                     ]
                in errs ++ go closed' (Just k) rest
@@ -984,7 +1017,7 @@ checkMacroClauseContiguity = go Set.empty Nothing
 -- | Equation contiguity: equations for the same non-open function name
 -- must be a contiguous block of module items.
 checkEquationContiguity ::
-  Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+  Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
 checkEquationContiguity openNames = go Set.empty Nothing
   where
     -- closed: function names whose equation block has ended.
@@ -1015,7 +1048,7 @@ checkEquationContiguity openNames = go Set.empty Nothing
 -- @:- function f\/1, g\/1.@) count as one block per function and do
 -- not close each other.
 checkDeclContiguity ::
-  Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+  Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
 checkDeclContiguity openNames = go Set.empty Set.empty
   where
     -- closed: function names whose decl block has ended.
@@ -1024,11 +1057,11 @@ checkDeclContiguity openNames = go Set.empty Set.empty
     go _closed _active [] = []
     go closed active (ItemDirective dir : rest)
       | Just ds <- declListOf dir =
-          let names = [(fd.name, loc) | Ann (FunctionDecl fd) loc <- ds]
-              nonOpenNames = [n | n <- map fst names, n `Set.notMember` openNames]
+          let names = [Ann fd.name loc | Ann (FunctionDecl fd) loc <- ds]
+              nonOpenNames = [n.node | n <- names, n.node `Set.notMember` openNames]
               reopened =
                 [ noAnnPAt loc (DiscontiguousFunctionDecls n)
-                | (n, loc) <- names,
+                | Ann n loc <- names,
                   n `Set.notMember` openNames,
                   n `Set.member` closed,
                   n `Set.notMember` active
@@ -1048,12 +1081,10 @@ checkDeclContiguity openNames = go Set.empty Set.empty
 -- raised during conversion. Returns 'Nothing' if the term does not denote
 -- a recognized top-level item; a 'MalformedTopLevel' error is emitted
 -- in that case.
-convertModuleItem ::
-  Ann PExpr -> (Maybe ModuleItem, [AnnP ParseValidationError])
+convertModuleItem :: Ann PExpr -> Conv (Maybe ModuleItem)
 convertModuleItem expr = case expr.node of
   -- Directive: :- body
-  Compound ":-" [_] ->
-    let (d, errs) = convertDirective expr in (Just (ItemDirective d), errs)
+  Compound ":-" [_] -> Just . ItemDirective <$> convertDirective expr
   -- Named rule: name @ ...
   Compound "@" [_, Ann (Compound "<=>" _) _] -> ruleItem
   Compound "@" [_, Ann (Compound "==>" _) _] -> ruleItem
@@ -1062,101 +1093,81 @@ convertModuleItem expr = case expr.node of
   Compound "==>" _ -> ruleItem
   -- Macro clause: Head ---> [Goals]. Grouped with its declaration by
   -- 'groupMacroClauses'.
-  Compound "--->" [_, _] -> case convertMacroClause expr of
-    (Just (n, c), errs) -> (Just (ItemMacroClause n c), errs)
-    (Nothing, errs) -> (Nothing, errs)
+  Compound "--->" [_, _] -> fmap ItemMacroClause <$> convertMacroClause expr
   -- Function equation (contains -> at top level)
-  Compound "->" _ ->
-    let (mEq, errs) = convertFunctionEquation expr
-     in (ItemEquation <$> mEq, errs)
+  Compound "->" _ -> fmap ItemEquation <$> convertFunctionEquation expr
   -- Anything else at top level is malformed.
-  _ -> (Nothing, [AnnP MalformedTopLevel expr.sourceLoc expr.node])
+  _ -> failWith (AnnP MalformedTopLevel expr.sourceLoc expr.node)
   where
-    ruleItem = let (mr, errs) = convertRule expr in (ItemRule <$> mr, errs)
+    ruleItem = fmap ItemRule <$> convertRule expr
 
 -- ** Directive conversion
 
 -- | Convert a directive PExpr to a 'Directive', collecting any errors
 -- raised during conversion. Malformed sub-items (declarations, equations,
 -- export items) are dropped and reported via 'ParseValidationError's.
-convertDirective :: Ann PExpr -> (Directive, [AnnP ParseValidationError])
+convertDirective :: Ann PExpr -> Conv Directive
 convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- module(name, [exports]).
-  Compound "module" [Ann (Atom name) _, exports] ->
-    let (decls, errs) = collectMaybes (map convertExportItem (unfoldList exports.node))
-     in (DirModule name loc body.node (Just decls), errs)
+  Compound "module" [Ann (Atom name) _, exports] -> do
+    decls <- collectList convertExportItem (unfoldList exports.node)
+    pure (DirModule (ModuleDirective name loc body.node (Just decls)))
   -- :- module(name).  (no export list — exports everything)
   Compound "module" [Ann (Atom name) _] ->
-    (DirModule name loc body.node Nothing, [])
+    pure (DirModule (ModuleDirective name loc body.node Nothing))
   -- :- use_module(name).  or  :- use_module(library(name)).
   Compound "use_module" [imp, importList] ->
-    case convertImportWithList loc body.node imp importList of
-      Right (ann, errs) -> (DirImport ann, errs)
-      Left err -> (DirOther, [err])
+    maybe DirOther DirImport <$> convertImportWithList loc body.node imp importList
   Compound "use_module" [imp] ->
     case convertImport loc body.node imp of
-      Right ann -> (DirImport ann, [])
-      Left err -> (DirOther, [err])
+      Right ann -> pure (DirImport ann)
+      Left err -> DirOther <$ tell [err]
   -- :- chr_constraint leq/2, fib/2.
   -- Parsed as prefix op: Compound "chr_constraint" [body]
   Compound "chr_constraint" [decls] ->
-    let (decls', errs) = collectDecls convertConstraintDecl decls
-     in (DirConstraintDecl decls', errs)
+    DirConstraintDecl <$> collectDecls convertConstraintDecl decls
   -- :- function foo/2.  or  :- function factorial(int) -> int.
   Compound "function" [decls] ->
-    let (decls', errs) = collectDecls convertFunctionDecl decls
-     in (DirFunctionDecl decls', errs)
+    DirFunctionDecl <$> collectDecls convertFunctionDecl decls
   -- :- open_function foo/2.
   Compound "open_function" [decls] ->
-    let (decls', errs) = collectDecls convertOpenFunctionDecl decls
-     in (DirOpenFunctionDecl decls', errs)
+    DirOpenFunctionDecl <$> collectDecls convertOpenFunctionDecl decls
   -- :- class size(int) -> int.  or  :- class (size(int) -> int), (size(string) -> int).
-  Compound "class" [decls] ->
-    let (decls', errs) = collectDecls convertClassDecl decls
-        classReqErrs = requiringOnClassErrors loc body.node decls'
-     in (DirClassDecl decls', errs ++ classReqErrs)
+  Compound "class" [decls] -> do
+    decls' <- collectDecls convertClassDecl decls
+    tell (requiringOnClassErrors loc body.node decls')
+    pure (DirClassDecl decls')
   -- :- open_class size(int) -> int.
-  Compound "open_class" [decls] ->
-    let (decls', errs) = collectDecls convertOpenClassDecl decls
-        classReqErrs = requiringOnClassErrors loc body.node decls'
-     in (DirOpenClassDecl decls', errs ++ classReqErrs)
+  Compound "open_class" [decls] -> do
+    decls' <- collectDecls convertOpenClassDecl decls
+    tell (requiringOnClassErrors loc body.node decls')
+    pure (DirOpenClassDecl decls')
   -- :- inline double/1, succ/1.
   Compound "inline" [decls] ->
-    let (decls', errs) = collectDecls convertInlineDecl decls
-     in (DirInlineDecl decls', errs)
+    DirInlineDecl <$> collectDecls convertInlineDecl decls
   -- :- constraint_use fact(log/2), event(click/1).
   Compound "constraint_use" [decls] ->
-    let (decls', errs) = collectDecls convertConstraintUseDecl decls
-     in (DirConstraintUseDecl decls', errs)
+    DirConstraintUseDecl <$> collectDecls convertConstraintUseDecl decls
   -- :- extend_class_type (foo(int) -> int).
   Compound "extend_class_type" [decls] ->
-    let (decls', errs) = collectDecls convertExtendClassTypeDecl decls
-     in (DirExtendClassTypeDecl decls', errs)
+    DirExtendClassTypeDecl <$> collectDecls convertExtendClassTypeDecl decls
   -- :- extend_function name(args) [| guards] -> body.
   Compound "extend_function" [eqn] ->
-    case convertFunctionEquation eqn of
-      (Just annEq, errs) -> (DirExtendFunctionEqn annEq, errs)
-      (Nothing, errs) -> (DirOther, errs)
+    maybe DirOther DirExtendFunctionEqn <$> convertFunctionEquation eqn
   -- :- extend_class name(args) [| guards] -> body.
   Compound "extend_class" [eqn] ->
-    case convertFunctionEquation eqn of
-      (Just annEq, errs) -> (DirExtendClassEqn annEq, errs)
-      (Nothing, errs) -> (DirOther, errs)
+    maybe DirOther DirExtendClassEqn <$> convertFunctionEquation eqn
   -- :- chr_type name ---> con1 ; con2 ; ...
   -- Parsed as prefix op: Compound "chr_type" [Compound "--->" [head, alts]]
   Compound "chr_type" [typeBody] ->
-    case convertTypeDefinition typeBody of
-      (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
-      (Nothing, errs) -> (DirOther, errs)
+    maybe DirOther (DirTypeDecl . pure) <$> convertTypeDefinition typeBody
   -- :- opaque_type name(Vars).
   -- Parsed as prefix op (1180): Compound "opaque_type" [head]. A
   -- constructor body @---> ...@ (1150) nests inside as
   -- Compound "opaque_type" [Compound "--->" [..]] and is rejected by
   -- 'convertOpaqueTypeDefinition'.
   Compound "opaque_type" [typeBody] ->
-    case convertOpaqueTypeDefinition typeBody of
-      (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
-      (Nothing, errs) -> (DirOther, errs)
+    maybe DirOther (DirTypeDecl . pure) <$> convertOpaqueTypeDefinition typeBody
   -- :- macro Name/N, ...  or  :- macro_decls Name/N, ...
   -- (a declaration; the clauses are top-level items)
   Compound kw [decls@(Ann (Compound "/" [_, _]) _)]
@@ -1167,51 +1178,46 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- (a one-line definition). Parsed as prefix op:
   -- Compound "macro" [Compound "--->" [head, body]]
   Compound kw [macroBody@(Ann (Compound "--->" [_, _]) _)]
-    | Just k <- macroKeyword kw -> case convertMacroClause macroBody of
-        (Just (n, c), errs) ->
-          let def = MacroDef k n (length c.node.params) [c]
-           in (DirMacro (AnnP def c.sourceLoc c.parsed), errs)
-        (Nothing, errs) -> (DirOther, errs)
+    | Just k <- macroKeyword kw ->
+        maybe DirOther (macroDef k) <$> convertMacroClause macroBody
   Compound kw [other]
     | Just _ <- macroKeyword kw ->
-        (DirOther, [AnnP MalformedMacroHead other.sourceLoc other.node])
+        DirOther <$ tell [AnnP MalformedMacroHead other.sourceLoc other.node]
   -- A built-in directive in a shape we don't know, e.g. @:- module(42).@
   -- Report it, or it would vanish.
   _
     | isBuiltinDirective body.node ->
-        (DirOther, [AnnP (MalformedDirective (directiveName body.node)) loc body.node])
+        let err = MalformedDirective (directiveName body.node)
+         in DirOther <$ tell [AnnP err loc body.node]
   -- Anything else is a macro use or unknown. "YCHR.Internal.DeclMacro"
   -- handles both before this; here we just skip them.
-  _ -> (DirOther, [])
+  _ -> pure DirOther
   where
     macroKeyword :: Text -> Maybe MacroKind
     macroKeyword "macro" = Just GoalMacro
     macroKeyword "macro_decls" = Just DeclMacro
     macroKeyword _ = Nothing
-    macroDecls k decls =
-      let (keys, errs) = collectMaybes (map (macroKey k) (flattenComma decls))
-       in (DirMacroDecl keys, errs)
+    macroDecls k decls = DirMacroDecl <$> collectList (macroKey k) (flattenComma decls)
     macroKey k (Ann d dloc) = case d of
       Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]
         | Set.notMember name reservedMacroHeadNames,
           arity >= 0 ->
-            (Just (AnnP (MacroKey k name (fromInteger arity)) loc body.node), [])
-      _ -> (Nothing, [AnnP MalformedMacroHead dloc d])
-convertDirective _ = (DirOther, [])
+            pure (Just (AnnP (MacroKey k name (fromInteger arity)) loc body.node))
+      _ -> failWith (AnnP MalformedMacroHead dloc d)
+    macroDef k nc =
+      let c = nc.clause
+          def = MacroDef k nc.name (length c.node.params) [c]
+       in DirMacro (AnnP def c.sourceLoc c.parsed)
+convertDirective _ = pure DirOther
 
 -- | Run a per-declaration converter over a comma-separated declaration
--- list, dropping declarations that failed conversion and accumulating
--- their errors.
-collectDecls ::
-  (Ann PExpr -> (Maybe (Ann a), [AnnP ParseValidationError])) ->
-  Ann PExpr ->
-  ([Ann a], [AnnP ParseValidationError])
-collectDecls conv = collectMaybes . map conv . flattenComma
+-- list, dropping declarations that failed conversion.
+collectDecls :: (Ann PExpr -> Conv (Maybe (Ann a))) -> Ann PExpr -> Conv [Ann a]
+collectDecls conv = collectList conv . flattenComma
 
--- | Flatten a list of @(Maybe a, errors)@ results: keep the successes,
--- concatenate the errors.
-collectMaybes :: [(Maybe a, [e])] -> ([a], [e])
-collectMaybes results = ([a | (Just a, _) <- results], concatMap snd results)
+-- | Convert each element, dropping the ones that failed.
+collectList :: (Ann PExpr -> Conv (Maybe a)) -> [Ann PExpr] -> Conv [a]
+collectList conv = fmap catMaybes . traverse conv
 
 -- | Convert an import PExpr (use_module/1, imports everything).
 -- Returns 'Left' with a 'MalformedImport' error if the argument is not a
@@ -1228,26 +1234,25 @@ convertImport dirLoc dirPExpr (Ann pexpr loc) = case pexpr of
   _ -> Left (AnnP MalformedImport loc pexpr)
 
 -- | Convert an import PExpr with an explicit import list (use_module/2).
--- Returns 'Left' with a 'MalformedImport' error if the import target is not
--- a module name or @library(name)@. On success, also returns any
+-- Reports a 'MalformedImport' error if the import target is not a module
+-- name or @library(name)@. On success, also reports any
 -- 'MalformedExportItem' errors from items inside the import list.
 convertImportWithList ::
   SourceLoc ->
   PExpr ->
   Ann PExpr ->
   Ann PExpr ->
-  Either
-    (AnnP ParseValidationError)
-    (AnnP Import, [AnnP ParseValidationError])
-convertImportWithList dirLoc dirPExpr imp importList =
-  let (items, itemErrs) =
-        collectMaybes (map convertExportItem (unfoldList importList.node))
-   in case imp.node of
-        Compound "library" [Ann (Atom name) _] ->
-          Right (AnnP (LibraryImport name (Just items)) dirLoc dirPExpr, itemErrs)
-        Atom name ->
-          Right (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr, itemErrs)
-        _ -> Left (AnnP MalformedImport imp.sourceLoc imp.node)
+  Conv (Maybe (AnnP Import))
+convertImportWithList dirLoc dirPExpr imp importList = case imp.node of
+  Compound "library" [Ann (Atom name) _] -> do
+    items <- importItems
+    pure (Just (AnnP (LibraryImport name (Just items)) dirLoc dirPExpr))
+  Atom name -> do
+    items <- importItems
+    pure (Just (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr))
+  _ -> failWith (AnnP MalformedImport imp.sourceLoc imp.node)
+  where
+    importItems = collectList convertExportItem (unfoldList importList.node)
 
 -- | Report a 'RequiringOnClass' error for every declaration inside a
 -- @:- class@ or @:- open_class@ directive that carries a @requiring@
@@ -1260,9 +1265,7 @@ requiringOnClassErrors ::
 requiringOnClassErrors loc origin decls =
   [ AnnP (RequiringOnClass fd.name) loc origin
   | Ann (FunctionDecl fd) _ <- decls,
-    case fd.requiring of
-      Just _ -> True
-      Nothing -> False
+    isJust fd.requiring
   ]
 
 -- | Convert an export item PExpr to a 'Declaration'. Items whose shape
@@ -1275,55 +1278,51 @@ requiringOnClassErrors loc origin decls =
 -- well-formed atoms) keeps the parser uniform with the rest of the
 -- malformed-input policy, and avoids accidentally widening or
 -- narrowing the constructor allowlist relative to what the user wrote.
-convertExportItem ::
-  Ann PExpr -> (Maybe Declaration, [AnnP ParseValidationError])
+convertExportItem :: Ann PExpr -> Conv (Maybe Declaration)
 convertExportItem (Ann pexpr loc) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    ( Just
-        ( FunctionDecl
-            ( FunctionDeclBody
-                name
-                (fromInteger arity)
-                Nothing
-                Nothing
-                False
-                DKFunction
-                Nothing
-                Nothing
-            )
-        ),
-      []
-    )
+    pure
+      ( Just
+          ( FunctionDecl
+              FunctionDeclBody
+                { name,
+                  arity = fromInteger arity,
+                  argTypes = Nothing,
+                  returnType = Nothing,
+                  isOpen = False,
+                  kind = DKFunction,
+                  requiring = Nothing,
+                  refining = Nothing
+                }
+          )
+      )
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    ( Just
-        (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing)),
-      []
-    )
+    pure
+      (Just (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing)))
   Compound "macro" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    (Just (MacroExportDecl (MacroExportDeclBody name (fromInteger arity))), [])
+    pure (Just (MacroExportDecl (MacroExportDeclBody name (fromInteger arity))))
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
     | Just ty <- parseOpTypeFromPExpr tyExpr,
       Just name <- atomName nameExpr ->
-        (Just (OperatorDecl (OpDecl (fromInteger fix) ty name)), [])
+        pure (Just (OperatorDecl (OpDecl (fromInteger fix) ty name)))
   -- @type(name/arity)@ — covers both algebraic and opaque types (they
   -- share one type namespace).
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    (Just (TypeExportDecl (TypeExportDeclBody name (fromInteger arity) Nothing)), [])
+    pure (Just (TypeExportDecl (TypeExportDeclBody name (fromInteger arity) Nothing)))
   Compound "type" [spec, conList]
     | Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] <- spec.node ->
         case unfoldListStrict conList.node of
-          Nothing ->
-            (Nothing, [AnnP MalformedExportItem conList.sourceLoc conList.node])
+          Nothing -> failWith (AnnP MalformedExportItem conList.sourceLoc conList.node)
           Just items -> case partitionEithers (map atomElement items) of
             ([], names) ->
-              ( Just
-                  ( TypeExportDecl
-                      (TypeExportDeclBody name (fromInteger arity) (Just names))
-                  ),
-                []
-              )
-            (errs, _) -> (Nothing, errs)
-  _ -> (Nothing, [AnnP MalformedExportItem loc pexpr])
+              pure
+                ( Just
+                    ( TypeExportDecl
+                        (TypeExportDeclBody name (fromInteger arity) (Just names))
+                    )
+                )
+            (errs, _) -> failWithAll errs
+  _ -> failWith (AnnP MalformedExportItem loc pexpr)
   where
     atomElement (Ann (Atom n) _) = Right n
     atomElement (Ann e l) = Left (AnnP MalformedExportItem l e)
@@ -1331,8 +1330,7 @@ convertExportItem (Ann pexpr loc) = case pexpr of
 -- | Convert a PExpr to a constraint declaration. Returns 'Nothing' and
 -- a 'MalformedDeclaration' (or 'MalformedTypeExpr' / 'MalformedBoundSig'
 -- from sub-conversions) error if the declaration cannot be converted.
-convertConstraintDecl ::
-  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
+convertConstraintDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
 convertConstraintDecl (Ann pexpr loc) = case pexpr of
   -- @sig requiring bound, ...@
   Compound "requiring" [sig, bounds] -> case sig.node of
@@ -1342,77 +1340,47 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
             partitionEithers (map convertBoundSig (flattenComma bounds))
        in case argTypeErrs ++ boundErrs of
             [] ->
-              ( Just
-                  ( Ann
-                      ( ConstraintDecl
-                          ( ConstraintDeclBody
-                              name
-                              (length args)
-                              (Just argTypes)
-                              (Just bs)
-                          )
-                      )
-                      loc
-                  ),
-                []
-              )
-            errs -> (Nothing, errs)
-    _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+              found
+                (ConstraintDeclBody name (length args) (Just argTypes) (Just bs))
+            errs -> failWithAll errs
+    _ -> failWith (AnnP MalformedDeclaration loc pexpr)
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    ( Just
-        ( Ann
-            (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing))
-            loc
-        ),
-      []
-    )
+    found (ConstraintDeclBody name (fromInteger arity) Nothing Nothing)
   -- @refining@ is an operator word, so @c(any) refining int@ parses as
   -- a compound named @refining@ at arity 2 — indistinguishable from a
   -- constraint literally named @refining@ with two arguments. Only a
   -- function can be a refinement predicate, so the shape is rejected
   -- before the generic arm below, which would otherwise declare it.
   -- Any other arity cannot come from the operator and is left alone.
-  Compound "refining" [_, _] -> (Nothing, [AnnP RefiningOnConstraint loc pexpr])
+  Compound "refining" [_, _] -> failWith (AnnP RefiningOnConstraint loc pexpr)
   -- Typed: name(type, ...)
   Compound name args -> case partitionEithers (map convertTypeExpr args) of
     ([], argTypes) ->
-      ( Just
-          ( Ann
-              ( ConstraintDecl
-                  (ConstraintDeclBody name (length args) (Just argTypes) Nothing)
-              )
-              loc
-          ),
-        []
-      )
-    (errs, _) -> (Nothing, errs)
+      found (ConstraintDeclBody name (length args) (Just argTypes) Nothing)
+    (errs, _) -> failWithAll errs
   -- Zero-arity bare atom
-  Atom name ->
-    ( Just
-        (Ann (ConstraintDecl (ConstraintDeclBody name 0 Nothing Nothing)) loc),
-      []
-    )
-  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+  Atom name -> found (ConstraintDeclBody name 0 Nothing Nothing)
+  _ -> failWith (AnnP MalformedDeclaration loc pexpr)
+  where
+    found body = pure (Just (Ann (ConstraintDecl body) loc))
 
 -- | Convert one @name\/arity@ entry of an @:- inline@ directive.
-convertInlineDecl ::
-  Ann PExpr -> (Maybe (Ann InlineDecl), [AnnP ParseValidationError])
+convertInlineDecl :: Ann PExpr -> Conv (Maybe (Ann InlineDecl))
 convertInlineDecl (Ann pexpr loc) = case pexpr of
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Just (Ann (InlineDecl name (fromInteger arity)) loc), [])
-  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+    pure (Just (Ann (InlineDecl name (fromInteger arity)) loc))
+  _ -> failWith (AnnP MalformedDeclaration loc pexpr)
 
 -- | Convert one @Tag(name\/arity)@ entry of a @:- constraint_use@
 -- directive. The tag must be one of the four modes, applied to exactly
 -- one @name\/arity@.
-convertConstraintUseDecl ::
-  Ann PExpr -> (Maybe (Ann ConstraintUseDecl), [AnnP ParseValidationError])
+convertConstraintUseDecl :: Ann PExpr -> Conv (Maybe (Ann ConstraintUseDecl))
 convertConstraintUseDecl (Ann pexpr loc) = case pexpr of
   Compound tag [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _]
     | Just use <- constraintUseTag tag ->
-        (Just (Ann (ConstraintUseDecl use name (fromInteger arity)) loc), [])
-  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+        pure (Just (Ann (ConstraintUseDecl use name (fromInteger arity)) loc))
+  _ -> failWith (AnnP MalformedDeclaration loc pexpr)
   where
     constraintUseTag :: Text -> Maybe ConstraintUse
     constraintUseTag t = case t of
@@ -1423,23 +1391,19 @@ convertConstraintUseDecl (Ann pexpr loc) = case pexpr of
       _ -> Nothing
 
 -- | Convert a PExpr to a closed-function declaration.
-convertFunctionDecl ::
-  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
+convertFunctionDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
 convertFunctionDecl = convertFunctionDeclWith False DKFunction
 
 -- | Convert a PExpr to an open-function declaration.
-convertOpenFunctionDecl ::
-  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
+convertOpenFunctionDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
 convertOpenFunctionDecl = convertFunctionDeclWith True DKFunction
 
 -- | Convert a PExpr to a closed-class declaration.
-convertClassDecl ::
-  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
+convertClassDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
 convertClassDecl = convertFunctionDeclWith False DKClass
 
 -- | Convert a PExpr to an open-class declaration.
-convertOpenClassDecl ::
-  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
+convertOpenClassDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
 convertOpenClassDecl = convertFunctionDeclWith True DKClass
 
 -- | Convert a PExpr to an extension type declaration. Targets
@@ -1451,41 +1415,38 @@ convertOpenClassDecl = convertFunctionDeclWith True DKClass
 -- an extension. The inner signature is still converted so that any
 -- sub-errors (malformed type expressions) are reported alongside the
 -- 'RequiringOnExtendClassType' error.
-convertExtendClassTypeDecl ::
-  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
+convertExtendClassTypeDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
 convertExtendClassTypeDecl (Ann pexpr loc) = case pexpr of
   -- @requiring@ is Xfx, so the inner @sig@ is never another @requiring@.
-  Compound "requiring" [sig, _] ->
-    let (mDecl, errs) = convertSig sig
-        targetName = case sig.node of
+  Compound "requiring" [sig, _] -> do
+    let targetName = case sig.node of
           Compound "->" [Ann (Compound n _) _, _] -> n
           _ -> "<unknown>"
-        reqErr = AnnP (RequiringOnExtendClassType targetName) loc pexpr
-     in (mDecl, reqErr : errs)
+    tell [AnnP (RequiringOnExtendClassType targetName) loc pexpr]
+    convertSig sig
   _ -> convertSig (Ann pexpr loc)
   where
     convertSig (Ann e l) = case e of
       Compound "->" [Ann (Compound name args) _, ret] ->
         case (partitionEithers (map convertTypeExpr args), convertTypeExpr ret) of
           (([], argTypes), Right retType) ->
-            ( Just
-                ( Ann
-                    ( ExtendClassTypeDecl
-                        ( ExtendClassTypeDeclBody
-                            name
-                            (length args)
-                            (Just argTypes)
-                            (Just retType)
-                            Nothing
-                        )
-                    )
-                    l
-                ),
-              []
-            )
-          ((argErrs, _), retE) ->
-            (Nothing, argErrs ++ leftToList retE)
-      _ -> (Nothing, [AnnP MalformedDeclaration l e])
+            pure
+              ( Just
+                  ( Ann
+                      ( ExtendClassTypeDecl
+                          ( ExtendClassTypeDeclBody
+                              name
+                              (length args)
+                              (Just argTypes)
+                              (Just retType)
+                              Nothing
+                          )
+                      )
+                      l
+                  )
+              )
+          ((argErrs, _), retE) -> failWithAll (argErrs ++ leftToList retE)
+      _ -> failWith (AnnP MalformedDeclaration l e)
 
 -- | Shared implementation of 'convertFunctionDecl',
 -- 'convertOpenFunctionDecl', 'convertClassDecl' and
@@ -1496,54 +1457,65 @@ convertFunctionDeclWith ::
   Bool ->
   FunctionDeclKind ->
   Ann PExpr ->
-  (Maybe (Ann Declaration), [AnnP ParseValidationError])
+  Conv (Maybe (Ann Declaration))
 convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
   -- @name(types) -> ret requiring bound, ...@
   Compound "requiring" [sig, bounds] ->
     let (boundErrs, bs) =
           partitionEithers (map convertBoundSig (flattenComma bounds))
      in case typedCore sig of
-          Left errs -> (Nothing, errs ++ boundErrs)
-          Right mk
-            | null boundErrs -> (Just (Ann (mk (Just bs) Nothing) loc), [])
-            | otherwise -> (Nothing, boundErrs)
+          Left errs -> failWithAll (errs ++ boundErrs)
+          Right core
+            | null boundErrs -> found (withClauses core (Just bs) Nothing)
+            | otherwise -> failWithAll boundErrs
   -- @name(any) -> bool refining type@. The untyped core is accepted
   -- here so that Resolve can reject it as an invalid @refining@ clause
   -- (YCHR-16021) rather than a bare syntax error.
   Compound "refining" [core, ty] ->
     let tyResult = convertTypeExpr ty
      in case (anyCore core, tyResult) of
-          (Left errs, _) -> (Nothing, errs ++ leftToList tyResult)
-          (Right _, Left err) -> (Nothing, [err])
-          (Right mk, Right t) -> (Just (Ann (mk Nothing (Just t)) loc), [])
+          (Left errs, _) -> failWithAll (errs ++ leftToList tyResult)
+          (Right _, Left err) -> failWith err
+          (Right c, Right t) -> found (withClauses c Nothing (Just t))
   _ -> case anyCore (Ann pexpr loc) of
-    Left errs -> (Nothing, errs)
-    Right mk -> (Just (Ann (mk Nothing Nothing) loc), [])
+    Left errs -> failWithAll errs
+    Right core -> found (FunctionDecl core)
   where
     malformed = [AnnP MalformedDeclaration loc pexpr]
+    found decl = pure (Just (Ann decl loc))
 
-    -- Build the declaration from its core fields, partially applied up
-    -- to the two optional trailing clauses (@requiring@ / @refining@).
-    mkDecl n ar argTys retTy requiring refining =
-      FunctionDecl
-        (FunctionDeclBody n ar argTys retTy open kind requiring refining)
+    -- The core fields, with no @requiring@ / @refining@ clause yet.
+    coreBody name arity argTypes returnType =
+      FunctionDeclBody
+        { name,
+          arity,
+          argTypes,
+          returnType,
+          isOpen = open,
+          kind,
+          requiring = Nothing,
+          refining = Nothing
+        }
 
-    -- The typed spelling @name(type, ...) -> type@, partially applied
-    -- up to the two optional trailing clauses.
+    -- Add the two optional trailing clauses to a core.
+    withClauses core requiring refining =
+      FunctionDecl core {requiring, refining}
+
+    -- The typed spelling @name(type, ...) -> type@.
     typedCore sig = case sig.node of
       Compound "->" [Ann (Compound name args) _, ret] ->
         case ( partitionEithers (map convertTypeExpr args),
                convertTypeExpr ret
              ) of
           (([], argTypes), Right retType) ->
-            Right (mkDecl name (length args) (Just argTypes) (Just retType))
+            Right (coreBody name (length args) (Just argTypes) (Just retType))
           ((argErrs, _), retE) -> Left (argErrs ++ leftToList retE)
       _ -> Left malformed
 
     -- Either spelling: the untyped @name/arity@ or the typed one.
     anyCore core = case core.node of
       Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-        Right (mkDecl name (fromInteger arity) Nothing Nothing)
+        Right (coreBody name (fromInteger arity) Nothing Nothing)
       _ -> typedCore core
 
 -- | Lift a single 'Left' into a singleton list of errors, dropping the
@@ -1608,31 +1580,33 @@ convertTypeExpr (Ann pexpr loc) = case pexpr of
 -- 'MalformedTypeDefinition' (or 'MalformedDataConstructor' /
 -- 'MalformedTypeExpr' from sub-conversions) error if the definition
 -- cannot be converted.
-convertTypeDefinition ::
-  Ann PExpr -> (Maybe (Ann TypeDefinition), [AnnP ParseValidationError])
+convertTypeDefinition :: Ann PExpr -> Conv (Maybe (Ann TypeDefinition))
 convertTypeDefinition (Ann pexpr loc) = case pexpr of
   -- name(Vars) ---> con1 ; con2 ; ...
-  Compound "--->" [typeHead, alts] -> case typeHeadShape typeHead.node of
-    Nothing -> (Nothing, [AnnP MalformedTypeDefinition loc pexpr])
-    Just (tname, rawParams) -> case validateTypeParams rawParams of
-      Left errs -> (Nothing, errs)
+  Compound "--->" [typeHead, alts] -> case compoundView typeHead.node of
+    Compound tname rawParams -> case validateTypeParams rawParams of
+      Left errs -> failWithAll errs
       Right tvars ->
         case partitionEithers
           (map convertDataConstructor (flattenSemicolon alts)) of
           ([], cons) ->
-            ( Just
-                ( Ann
-                    (TypeDefinition (Unqualified tname) tvars (Algebraic cons) loc)
-                    loc
-                ),
-              []
-            )
-          (errs, _) -> (Nothing, errs)
-  _ -> (Nothing, [AnnP MalformedTypeDefinition loc pexpr])
+            pure
+              ( Just
+                  ( Ann
+                      (TypeDefinition (Unqualified tname) tvars (Algebraic cons) loc)
+                      loc
+                  )
+              )
+          (errs, _) -> failWithAll errs
+    _ -> malformed
+  _ -> malformed
   where
-    typeHeadShape (Atom n) = Just (n, [])
-    typeHeadShape (Compound n vars) = Just (n, vars)
-    typeHeadShape _ = Nothing
+    malformed = failWith (AnnP MalformedTypeDefinition loc pexpr)
+
+-- | View an atom as a compound with no arguments.
+compoundView :: PExpr -> PExpr
+compoundView (Atom n) = Compound n []
+compoundView e = e
 
 -- | Validate a type head's parameter list: every parameter must be a
 -- variable, and no variable may repeat. Rejecting outright keeps the
@@ -1658,15 +1632,14 @@ validateTypeParams params = case go Set.empty params of
 -- constructor body (@---> ...@) is rejected with
 -- 'OpaqueTypeHasConstructors'; any other non-head shape is
 -- 'MalformedOpaqueTypeDefinition'.
-convertOpaqueTypeDefinition ::
-  Ann PExpr -> (Maybe (Ann TypeDefinition), [AnnP ParseValidationError])
+convertOpaqueTypeDefinition :: Ann PExpr -> Conv (Maybe (Ann TypeDefinition))
 convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
-  Compound "--->" _ -> (Nothing, [AnnP OpaqueTypeHasConstructors loc pexpr])
-  Atom n -> (Just (mk n []), [])
+  Compound "--->" _ -> failWith (AnnP OpaqueTypeHasConstructors loc pexpr)
+  Atom n -> pure (Just (mk n []))
   Compound n vars -> case validateTypeParams vars of
-    Left errs -> (Nothing, errs)
-    Right tvars -> (Just (mk n tvars), [])
-  _ -> (Nothing, [AnnP MalformedOpaqueTypeDefinition loc pexpr])
+    Left errs -> failWithAll errs
+    Right tvars -> pure (Just (mk n tvars))
+  _ -> failWith (AnnP MalformedOpaqueTypeDefinition loc pexpr)
   where
     mk tname tvars =
       Ann (TypeDefinition (Unqualified tname) tvars Opaque loc) loc
@@ -1681,7 +1654,7 @@ convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
 -- need to cover because the renamer never resolves a bare
 -- @,@\/@;@\/@\\@\/@|@ as a callable name. @:@ is included so that a
 -- qualified head @m:f(...)@ is rejected in one error.
-reservedMacroHeadNames :: Set.Set Text
+reservedMacroHeadNames :: Set Text
 reservedMacroHeadNames =
   Set.fromList
     [ ",",
@@ -1703,7 +1676,7 @@ reservedMacroHeadNames =
 
 -- | Convert a macro clause, @Head ---> Body@ (the @Compound \"--->\"@
 -- term a one-line @:- macro@ directive wraps, or a top-level clause),
--- to its macro's name and a 'MacroClause'.
+-- to a 'MacroClause' with its macro's name.
 --
 -- The head must be an atom or a compound named by an unqualified atom
 -- outside 'reservedMacroHeadNames' ('MalformedMacroHead' otherwise).
@@ -1712,23 +1685,19 @@ reservedMacroHeadNames =
 -- ('MalformedMacroBody' otherwise); its elements are kept exactly as
 -- written, since whether an expansion is valid depends on where it is
 -- used (see "YCHR.Internal.Rename.Macro").
-convertMacroClause ::
-  Ann PExpr -> (Maybe (Text, AnnP MacroClause), [AnnP ParseValidationError])
+convertMacroClause :: Ann PExpr -> Conv (Maybe NamedClause)
 convertMacroClause (Ann pexpr loc) = case pexpr of
-  Compound "--->" [macroHead, macroBody] -> case macroHeadShape macroHead.node of
-    Just (mname, rawParams)
+  Compound "--->" [macroHead, macroBody] -> case compoundView macroHead.node of
+    Compound mname rawParams
       | Set.notMember mname reservedMacroHeadNames ->
           case unfoldListStrict macroBody.node of
-            Nothing -> (Nothing, [AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node])
+            Nothing ->
+              failWith (AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node)
             Just elems ->
               let clause = MacroClause (map convertTerm rawParams) (map convertTerm elems)
-               in (Just (mname, AnnP clause loc pexpr), [])
-    _ -> (Nothing, [AnnP MalformedMacroHead macroHead.sourceLoc macroHead.node])
-  _ -> (Nothing, [AnnP MalformedMacroHead loc pexpr])
-  where
-    macroHeadShape (Atom n) = Just (n, [])
-    macroHeadShape (Compound n args) = Just (n, args)
-    macroHeadShape _ = Nothing
+               in pure (Just (NamedClause mname (AnnP clause loc pexpr)))
+    _ -> failWith (AnnP MalformedMacroHead macroHead.sourceLoc macroHead.node)
+  _ -> failWith (AnnP MalformedMacroHead loc pexpr)
 
 -- | Convert a PExpr to a 'DataConstructor'. Returns 'Left' if the
 -- constructor or any of its argument types is malformed.
@@ -1751,22 +1720,18 @@ convertDataConstructor (Ann pexpr loc) = case pexpr of
 --
 -- Returns 'Nothing' and a 'MalformedTopLevel' error when the input is
 -- not a recognized rule shape (named or unnamed @\<=\>@/@==\>@).
-convertRule :: Ann PExpr -> (Maybe Rule, [AnnP ParseValidationError])
-convertRule expr =
-  let (mName, ruleExpr) = case expr.node of
-        Compound "@" [Ann (Atom name) nameLoc, body] ->
-          (Just (Ann name nameLoc), body)
-        _ -> (Nothing, expr)
-   in case ruleExpr.node of
-        Compound "<=>" [h, gb] ->
-          let (head_, headErrs) = convertHead h
-              (guard_, body_) = splitGuardBody gb
-           in (Just (Rule mName head_ guard_ body_ []), headErrs)
-        Compound "==>" [h, gb] ->
-          let (head_, headErrs) = convertPropagationHead h
-              (guard_, body_) = splitGuardBody gb
-           in (Just (Rule mName head_ guard_ body_ []), headErrs)
-        _ -> (Nothing, [AnnP MalformedTopLevel expr.sourceLoc expr.node])
+convertRule :: Ann PExpr -> Conv (Maybe Rule)
+convertRule expr = case expr.node of
+  Compound "@" [Ann (Atom name) nameLoc, body] -> named (Just (Ann name nameLoc)) body
+  _ -> named Nothing expr
+  where
+    named mName ruleExpr = case ruleExpr.node of
+      Compound "<=>" [h, gb] -> mkRule mName gb <$> convertHead h
+      Compound "==>" [h, gb] -> mkRule mName gb <$> convertPropagationHead h
+      _ -> failWith (AnnP MalformedTopLevel expr.sourceLoc expr.node)
+    mkRule mName gb head_ =
+      let gab = splitGuardBody gb
+       in Just (Rule mName head_ gab.guard gab.body [])
 
 -- | Convert the head of a simplification or simpagation rule. Malformed
 -- constraints are dropped from the resulting head and reported as errors.
@@ -1774,103 +1739,88 @@ convertRule expr =
 -- No aggregate can appear here: an aggregate is written as a term the
 -- macro preprocessor has to expand first, so the renamer is where heads
 -- gain their aggregates.
-convertHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
+convertHead :: Ann PExpr -> Conv (AnnP Head)
 convertHead (Ann pexpr loc) = case pexpr of
-  Compound "\\" [kept, removed] ->
-    let (keptErrs, keptOk) = partitionEithers (map convertConstraint (flattenComma kept))
-        ( removedErrs,
-          removedOk
-          ) = partitionEithers (map convertConstraint (flattenComma removed))
-     in (AnnP (Simpagation keptOk removedOk []) loc pexpr, keptErrs ++ removedErrs)
-  _ ->
-    let constraints = flattenComma (Ann pexpr loc)
-        (errs, ok) = partitionEithers (map convertConstraint constraints)
-     in (AnnP (Simplification ok []) loc pexpr, errs)
+  Compound "\\" [kept, removed] -> do
+    keptOk <- convertConstraints kept
+    removedOk <- convertConstraints removed
+    pure (AnnP (Simpagation keptOk removedOk []) loc pexpr)
+  _ -> do
+    ok <- convertConstraints (Ann pexpr loc)
+    pure (AnnP (Simplification ok []) loc pexpr)
 
 -- | Convert the head of a propagation rule. Malformed constraints are
 -- dropped from the resulting head and reported as errors.
-convertPropagationHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
-convertPropagationHead (Ann pexpr loc) =
-  let (errs, ok) = partitionEithers (map convertConstraint (flattenComma (Ann pexpr loc)))
-   in (AnnP (Propagation ok []) loc pexpr, errs)
+convertPropagationHead :: Ann PExpr -> Conv (AnnP Head)
+convertPropagationHead (Ann pexpr loc) = do
+  ok <- convertConstraints (Ann pexpr loc)
+  pure (AnnP (Propagation ok []) loc pexpr)
+
+-- | Convert a comma-separated list of constraints, dropping and
+-- reporting malformed ones.
+convertConstraints :: Ann PExpr -> Conv [Constraint]
+convertConstraints expr = do
+  let (errs, ok) = partitionEithers (map convertConstraint (flattenComma expr))
+  tell errs
+  pure ok
+
+-- | A rule's guard and body.
+data GuardAndBody = GuardAndBody
+  { guard :: AnnP [Term],
+    body :: AnnP [Term]
+  }
 
 -- | Split a guard|body PExpr into guard and body term lists.
-splitGuardBody :: Ann PExpr -> (AnnP [Term], AnnP [Term])
+splitGuardBody :: Ann PExpr -> GuardAndBody
 splitGuardBody expr = case expr.node of
-  Compound "|" [guard_, body_] ->
-    ( AnnP (map convertTerm (flattenComma guard_)) guard_.sourceLoc guard_.node,
-      AnnP (map convertTerm (flattenComma body_)) body_.sourceLoc body_.node
-    )
-  _ ->
-    ( noAnnPAt expr.sourceLoc [],
-      AnnP (map convertTerm (flattenComma expr)) expr.sourceLoc expr.node
-    )
+  Compound "|" [guard_, body_] -> GuardAndBody (goalList guard_) (goalList body_)
+  _ -> GuardAndBody (noAnnPAt expr.sourceLoc []) (goalList expr)
+
+-- | Convert a comma-separated goal list, annotated with its own term.
+goalList :: Ann PExpr -> AnnP [Term]
+goalList x = AnnP (map convertTerm (flattenComma x)) x.sourceLoc x.node
 
 -- ** Function equation conversion
 
 -- | Convert a top-level PExpr to a 'FunctionEquation'. Returns 'Nothing'
 -- and a 'MalformedFunctionEquation' error when the input is not of the
 -- expected @lhs [| guard] -> rhs@ shape.
-convertFunctionEquation ::
-  Ann PExpr -> (Maybe (AnnP FunctionEquation), [AnnP ParseValidationError])
+convertFunctionEquation :: Ann PExpr -> Conv (Maybe (AnnP FunctionEquation))
 convertFunctionEquation (Ann pexpr loc) = case pexpr of
   Compound "->" [lhs, rhs] -> case lhs.node of
     -- Guarded: lhs_pattern | guard -> rhs
-    Compound "|" [pat, guard_] -> case extractFunNameArgs pat of
-      Just (name, args) ->
-        ( Just
-            ( AnnP
-                ( FunctionEquation
-                    (Unqualified name)
-                    args
-                    ( AnnP
-                        (map convertTerm (flattenComma guard_))
-                        guard_.sourceLoc
-                        guard_.node
-                    )
-                    (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
-                    []
-                )
-                loc
-                pexpr
-            ),
-          []
-        )
-      Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
+    Compound "|" [p, guard_] -> equation p (goalList guard_) rhs
     -- Unguarded: lhs_pattern -> rhs
-    _ -> case extractFunNameArgs lhs of
-      Just (name, args) ->
-        ( Just
-            ( AnnP
-                ( FunctionEquation
-                    (Unqualified name)
-                    args
-                    (noAnnPAt lhs.sourceLoc [])
-                    (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
-                    []
-                )
-                loc
-                pexpr
-            ),
-          []
-        )
-      Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
-  _ -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
+    _ -> equation lhs (noAnnPAt lhs.sourceLoc []) rhs
+  _ -> failWith (AnnP MalformedFunctionEquation loc pexpr)
+  where
+    equation pat guardAnn rhs = case equationHead pat of
+      Just c ->
+        let rhsAnn = AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node
+            eqn = FunctionEquation (Unqualified c.name) c.args guardAnn rhsAnn []
+         in pure (Just (AnnP eqn loc pexpr))
+      Nothing -> failWith (AnnP MalformedFunctionEquation loc pexpr)
 
 -- | Flatten a function-equation RHS (or lambda body) on the top-level
 -- comma operator. Non-empty by construction.
 convertRhsSequence :: Ann PExpr -> NE.NonEmpty Term
 convertRhsSequence = fmap convertTerm . flattenComma1
 
--- | Extract the function name and argument list from an equation LHS.
+-- | The function name and argument patterns of an equation LHS.
+data EquationHead = EquationHead
+  { name :: Text,
+    args :: [Term]
+  }
+
+-- | Read an equation LHS.
 --
 -- Handles prefix notation @name(args)@ and operator notation @X op Y@
 -- (which parses as @Compound op [X, Y]@). Returns 'Nothing' if the LHS
 -- is a literal, variable, wildcard, or string.
-extractFunNameArgs :: Ann PExpr -> Maybe (Text, [Term])
-extractFunNameArgs (Ann pexpr _) = case pexpr of
+equationHead :: Ann PExpr -> Maybe EquationHead
+equationHead (Ann pexpr _) = case pexpr of
   -- Prefix: name(arg1, arg2, ...) — also covers operator notation.
-  Compound name args -> Just (name, map convertTerm args)
+  Compound name args -> Just (EquationHead name (map convertTerm args))
   -- Bare atom (zero-arity function)
-  Atom name -> Just (name, [])
+  Atom name -> Just (EquationHead name [])
   _ -> Nothing

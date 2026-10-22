@@ -1,17 +1,16 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- |
 -- Module      : YCHR.Internal.Desugar
 -- Description : Transforms the resolved AST into the compiler's internal AST.
 --
--- The Desugarer is the transformation pass between the resolved
--- 'YCHR.Internal.Resolved.Program' and the internal 'YCHR.Internal.Desugared.Program'
--- consumed by the compiler. It performs, in order:
+-- The pass between the resolved 'YCHR.Internal.Resolved.Program' and
+-- the 'YCHR.Internal.Desugared.Program' the compiler reads. It does,
+-- in order:
 --
--- 1. /Head-kind flattening/: map the three surface head kinds
---    ('P.Simplification', 'P.Propagation', 'P.Simpagation') to the
+-- 1. /Head-kind flattening/: map the three head kinds
+--    ('R.Simplification', 'R.Propagation', 'R.Simpagation') to the
 --    uniform @Kept\/Removed@ shape of 'D.Head'.
 --
 -- 2. /Head Normal Form (HNF)/: in every head constraint, replace
@@ -19,9 +18,8 @@
 --    emitting explicit 'D.GuardEqual' / 'D.GuardMatch' / 'D.GuardGetArg'
 --    guards.
 --
--- 3. /Goal classification/: partition each body into structured 'D.BodyGoal'
---    values ('D.BodyUnify', 'D.BodyIs', 'D.BodyHostStmt',
---    'D.BodyCall', 'D.BodyTell', or 'D.BodyTrue').
+-- 3. /Goal classification/: turn each body expression into
+--    'D.BodyGoal' values (see 'desugarBodyGoal').
 --
 -- 4. /Guard classification/: map each surface guard term to a 'D.Guard'.
 --
@@ -35,12 +33,12 @@
 -- Module erasure and equation grouping are handled upstream by the
 -- resolve phase ('YCHR.Internal.Resolve').
 --
--- 'extractSymbolTable' is a separate utility that assigns sequential IDs
--- to every 'Qualified' rule-head constraint in the desugared program; it
--- is not part of the main pipeline.
+-- 'extractSymbolTable' is a separate utility that numbers every
+-- constraint of the desugared program; it is not part of the main
+-- pipeline.
 --
--- Non-obvious design choices are documented in the \"Notes\" block at the
--- bottom of this file.
+-- Non-obvious design choices are in the \"Notes\" block at the bottom
+-- of this file.
 module YCHR.Internal.Desugar
   ( -- * Pipeline
     desugarProgram,
@@ -48,6 +46,7 @@ module YCHR.Internal.Desugar
 
     -- * Lambda lifting
     liftAllLambdas,
+    LiftedQuery (..),
     liftQueryLambdas,
 
     -- * Symbol table
@@ -57,6 +56,7 @@ module YCHR.Internal.Desugar
     -- * Variable scopes
     bodyGoalVars,
     guardVars,
+    ruleScope,
 
     -- * Rule helpers
     ruleModName,
@@ -67,10 +67,20 @@ module YCHR.Internal.Desugar
 where
 
 import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
+import Control.Monad.Trans.State.Strict
+  ( State,
+    StateT,
+    evalStateT,
+    get,
+    gets,
+    modify,
+    modify',
+    runState,
+    runStateT,
+    state,
+  )
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.Foldable (toList)
-import Data.List (mapAccumL)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Sequence (Seq, (|>))
@@ -79,7 +89,13 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Desugar.AggregateScope (scopeAggregates)
-import YCHR.Internal.Desugar.Hnf (HnfState (..), headTermToExpr, hnfState, normalizeArg)
+import YCHR.Internal.Desugar.Hnf
+  ( Hnf,
+    HnfState (..),
+    headTermToExpr,
+    hnfState,
+    normalizeArg,
+  )
 import YCHR.Internal.Desugar.Vars (exprVars, guardVars, headArgVars, sequenceFree)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
@@ -207,8 +223,7 @@ desugarProgram rprog =
             }
    in if null errs then Right result else Left errs
 
--- | Scans a desugared program and builds the optimization map.
--- It ensures that all qualified names get a sequential ID starting from 0.
+-- | Number every constraint of a desugared program, from 0.
 --
 -- Constraint names come from two sources:
 --
@@ -224,14 +239,12 @@ extractSymbolTable prog =
   let rules = prog.rules
       ruleIds =
         Set.fromList
-          [ qualifiedNameToIdentifier name arity
+          [ qualifiedNameToIdentifier key.name key.arity
           | r <- rules,
-            (name, arity) <- getRuleConstraints r
+            key <- getRuleConstraints r
           ]
-      -- Constraints declared via :- chr_constraint that never appear in
-      -- any rule still need a tell_c and activate_c procedure. Without
-      -- a symbol-table entry the compiler skips them entirely and the
-      -- user hits a raw "user error (Constraint not found)" at goal time.
+      -- Declared constraints that no rule mentions still need a tell_c
+      -- and an activate_c. See the note at the bottom of this module.
       declaredIds =
         Set.fromList
           [ qualifiedNameToIdentifier key.name key.arity
@@ -240,24 +253,24 @@ extractSymbolTable prog =
       allIds = ruleIds `Set.union` declaredIds
    in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
 
--- | Helper to find every constraint instance in a desugared rule,
--- returning its qualified name and arity. Head constraints, body tells
+-- | Every constraint occurrence in a desugared rule, as its qualified
+-- name and arity. Head constraints, body tells
 -- and aggregate goals are all included, since all contribute to the
 -- constraint-symbol table.
-getRuleConstraints :: D.Rule -> [(QualifiedName, Int)]
+getRuleConstraints :: D.Rule -> [ConstraintKey]
 getRuleConstraints r =
   let AnnP {node = rHead} = r.head
       AnnP {node = rBody} = r.body
-      headPair hc = (hc.name, length hc.args)
-   in map headPair rHead.kept
-        ++ map headPair rHead.removed
-        ++ concatMap aggPairs rHead.aggregates
-        ++ [(qn, length args) | D.BodyTell qn args <- rBody]
+      headKey hc = ConstraintKey hc.name (length hc.args)
+   in map headKey rHead.kept
+        ++ map headKey rHead.removed
+        ++ concatMap aggKeys rHead.aggregates
+        ++ [ConstraintKey qn (length args) | D.BodyTell qn args <- rBody]
   where
-    aggPairs a = concatMap conjunctPair a.goal
-    conjunctPair (D.AggConstraint hc _) = [(hc.name, length hc.args)]
-    conjunctPair (D.AggNested a) = aggPairs a
-    conjunctPair (D.AggGuard _) = []
+    aggKeys a = concatMap conjunctKey a.goal
+    conjunctKey (D.AggConstraint hc _) = [ConstraintKey hc.name (length hc.args)]
+    conjunctKey (D.AggNested a) = aggKeys a
+    conjunctKey (D.AggGuard _) = []
 
 -- | Desugar one resolved rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head and on every
@@ -267,22 +280,19 @@ getRuleConstraints r =
 desugarRule :: R.Rule -> Writer [Diagnostic DesugarError] D.Rule
 desugarRule r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
-      headLoc = r.head.sourceLoc
-      headOrigin = r.head.parsed
   ruleBody <-
     desugarBodyGoals r.moduleName ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc r.guard.parsed) r.guard.node
-  let (rawKept, rawRemoved, rawAggs) = flattenHeadKind r.head.node
-      initState = hnfState
-      (st1, kept', removed') = normalizeHeadConstraints initState rawKept rawRemoved
-  (st2, aggs) <- desugarAggregates st1 headLoc headOrigin rawAggs
-  let guards = toList st2.guards
+  (hd, st) <-
+    runStateT (desugarHead r.head.sourceLoc r.head.parsed r.head.node) hnfState
+  let guards = toList st.guards
       -- What is bound before the first aggregate: the regular heads, and
       -- the variables their HNF guards extract from a compound argument.
       headBound =
-        Set.fromList [v | hc <- kept' ++ removed', HeadVar v <- hc.args]
+        Set.fromList [v | hc <- hd.kept ++ hd.removed, HeadVar v <- hc.args]
           `Set.union` Set.fromList [v | D.GuardGetArg v _ _ <- guards]
-      normalizedHead = D.Head kept' removed' (scopeAggregates headBound aggs)
+      normalizedHead =
+        D.Head hd.kept hd.removed (scopeAggregates headBound hd.aggregates)
   pure
     D.Rule
       { name = fmap (.node) r.name,
@@ -291,20 +301,26 @@ desugarRule r = do
         body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
--- | Desugar the rule's aggregates, threading the rule's HNF state through
--- each of them so that the fresh-name counter stays shared with the head.
-desugarAggregates ::
-  HnfState ->
-  P.SourceLoc ->
-  PExpr ->
-  [R.Aggregate] ->
-  Writer [Diagnostic DesugarError] (HnfState, [D.Aggregate])
-desugarAggregates st0 loc origin = go st0 []
-  where
-    go st acc [] = pure (st, reverse acc)
-    go st acc (a : rest) = do
-      (st', a') <- desugarAggregate st loc origin a
-      go st' (a' : acc) rest
+-- | HNF state over the desugarer's diagnostics.
+type HnfW = StateT HnfState (Writer [Diagnostic DesugarError])
+
+-- | Run a pure HNF step in 'HnfW'.
+hnf :: Hnf a -> HnfW a
+hnf m = state (runState m)
+
+-- | Normalize a head: its kept and removed constraints, then its
+-- aggregates, in one HNF state, so a fresh name is unique across the
+-- whole rule. Kept is processed before removed so that variables first
+-- appearing in kept constraints become the canonical binding (see the
+-- note at the bottom of this module). The aggregates are not scoped
+-- yet.
+desugarHead :: P.SourceLoc -> PExpr -> R.Head -> HnfW D.Head
+desugarHead loc origin h = do
+  let parts = flattenHeadKind h
+  kept' <- hnf (traverse normalizeConstraint parts.kept)
+  removed' <- hnf (traverse normalizeConstraint parts.removed)
+  aggs <- traverse (desugarAggregate loc origin) parts.aggregates
+  pure (D.Head kept' removed' aggs)
 
 -- | Desugar one resolved aggregate. Its expressions are already typed
 -- (resolution did that); the guards are classified here, so a non-boolean
@@ -322,123 +338,92 @@ desugarAggregates st0 loc origin = go st0 []
 -- through a compound argument is recognized the same way: HNF emits a
 -- get-arg for it, and the fold's variable map already binds it, so the
 -- extraction becomes a test rather than a rebinding.
-desugarAggregate ::
-  HnfState ->
-  P.SourceLoc ->
-  PExpr ->
-  R.Aggregate ->
-  Writer [Diagnostic DesugarError] (HnfState, D.Aggregate)
-desugarAggregate st0 loc origin a = do
-  (st1, goal') <- desugarConjuncts (st0 {seen = Set.empty}) loc origin a.goal
+desugarAggregate :: P.SourceLoc -> PExpr -> R.Aggregate -> HnfW D.Aggregate
+desugarAggregate loc origin a = do
+  modify' (\st -> st {seen = Set.empty})
+  goal' <- desugarConjuncts loc origin a.goal
   pure
-    ( st1,
-      D.Aggregate
-        { D.kind = a.kind,
-          D.agg = a.agg,
-          D.element = a.element,
-          D.goal = goal',
-          D.result = a.result,
-          -- Filled by 'scopeAggregates' once the whole head is desugared.
-          D.aggShared = [],
-          D.aggLocals = [],
-          D.aggBinds = [],
-          D.aggResult = Nothing
-        }
-    )
+    D.Aggregate
+      { D.kind = a.kind,
+        D.agg = a.agg,
+        D.element = a.element,
+        D.goal = goal',
+        D.result = a.result,
+        -- Filled by 'scopeAggregates' once the whole head is desugared.
+        D.aggShared = [],
+        D.aggLocals = [],
+        D.aggBinds = [],
+        D.aggResult = Nothing
+      }
 
--- | Desugar one aggregate's goal conjuncts, left to right, threading the
--- HNF state so that a variable repeated across two conjuncts of the same
+-- | Desugar one aggregate's goal conjuncts, left to right, in one HNF
+-- state, so that a variable repeated across two conjuncts of the same
 -- goal is matched by an equality guard.
 desugarConjuncts ::
-  HnfState ->
   P.SourceLoc ->
   PExpr ->
   [R.AggregateConjunct] ->
-  Writer [Diagnostic DesugarError] (HnfState, [D.AggregateConjunct])
-desugarConjuncts st0 loc origin = go st0 []
+  HnfW [D.AggregateConjunct]
+desugarConjuncts loc origin = traverse conjunct
   where
-    go st acc [] = pure (st, reverse acc)
-    go st acc (c : rest) = case c of
-      R.AggConstraint qc -> do
-        let (st', hc, own) = normalizeGoalConstraint st qc
-        go st' (D.AggConstraint hc own : acc) rest
+    conjunct c = case c of
+      R.AggConstraint qc -> hnf (normalizeGoalConstraint qc)
       -- A nested goal has its own variables: keep the counter it advanced,
       -- but not its @seen@ set, so the conjuncts after it are normalized
       -- against this goal's variables only.
       R.AggNested a -> do
-        (st', a') <- desugarAggregate st loc origin a
-        go st' {seen = st.seen} (D.AggNested a' : acc) rest
-      R.AggGuard g -> do
-        g' <- desugarGuard loc origin g
-        go st (D.AggGuard g' : acc) rest
+        seen0 <- gets (.seen)
+        a' <- desugarAggregate loc origin a
+        modify' (\st -> st {seen = seen0})
+        pure (D.AggNested a')
+      R.AggGuard g -> D.AggGuard <$> lift (desugarGuard loc origin g)
 
--- | Map the three resolved head kinds to a uniform @(kept, removed,
--- aggregates)@ triple. Propagation rules keep every constraint;
--- simplification rules remove every constraint; simpagation rules carry
--- both lists explicitly. The constraint lists are fed to
--- 'normalizeHead'.
-flattenHeadKind ::
-  R.Head ->
-  ( [QualifiedConstraint],
-    [QualifiedConstraint],
-    [R.Aggregate]
-  )
+-- | A resolved head, split by role. Propagation rules keep every
+-- constraint; simplification rules remove every constraint; simpagation
+-- rules carry both lists explicitly.
+data HeadParts = HeadParts
+  { kept :: [QualifiedConstraint],
+    removed :: [QualifiedConstraint],
+    aggregates :: [R.Aggregate]
+  }
+
+-- | Map the three resolved head kinds to 'HeadParts'.
+flattenHeadKind :: R.Head -> HeadParts
 flattenHeadKind h = case h of
-  R.Simplification rs aggs -> ([], rs, aggs)
-  R.Propagation ks aggs -> (ks, [], aggs)
-  R.Simpagation ks rs aggs -> (ks, rs, aggs)
+  R.Simplification rs aggs -> HeadParts [] rs aggs
+  R.Propagation ks aggs -> HeadParts ks [] aggs
+  R.Simpagation ks rs aggs -> HeadParts ks rs aggs
 
 -- ---------------------------------------------------------------------------
 -- Head Normal Form (HNF)
 -- ---------------------------------------------------------------------------
 
--- | In every head constraint, replace non-variable and duplicated-variable
+-- In every head constraint, replace non-variable and duplicated-variable
 -- arguments with fresh variables and emit explicit 'D.GuardEqual',
 -- 'D.GuardMatch', and 'D.GuardGetArg' guards that recover the original
--- semantics. The core of it lives in "YCHR.Internal.Desugar.Hnf".
+-- meaning. The core of it lives in "YCHR.Internal.Desugar.Hnf".
 
--- | Normalize the kept and removed constraints of a head. Kept is
--- processed before removed so that variables first appearing in kept
--- constraints become the canonical binding (see the note at the bottom
--- of this module).
---
--- The state that comes back carries the head's guards, its fresh-name
--- counter, and the variables it has seen. 'desugarAggregates' continues
--- from it, so a fresh name is unique across the whole rule.
-normalizeHeadConstraints ::
-  HnfState ->
-  [QualifiedConstraint] ->
-  [QualifiedConstraint] ->
-  (HnfState, [HeadConstraint], [HeadConstraint])
-normalizeHeadConstraints initState kept removed =
-  let (st1, kept') = mapAccumL normalizeConstraint initState kept
-      (st2, removed') = mapAccumL normalizeConstraint st1 removed
-   in (st2, kept', removed')
-
--- | Normalize one constraint conjunct of an aggregate goal, returning the
--- updated state, the normalized constraint, and that conjunct's own guards
--- in emission order.
+-- | Normalize one constraint conjunct of an aggregate goal, with that
+-- conjunct's own guards in emission order.
 --
 -- The guards are taken back out of the shared accumulator, so they stay
 -- with the conjunct they came from: they are evaluated inside the loop that
 -- matches that conjunct, not in the rule's guard beside the head's own HNF
 -- guards.
-normalizeGoalConstraint ::
-  HnfState ->
-  QualifiedConstraint ->
-  (HnfState, HeadConstraint, [D.Guard])
-normalizeGoalConstraint st qc =
-  let saved = st.guards
-      (st', hc) = normalizeConstraint (st {guards = Seq.empty}) qc
-      own = toList st'.guards
-   in (st' {guards = saved}, hc, own)
+normalizeGoalConstraint :: QualifiedConstraint -> Hnf D.AggregateConjunct
+normalizeGoalConstraint qc = do
+  saved <- gets (.guards)
+  modify' (\st -> st {guards = Seq.empty})
+  hc <- normalizeConstraint qc
+  own <- gets (\st -> toList st.guards)
+  modify' (\st -> st {guards = saved})
+  pure (D.AggConstraint hc own)
 
 -- | Normalize the arguments of one head constraint, narrowing them
 -- from raw 'Term's to 'HeadArg's.
-normalizeConstraint :: HnfState -> QualifiedConstraint -> (HnfState, HeadConstraint)
-normalizeConstraint st (QualifiedConstraint cname cargs) =
-  let (st', args') = mapAccumL normalizeArg st cargs
-   in (st', HeadConstraint cname args')
+normalizeConstraint :: QualifiedConstraint -> Hnf HeadConstraint
+normalizeConstraint (QualifiedConstraint cname cargs) =
+  HeadConstraint cname <$> traverse normalizeArg cargs
 
 -- | Desugar a resolved function definition: HNF-normalize its equation
 -- patterns and produce a 'D.Function'.
@@ -466,35 +451,31 @@ desugarResolvedEquation annEq = do
 
 desugarEquation' :: R.FunctionEquation -> Writer [Diagnostic DesugarError] D.Equation
 desugarEquation' eq = do
-  let initState = hnfState
-      (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
+  let (normalizedArgs, st) = runState (traverse normalizeArg eq.args) hnfState
       guards = toList st.guards
   userGuards <- traverse (desugarGuard eq.guard.sourceLoc eq.guard.parsed) eq.guard.node
-  (prelude, returnExpr) <-
-    classifyFunctionBody eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node
+  prelude <- classifyFunctionPrelude eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node
   pure
     D.Equation
       { params = normalizedArgs,
         guards = guards ++ userGuards,
         prelude = prelude,
-        rhs = returnExpr
+        rhs = NE.last eq.rhs.node
       }
 
--- | Split a function-body sequence into its non-final prelude items
--- and the trailing return expression. Each non-final item must be one
--- of @host:f(args)@, @X is E@ (variable LHS), a function call, or
+-- | Classify the non-final items of a function-body sequence, the
+-- prelude before its return expression. Each must be one of
+-- @host:f(args)@, @X is E@ (variable LHS), a function call, or
 -- @'$call'(F, args)@; anything else is reported as 'NonPreludeFunctionBodyItem'.
 -- A non-variable @is@ LHS in non-final position is reported as
 -- 'NonVariableIsInFunctionBody'. The return expression is left as-is.
-classifyFunctionBody ::
+classifyFunctionPrelude ::
   P.SourceLoc ->
   PExpr ->
   NE.NonEmpty R.Expr ->
-  Writer [Diagnostic DesugarError] ([D.FunStmt], R.Expr)
-classifyFunctionBody loc origin body = do
-  let (initExprs, lastExpr) = (NE.init body, NE.last body)
-  stmts <- traverse (classifyFunStmt loc origin) initExprs
-  pure (stmts, lastExpr)
+  Writer [Diagnostic DesugarError] [D.FunStmt]
+classifyFunctionPrelude loc origin body =
+  traverse (classifyFunStmt loc origin) (NE.init body)
 
 -- | Classify a single non-final function-body expression into a 'D.FunStmt'.
 -- Emits a diagnostic and returns a no-op placeholder when the shape is
@@ -587,9 +568,10 @@ desugarQueryGoals goals =
     isDisjunction _ = False
 
 -- ---------------------------------------------------------------------------
--- VarNameSupply: fresh variable generation for desugaring
+-- Fresh @__is_N@ names for body desugaring
 -- ---------------------------------------------------------------------------
 
+-- | A fresh @__is_N@ variable name.
 freshVarName :: StateT Int (Writer [Diagnostic DesugarError]) Text
 freshVarName = do
   n <- get
@@ -615,18 +597,19 @@ desugarBodyGoals scope label loc origin exprs =
 
 -- | Classify a resolved body expression into 'D.BodyGoal's.
 --
--- Pattern priority (order matters):
+-- Patterns, tried in this order (order matters):
 --
 -- 1. @X = Y@ -> 'D.BodyUnify'
 -- 2. @X is Expr@ (variable LHS) -> 'D.BodyIs'
 -- 3. @T is Expr@ (non-variable LHS) -> @R is Expr, R = T@ with fresh @R@
 -- 4. 'R.HostExpr' -> 'D.BodyHostStmt'
--- 5. 'R.CallExpr' -> 'D.BodyCall'
--- 6. 'R.ApplyExpr' -> 'D.BodyApply'; @tell(G, …)@ -> 'D.BodyTellDynamic'
--- 7. @A ; B@ -> 'D.BodyOr'
--- 8. Constructor with a 'Qualified' name -> 'D.BodyTell'
--- 9. @true@ in any spelling -> 'D.BodyTrue'
--- 10. Anything else -> error
+-- 5. @true@ in either spelling -> 'D.BodyTrue'
+-- 6. 'R.CallExpr' -> 'D.BodyCall'
+-- 7. 'R.ApplyExpr' -> 'D.BodyApply'
+-- 8. @tell(G, …)@ -> 'D.BodyTellDynamic'
+-- 9. @A ; B@ -> 'D.BodyOr'
+-- 10. Constructor with a 'Qualified' name -> 'D.BodyTell'
+-- 11. Anything else -> error
 desugarBodyGoal ::
   Text ->
   Maybe Text ->
@@ -689,7 +672,7 @@ conjuncts e = [e]
 -- Lambda lifting
 -- ---------------------------------------------------------------------------
 
--- | Threaded state for the lambda-lifter: a counter that supplies fresh
+-- | State of the lambda-lifter: a counter that supplies fresh
 -- @__lambda_N@ names, the top-level functions that have already been
 -- lifted out (in discovery order), and an error accumulator for
 -- lambda-body classification failures discovered during the lift.
@@ -697,16 +680,18 @@ conjuncts e = [e]
 -- top-level RHS sequence of an equation.
 --
 -- 'liftedFunctions' is a 'Seq' for the same reason 'HnfState.guards'
--- is: appending keeps the accumulator in the order it was built,
--- rather than leaving reverse discovery order to leak into
--- 'D.Program.functions'. Nothing downstream depends on the order —
--- the lifted functions are looked up by name — so the switch is
--- observable only in generated-procedure emission order.
+-- is: appending keeps it in discovery order, so 'D.Program.functions'
+-- lists lifted lambdas in that order. Nothing downstream depends on it
+-- (lifted functions are looked up by name); it only shows in the order
+-- procedures are emitted.
 data LiftState = LiftState
   { counter :: !Int,
     liftedFunctions :: Seq D.Function,
     liftErrors :: [Diagnostic DesugarError]
   }
+
+-- | The lambda-lifter's monad.
+type Lift = State LiftState
 
 -- | Lift lambdas in a single expression. Each 'R.LambdaExpr' is
 -- replaced by a /self-describing closure/ of the form
@@ -714,8 +699,7 @@ data LiftState = LiftState
 -- identifying the lifted function, @SourceForm@ is a quoted copy of
 -- the original lambda (for pretty-printing), and @F1 .. Fn@ are the
 -- captured free variables. The lambda body itself is lifted into a
--- fresh top-level 'D.Function'. Returns the updated state and the
--- rewritten expression.
+-- fresh top-level 'D.Function'.
 --
 -- Lifted lambdas carry no @requiring@ clause. The type checker runs
 -- on the pre-lift program, where the lambda body is checked in place
@@ -723,14 +707,9 @@ data LiftState = LiftState
 -- signatures its @requiring@ clause contributes — so inheriting the
 -- parent's clause here would be dead data (and the checker's
 -- untyped-function path ignores it anyway).
-liftExpr ::
-  Text ->
-  Set.Set Text ->
-  LiftState ->
-  R.Expr ->
-  (LiftState, R.Expr)
-liftExpr modName scope st0 expr = case expr of
-  R.LambdaExpr params body ->
+liftExpr :: Text -> Set.Set Text -> R.Expr -> Lift R.Expr
+liftExpr modName scope expr = case expr of
+  R.LambdaExpr params body -> do
     let paramsList = NE.toList params
         paramVarNames = Set.fromList [v | HeadVar v <- paramsList]
         bodyList = NE.toList body
@@ -755,21 +734,11 @@ liftExpr modName scope st0 expr = case expr of
             `Set.union` paramVarNames
             `Set.union` Set.fromList
               [v | R.CtorExpr (Unqualified "is") [R.VarExpr v, _] <- bodyList]
-        (st1, liftedBody) =
-          mapAccumL
-            (liftExpr modName innerScope)
-            st0
-            bodyList
-        liftedBodyNE = NE.fromList liftedBody
-        (preludeExprs, rhsExpr) =
-          (NE.init liftedBodyNE, NE.last liftedBodyNE)
-        (prelude, classifyErrs) =
-          runWriter $
-            traverse
-              (classifyFunStmt P.dummyLoc (Atom ""))
-              preludeExprs
-        st1' = st1 {liftErrors = st1.liftErrors ++ classifyErrs}
-        idx = st1'.counter
+    -- The body is lifted first, so a nested lambda gets a lower number.
+    liftedBody <- NE.fromList <$> traverse (liftExpr modName innerScope) bodyList
+    idx <- gets (.counter)
+    let (prelude, classifyErrs) =
+          runWriter (classifyFunctionPrelude P.dummyLoc (Atom "") liftedBody)
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = QualifiedName modName lambdaName
         allParams = map HeadVar freeVars ++ paramsList
@@ -788,14 +757,9 @@ liftExpr modName scope st0 expr = case expr of
                       { params = allParams,
                         guards = [],
                         prelude = prelude,
-                        rhs = rhsExpr
+                        rhs = NE.last liftedBody
                       }
                 ]
-            }
-        st2 =
-          st1'
-            { counter = idx + 1,
-              liftedFunctions = st1'.liftedFunctions |> func
             }
         lambdaId = modName <> "__" <> lambdaName
         -- The quoted source form is for pretty-printing only and must
@@ -818,78 +782,40 @@ liftExpr modName scope st0 expr = case expr of
           R.CtorExpr (Unqualified "quote") [quoteExpr expr]
         closureArgs =
           R.CtorExpr (Unqualified lambdaId) [] : sourceForm : map R.VarExpr freeVars
-     in (st2, R.CtorExpr (Unqualified closureFunctor) closureArgs)
-  R.CtorExpr name args ->
-    let (st1, args') =
-          mapAccumL (liftExpr modName scope) st0 args
-     in (st1, R.CtorExpr name args')
-  R.CallExpr qn args ->
-    let (st1, args') =
-          mapAccumL (liftExpr modName scope) st0 args
-     in (st1, R.CallExpr qn args')
-  R.ApplyExpr f args ->
-    let (st1, f') = liftExpr modName scope st0 f
-        (st2, args') =
-          mapAccumL (liftExpr modName scope) st1 args
-     in (st2, R.ApplyExpr f' args')
-  R.HostExpr f args ->
-    let (st1, args') =
-          mapAccumL (liftExpr modName scope) st0 args
-     in (st1, R.HostExpr f args')
-  _ -> (st0, expr)
+    modify' $ \st ->
+      st
+        { counter = idx + 1,
+          liftedFunctions = st.liftedFunctions |> func,
+          liftErrors = st.liftErrors ++ classifyErrs
+        }
+    pure (R.CtorExpr (Unqualified closureFunctor) closureArgs)
+  R.CtorExpr name args -> R.CtorExpr name <$> traverse go args
+  R.CallExpr qn args -> R.CallExpr qn <$> traverse go args
+  R.ApplyExpr f args -> R.ApplyExpr <$> go f <*> traverse go args
+  R.HostExpr f args -> R.HostExpr f <$> traverse go args
+  _ -> pure expr
+  where
+    go = liftExpr modName scope
 
 -- | Lift lambdas in a body goal. Every body goal carries 'Expr'-typed
 -- children, so 'liftExpr' walks them uniformly.
-liftBodyGoal ::
-  Text ->
-  Set.Set Text ->
-  LiftState ->
-  D.BodyGoal ->
-  (LiftState, D.BodyGoal)
-liftBodyGoal modName scope st goal = case goal of
-  D.BodyIs v expr ->
-    let (st', expr') = liftExpr modName scope st expr
-     in (st', D.BodyIs v expr')
-  D.BodyCall qn args ->
-    let (st', args') =
-          mapAccumL (liftExpr modName scope) st args
-     in (st', D.BodyCall qn args')
-  D.BodyApply f args ->
-    let (st', f') = liftExpr modName scope st f
-        (st'', args') =
-          mapAccumL (liftExpr modName scope) st' args
-     in (st'', D.BodyApply f' args')
+liftBodyGoal :: Text -> Set.Set Text -> D.BodyGoal -> Lift D.BodyGoal
+liftBodyGoal modName scope goal = case goal of
+  D.BodyIs v expr -> D.BodyIs v <$> go expr
+  D.BodyCall qn args -> D.BodyCall qn <$> traverse go args
+  D.BodyApply f args -> D.BodyApply <$> go f <*> traverse go args
   D.BodyTellDynamic m g extras ->
-    let (st', g') = liftExpr modName scope st g
-        (st'', extras') =
-          mapAccumL (liftExpr modName scope) st' extras
-     in (st'', D.BodyTellDynamic m g' extras')
-  D.BodyTell qn args ->
-    let (st', args') =
-          mapAccumL (liftExpr modName scope) st args
-     in (st', D.BodyTell qn args')
-  D.BodyUnify t1 t2 ->
-    let (st', t1') = liftExpr modName scope st t1
-        (st'', t2') = liftExpr modName scope st' t2
-     in (st'', D.BodyUnify t1' t2')
-  D.BodyHostStmt f args ->
-    let (st', args') =
-          mapAccumL (liftExpr modName scope) st args
-     in (st', D.BodyHostStmt f args')
+    D.BodyTellDynamic m <$> go g <*> traverse go extras
+  D.BodyTell qn args -> D.BodyTell qn <$> traverse go args
+  D.BodyUnify t1 t2 -> D.BodyUnify <$> go t1 <*> go t2
+  D.BodyHostStmt f args -> D.BodyHostStmt f <$> traverse go args
   -- Every branch is lifted in the same scope: a disjunct sees exactly
   -- the variables the enclosing rule body sees.
-  --
-  -- MicroHs's 'Data.List.mapAccumL' is list-only, so the branches are
-  -- threaded through the list representation
-  -- (dev-docs/MICROHS_GAPS.md, gap 6).
   D.BodyOr branches ->
-    let (st', branches') =
-          mapAccumL
-            (mapAccumL (liftBodyGoal modName scope))
-            st
-            (NE.toList branches)
-     in (st', D.BodyOr (NE.fromList branches'))
-  D.BodyTrue -> (st, D.BodyTrue)
+    D.BodyOr <$> traverse (traverse (liftBodyGoal modName scope)) branches
+  D.BodyTrue -> pure D.BodyTrue
+  where
+    go = liftExpr modName scope
 
 -- | Lift lambdas in a guard. 'GuardExpr' and 'GuardEqual' carry
 -- user-written expressions that can contain a lambda
@@ -897,68 +823,39 @@ liftBodyGoal modName scope st goal = case goal of
 -- their operands with 'liftExpr'. 'GuardMatch' and 'GuardGetArg' are
 -- HNF-synthetic: their operands are always 'R.VarExpr', so a walk
 -- would be a no-op and we leave them untouched.
-liftGuard ::
-  Text ->
-  Set.Set Text ->
-  LiftState ->
-  D.Guard ->
-  (LiftState, D.Guard)
-liftGuard modName scope st guard_ = case guard_ of
-  D.GuardExpr e ->
-    let (st', e') = liftExpr modName scope st e
-     in (st', D.GuardExpr e')
-  D.GuardEqual e1 e2 ->
-    let (st', e1') = liftExpr modName scope st e1
-        (st'', e2') = liftExpr modName scope st' e2
-     in (st'', D.GuardEqual e1' e2')
-  _ -> (st, guard_)
+liftGuard :: Text -> Set.Set Text -> D.Guard -> Lift D.Guard
+liftGuard modName scope guard_ = case guard_ of
+  D.GuardExpr e -> D.GuardExpr <$> go e
+  D.GuardEqual e1 e2 -> D.GuardEqual <$> go e1 <*> go e2
+  _ -> pure guard_
+  where
+    go = liftExpr modName scope
 
 -- | Lift lambdas in a function equation. The scope visible to the RHS
 -- (and therefore to any lambda captured inside it) includes the pattern
 -- parameters /and/ the variables introduced by HNF guards — most
 -- importantly 'D.GuardGetArg', which binds the user-written components
 -- of a compound pattern like @maplist(F, [X|Xs]) -> ...@.
-liftEquation ::
-  Text ->
-  LiftState ->
-  D.Equation ->
-  (LiftState, D.Equation)
-liftEquation modName st eq =
+liftEquation :: Text -> D.Equation -> Lift D.Equation
+liftEquation modName eq = do
   let scope =
         Set.unions (map headArgVars eq.params)
           `Set.union` guardVars eq.guards
           `Set.union` funStmtBindings eq.prelude
-      (st', guards') =
-        mapAccumL (liftGuard modName scope) st eq.guards
-      (st'', prelude') =
-        mapAccumL (liftFunStmt modName scope) st' eq.prelude
-      (st''', rhs') = liftExpr modName scope st'' eq.rhs
-   in (st''', eq {D.guards = guards', D.prelude = prelude', D.rhs = rhs'})
+  guards' <- traverse (liftGuard modName scope) eq.guards
+  prelude' <- traverse (liftFunStmt modName scope) eq.prelude
+  rhs' <- liftExpr modName scope eq.rhs
+  pure eq {D.guards = guards', D.prelude = prelude', D.rhs = rhs'}
 
 -- | Lift lambdas in a function-body prelude statement.
-liftFunStmt ::
-  Text ->
-  Set.Set Text ->
-  LiftState ->
-  D.FunStmt ->
-  (LiftState, D.FunStmt)
-liftFunStmt modName scope st stmt = case stmt of
-  D.FunIs v expr ->
-    let (st', expr') = liftExpr modName scope st expr
-     in (st', D.FunIs v expr')
-  D.FunHostStmt f args ->
-    let (st', args') =
-          mapAccumL (liftExpr modName scope) st args
-     in (st', D.FunHostStmt f args')
-  D.FunCall qn args ->
-    let (st', args') =
-          mapAccumL (liftExpr modName scope) st args
-     in (st', D.FunCall qn args')
-  D.FunApply f args ->
-    let (st', f') = liftExpr modName scope st f
-        (st'', args') =
-          mapAccumL (liftExpr modName scope) st' args
-     in (st'', D.FunApply f' args')
+liftFunStmt :: Text -> Set.Set Text -> D.FunStmt -> Lift D.FunStmt
+liftFunStmt modName scope stmt = case stmt of
+  D.FunIs v expr -> D.FunIs v <$> go expr
+  D.FunHostStmt f args -> D.FunHostStmt f <$> traverse go args
+  D.FunCall qn args -> D.FunCall qn <$> traverse go args
+  D.FunApply f args -> D.FunApply <$> go f <*> traverse go args
+  where
+    go = liftExpr modName scope
 
 -- | Variables bound by a list of function-body prelude statements (only
 -- 'FunIs' contributes a binding).
@@ -968,27 +865,12 @@ funStmtBindings = Set.fromList . concatMap binds
     binds (D.FunIs v _) = [v]
     binds _ = []
 
--- | Lift lambdas in a function definition.
-liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
-liftFunction st func =
-  let modName = func.name.moduleName
-      (st', eqs') =
-        mapAccumL
-          (liftAnnEquation modName)
-          st
-          func.equations
-   in (st', func {D.equations = eqs'})
-
--- | Lift lambdas in one annotated equation, preserving the equation's
--- own source location and parsed origin.
-liftAnnEquation ::
-  Text ->
-  LiftState ->
-  AnnP D.Equation ->
-  (LiftState, AnnP D.Equation)
-liftAnnEquation modName st (AnnP eq loc parsed) =
-  let (st', eq') = liftEquation modName st eq
-   in (st', AnnP eq' loc parsed)
+-- | Lift lambdas in a function definition. Each equation keeps its own
+-- source location and parsed origin.
+liftFunction :: D.Function -> Lift D.Function
+liftFunction func = do
+  eqs' <- traverse (traverse (liftEquation func.name.moduleName)) func.equations
+  pure func {D.equations = eqs'}
 
 -- | Extract all variables from a rule head (kept + removed constraints).
 ruleHeadVars :: D.Head -> Set.Set Text
@@ -998,6 +880,14 @@ ruleHeadVars h =
     | c <- h.kept ++ h.removed,
       arg <- c.args
     ]
+
+-- | Every variable a rule mentions: head, guard, and body. A lambda or a
+-- disjunct lifted out of the rule may capture only these.
+ruleScope :: D.Rule -> Set.Set Text
+ruleScope rule =
+  ruleHeadVars rule.head.node
+    `Set.union` guardVars rule.guard.node
+    `Set.union` bodyGoalVars rule.body.node
 
 -- | Extract the module name from a rule's head constraints. The
 -- qualification invariant is enforced by 'QualifiedConstraint'; the
@@ -1028,32 +918,25 @@ bodyGoalVars = Set.unions . map goalVars
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body).
 --
--- The aggregates are lifted last, so a rule without aggregates keeps the
--- traversal order — and so the @__lambda_N@ numbering — it had before.
-liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
-liftRule st rule =
+-- The aggregates are lifted last, so their lambdas are numbered after
+-- the guard's and the body's.
+liftRule :: D.Rule -> Lift D.Rule
+liftRule rule = do
   let headAnn = rule.head
       headNode = headAnn.node
       guardAnn = rule.guard
       bodyAnn = rule.body
-      scope =
-        ruleHeadVars headNode
-          `Set.union` guardVars guardAnn.node
-          `Set.union` bodyGoalVars bodyAnn.node
+      scope = ruleScope rule
       modName = ruleModName headNode
-      (st', guards') =
-        mapAccumL (liftGuard modName scope) st guardAnn.node
-      (st'', body') =
-        mapAccumL (liftBodyGoal modName scope) st' bodyAnn.node
-      (st''', aggs') =
-        mapAccumL (liftAggregate modName scope) st'' headNode.aggregates
-   in ( st''',
-        rule
-          { D.head = headAnn {node = headNode {D.aggregates = aggs'}},
-            D.guard = guardAnn {node = guards'},
-            D.body = bodyAnn {node = body'}
-          }
-      )
+  guards' <- traverse (liftGuard modName scope) guardAnn.node
+  body' <- traverse (liftBodyGoal modName scope) bodyAnn.node
+  aggs' <- traverse (liftAggregate modName scope) headNode.aggregates
+  pure
+    rule
+      { D.head = headAnn {node = headNode {D.aggregates = aggs'}},
+        D.guard = guardAnn {node = guards'},
+        D.body = bodyAnn {node = body'}
+      }
 
 -- | Lift lambdas in one aggregate. Its three expression positions see
 -- different scopes:
@@ -1068,59 +951,24 @@ liftRule st rule =
 --     so a lambda in them may capture the goal's own variables: the closure
 --     is built there, and the lifter turns each capture into a leading
 --     parameter.
-liftAggregate ::
-  Text ->
-  Set.Set Text ->
-  LiftState ->
-  D.Aggregate ->
-  (LiftState, D.Aggregate)
-liftAggregate modName outerScope st a =
+liftAggregate :: Text -> Set.Set Text -> D.Aggregate -> Lift D.Aggregate
+liftAggregate modName outerScope a = do
   let innerScope = outerScope `Set.union` aggregateGoalVars a
-      (st1, agg') = liftMaybeExpr modName outerScope st a.agg
-      (st2, element') = liftExpr modName innerScope st1 a.element
-      (st3, goal') =
-        mapAccumL (liftConjunct modName innerScope) st2 a.goal
-   in ( st3,
-        a
-          { D.agg = agg',
-            D.element = element',
-            D.goal = goal'
-          }
-      )
+  -- @agg@ is 'Nothing' for a selection form.
+  agg' <- traverse (liftExpr modName outerScope) a.agg
+  element' <- liftExpr modName innerScope a.element
+  goal' <- traverse (liftConjunct modName innerScope) a.goal
+  pure a {D.agg = agg', D.element = element', D.goal = goal'}
 
 -- | Lift lambdas in one aggregate-goal conjunct: the conjunct's own HNF
 -- guards, a @?@ guard's expression, or a nested aggregate, which shares the
 -- enclosing goal's scope.
-liftConjunct ::
-  Text ->
-  Set.Set Text ->
-  LiftState ->
-  D.AggregateConjunct ->
-  (LiftState, D.AggregateConjunct)
-liftConjunct modName scope st c = case c of
+liftConjunct :: Text -> Set.Set Text -> D.AggregateConjunct -> Lift D.AggregateConjunct
+liftConjunct modName scope c = case c of
   D.AggConstraint hc guards ->
-    let (st', guards') = mapAccumL (liftGuard modName scope) st guards
-     in (st', D.AggConstraint hc guards')
-  D.AggNested a ->
-    let (st', a') = liftAggregate modName scope st a
-     in (st', D.AggNested a')
-  D.AggGuard g ->
-    let (st', g') = liftGuard modName scope st g
-     in (st', D.AggGuard g')
-
--- | 'liftExpr' over an optional expression: an aggregate's @agg@, which is
--- 'Nothing' for a selection form.
-liftMaybeExpr ::
-  Text ->
-  Set.Set Text ->
-  LiftState ->
-  Maybe R.Expr ->
-  (LiftState, Maybe R.Expr)
-liftMaybeExpr modName scope st mexpr = case mexpr of
-  Nothing -> (st, Nothing)
-  Just expr ->
-    let (st', expr') = liftExpr modName scope st expr
-     in (st', Just expr')
+    D.AggConstraint hc <$> traverse (liftGuard modName scope) guards
+  D.AggNested a -> D.AggNested <$> liftAggregate modName scope a
+  D.AggGuard g -> D.AggGuard <$> liftGuard modName scope g
 
 -- | Variables an aggregate's goal makes available inside its loops: the
 -- arguments of its constraint conjuncts, the fresh variables their HNF
@@ -1139,20 +987,25 @@ aggregateGoalVars a = Set.unions (map conjunctVars a.goal)
       aggregateGoalVars n `Set.union` exprVars (headTermToExpr n.result)
 
 -- | Post-desugaring pass: lift all lambda expressions into top-level
--- functions. Returns any diagnostics produced while classifying lambda
--- body sequences (see 'classifyFunStmt'). Callers must merge these
--- with the rest of the pipeline's errors.
-liftAllLambdas :: D.Program -> (D.Program, [Diagnostic DesugarError])
-liftAllLambdas prog =
-  let initState = LiftState 0 Seq.empty []
-      (st1, functions') = mapAccumL liftFunction initState prog.functions
-      (st2, rules') = mapAccumL liftRule st1 prog.rules
-   in ( prog
-          { D.functions = functions' ++ toList st2.liftedFunctions,
-            D.rules = rules'
-          },
-        st2.liftErrors
-      )
+-- functions. Fails with the diagnostics produced while classifying
+-- lambda body sequences (see 'classifyFunStmt').
+liftAllLambdas :: D.Program -> Either [Diagnostic DesugarError] D.Program
+liftAllLambdas prog = case st.liftErrors of
+  [] -> Right lifted {D.functions = lifted.functions ++ toList st.liftedFunctions}
+  errs -> Left errs
+  where
+    (lifted, st) = runState liftParts (LiftState 0 Seq.empty [])
+    liftParts = do
+      functions' <- traverse liftFunction prog.functions
+      rules' <- traverse liftRule prog.rules
+      pure prog {D.functions = functions', D.rules = rules'}
+
+-- | Query goals after lambda lifting, and the functions lifted out of
+-- them.
+data LiftedQuery = LiftedQuery
+  { goals :: [D.BodyGoal],
+    lambdas :: [D.Function]
+  }
 
 -- | Lift lambdas from query body goals. Returns the rewritten goals
 -- and any generated function definitions (to be compiled on the fly).
@@ -1162,13 +1015,16 @@ liftAllLambdas prog =
 liftQueryLambdas ::
   Int ->
   [D.BodyGoal] ->
-  ([D.BodyGoal], [D.Function], [Diagnostic DesugarError])
-liftQueryLambdas startCounter goals =
-  let scope = bodyGoalVars goals
-      initState = LiftState startCounter Seq.empty []
-      (st, goals') =
-        mapAccumL (liftBodyGoal "__query" scope) initState goals
-   in (goals', toList st.liftedFunctions, st.liftErrors)
+  Either [Diagnostic DesugarError] LiftedQuery
+liftQueryLambdas startCounter goals = case st.liftErrors of
+  [] -> Right LiftedQuery {goals = goals', lambdas = toList st.liftedFunctions}
+  errs -> Left errs
+  where
+    scope = bodyGoalVars goals
+    (goals', st) =
+      runState
+        (traverse (liftBodyGoal "__query" scope) goals)
+        (LiftState startCounter Seq.empty [])
 
 {- ---------------------------------------------------------------------------
 Notes

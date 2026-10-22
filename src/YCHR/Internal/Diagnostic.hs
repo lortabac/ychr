@@ -20,9 +20,9 @@ import YCHR.Internal.Parsed (AnnP (..))
 data Diagnostic a = Diagnostic
   { -- | Human-readable label for the enclosing context, e.g.
     -- @"rule transitivity"@ or @"function factorial\/1"@.
-    diagLabel :: Maybe Text,
+    label :: Maybe Text,
     -- | The underlying annotated node.
-    diagAnnotation :: AnnP a,
+    annotation :: AnnP a,
     -- | The chain of @:- macro@ expansions that produced the code this
     -- diagnostic points at, innermost first — each entry already
     -- rendered as one display line (@"in the expansion of m:name\/n,
@@ -31,7 +31,7 @@ data Diagnostic a = Diagnostic
     -- "YCHR.Internal.Rename", which is the only phase whose
     -- diagnostics can carry one; see docs/reference/macros.md
     -- §Diagnostics.
-    diagContext :: [Text]
+    context :: [Text]
   }
   deriving (Show, Eq)
 

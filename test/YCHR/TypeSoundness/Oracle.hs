@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | The oracle: what counts as a soundness violation, and why nothing
 -- else can masquerade as one.
@@ -11,7 +10,6 @@ module YCHR.TypeSoundness.Oracle
 where
 
 import Control.Exception (SomeException, fromException)
-import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Display (Display (..))
@@ -172,16 +170,10 @@ conforms ty@(GTy con args) t = case (con, args) of
     CompoundTerm n as -> case findCtor def (baseOf n) of
       Just c ->
         length c.ctorFields == length as
-          && and (zipWith conforms (fieldGTys def args c) as)
+          && and (zipWith conforms (ctorFieldGTys def args c) as)
       Nothing -> False
     _ -> False
   _ -> False
-
--- | A constructor's field types at a ground instantiation.
-fieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
-fieldGTys def args c = map (groundD sub) c.ctorFields
-  where
-    sub = Map.fromList (zip def.adtParams args)
 
 -- | Render a recorded violation for the counterexample.
 describeBad :: Bad -> String

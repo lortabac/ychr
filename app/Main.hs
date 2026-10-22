@@ -13,17 +13,18 @@ import YCHR.Embedded (loadResources)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
-import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (displayMsg, renderSplices)
 import YCHR.Internal.Pretty (prettyBindings)
+import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..))
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
-import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
   ( Error (..),
+    PreparedGoal (..),
+    QueryTell (..),
     Warning (..),
     compileFiles,
     prepareGoal,
@@ -56,7 +57,7 @@ data CompileOpts = CompileOpts
   }
 
 data GenDriverOpts = GenDriverOpts
-  { gdGoal :: T.Text,
+  { goal :: T.Text,
     werror :: Bool,
     noCheck :: Bool,
     dumpSplices :: Bool
@@ -238,13 +239,16 @@ main = do
   case cmd of
     Repl opts files ->
       Repl.runRepl
-        resources.stdlib
-        (if opts.noCheck then Nothing else Just resources.typeCheckerProgram)
-        hostCalls
-        opts.quiet
-        opts.werror
-        opts.dumpSplices
-        files
+        Repl.ReplOptions
+          { stdlib = resources.stdlib,
+            typeChecker =
+              if opts.noCheck then Nothing else Just resources.typeCheckerProgram,
+            hostCalls = hostCalls,
+            quiet = opts.quiet,
+            werror = opts.werror,
+            dumpSplices = opts.dumpSplices,
+            files = files
+          }
     Run opts files -> runGoal resources opts files
     Compile opts files -> runCompile resources opts files
     GenDriver opts files -> runGenDriver resources opts files
@@ -271,16 +275,17 @@ loadResourcesOrExit = do
 -- ---------------------------------------------------------------------------
 
 runGoal :: Resources -> RunOpts -> [FilePath] -> IO ()
-runGoal resources opts files = withCompiled resources False files $ \prog warnings -> do
+runGoal resources opts files = withCompiled resources files $ \prog warnings -> do
   dumpSplicesIf opts.dumpSplices prog
   printWarnings warnings
   typeWarnings <- typeCheckUnless opts.noCheck resources prog
   prepResult <- try @SomeException (prepareGoal prog opts.goal)
   case prepResult of
     Left exc -> reportErrorAndExit exc
-    Right (constraint, goalWarnings) -> do
-      printWarnings goalWarnings
-      exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
+    Right prepared -> do
+      let constraint = prepared.constraint
+      printWarnings prepared.warnings
+      exitOnWerror opts.werror (warnings ++ typeWarnings ++ prepared.warnings)
       -- Without the checker the goal runs through 'runGoalConstraint',
       -- the same unchecked entry point the library exposes; with it,
       -- 'runPreparedGoal' type-checks the goal first.
@@ -302,7 +307,7 @@ runGoal resources opts files = withCompiled resources False files $ \prog warnin
 
 runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
 runCompile resources opts files =
-  withCompiled resources False files $ \prog warnings -> do
+  withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckUnless opts.noCheck resources prog
@@ -341,7 +346,7 @@ runCompile resources opts files =
 
 runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver resources opts files =
-  withCompiled resources False files $ \prog warnings -> do
+  withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckUnless opts.noCheck resources prog
@@ -349,20 +354,20 @@ runGenDriver resources opts files =
     -- data-constructor references in its arguments, so they reach the
     -- runtime in the same flat-functor form the compiled head patterns
     -- expect.
-    prepResult <- try @SomeException (prepareGoal prog opts.gdGoal)
-    (constraint, goalWarnings) <- case prepResult of
+    prepResult <- try @SomeException (prepareGoal prog opts.goal)
+    prepared <- case prepResult of
       Left e -> reportGenErrorAndExit e
-      Right pair -> pure pair
-    printWarnings goalWarnings
-    outcome <- try @SomeException (resolveQueryTellOrThrow prog constraint)
-    (qn, exprs) <- case outcome of
+      Right prepared -> pure prepared
+    printWarnings prepared.warnings
+    outcome <- try @SomeException (resolveQueryTellOrThrow prog prepared.constraint)
+    queryTell <- case outcome of
       Left e -> reportGenErrorAndExit e
-      Right pair -> pure pair
+      Right queryTell -> pure queryTell
     -- Combine file-level, type-check, and goal-level warnings into a
     -- single Werror decision so a single run reports every warning
     -- before exiting.
-    exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
-    case generateDriver (T.pack "program") qn exprs of
+    exitOnWerror opts.werror (warnings ++ typeWarnings ++ prepared.warnings)
+    case generateDriver (T.pack "program") queryTell.name queryTell.args of
       Left err -> do
         putStr (displayMsg err)
         exitFailure
@@ -378,7 +383,7 @@ runGenDriver resources opts files =
 
 runCheck :: Resources -> CheckOpts -> [FilePath] -> IO ()
 runCheck resources opts files =
-  withCompiled resources False files $ \prog warnings -> do
+  withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
     typeWarnings <- typeCheckOrExit resources prog
@@ -409,16 +414,15 @@ schemeRuntimeNote =
 -- continuation. On compilation failure, print the diagnostic to
 -- stdout and exit non-zero — the continuation does not run.
 --
--- The 'Bool' is @includeStdlib@; 'resources' supplies the standard
--- library and the type-checker (see "YCHR.Embedded").
+-- The standard library is not compiled whole (@includeStdlib@ is
+-- 'False'): only the libraries the program imports are pulled in.
 withCompiled ::
   Resources ->
-  Bool ->
   [FilePath] ->
   (CompiledProgram -> [Warning] -> IO ()) ->
   IO ()
-withCompiled resources includeStdlib files k = do
-  result <- compileFiles resources.stdlib includeStdlib files
+withCompiled resources files k = do
+  result <- compileFiles resources.stdlib False files
   case result of
     Left err -> do
       putStr (displayMsg err)
@@ -453,15 +457,12 @@ typeCheckUnless noCheck resources prog
 -- warnings.
 typeCheckOrExit :: Resources -> CompiledProgram -> IO [Warning]
 typeCheckOrExit resources prog = do
-  let useErrors = checkConstraintUse prog.desugaredProgram
-  result <- typeCheckProgram resources.typeCheckerProgram prog.desugaredProgram
-  unless (null useErrors && null result.errors) $ do
-    mapM_ (hPutStr stderr . displayMsg) useErrors
-    mapM_ (hPutStr stderr . displayMsg) result.errors
+  check <- checkProgram resources.typeCheckerProgram prog.desugaredProgram
+  unless (null check.errors) $ do
+    mapM_ (hPutStr stderr) check.errors
     exitFailure
-  let ws = [TypeCheckWarnings result.warnings | not (null result.warnings)]
-  printWarnings ws
-  pure ws
+  printWarnings check.warnings
+  pure check.warnings
 
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (hPutStr stderr . displayMsg)

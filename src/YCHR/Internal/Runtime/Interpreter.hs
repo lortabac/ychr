@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Haskell interpreter for CHR VM programs.
@@ -38,7 +37,6 @@ module YCHR.Internal.Runtime.Interpreter
     emitTrace,
     snapshotValue,
     snapshotValues,
-    suspensionView,
     constraintTypeLabel,
     lookupRuleName,
 
@@ -85,6 +83,7 @@ import Data.Text.Shim qualified as T
 import YCHR.Internal.Interpreter.Slots
   ( CallTarget (..),
     ProcIx (..),
+    SIndexCondition (..),
     Slot,
     SlotBoolExpr (..),
     SlotCallArg (..),
@@ -92,16 +91,15 @@ import YCHR.Internal.Interpreter.Slots
     SlotProc (..),
     SlotStmt (..),
     SlotValExpr (..),
-    lowerProgram,
   )
 import YCHR.Internal.Meta
   ( FunRefLookup (..),
+    decodeMangled,
     decodeName,
     flatToName,
     lookupFunRef,
     valueToTerm,
   )
-import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
   ( RuntimeErrorKind (..),
@@ -118,15 +116,17 @@ import YCHR.Internal.Runtime.Error
     tellUnboundError,
   )
 import YCHR.Internal.Runtime.History (addHistory, notInHistory)
-import YCHR.Internal.Runtime.Index (GroundKey, indexablePositions)
+import YCHR.Internal.Runtime.Index (GroundKey)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     HostCallFn (..),
     HostCallRegistry,
     SessionEnv (..),
     initSessionEnv,
+    programSessionConfig,
     runChr,
   )
+import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
@@ -193,8 +193,7 @@ data Cell
 -- The array is shared by everything that runs in the call — a nested
 -- 'execStmts', the body a loop runs per candidate, and the
 -- 'catchInstantiation' boundary behind 'BSoftGuard' — so a write made
--- before a guard failure is visible afterwards, exactly as the
--- 'IORef'-held environment it replaces was.
+-- before a guard failure is visible afterwards.
 type Env = IOArray Int Cell
 
 -- | Allocate a call's environment. Slot @i@ is drawn from
@@ -252,11 +251,10 @@ instance MonadIO InterpM where
 runInterpM :: InterpM a -> Env -> Chr a
 runInterpM (InterpM m) env = m env
 
--- | The local 'Env' an 'InterpM' action runs against. The flat
--- representation makes this the environment itself rather than a
--- 'Reader' lookup, which is the point of the change: a helper that
--- needs the environment pays a function application rather than a
--- dictionary selection.
+-- | The local 'Env' an 'InterpM' action runs against. Thanks to the flat
+-- representation this is the environment itself rather than a
+-- 'Reader' lookup: a helper that needs the environment pays a function
+-- application rather than a dictionary selection.
 interpEnv :: InterpM Env
 interpEnv = InterpM (\env -> pure env)
 
@@ -284,24 +282,8 @@ liftChr action = InterpM (\_ -> action)
 -- buys and what a hand-built 'Program' in a test expects.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
-  let slotProgram = lowerProgram prog
-      evaluableMap = Map.fromList prog.evaluables
-      callableMap = Map.fromList prog.callables
-  env <-
-    initSessionEnv
-      prog.typeNames
-      prog.ruleNames
-      prog.inertTypes
-      (indexablePositions prog)
-      builtinOps
-      slotProgram
-      hostCalls
-      evaluableMap
-      callableMap
-      (Map.fromList prog.tellables)
-      prog.tellablesUnqualified
-      Map.empty
-      mempty
+  -- 'Config.' picks the 'SessionConfig' field over the 'SessionEnv' one.
+  env <- initSessionEnv (programSessionConfig prog) {Config.hostCalls = hostCalls}
   runChr (callProc entryName (map CVal args)) env
 
 -- ---------------------------------------------------------------------------
@@ -487,13 +469,6 @@ snapshotValue = valueToTerm Map.empty
 snapshotValues :: [Value] -> Chr [Term]
 snapshotValues = traverse snapshotValue
 
--- | Look up a suspension by id and return its constraint-type and
--- argument values. Used by trace-event builders that need both.
-suspensionView :: SuspensionId -> Chr (ConstraintType, [Value])
-suspensionView sid = do
-  susp <- lookupSusp sid
-  pure (susp.suspType, susp.args)
-
 -- | Look up a rule's display name from the session-cached
 -- 'ruleNames' table. Falls back to @__rule_N@ on miss.
 lookupRuleName :: SessionEnv -> RuleId -> Text
@@ -613,9 +588,9 @@ traceEntry proc args = case proc.slotProcKind of
     pure (TETell ctName ts)
   PKActivate _ -> emitTrace $ do
     let sid = activateSuspensionId args
-    (ct, vs) <- suspensionView sid
-    ctName <- constraintTypeLabel ct
-    ts <- snapshotValues vs
+    susp <- lookupSusp sid
+    ctName <- constraintTypeLabel susp.suspType
+    ts <- snapshotValues susp.args
     pure (TEActivate ctName sid ts)
   PKOccurrence ct n _ display -> emitTrace $ do
     ctName <- constraintTypeLabel ct
@@ -744,9 +719,9 @@ execStmt (SStore expr) = do
     -- than once for the same suspension; only the one that took
     -- effect is a trace event.
     when didStore $ emitTrace $ do
-      (ct, vs) <- suspensionView sid
-      ctName <- constraintTypeLabel ct
-      ts <- snapshotValues vs
+      susp <- lookupSusp sid
+      ctName <- constraintTypeLabel susp.suspType
+      ts <- snapshotValues susp.args
       pure (TEStore sid ctName ts)
   pure SFall
 execStmt (SKill expr) = do
@@ -772,9 +747,9 @@ execStmt (SDrainReactivationQueue suspSlot body) = do
       if alive
         then do
           emitTrace $ do
-            (ct, vs) <- suspensionView sid
-            ctName <- constraintTypeLabel ct
-            ts <- snapshotValues vs
+            susp <- lookupSusp sid
+            ctName <- constraintTypeLabel susp.suspType
+            ts <- snapshotValues susp.args
             pure (TEReactivate sid ctName ts)
           liftIO (unsafeWrite cells suspSlot (CellId sid))
           -- The compiler fixes this body to a single dispatch call
@@ -809,7 +784,7 @@ execStmt (SPushFrame frame) = do
 -- for why the narrowed list is still a superset of the matches;
 -- 'driverKey' holds the two guards that keep the narrowing invisible to
 -- a program's behaviour.
-foreachCandidates :: ConstraintType -> [(ArgIndex, SlotValExpr)] -> InterpM [Suspension]
+foreachCandidates :: ConstraintType -> [SIndexCondition] -> InterpM [Suspension]
 foreachCandidates cType conditions = do
   mIndexed <- liftChr (indexedPositionsFor cType)
   case mIndexed of
@@ -818,11 +793,16 @@ foreachCandidates cType conditions = do
       mDriver <- driverKey indexed conditions
       case mDriver of
         Nothing -> liftChr (toList <$> getStoreSnapshot cType)
-        Just (pos, key) -> liftChr (candidateSuspensions cType pos key)
+        Just probe -> liftChr (candidateSuspensions cType probe.position probe.key)
 
--- | The first index condition that can drive the store index, as its
--- argument position together with the ground key of the condition's
--- value.
+-- | An index lookup that a 'Foreach' condition drives: an argument
+-- position and the ground key of the condition's value.
+data IndexProbe = IndexProbe
+  { position :: !Int,
+    key :: !GroundKey
+  }
+
+-- | The first index condition that can drive the store index.
 --
 -- Two guards make the narrowing both sound and unobservable. The
 -- condition's value must be /non-raising/ by construction
@@ -833,16 +813,16 @@ foreachCandidates cType conditions = do
 -- is stable for the loop's duration. Anything else — including a
 -- compound term holding an unbound variable — falls through to the
 -- unindexed path, which evaluates the condition per candidate.
-driverKey :: IntSet -> [(ArgIndex, SlotValExpr)] -> InterpM (Maybe (Int, GroundKey))
+driverKey :: IntSet -> [SIndexCondition] -> InterpM (Maybe IndexProbe)
 driverKey _ [] = pure Nothing
-driverKey indexed ((ArgIndex pos, expr) : rest)
+driverKey indexed (SIndexCondition (ArgIndex pos) expr : rest)
   | nonRaising expr,
     -- 'pos' is bounded by the constraint arity, so the conversion is safe.
     IntSet.member (fromIntegral pos) indexed = do
       value <- evalValExpr expr
       mkey <- liftChr (groundKey value)
       case mkey of
-        Just key -> pure (Just (fromIntegral pos, key))
+        Just key -> pure (Just (IndexProbe (fromIntegral pos) key))
         Nothing -> driverKey indexed rest
   | otherwise = driverKey indexed rest
 
@@ -893,7 +873,7 @@ nonRaising (SFieldType _) = False
 execForeach ::
   Label ->
   Slot ->
-  [(ArgIndex, SlotValExpr)] ->
+  [SIndexCondition] ->
   [SlotStmt] ->
   [Suspension] ->
   InterpM Signal
@@ -922,11 +902,11 @@ execForeach lbl suspSlot conditions body (susp : rest) = do
               | l == lbl -> pure SFall
             _ -> pure sig
 
-checkConditions :: Suspension -> [(ArgIndex, SlotValExpr)] -> InterpM Bool
+checkConditions :: Suspension -> [SIndexCondition] -> InterpM Bool
 checkConditions _ [] = pure True
-checkConditions susp ((ArgIndex i, expr) : rest) = do
+checkConditions susp (SIndexCondition (ArgIndex i) expr : rest) = do
   v <- evalValExpr expr
-  -- Store's argument accessor is still 'Int'-indexed; 'i' is non-negative.
+  -- Store's argument accessor takes an 'Int'; 'i' is non-negative.
   let argVal = suspArg susp (fromIntegral i)
   eq <- liftChr (equal v argVal)
   if eq
@@ -967,7 +947,7 @@ evalValExpr (SGetArg expr idx) = do
   liftChr (getArg v idx)
 evalValExpr (SFieldArg expr (ArgIndex i)) = do
   sid <- evalIdExpr expr
-  -- Store's argument accessor is still 'Int'-indexed; 'i' is non-negative.
+  -- Store's argument accessor takes an 'Int'; 'i' is non-negative.
   liftChr (getConstraintArg sid (fromIntegral i))
 evalValExpr (SFieldType expr) = do
   sid <- evalIdExpr expr
@@ -1366,16 +1346,12 @@ invokeByKey key args = do
 -- source atom.
 hostCallName :: EvaluableKey -> Maybe Name
 hostCallName key = do
-  let (module_, rest) = T.breakOn "__" key.functor.unName
-  if T.null rest || T.null module_
+  qn <- decodeMangled key.functor.unName
+  -- 'decodeName' doubles as the @%%u@-escape decoder. Feeding it a
+  -- separator-free component cannot re-split it.
+  if "__" `T.isInfixOf` qn.baseName || unescaped qn.moduleName /= Just "host"
     then Nothing
-    else do
-      let base = T.drop 2 rest
-      -- 'decodeName' doubles as the @%%u@-escape decoder. Feeding it a
-      -- separator-free component cannot re-split it.
-      if "__" `T.isInfixOf` base || unescaped module_ /= Just "host"
-        then Nothing
-        else Name <$> unescaped base
+    else Name <$> unescaped qn.baseName
   where
     unescaped t = case decodeName t [] of
       CompoundTerm (Types.Unqualified f) _ -> Just f
@@ -1406,7 +1382,7 @@ evalCallArgDeep (SCallVal e) = CVal <$> evalValExprDeep e
 evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 
 -- ---------------------------------------------------------------------------
--- Closure application
+-- Dynamic tell
 -- ---------------------------------------------------------------------------
 
 -- | Tell a constraint chosen at run time: the whole of a dynamic
@@ -1440,10 +1416,8 @@ tellTerm scope goal extras = do
           arity = length allArgs
           scopedKey = TellableKey {scope = Just scope, functor = Name f, arity = arity}
           anywhereKey = scopedKey {scope = Nothing}
-          notVisible =
-            tellNotVisibleError
-              (T.unpack (displayFunctor f) <> "/" <> show arity)
-              (T.unpack scope)
+          nameArity = T.unpack (displayFunctor f) <> "/" <> show arity
+          notVisible = tellNotVisibleError nameArity (T.unpack scope)
       SessionEnv {tellables, tellablesUnqualified} <- ask
       case Map.lookup scopedKey tellables of
         Just procName -> void (callProc procName (map CVal allArgs))
@@ -1452,19 +1426,22 @@ tellTerm scope goal extras = do
               case Map.lookup anywhereKey tellablesUnqualified of
                 Just (UniqueTell procName) -> void (callProc procName (map CVal allArgs))
                 Just (AmbiguousTell candidates) ->
-                  tellAmbiguousError
-                    (T.unpack (displayFunctor f) <> "/" <> show arity)
-                    (map (T.unpack . Types.flattenName . Types.qualifiedToName) candidates)
+                  tellAmbiguousError nameArity (map qualifiedText candidates)
                 Nothing -> notVisible
           | otherwise -> notVisible
     -- The module whose rules may be handed a goal they cannot name. See
     -- the note above 'tellTerm'.
     preludeModule = "prelude"
+    qualifiedText = T.unpack . Types.flattenName . Types.qualifiedToName
     -- The functor as the user would write it: @m:foo@ for a mangled
     -- qualified name, the bare name otherwise.
     displayFunctor f = case decodeName f [] of
       CompoundTerm name _ -> Types.flattenName name
       _ -> f
+
+-- ---------------------------------------------------------------------------
+-- Closure application
+-- ---------------------------------------------------------------------------
 
 -- | Apply a first-class callable to arguments: the whole of
 -- @'$call'(F, A1, …, An)@.
@@ -1493,7 +1470,7 @@ applyClosure closure args = do
   v <- deref closure
   v' <- derefClosureHeader v
   case closureKey (length args) v' of
-    Just (key, captures) -> dispatch key captures
+    Just call -> dispatch call.key call.captures
     Nothing -> do
       mKey <- dynamicFunRefKey (length args) v'
       case mKey of
@@ -1551,12 +1528,9 @@ dynamicFunRefKey n v = case v of
               }
         _ -> Nothing
 
--- | Read a closure's two header fields through their bindings.
---
--- The generated dispatchers compared those fields with @BEqual@, which
--- dereferences its operands, so a function-reference term whose name or
--- declared-arity field was a /bound variable/ still dispatched. Reading
--- them here keeps that behaviour. Only the header is read: the captures
+-- | Read a closure's two header fields through their bindings, so a
+-- function-reference term whose name or declared-arity field is a
+-- /bound variable/ still dispatches. Only the header is read: the captures
 -- are handed to the callee exactly as @GetArg@ handed them, so a
 -- capture that is an unbound variable stays the very cell the callee
 -- observes.
@@ -1592,31 +1566,42 @@ derefClosureHeader v = pure v
 -- (identity and quoted source form), passed through un-dereferenced —
 -- exactly what @GetArg@ handed the dispatched procedure. The header
 -- itself is dereferenced before this runs (see 'derefClosureHeader').
-closureKey :: Int -> Value -> Maybe (CallableKey, [Value])
+closureKey :: Int -> Value -> Maybe ClosureCall
 closureKey n v = case v of
   VTerm f (VAtom ident : rest)
     | f == funRefFunctor.unName,
       [VInt declared] <- rest,
       fromIntegral declared == n ->
         Just
-          ( CallableKey
-              { functor = funRefFunctor,
-                identity = Name ident,
-                arity = fromIntegral declared
-              },
-            []
-          )
+          ClosureCall
+            { key =
+                CallableKey
+                  { functor = funRefFunctor,
+                    identity = Name ident,
+                    arity = fromIntegral declared
+                  },
+              captures = []
+            }
     | f == lambdaClosureFunctor.unName,
       _sourceForm : captures <- rest ->
         Just
-          ( CallableKey
-              { functor = lambdaClosureFunctor,
-                identity = Name ident,
-                arity = n
-              },
-            captures
-          )
+          ClosureCall
+            { key =
+                CallableKey
+                  { functor = lambdaClosureFunctor,
+                    identity = Name ident,
+                    arity = n
+                  },
+              captures
+            }
   _ -> Nothing
+
+-- | A recognized closure: the key that selects its procedure, and the
+-- captured values passed before the call's own arguments.
+data ClosureCall = ClosureCall
+  { key :: !CallableKey,
+    captures :: ![Value]
+  }
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (deep deref mode)

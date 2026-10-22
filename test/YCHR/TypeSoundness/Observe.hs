@@ -1,4 +1,3 @@
-{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The runtime half of the oracle: a host function the generated
@@ -49,10 +48,9 @@ module YCHR.TypeSoundness.Observe
 where
 
 import Control.Monad.IO.Class (liftIO)
-import Data.IORef
+import Data.IORef (IORef, modifyIORef')
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'breakOnEnd'; the shim supplies it
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
@@ -84,6 +82,7 @@ data Snap
   | SnUnbound Int
   deriving (Eq, Show)
 
+-- | Freeze a value, dereferencing all the way down.
 snapshot :: Value -> Chr Snap
 snapshot v = do
   d <- deref v
@@ -161,17 +160,10 @@ conformsSnap ty@(GTy con args) s = case s of
             Outside (n <> " applied to " <> tshow (length as) <> " arguments")
         | otherwise ->
             firstNonInhabits
-              (zipWith conformsSnap (fieldGTys def args c) as)
+              (zipWith conformsSnap (ctorFieldGTys def args c) as)
     firstNonInhabits vs = case filter (/= Inhabits) vs of
       [] -> Inhabits
       (v : _) -> v
-
--- | A constructor's field types at a ground instantiation of its
--- type's parameters.
-fieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
-fieldGTys def args c = map (groundD sub) c.ctorFields
-  where
-    sub = Map.fromList (zip def.adtParams args)
 
 -- | The final component of a possibly-qualified, possibly-mangled
 -- functor name.
@@ -184,6 +176,7 @@ baseName n
       (pre, post) | not (T.null pre), not (T.null post) -> post
       _ -> t
 
+-- | A short description of a snapshot for a mismatch message.
 describe :: Snap -> Text
 describe s = case s of
   SnInt n -> "int " <> tshow n
@@ -207,6 +200,7 @@ data Bad = Bad
   }
   deriving (Eq, Show)
 
+-- | Everything the observer recorded during one run.
 data ObsLog = ObsLog
   { -- | Hits per site code. This is what makes runtime facts —
     -- \"this rule fired\" — assertable with @cover@.
@@ -223,6 +217,7 @@ data ObsLog = ObsLog
   }
   deriving (Eq, Show)
 
+-- | The log before the run starts.
 emptyLog :: ObsLog
 emptyLog =
   ObsLog

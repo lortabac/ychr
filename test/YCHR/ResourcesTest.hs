@@ -9,11 +9,10 @@
 -- modules @make resources@ writes (@dev-docs\/MICROHS_GAPS.md@, gap 5;
 -- @dev-docs\/MICROHS_PERFORMANCE.md@, option B).
 -- "YCHR.Internal.Resources" is the loader this executable's provider and
--- the on-disk embedder share, so
--- these tests run it under GHC — where the embedded values are available
--- to compare against — and pin the directory lookup, the @YCHR_LIB_DIR@
--- policy, the @.chr@ filter and sort, and the error reporting for a
--- missing or empty directory.
+-- the on-disk embedder share, so these tests run it under GHC, where the
+-- embedded values are available to compare against, and pin the
+-- directory lookup, the @YCHR_LIB_DIR@ policy, the @.chr@ filter and
+-- sort, and the error reporting for a missing or empty directory.
 --
 -- The content comparison is exact, but only where the file paths match:
 -- the embedder reads @libraries\/x.chr@, so the test parses what
@@ -27,7 +26,7 @@
 -- the change is a stale binary and needs a @cabal clean@.
 module YCHR.ResourcesTest (tests) where
 
--- 'evaluate' forces the lazy type-checker binding; 'try' is not used here.
+-- 'evaluate' forces the lazy type-checker binding.
 import Control.Exception (evaluate)
 import Data.List (sort)
 import Data.Map.Strict (Map)
@@ -50,7 +49,8 @@ import YCHR.Internal.Resources
   )
 import YCHR.Internal.StdLib (StdLib (..), parseStdLib)
 
--- | Pins the runtime resources loader to the compile-time embedder and its root resolution.
+-- | Pins the runtime resources loader to the compile-time embedder, and
+-- tests its root resolution.
 tests :: TestTree
 tests =
   testGroup

@@ -17,7 +17,8 @@
 -- pane instead of growing a second, drifting implementation; the
 -- terminal REPL is just @putStr@ of them.
 module YCHR.Internal.Repl
-  ( runRepl,
+  ( ReplOptions (..),
+    runRepl,
     modulesText,
     declarationsText,
     infoText,
@@ -47,7 +48,6 @@ import System.Exit (exitFailure)
 import System.IO (hPutStr, hPutStrLn, stderr, stdout)
 import YCHR.Internal.Collected (CollectedModule (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
-import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Display (Display (..), displayMsg, renderSplices)
 import YCHR.Internal.LineInput (LineInput (..), LineInputSettings (..), mkLineInput)
@@ -56,12 +56,18 @@ import YCHR.Internal.Parsed qualified as Parsed
 import YCHR.Internal.Parser (opTableEntries, parseTermWith)
 import YCHR.Internal.Pretty
   ( DeclKind (..),
+    declKindKeyword,
     prettyConstraintDecl,
     prettyFunctionDecl,
     prettyQualifiedName,
     prettyQueryResult,
     prettyTypeDecl,
     renderAtom,
+  )
+import YCHR.Internal.ProgramCheck
+  ( ProgramCheck (..),
+    constraintUseErrors,
+    typeCheckReport,
   )
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Monad (Chr)
@@ -75,7 +81,6 @@ import YCHR.Internal.Runtime.Session
   )
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
 import YCHR.Internal.StdLib (StdLib)
-import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.TypeCheck.Render (typeModule)
 import YCHR.Internal.Types
   ( BoundSig,
@@ -102,52 +107,56 @@ import YCHR.Run
 -- Entry point
 -- ---------------------------------------------------------------------------
 
--- | Run the interactive REPL on the given files. Compiles the inputs
--- (or an empty program if @files@ is empty), prints any warnings and
--- type errors to stderr, then enters the outer command loop. The
--- session continues until the user types @:quit@ or hits EOF. When
--- @werror@ is set, warnings during the initial load abort startup;
--- during @:recompile@ they keep the previous program loaded.
+-- | What the REPL runs on, and the CLI flags it honours.
 --
 -- The 'StdLib' and the compiled type-checker are explicit inputs: the
 -- @ychr@ library embeds nothing at compile time. The CLI passes the two
--- values its embedding component provides. The checker is a 'Maybe'
--- because the CLI's @--no-check@ passes 'Nothing': the REPL then prints
--- no type-check report, and prepares every query unchecked.
-runRepl ::
-  StdLib ->
-  Maybe SessionInput ->
-  HostCallRegistry ->
-  Bool ->
-  Bool ->
-  Bool ->
-  [FilePath] ->
-  IO ()
-runRepl stdlib mtypeChecker hostCalls quietMode werror dumpSplices files = do
-  result <- compileFiles stdlib True files
+-- values its embedding component provides.
+data ReplOptions = ReplOptions
+  { stdlib :: StdLib,
+    -- | The compiled type-checker. 'Nothing' under @--no-check@: the
+    -- REPL then prints no type-check report, and prepares every query
+    -- unchecked.
+    typeChecker :: Maybe SessionInput,
+    hostCalls :: HostCallRegistry,
+    -- | @--quiet@: no prompts; skip warnings (unless fatal), the
+    -- startup type-check report and the history notice.
+    quiet :: Bool,
+    -- | @--Werror@: warnings during the initial load abort startup;
+    -- during @:recompile@ they keep the previous program loaded.
+    werror :: Bool,
+    -- | @--dump-splices@: print the declaration-macro splices to stderr
+    -- on load and on @:recompile@.
+    dumpSplices :: Bool,
+    -- | The files to compile; empty means an empty program.
+    files :: [FilePath]
+  }
+
+-- | Run the interactive REPL. Compiles the inputs, prints any warnings
+-- and type errors to stderr, then enters the outer command loop. The
+-- session continues until the user types @:quit@ or hits EOF.
+runRepl :: ReplOptions -> IO ()
+runRepl opts = do
+  result <- compileFiles opts.stdlib True opts.files
   case result of
     Left err -> do
       putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
-      when dumpSplices (hPutStr stderr (renderSplices prog.splices))
-      let warnsFatal = werror && not (null warnings)
-      when (warnsFatal || not quietMode) (printWarnings warnings)
+      when opts.dumpSplices (hPutStr stderr (renderSplices prog.splices))
+      let warnsFatal = opts.werror && not (null warnings)
+      when (warnsFatal || not opts.quiet) (printWarnings warnings)
       when warnsFatal exitFailure
-      unless quietMode (printTypeDiagnosticsWhen mtypeChecker prog)
+      unless opts.quiet (printTypeDiagnosticsWhen opts.typeChecker prog)
       let exported = exportedNames prog
-      (outerInput, liveInput) <- mkReplInputs quietMode exported
-      outerLoop
-        stdlib
-        mtypeChecker
-        hostCalls
-        quietMode
-        werror
-        dumpSplices
-        files
-        outerInput
-        liveInput
-        prog
+      inputs <- mkReplInputs opts.quiet exported
+      outerLoop opts inputs prog
+
+-- | The line inputs of the outer loop and of a live session.
+data ReplInputs = ReplInputs
+  { outer :: LineInput,
+    live :: LineInput
+  }
 
 -- | Build the outer and live line inputs, which share one history file.
 -- If that file cannot be used — its parent directory is not creatable,
@@ -156,18 +165,18 @@ runRepl stdlib mtypeChecker hostCalls quietMode werror dumpSplices files = do
 -- on stderr instead of aborting startup. @--quiet@ drops the notice,
 -- matching how it drops compile warnings. Tab completion, prompts and
 -- the rest of the session are unaffected.
-mkReplInputs :: Bool -> [String] -> IO (LineInput, LineInput)
+mkReplInputs :: Bool -> [String] -> IO ReplInputs
 mkReplInputs quietMode exported = do
   attempt <-
     try @IOException $
-      (,)
+      ReplInputs
         <$> withHistory (commandNames ++ exported)
         <*> withHistory (":end" : exported)
   case attempt of
     Right inputs -> pure inputs
     Left _ -> do
       unless quietMode (hPutStrLn stderr "REPL history not available")
-      (,)
+      ReplInputs
         <$> withoutHistory (commandNames ++ exported)
         <*> withoutHistory (":end" : exported)
   where
@@ -227,23 +236,12 @@ stripComment = go
 -- Outer REPL loop
 -- ---------------------------------------------------------------------------
 
-outerLoop ::
-  StdLib ->
-  Maybe SessionInput ->
-  HostCallRegistry ->
-  Bool ->
-  Bool ->
-  Bool ->
-  [FilePath] ->
-  LineInput ->
-  LineInput ->
-  CompiledProgram ->
-  IO ()
-outerLoop stdlib mtypeChecker hostCalls quietMode werror dump files outerInput liveInput = go
+outerLoop :: ReplOptions -> ReplInputs -> CompiledProgram -> IO ()
+outerLoop opts inputs = go
   where
-    prompt = if quietMode then "" else "ychr> "
+    prompt = if opts.quiet then "" else "ychr> "
     go prog = do
-      minput <- outerInput.readLine prompt
+      minput <- inputs.outer.readLine prompt
       case minput of
         Nothing -> pure ()
         Just input -> dispatch prog input
@@ -254,7 +252,7 @@ outerLoop stdlib mtypeChecker hostCalls quietMode werror dump files outerInput l
       ":h" -> showHelp *> go prog
       ":recompile" -> recompile prog
       ":r" -> recompile prog
-      ":list_files" -> showFiles files *> go prog
+      ":list_files" -> showFiles opts.files *> go prog
       ":list_modules" -> showModules prog *> go prog
       ":list_declarations" -> showDeclarations prog *> go prog
       ":list_operators" -> showOperators prog *> go prog
@@ -263,34 +261,34 @@ outerLoop stdlib mtypeChecker hostCalls quietMode werror dump files outerInput l
       ":trace" -> showTraceUsage *> go prog
       ":time" -> showTimeUsage *> go prog
       ":begin" -> do
-        runLiveSession mtypeChecker hostCalls liveInput quietMode werror prog
+        runLiveSession opts inputs.live prog
         go prog
       "" -> go prog
       line
         | Just rest <- stripPrefix ":info " line -> showInfo prog rest *> go prog
         | Just rest <- stripPrefix ":i " line -> showInfo prog rest *> go prog
         | Just rest <- stripPrefix ":trace " line ->
-            runTracedQuery mtypeChecker hostCalls werror prog rest *> go prog
+            runTracedQuery opts prog rest *> go prog
         | Just rest <- stripPrefix ":time " line ->
-            runTimedOuterQuery mtypeChecker hostCalls werror prog rest *> go prog
-        | otherwise -> runOuterQuery mtypeChecker hostCalls werror prog line *> go prog
+            runTimedOuterQuery opts prog rest *> go prog
+        | otherwise -> runOuterQuery opts prog line *> go prog
     recompile prog = do
-      result <- compileFiles stdlib True files
+      result <- compileFiles opts.stdlib True opts.files
       case result of
         Left err -> putStr (displayMsg err) *> go prog
         Right (prog', warnings) -> do
-          when dump (hPutStr stderr (renderSplices prog'.splices))
-          if werror && not (null warnings)
+          when opts.dumpSplices (hPutStr stderr (renderSplices prog'.splices))
+          if opts.werror && not (null warnings)
             then do
               printWarnings warnings
               -- Surface type errors of the rejected program too, so the
               -- user sees the full diagnostic picture before deciding
               -- what to fix; the previous program stays loaded.
-              printTypeDiagnosticsWhen mtypeChecker prog'
+              printTypeDiagnosticsWhen opts.typeChecker prog'
               go prog
             else do
               printWarnings warnings
-              printTypeDiagnosticsWhen mtypeChecker prog'
+              printTypeDiagnosticsWhen opts.typeChecker prog'
               go prog'
 
 -- | Run a one-off query in the outer REPL: parse, typecheck, execute
@@ -299,13 +297,7 @@ outerLoop stdlib mtypeChecker hostCalls quietMode werror dump files outerInput l
 -- @"Error: " ++ displayException@. Under @--Werror@, query-rename
 -- warnings short-circuit before execution; the constraint store is
 -- untouched (one-shot queries get a fresh store anyway).
-runOuterQuery ::
-  Maybe SessionInput ->
-  HostCallRegistry ->
-  Bool ->
-  CompiledProgram ->
-  String ->
-  IO ()
+runOuterQuery :: ReplOptions -> CompiledProgram -> String -> IO ()
 runOuterQuery = runOuterQueryWith False
 
 -- | Like 'runOuterQuery', but as @:time@: print the query's execution
@@ -315,50 +307,41 @@ runOuterQuery = runOuterQueryWith False
 -- resolve, desugar, type-check), so a query rejected before execution
 -- prints no timing line. A runtime error still prints one, since
 -- execution started.
-runTimedOuterQuery ::
-  Maybe SessionInput ->
-  HostCallRegistry ->
-  Bool ->
-  CompiledProgram ->
-  String ->
-  IO ()
+runTimedOuterQuery :: ReplOptions -> CompiledProgram -> String -> IO ()
 runTimedOuterQuery = runOuterQueryWith True
 
-runOuterQueryWith ::
-  Bool ->
-  Maybe SessionInput ->
-  HostCallRegistry ->
-  Bool ->
-  CompiledProgram ->
-  String ->
-  IO ()
-runOuterQueryWith timed mtypeChecker hostCalls werror prog line = do
+-- | 'runOuterQuery' or, when the 'Bool' is set, 'runTimedOuterQuery'.
+runOuterQueryWith :: Bool -> ReplOptions -> CompiledProgram -> String -> IO ()
+runOuterQueryWith timed opts prog line = do
   prepResult <-
     try @SomeException $
-      prepareQueryWith mtypeChecker prog (T.pack line)
+      prepareQueryWith opts.typeChecker prog (T.pack line)
   case prepResult of
-    Left exc -> reportException exc
-    Right (prep, ws) -> do
-      printWarnings ws
-      unless (werror && not (null ws)) $ do
+    Left exc -> reportQueryException exc
+    Right prep -> do
+      printWarnings prep.warnings
+      unless (opts.werror && not (null prep.warnings)) $ do
         start <- getCPUTime
         execResult <-
           try @SomeException $
             withCHRExtra
               (toSessionInput prog)
-              hostCalls
+              opts.hostCalls
               prep.extraProcs
               prep.extraCallables
               (executePreparedQuery prep.liftedGoals)
         end <- getCPUTime
         when timed (putStrLn (formatElapsed (end - start)))
         case execResult of
-          Left exc -> reportException exc
+          Left exc -> reportQueryException exc
           Right bindings -> putStr (prettyQueryResult bindings)
-  where
-    reportException exc = case fromException exc of
-      Just err -> putStr (displayMsg (err :: Error))
-      Nothing -> putStrLn ("Error: " ++ displayException exc)
+
+-- | Print an outer-loop query failure: an 'Error' through 'displayMsg',
+-- anything else as @"Error: " ++ displayException@.
+reportQueryException :: SomeException -> IO ()
+reportQueryException exc = case fromException exc of
+  Just err -> putStr (displayMsg (err :: Error))
+  Nothing -> putStrLn ("Error: " ++ displayException exc)
 
 -- | Render an elapsed CPU time, in picoseconds, as seconds with
 -- microsecond resolution: @0.000123s@. Six decimals is the resolution
@@ -374,33 +357,28 @@ formatElapsed ps = "Time: " ++ showFFloat (Just 6) seconds "s"
 -- bindings are intentionally not printed, matching the documented
 -- @:trace@ behaviour. To see bindings, re-run the goal without
 -- @:trace@.
-runTracedQuery ::
-  Maybe SessionInput -> HostCallRegistry -> Bool -> CompiledProgram -> String -> IO ()
-runTracedQuery mtypeChecker hostCalls werror prog line = do
+runTracedQuery :: ReplOptions -> CompiledProgram -> String -> IO ()
+runTracedQuery opts prog line = do
   prepResult <-
     try @SomeException $
-      prepareQueryWith mtypeChecker prog (T.pack line)
+      prepareQueryWith opts.typeChecker prog (T.pack line)
   case prepResult of
-    Left exc -> reportException exc
-    Right (prep, ws) -> do
-      printWarnings ws
-      unless (werror && not (null ws)) $ do
+    Left exc -> reportQueryException exc
+    Right prep -> do
+      printWarnings prep.warnings
+      unless (opts.werror && not (null prep.warnings)) $ do
         execResult <-
           try @SomeException $
             withCHRExtraTraced
               (toSessionInput prog)
-              hostCalls
+              opts.hostCalls
               prep.extraProcs
               prep.extraCallables
               (defaultTraceHandler stdout)
               (executePreparedQuery prep.liftedGoals)
         case execResult of
-          Left exc -> reportException exc
+          Left exc -> reportQueryException exc
           Right _ -> pure ()
-  where
-    reportException exc = case fromException exc of
-      Just err -> putStr (displayMsg (err :: Error))
-      Nothing -> putStrLn ("Error: " ++ displayException exc)
 
 showTraceUsage :: IO ()
 showTraceUsage =
@@ -419,18 +397,11 @@ showTimeUsage =
 -- and reactivation queue persist across queries entered at the
 -- @ychr live>@ prompt. The session ends when the user types @:end@,
 -- hits EOF, or a runtime error aborts execution.
-runLiveSession ::
-  Maybe SessionInput ->
-  HostCallRegistry ->
-  LineInput ->
-  Bool ->
-  Bool ->
-  CompiledProgram ->
-  IO ()
-runLiveSession mtypeChecker hostCalls liveInput quietMode werror cp =
-  withCHR (toSessionInput cp) hostCalls liveLoop
+runLiveSession :: ReplOptions -> LineInput -> CompiledProgram -> IO ()
+runLiveSession opts liveInput cp =
+  withCHR (toSessionInput cp) opts.hostCalls liveLoop
   where
-    prompt = if quietMode then "" else "ychr live> "
+    prompt = if opts.quiet then "" else "ychr live> "
     liveLoop :: Chr ()
     liveLoop = do
       mline <- liftIO (liveInput.readLine prompt)
@@ -443,7 +414,7 @@ runLiveSession mtypeChecker hostCalls liveInput quietMode werror cp =
       | Just rest <- T.stripPrefix ":trace " stripped = do
           outcome <-
             withTraceHandler (defaultTraceHandler stdout) $
-              handleLiveQuery mtypeChecker cp werror rest
+              handleLiveQuery opts cp rest
           case outcome of
             QueryOk _ -> liveLoop
             QueryRecoverable msg -> do
@@ -456,7 +427,7 @@ runLiveSession mtypeChecker hostCalls liveInput quietMode werror cp =
           liftIO showTraceUsage
           liveLoop
       | otherwise = do
-          outcome <- handleLiveQuery mtypeChecker cp werror (T.pack line')
+          outcome <- handleLiveQuery opts cp (T.pack line')
           case outcome of
             QueryOk bindings -> do
               liftIO (putStr (prettyQueryResult bindings))
@@ -489,19 +460,15 @@ data QueryOutcome
 -- warnings short-circuit before execution: the warnings are printed
 -- to stderr and the query is treated as recoverable, leaving the
 -- session's constraint store untouched.
-handleLiveQuery ::
-  Maybe SessionInput ->
-  CompiledProgram ->
-  Bool ->
-  Text ->
-  Chr QueryOutcome
-handleLiveQuery mtypeChecker cp werror src = do
-  prepResult <- liftIO (try @SomeException (prepareQueryWith mtypeChecker cp src))
+handleLiveQuery :: ReplOptions -> CompiledProgram -> Text -> Chr QueryOutcome
+handleLiveQuery opts cp src = do
+  prepResult <-
+    liftIO (try @SomeException (prepareQueryWith opts.typeChecker cp src))
   case prepResult of
     Left exc -> pure (classifyAsRecoverable exc)
-    Right (prep, ws) -> do
-      liftIO (printWarnings ws)
-      if werror && not (null ws)
+    Right prep -> do
+      liftIO (printWarnings prep.warnings)
+      if opts.werror && not (null prep.warnings)
         then pure (QueryRecoverable "")
         else case prep.queryLambdas of
           (lam : _) ->
@@ -572,7 +539,7 @@ showHelp = do
   putStrLn "Commands:"
   mapM_ (putStrLn . renderCommand) commands
   where
-    -- Align descriptions at column 25 to match the original layout.
+    -- Align descriptions at column 25.
     renderCommand c =
       let label = intercalate ", " c.names
           padding = replicate (max 1 (23 - length label)) ' '
@@ -609,12 +576,7 @@ declarationsText prog = concatMap (++ "\n") declLines
               [("chr_constraint", n, a)]
           Parsed.FunctionDecl
             Parsed.FunctionDeclBody {name = n, arity = a, isOpen = o, kind = k} ->
-              let kw = case (o, k) of
-                    (False, Parsed.DKFunction) -> "function"
-                    (True, Parsed.DKFunction) -> "open_function"
-                    (False, Parsed.DKClass) -> "class"
-                    (True, Parsed.DKClass) -> "open_class"
-               in [(kw, n, a)]
+              [(declKindKeyword (toDeclKind o k), n, a)]
           Parsed.ExtendClassTypeDecl
             Parsed.ExtendClassTypeDeclBody {name = n, arity = a} ->
               [("extend_class_type", n, a)]
@@ -643,7 +605,7 @@ showOperators prog = mapM_ (putStrLn . renderOp) entries
     entries =
       sort
         [ (fix, opTypeStr ty, name)
-        | (fix, ty, name) <- opTableEntries prog.opTable
+        | P.OpDecl fix ty name <- opTableEntries prog.opTable
         ]
     renderOp (fix, ty, name) =
       "op(" ++ show fix ++ ", " ++ ty ++ ", " ++ renderAtom name ++ ")"
@@ -686,32 +648,39 @@ showInfoUsage = putStrLn infoUsageText
 infoUsageText :: String
 infoUsageText = "usage: :info <identifier>"
 
+-- | The identifier @:info@ asks about: a bare or qualified name, and
+-- an arity when one is given.
+data InfoQuery = InfoQuery
+  { name :: Either Text QualifiedName,
+    arity :: Maybe Int
+  }
+
 -- | Parse the argument to @:info@. Accepts @name@, @name/arity@,
 -- @mod:name@, or @mod:name/arity@. Returns 'Nothing' if the parse
 -- fails or the resulting term is not a recognized identifier shape,
 -- in which case 'showInfo' falls back to "unknown identifier".
-parseInfoArg :: CompiledProgram -> Text -> Maybe (Either Text QualifiedName, Maybe Int)
+parseInfoArg :: CompiledProgram -> Text -> Maybe InfoQuery
 parseInfoArg prog raw = case parseTermWith prog.opTable "<:info>" raw of
   Left _ -> Nothing
   Right t -> termToInfoArg t
 
-termToInfoArg :: Term -> Maybe (Either Text QualifiedName, Maybe Int)
+termToInfoArg :: Term -> Maybe InfoQuery
 termToInfoArg = \case
   CompoundTerm (Unqualified "/") [headT, IntTerm a] -> do
-    (nm, _) <- termToInfoArg headT
-    pure (nm, Just (fromInteger a))
+    q <- termToInfoArg headT
+    pure InfoQuery {name = q.name, arity = Just (fromInteger a)}
   CompoundTerm (Unqualified n) [] ->
-    Just (Left n, Nothing)
+    Just InfoQuery {name = Left n, arity = Nothing}
   CompoundTerm (Qualified m n) [] ->
-    Just (Right (QualifiedName m n), Nothing)
+    Just InfoQuery {name = Right (QualifiedName m n), arity = Nothing}
   _ -> Nothing
 
 -- | One discovered fact about an identifier. The qualified name is
 -- always attached so 'renderInfoEntry' does not need to re-derive it.
 data InfoEntry
-  = -- | The identifier is a constraint. The @Maybe [TypeExpr]@ is
-    -- 'Just' when the constraint is typed (declared via
-    -- @:- chr_constraint name(T1, ..., Tn)@), 'Nothing' otherwise.
+  = -- | The identifier is a constraint, with its argument types. These
+    -- are always 'Just' here: the resolver gives an untyped constraint
+    -- an @any@-filled signature.
     IEConstraint QualifiedName Int (Maybe [TypeExpr]) [BoundSig]
   | -- | The identifier is a function or class. The 'DeclKind' comes
     -- from the original 'Parsed.Declaration' in 'allModules'.
@@ -871,7 +840,7 @@ classifyQualified prog qn arity =
 functionDeclKind :: CompiledProgram -> QualifiedName -> Int -> DeclKind
 functionDeclKind prog qn arity =
   let matches =
-        [ (fd.isOpen, fd.kind)
+        [ toDeclKind fd.isOpen fd.kind
         | m <- prog.allModules,
           m.name == qn.moduleName,
           Parsed.Ann d _ <- m.decls,
@@ -880,11 +849,16 @@ functionDeclKind prog qn arity =
           fd.arity == arity
         ]
    in case matches of
-        ((False, Parsed.DKFunction) : _) -> DKFunction
-        ((True, Parsed.DKFunction) : _) -> DKOpenFunction
-        ((False, Parsed.DKClass) : _) -> DKClass
-        ((True, Parsed.DKClass) : _) -> DKOpenClass
+        (k : _) -> k
         [] -> DKFunction
+
+-- | The declaration kind of a parsed function declaration, from its
+-- open flag and its parsed kind.
+toDeclKind :: Bool -> Parsed.FunctionDeclKind -> DeclKind
+toDeclKind False Parsed.DKFunction = DKFunction
+toDeclKind True Parsed.DKFunction = DKOpenFunction
+toDeclKind False Parsed.DKClass = DKClass
+toDeclKind True Parsed.DKClass = DKOpenClass
 
 -- The renamer guarantees that 'TypeDefinition.name' and
 -- 'DataConstructor.conName' are always 'Qualified' once resolution
@@ -972,8 +946,8 @@ infoText prog raw =
         then infoUsageText ++ "\n"
         else case parseInfoArg prog trimmed of
           Nothing -> printUnknown (T.unpack trimmed)
-          Just (name, mArity) ->
-            case lookupInfo prog name mArity of
+          Just q ->
+            case lookupInfo prog q.name q.arity of
               [] -> printUnknown (T.unpack trimmed)
               entries -> renderInfo entries
   where
@@ -994,7 +968,7 @@ renderInfoEntry = \case
   IEFunction f kind ->
     prettyQualifiedName f.name
       ++ "\n"
-      ++ prettyFunctionDecl f.name f.arity f.signatures f.requiring f.refining kind
+      ++ prettyFunctionDecl f kind
       ++ "\n"
   IEType td ->
     let qn = case td.name of
@@ -1036,10 +1010,10 @@ printWarnings = mapM_ (hPutStr stderr . displayMsg)
 -- program loads at all) does not consult them.
 printTypeDiagnostics :: SessionInput -> CompiledProgram -> IO ()
 printTypeDiagnostics typeChecker prog = do
-  mapM_ (hPutStr stderr . displayMsg) (checkConstraintUse prog.desugaredProgram)
-  result <- typeCheckProgram typeChecker prog.desugaredProgram
-  mapM_ (hPutStr stderr . displayMsg) result.errors
-  unless (null result.warnings) (printWarnings [TypeCheckWarnings result.warnings])
+  mapM_ (hPutStr stderr) (constraintUseErrors prog.desugaredProgram)
+  report <- typeCheckReport typeChecker prog.desugaredProgram
+  mapM_ (hPutStr stderr) report.errors
+  printWarnings report.warnings
 
 -- | 'printTypeDiagnostics' when a checker is available. The CLI's
 -- @--no-check@ passes 'Nothing' and gets no report at all.
@@ -1054,6 +1028,6 @@ prepareQueryWith ::
   Maybe SessionInput ->
   CompiledProgram ->
   Text ->
-  IO (PreparedQuery, [Warning])
+  IO PreparedQuery
 prepareQueryWith Nothing = prepareQueryUnchecked
 prepareQueryWith (Just typeChecker) = prepareQuery typeChecker

@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Function inlining: substituting a call to an @:- inline@-marked
@@ -14,7 +13,7 @@
 --   * exactly one equation (an inline substitution has no way to try
 --     equations in order: the desugared AST has no conditional);
 --   * that equation has no guards (including HNF-synthesized ones —
---     see 'YCHR.Internal.Desugar.normalizeArg' — so every parameter is
+--     see 'YCHR.Internal.Desugar.Hnf.normalizeArg' — so every parameter is
 --     a plain variable or wildcard) and an empty prelude (so the body
 --     is a single return expression);
 --   * no cycle among candidates, direct or transitive. A function that
@@ -34,6 +33,8 @@
 -- postorder depth-first walk visits every node exactly once.
 module YCHR.Internal.Desugar.Inline (inlineFunctions) where
 
+import Control.Monad (unless)
+import Control.Monad.Trans.State.Strict (execState, gets, modify')
 import Data.List (sort)
 -- 'foldl'' is imported qualified because the Prelude only re-exports it
 -- from base 4.20 (GHC 9.10); MicroHs's bundled base is older. An
@@ -44,11 +45,12 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
--- Re-exported from "YCHR.Internal.Desugar" so error codes/messages for
--- the new constructors live where every other 'DesugarError' lives.
+-- The inline errors are 'DesugarError' constructors, so their codes and
+-- messages live with the other desugar errors.
 import YCHR.Internal.Desugar (DesugarError (..))
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
@@ -84,25 +86,20 @@ type Candidates = Map QualifiedName Candidate
 -- level). A program with no @:- inline@-marked function comes back
 -- unchanged.
 --
--- When a candidate's declared shape is ineligible, or two or more
--- candidates call each other, the diagnostics describe why and the
--- program comes back unchanged (mirrors
--- 'YCHR.Internal.Desugar.liftAllLambdas': the caller treats any
--- non-empty error list as a hard failure and never looks at the
--- program half of the pair).
-inlineFunctions :: D.Program -> (D.Program, [Diagnostic DesugarError])
-inlineFunctions prog = case buildCandidates prog.functions of
-  Left errs -> (prog, errs)
-  Right raw
-    | Map.null raw -> (prog, [])
-    | otherwise ->
+-- Fails when a candidate's declared shape is ineligible, or two or
+-- more candidates call each other; the diagnostics describe why.
+inlineFunctions :: D.Program -> Either [Diagnostic DesugarError] D.Program
+inlineFunctions prog = do
+  raw <- buildCandidates prog.functions
+  pure $
+    if Map.null raw
+      then prog
+      else
         let cands = finalCandidates raw
-         in ( prog
-                { D.rules = map (rewriteRule cands) prog.rules,
-                  D.functions = map (rewriteFunction cands) prog.functions
-                },
-              []
-            )
+         in prog
+              { D.rules = map (rewriteRule cands) prog.rules,
+                D.functions = map (rewriteFunction cands) prog.functions
+              }
 
 -- ---------------------------------------------------------------------------
 -- Candidate collection and validation
@@ -149,10 +146,13 @@ shapeCheck f = case f.equations of
     | otherwise -> []
   eqs -> [diag (InlineNotSingleEquation f.name (length eqs))]
   where
-    diag err = noDiag (AnnP err loc pexpr)
-    (loc, pexpr) = case f.equations of
-      (annEq : _) -> (annEq.sourceLoc, annEq.parsed)
-      [] -> (dummyLoc, Atom "inline")
+    diag = atFirstEquation f.equations
+
+-- | A diagnostic anchored at the first of some equations.
+atFirstEquation :: [AnnP D.Equation] -> DesugarError -> Diagnostic DesugarError
+atFirstEquation eqs err = case eqs of
+  (annEq : _) -> noDiag (AnnP err annEq.sourceLoc annEq.parsed)
+  [] -> noDiag (AnnP err dummyLoc (Atom "inline"))
 
 -- | Every 'R.CallExpr' target reachable anywhere inside an expression,
 -- regardless of nesting. Used both to build the candidate call graph
@@ -177,7 +177,8 @@ collectCalls e = case e of
 
 -- | The candidates (by name) that an expression calls directly.
 directCallees :: Set QualifiedName -> R.Expr -> Set QualifiedName
-directCallees candNames = Set.filter (`Set.member` candNames) . Set.fromList . collectCalls
+directCallees candNames =
+  Set.filter (`Set.member` candNames) . Set.fromList . collectCalls
 
 -- | Every candidate that is on a cycle of the candidate call graph —
 -- reachable from one of its own direct callees. A self-call (@f@ calls
@@ -194,16 +195,14 @@ cyclicNodes graph =
       | x `Set.member` seen = go seen xs
       | otherwise = go (Set.insert x seen) (Set.toList (successors x) ++ xs)
 
+-- | The 'InlineCycle' error, anchored at the first cyclic candidate's
+-- first equation.
 cycleDiagnostic :: [D.Function] -> [QualifiedName] -> Diagnostic DesugarError
 cycleDiagnostic marked cyclic =
   let names = sort (map (flattenName . qualifiedToName) cyclic)
       cyclicSet = Set.fromList cyclic
-      (loc, pexpr) = case [f | f <- marked, Set.member f.name cyclicSet] of
-        (f : _) -> case f.equations of
-          (annEq : _) -> (annEq.sourceLoc, annEq.parsed)
-          [] -> (dummyLoc, Atom "inline")
-        [] -> (dummyLoc, Atom "inline")
-   in noDiag (AnnP (InlineCycle names) loc pexpr)
+      firstCyclic = take 1 [f | f <- marked, Set.member f.name cyclicSet]
+   in atFirstEquation (concatMap (.equations) firstCyclic) (InlineCycle names)
 
 -- ---------------------------------------------------------------------------
 -- Candidate finalization
@@ -229,16 +228,24 @@ finalCandidates raw = List.foldl' step Map.empty (topoOrder graph)
 -- Sound only when the graph is acyclic, which every caller here has
 -- already checked; an unchecked cyclic graph would make this loop.
 topoOrder :: Map QualifiedName (Set QualifiedName) -> [QualifiedName]
-topoOrder graph = reverse order
+topoOrder graph = reverse walk.finished
   where
-    (_, order) = List.foldl' visit (Set.empty, []) (Map.keys graph)
-    visit (seen, out) n
-      | n `Set.member` seen = (seen, out)
-      | otherwise =
-          let seen1 = Set.insert n seen
-              (seen2, out2) = List.foldl' visit (seen1, out) (Set.toList (successors n))
-           in (seen2, n : out2)
+    walk = execState (mapM_ visit (Map.keys graph)) (TopoWalk Set.empty [])
+    visit n = do
+      seen <- gets (\w -> Set.member n w.visited)
+      unless seen $ do
+        modify' (\w -> w {visited = Set.insert n w.visited})
+        mapM_ visit (Set.toList (successors n))
+        modify' (\w -> w {finished = n : w.finished})
     successors n = Map.findWithDefault Set.empty n graph
+
+-- | The state of 'topoOrder'.
+data TopoWalk = TopoWalk
+  { -- | Nodes already entered.
+    visited :: Set QualifiedName,
+    -- | Nodes whose walk is done, last finished first.
+    finished :: [QualifiedName]
+  }
 
 -- ---------------------------------------------------------------------------
 -- Substitution
@@ -266,7 +273,7 @@ rewriteExpr cands = go
         let args' = map go args
          in case Map.lookup qn cands of
               Nothing -> R.CallExpr qn args'
-              Just cand -> maybe (R.CallExpr qn args') id (trySubstitute cand args')
+              Just cand -> fromMaybe (R.CallExpr qn args') (trySubstitute cand args')
 
 -- | Like 'rewriteExpr', but for the RHS of an @is@ binding
 -- ('D.BodyIs' / 'D.FunIs'). The compiler dispatches @is@ on the
@@ -319,29 +326,25 @@ rewriteIsRhs cands e = case e of
 trySubstitute :: Candidate -> [R.Expr] -> Maybe R.Expr
 trySubstitute cand args
   | length cand.params /= length args = Nothing
-  | otherwise = do
-      let pairs = zip cand.params args
-          rhs = cand.rhs
-      if any (\(p, a) -> p == HeadWildcard && not (isTrivial a)) pairs
-        then Nothing
-        else do
-          let nonTrivial = [(v, a) | (HeadVar v, a) <- pairs, not (isTrivial a)]
-          if any (\(v, _) -> occurrenceCount v rhs /= 1 || occursUnderQuote v rhs) nonTrivial
-            then Nothing
-            else
-              if not (orderMatches (map fst nonTrivial) rhs)
-                then Nothing
-                else
-                  let subst = Map.fromList [(v, a) | (HeadVar v, a) <- pairs]
-                   in Just (substExpr subst rhs)
+  | any droppedNonTrivial pairs = Nothing
+  | any unsafeOccurrence nonTrivial = Nothing
+  | not (orderMatches nonTrivial rhs) = Nothing
+  | otherwise = Just (substExpr subst rhs)
+  where
+    pairs = zip cand.params args
+    rhs = cand.rhs
+    droppedNonTrivial (p, a) = p == HeadWildcard && not (isTrivial a)
+    nonTrivial = [v | (HeadVar v, a) <- pairs, not (isTrivial a)]
+    unsafeOccurrence v = occurrenceCount v rhs /= 1 || occursUnderQuote v rhs
+    subst = Map.fromList [(v, a) | (HeadVar v, a) <- pairs]
 
 -- | A value expression whose evaluation has no effect of its own, so it
 -- may be duplicated or dropped freely: a variable reference, a
--- literal, the anonymous variable, or a nullary (atom-like)
--- constructor. Everything else — a call, a dynamic dispatch, a host
--- call, or a non-nullary constructor (which may itself contain one of
--- those) — is evaluated exactly once by an ordinary call and must stay
--- that way.
+-- literal, the anonymous variable, a function reference, or a nullary
+-- (atom-like) constructor. Everything else — a call, a dynamic
+-- dispatch, a host call, or a non-nullary constructor (which may
+-- itself contain one of those) — is evaluated exactly once by an
+-- ordinary call and must stay that way.
 isTrivial :: R.Expr -> Bool
 isTrivial e = case e of
   R.VarExpr _ -> True
@@ -373,6 +376,7 @@ varOccurrences e = case e of
   R.CallExpr _ args -> concatMap varOccurrences args
   R.LambdaExpr _ body -> concatMap varOccurrences (NE.toList body)
 
+-- | How many times a variable occurs in an expression.
 occurrenceCount :: Text -> R.Expr -> Int
 occurrenceCount v = length . filter (== v) . varOccurrences
 
@@ -430,6 +434,7 @@ substExpr subst = go
 -- Walking the rest of the program
 -- ---------------------------------------------------------------------------
 
+-- | Rewrite every eligible call in a rule.
 rewriteRule :: Candidates -> D.Rule -> D.Rule
 rewriteRule cands r =
   r
@@ -465,7 +470,8 @@ rewriteAggregateConjunct cands c = case c of
   D.AggGuard g -> D.AggGuard (rewriteGuard cands g)
 
 rewriteFunction :: Candidates -> D.Function -> D.Function
-rewriteFunction cands f = f {D.equations = map (rewriteEquation cands) f.equations}
+rewriteFunction cands f =
+  f {D.equations = map (rewriteEquation cands) f.equations}
 
 rewriteEquation :: Candidates -> AnnP D.Equation -> AnnP D.Equation
 rewriteEquation cands = fmap rw
@@ -496,7 +502,8 @@ rewriteBodyGoal cands g = case g of
     SubstHost f args' -> D.BodyHostStmt f args'
     SubstCall qn' args' -> D.BodyCall qn' args'
     SubstApply f args' -> D.BodyApply f args'
-  D.BodyApply f args -> D.BodyApply (rewriteExpr cands f) (map (rewriteExpr cands) args)
+  D.BodyApply f args ->
+    D.BodyApply (rewriteExpr cands f) (map (rewriteExpr cands) args)
   D.BodyTellDynamic m goal extras ->
     D.BodyTellDynamic m (rewriteExpr cands goal) (map (rewriteExpr cands) extras)
   D.BodyOr branches -> D.BodyOr (NE.map (map (rewriteBodyGoal cands)) branches)
@@ -510,7 +517,8 @@ rewriteFunStmt cands s = case s of
     SubstHost f args' -> D.FunHostStmt f args'
     SubstCall qn' args' -> D.FunCall qn' args'
     SubstApply f args' -> D.FunApply f args'
-  D.FunApply f args -> D.FunApply (rewriteExpr cands f) (map (rewriteExpr cands) args)
+  D.FunApply f args ->
+    D.FunApply (rewriteExpr cands f) (map (rewriteExpr cands) args)
 
 -- | The outcome of trying to inline a statement-position call
 -- (@D.BodyCall@ \/ @D.FunCall@: a call whose result is discarded). A
@@ -527,6 +535,7 @@ data StmtCallResult
   | SubstCall QualifiedName [R.Expr]
   | SubstApply R.Expr [R.Expr]
 
+-- | Try to inline a statement-position call; see 'StmtCallResult'.
 rewriteStmtCall :: Candidates -> QualifiedName -> [R.Expr] -> StmtCallResult
 rewriteStmtCall cands qn args =
   let args' = map (rewriteExpr cands) args

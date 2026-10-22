@@ -18,6 +18,9 @@
 -- resolve to several modules (which triggers an ambiguity error). They are
 -- kept as distinct newtypes so that callers can't accidentally use a
 -- declaration map in place of an export map.
+--
+-- 'importListPermits' answers whether an import list lets a name
+-- through, for any of the three namespaces (values, types, macros).
 module YCHR.Internal.Rename.Types
   ( -- * Export environment
     ExportEnv,
@@ -31,6 +34,12 @@ module YCHR.Internal.Rename.Types
     lookupDecl,
     toListDecl,
 
+    -- * Import lists
+    importListPermits,
+    valueEntry,
+    typeEntry,
+    macroEntry,
+
     -- * Reserved names
     isReserved,
   )
@@ -40,43 +49,79 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import YCHR.Internal.Parsed
+  ( ConstraintDeclBody (..),
+    Declaration (..),
+    FunctionDeclBody (..),
+    MacroExportDeclBody (..),
+    TypeExportDeclBody (..),
+  )
+import YCHR.Internal.Types (UnqualifiedIdentifier (..))
 
 -- | All names exported by each module, indexed by @(name, arity)@. For a
 -- module without an explicit @module@ directive, every declaration is
 -- considered exported.
-newtype ExportEnv = ExportEnv (Map.Map (Text, Int) [Text])
+newtype ExportEnv = ExportEnv (Map.Map UnqualifiedIdentifier [Text])
 
--- | Build an export environment from @((name, arity), providers)@ pairs;
+-- | Build an export environment from @(key, providers)@ pairs;
 -- several modules under one key accumulate into one entry.
-makeExportEnv :: [((Text, Int), [Text])] -> ExportEnv
+makeExportEnv :: [(UnqualifiedIdentifier, [Text])] -> ExportEnv
 makeExportEnv = ExportEnv . Map.fromListWith (++)
 
 -- | The modules exporting @(name, arity)@; @[]@ when none do.
-lookupExport :: (Text, Int) -> ExportEnv -> [Text]
+lookupExport :: UnqualifiedIdentifier -> ExportEnv -> [Text]
 lookupExport k (ExportEnv m) = Map.findWithDefault [] k m
 
 -- | Every @(name, arity)@ entry with its providers, in ascending key order.
-toListExport :: ExportEnv -> [((Text, Int), [Text])]
+toListExport :: ExportEnv -> [(UnqualifiedIdentifier, [Text])]
 toListExport (ExportEnv m) = Map.toList m
 
 -- | All names declared anywhere in the program, indexed by @(name, arity)@.
 -- Unlike 'ExportEnv', this ignores export lists: it answers \"is this name
 -- visible within its own declaring module?\".
-newtype DeclEnv = DeclEnv (Map.Map (Text, Int) [Text])
+newtype DeclEnv = DeclEnv (Map.Map UnqualifiedIdentifier [Text])
 
--- | Build a declaration environment from @((name, arity), declaringModules)@
+-- | Build a declaration environment from @(key, declaringModules)@
 -- pairs; several declarations under one key accumulate into one entry.
-makeDeclEnv :: [((Text, Int), [Text])] -> DeclEnv
+makeDeclEnv :: [(UnqualifiedIdentifier, [Text])] -> DeclEnv
 makeDeclEnv = DeclEnv . Map.fromListWith (++)
 
 -- | The modules declaring @(name, arity)@; @[]@ when none do.
-lookupDecl :: (Text, Int) -> DeclEnv -> [Text]
+lookupDecl :: UnqualifiedIdentifier -> DeclEnv -> [Text]
 lookupDecl k (DeclEnv m) = Map.findWithDefault [] k m
 
 -- | Every @(name, arity)@ entry with its declaring modules, in ascending
 -- key order.
-toListDecl :: DeclEnv -> [((Text, Int), [Text])]
+toListDecl :: DeclEnv -> [(UnqualifiedIdentifier, [Text])]
 toListDecl (DeclEnv m) = Map.toList m
+
+-- | Whether an import list permits importing @k@. @entry@ gives the
+-- name an item of the list imports into the namespace at hand
+-- ('Nothing' for items of other namespaces). No list (plain
+-- @use_module(M)@) permits everything.
+importListPermits ::
+  (Declaration -> Maybe UnqualifiedIdentifier) ->
+  UnqualifiedIdentifier ->
+  Maybe [Declaration] ->
+  Bool
+importListPermits _ _ Nothing = True
+importListPermits entry k (Just decls) = any (\d -> entry d == Just k) decls
+
+-- | The constraint or function an import-list item names.
+valueEntry :: Declaration -> Maybe UnqualifiedIdentifier
+valueEntry (ConstraintDecl d) = Just (UnqualifiedIdentifier d.name d.arity)
+valueEntry (FunctionDecl d) = Just (UnqualifiedIdentifier d.name d.arity)
+valueEntry _ = Nothing
+
+-- | The type a @type(...)@ import-list item names.
+typeEntry :: Declaration -> Maybe UnqualifiedIdentifier
+typeEntry (TypeExportDecl d) = Just (UnqualifiedIdentifier d.name d.arity)
+typeEntry _ = Nothing
+
+-- | The macro a @macro(...)@ import-list item names.
+macroEntry :: Declaration -> Maybe UnqualifiedIdentifier
+macroEntry (MacroExportDecl d) = Just (UnqualifiedIdentifier d.name d.arity)
+macroEntry _ = Nothing
 
 -- | Names that must stay 'YCHR.Types.Unqualified' even in resolving
 -- contexts. These are desugaring-level keywords (@true@, @=@, @is@,

@@ -642,6 +642,7 @@ postfixOps =
       (200, [(Yf, "++")])
     ]
 
+-- | Parse with 'postfixOps'.
 pPostfix :: Text -> Either ParseError [Ann PExpr]
 pPostfix = parseTerms postfixOps ""
 
@@ -688,6 +689,7 @@ prefixChainOps =
       (500, [(Fx, "neg")])
     ]
 
+-- | Parse with 'prefixChainOps'.
 pPrefixChain :: Text -> Either ParseError [Ann PExpr]
 pPrefixChain = parseTerms prefixChainOps ""
 
@@ -806,6 +808,7 @@ greedyOps =
       (200, [(Yfx, "++")])
     ]
 
+-- | Parse with 'greedyOps'.
 pGreedy :: Text -> Either ParseError [Ann PExpr]
 pGreedy = parseTerms greedyOps ""
 
@@ -825,13 +828,13 @@ symbolOpTokenTests =
       testCase "backslash is a symbol character" $
         -- `\` is declared (as simpagation) in the built-in table, so a
         -- bare backslash token parses as an operator.
-        case mergeOps greedyOps [(100, Xfx, "\\")] of
+        case mergeOps greedyOps [OpDecl 100 Xfx "\\"] of
           Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
           Right ops ->
             stripAll (parseTerms ops "" "X \\ Y.")
               @?= Right [Compound "\\" [noAnn (Var "X"), noAnn (Var "Y")]],
       testCase "declared backslash-disequality tokenizes greedily" $
-        case mergeOps greedyOps [(700, Xfx, "\\==")] of
+        case mergeOps greedyOps [OpDecl 700 Xfx "\\=="] of
           Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
           Right ops -> do
             stripAll (parseTerms ops "" "X \\== Y.")
@@ -919,54 +922,54 @@ mergeOpsTests =
   testGroup
     "mergeOps"
     [ testCase "adds new operator usable by parser" $
-        case mergeOps emptyOps [(500, Yfx, "++")] of
+        case mergeOps emptyOps [OpDecl 500 Yfx "++"] of
           Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
           Right merged ->
             stripAll (parseTerms merged "" "X ++ Y.")
               @?= Right [Compound "++" [noAnn (Var "X"), noAnn (Var "Y")]],
       testCase "identical re-declaration is a no-op" $
         let base = mkOpTable [(500, [(Yfx, "**")])]
-         in case mergeOps base [(500, Yfx, "**")] of
+         in case mergeOps base [OpDecl 500 Yfx "**"] of
               Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
               Right merged ->
-                length [() | (_, _, "**") <- opTableEntries merged] @?= 1,
+                length [() | OpDecl _ _ "**" <- opTableEntries merged] @?= 1,
       testCase "repeated entries within decls do not duplicate" $
-        case mergeOps emptyOps [(500, Yfx, "++"), (500, Yfx, "++")] of
+        case mergeOps emptyOps [OpDecl 500 Yfx "++", OpDecl 500 Yfx "++"] of
           Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
           Right merged ->
-            length [() | (_, _, "++") <- opTableEntries merged] @?= 1,
+            length [() | OpDecl _ _ "++" <- opTableEntries merged] @?= 1,
       testCase "prefix conflict (different fixity) returns Left" $
         let base = mkOpTable [(500, [(Fx, "foo")])]
-         in case mergeOps base [(600, Fx, "foo")] of
+         in case mergeOps base [OpDecl 600 Fx "foo"] of
               Left n -> n @?= "foo"
               Right _ -> assertFailure "expected conflict",
       testCase "prefix conflict (different type) returns Left" $
         let base = mkOpTable [(500, [(Fx, "foo")])]
-         in case mergeOps base [(500, Fy, "foo")] of
+         in case mergeOps base [OpDecl 500 Fy "foo"] of
               Left n -> n @?= "foo"
               Right _ -> assertFailure "expected conflict",
       testCase "infix conflict returns Left" $
         let base = mkOpTable [(500, [(Yfx, "@")])]
-         in case mergeOps base [(600, Yfx, "@")] of
+         in case mergeOps base [OpDecl 600 Yfx "@"] of
               Left n -> n @?= "@"
               Right _ -> assertFailure "expected conflict",
       testCase "dual-role allowed: prefix added when infix exists" $
         let base = mkOpTable [(500, [(Yfx, "-")])]
-         in case mergeOps base [(200, Fy, "-")] of
+         in case mergeOps base [OpDecl 200 Fy "-"] of
               Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
               Right merged -> do
-                Map.lookup "-" merged.prefixByName @?= Just (200, Fy)
-                Map.lookup "-" merged.infixByName @?= Just (500, Yfx),
+                Map.lookup "-" merged.prefixByName @?= Just (OpDecl 200 Fy "-")
+                Map.lookup "-" merged.infixByName @?= Just (OpDecl 500 Yfx "-"),
       testCase "postfix declarations populate infixByName" $
-        case mergeOps emptyOps [(200, Xf, "!")] of
+        case mergeOps emptyOps [OpDecl 200 Xf "!"] of
           Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
-          Right merged -> Map.lookup "!" merged.infixByName @?= Just (200, Xf),
+          Right merged -> Map.lookup "!" merged.infixByName @?= Just (OpDecl 200 Xf "!"),
       testCase "non-symbolic op extends wordOpSet" $
-        case mergeOps emptyOps [(700, Xfx, "is")] of
+        case mergeOps emptyOps [OpDecl 700 Xfx "is"] of
           Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
           Right merged ->
             assertBool "is should be in wordOpSet" $
-              "is" `elem` [name | (_, _, name) <- opTableEntries merged]
+              "is" `elem` [d.opName | d <- opTableEntries merged]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -994,7 +997,8 @@ opTableEntriesTests =
             table = mkOpTable grouped
             -- OpType lacks Ord, so compare via Show as a stable key.
             key (fix, ty, name) = (fix, show ty, name)
-         in sort (map key (opTableEntries table)) @?= sort (map key entries)
+            declKey d = (d.fixity, show d.opType, d.opName)
+         in sort (map declKey (opTableEntries table)) @?= sort (map key entries)
     ]
 
 -- ---------------------------------------------------------------------------
@@ -1028,35 +1032,35 @@ singleTermApiTests =
       testCase "parseLeadingTerms: all parse" $
         case parseLeadingTerms emptyOps "" "foo. bar." of
           Left err -> assertFailure (show err)
-          Right (terms, mLoc) -> do
+          Right (LeadingTerms terms mLoc) -> do
             map strip terms @?= [Atom "foo", Atom "bar"]
             assertBool "no remainder expected" (isNothing mLoc),
       testCase "parseLeadingTerms: partial parse leaves remainder" $
         case parseLeadingTerms emptyOps "" "foo. ???" of
           Left err -> assertFailure (show err)
-          Right (terms, mLoc) -> do
+          Right (LeadingTerms terms mLoc) -> do
             map strip terms @?= [Atom "foo"]
             assertBool "remainder expected" (isJust mLoc),
       testCase "parseLeadingTerms: failure at start yields empty list" $
         case parseLeadingTerms emptyOps "" "???" of
           Left err -> assertFailure (show err)
-          Right (terms, mLoc) -> do
+          Right (LeadingTerms terms mLoc) -> do
             map strip terms @?= []
             assertBool "remainder expected" (isJust mLoc),
       testCase "parseLeadingTerms: empty input yields empty list, no remainder" $
         case parseLeadingTerms emptyOps "" "" of
           Left err -> assertFailure (show err)
-          Right (terms, mLoc) -> do
+          Right (LeadingTerms terms mLoc) -> do
             terms @?= []
             assertBool "no remainder expected" (isNothing mLoc),
       testCase "parseLeadingTerms: remainder location is after the consumed prefix" $
         case parseLeadingTerms emptyOps "<src>" "foo.\n???" of
           Left err -> assertFailure (show err)
-          Right (_, Just loc) -> do
+          Right (LeadingTerms _ (Just loc)) -> do
             -- The remainder starts on line 2 (after the newline following 'foo.').
             loc.line @?= 2
             loc.file @?= "<src>"
-          Right (_, Nothing) -> assertFailure "expected remainder location"
+          Right (LeadingTerms _ Nothing) -> assertFailure "expected remainder location"
     ]
 
 -- ---------------------------------------------------------------------------

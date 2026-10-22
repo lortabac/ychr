@@ -23,9 +23,13 @@
 -- entails a typing fact tells that fact, and may pin a rigid type
 -- variable — in @typechecker\/solver.chr@.
 module YCHR.Internal.TypeCheck
-  ( TypeCheckError (..),
+  ( -- * Results
+    TypeCheckError (..),
+    ConstructorDecl (..),
     TypeCheckWarning (..),
     TypeCheckResult (..),
+
+    -- * Checking
     typeCheckProgram,
     typeCheckGoals,
   )
@@ -55,7 +59,8 @@ import YCHR.Internal.TypeCheck.Encode
     encodedToValue,
   )
 import YCHR.Internal.TypeCheck.Error
-  ( TypeCheckError (..),
+  ( ConstructorDecl (..),
+    TypeCheckError (..),
     TypeCheckResult (..),
     TypeCheckWarning (..),
   )
@@ -274,9 +279,9 @@ decodeLoc val = do
 
 decodeError :: Value -> Value -> Chr TypeCheckError
 decodeError code detail = case code of
-  VAtom c | c == diagAtom "inconsistent" -> do
-    (t1text, t2text) <- decodeTypePair detail
-    pure (InconsistentTypes t1text t2text)
+  VAtom c
+    | c == diagAtom "inconsistent" ->
+        decodeTypePair InconsistentTypes detail
   -- The two producers of this code spell the name differently, and
   -- deliberately: a @mangled_name@ renders with the mangling only half
   -- undone, which is what the solver reports, while a @source_name@
@@ -330,7 +335,7 @@ decodeError code detail = case code of
     _ -> malformed "aggregate_type_escapes detail" detail
   VAtom c
     | c == diagAtom "aggregate_link_conflict" ->
-        uncurry AggregateLinkConflict <$> decodeTypePair detail
+        decodeTypePair AggregateLinkConflict detail
   VAtom c | c == diagAtom "undetermined_instance" -> case detail of
     VTerm f [n, t]
       | f == diagAtom "undetermined_instance_d" ->
@@ -351,9 +356,9 @@ decodeError code detail = case code of
         VInt n -> pure (fromInteger n)
         v' -> malformed "integer" v'
 
--- | The @(type name, arity)@ of every declaration of a duplicated
--- constructor, in the order the CHR side sorted them.
-decodeDeclList :: Value -> Chr [(Text, Int)]
+-- | Every declaration of a duplicated constructor, in the order the CHR
+-- side sorted them.
+decodeDeclList :: Value -> Chr [ConstructorDecl]
 decodeDeclList val = do
   items <- derefList val
   case items of
@@ -366,28 +371,30 @@ decodeDeclList val = do
           k' <- deref k
           v' <- deref v
           case (k', v') of
-            (VAtom a, VInt n) -> pure (unmangleName a, fromInteger n)
+            (VAtom a, VInt n) ->
+              pure ConstructorDecl {typeName = unmangleName a, arity = fromInteger n}
             _ -> malformed "declaration entry fields" item
         item' -> malformed "declaration entry" item'
 
 decodeWarning :: Value -> Value -> Chr TypeCheckWarning
 decodeWarning code detail = case code of
-  VAtom c | c == diagAtom "inaccessible" -> do
-    (t1text, t2text) <- decodeTypePair detail
-    pure (InaccessibleBranch t1text t2text)
+  VAtom c
+    | c == diagAtom "inaccessible" ->
+        decodeTypePair InaccessibleBranch detail
   VAtom c
     | c == diagAtom "goal_inaccessible" ->
-        uncurry AggregateGoalInaccessible <$> decodeTypePair detail
+        decodeTypePair AggregateGoalInaccessible detail
   _ -> malformed "warning code" code
 
--- | Render a @tpair(T1, T2)@ detail as the two types' source syntax.
-decodeTypePair :: Value -> Chr (Text, Text)
-decodeTypePair detail = case detail of
+-- | Render a @tpair(T1, T2)@ detail as the two types' source syntax,
+-- and pass them to @mk@.
+decodeTypePair :: (Text -> Text -> a) -> Value -> Chr a
+decodeTypePair mk detail = case detail of
   VTerm pf [t1, t2] | pf == diagAtom "tpair" -> do
     t1' <- deepDerefType t1
     t2' <- deepDerefType t2
-    pure (showType t1', showType t2')
-  _ -> pure ("?", "?")
+    pure (mk (showType t1') (showType t2'))
+  _ -> pure (mk "?" "?")
 
 -- ---------------------------------------------------------------------------
 -- Value helpers

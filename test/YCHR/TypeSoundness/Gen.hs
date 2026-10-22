@@ -115,10 +115,10 @@ data Ctx = Ctx
     -- YCHR-60006 — which is precisely what makes bounded polymorphism
     -- worth generating: it is the mechanism that unblocks the
     -- downstream uses rigidity otherwise forbids.
-    ctxAmbients :: [(Text, STy)],
+    ctxAmbients :: [Ambient],
     -- | Which rigid variables carry a bound, and from which class.
     -- Every pin is gated on this; see 'pinOk'.
-    ctxBounded :: [(Skolem, Text)],
+    ctxBounded :: [BoundedSkolem],
     -- | Variables that may hold no value yet, because they were bound
     -- by head matching at a 'MayBeUnbound' position.
     --
@@ -127,9 +127,18 @@ data Ctx = Ctx
     -- predicate, or a bare argument at another 'MayBeUnbound'
     -- position. Everything else evaluates, and evaluation of a free
     -- variable is a runtime error the oracle would have to tolerate —
-    -- see @Note [Which failures are benign now]@.
+    -- see @Note [Why benign failures are impossible]@ in
+    -- "YCHR.TypeSoundness.Oracle".
     ctxTainted :: Set Text
   }
+
+-- | An ambient signature: class 'cls' is callable at the rigid type
+-- 'ty'.
+data Ambient = Ambient {cls :: Text, ty :: STy}
+  deriving (Eq)
+
+-- | A rigid variable whose declaration bounds it by class 'cls'.
+data BoundedSkolem = BoundedSkolem {skolem :: Skolem, cls :: Text}
 
 -- | Which regime a program is generated for.
 data Mode
@@ -144,8 +153,9 @@ data Mode
 
 -- | The scope, with every type fully resolved, so comparisons do not
 -- have to chase bindings.
-scopeTys :: Ctx -> [(Text, STy)]
-scopeTys ctx = [(n, stripSTy ctx.ctxSk t) | (n, t) <- Map.toList ctx.ctxScope]
+scopeTys :: Ctx -> [TypedVar]
+scopeTys ctx =
+  [TypedVar n (stripSTy ctx.ctxSk t) | (n, t) <- Map.toList ctx.ctxScope]
 
 -- | Variables usable in an /evaluated/ position: everything in scope
 -- at that type except the possibly-unbound ones.
@@ -161,7 +171,7 @@ varsAt ctx ty =
 -- @=@ operand, an ask-equality, a boundness or type predicate.
 varsAtAny :: Ctx -> STy -> [Expr]
 varsAtAny ctx ty =
-  [EVar n t | (n, t) <- scopeTys ctx, t == stripSTy ctx.ctxSk ty]
+  [EVar v.name v.ty | v <- scopeTys ctx, v.ty == stripSTy ctx.ctxSk ty]
 
 -- | Can a value of this type be built here at all?
 --
@@ -195,16 +205,15 @@ rigidTargets ctx =
   List.nub [t | EVar _ t <- allUntainted, isSkTy t]
   where
     allUntainted =
-      concat [varsAt ctx t | (_, t) <- scopeTys ctx]
+      concat [varsAt ctx v.ty | v <- scopeTys ctx]
 
--- | A type to instantiate a callee's parameter at, biased towards the
--- rigid ones.
+-- | A target type for a body binding ('genBind') or an ask-equality
+-- ('richAlts'), biased towards the rigid ones.
 --
 -- Drawn uniformly, a rigid target is picked a few percent of the time:
 -- the ground universe has dozens of members and a rule holds one or
--- two rigid types. That left "a body tell instantiates a parameter at
--- a rigid type" at 4%, which is the shape the polymorphic fragment
--- exists to exercise, so the draw is weighted instead.
+-- two rigid types, so the draw is weighted instead. Body tells pick
+-- their instantiations through 'pickBounded'.
 pickTarget :: Ctx -> Gen STy
 pickTarget ctx =
   Gen.frequency
@@ -238,21 +247,22 @@ boundedTargets ctx bounds v = case [b | b <- bounds, b.bsTv == v] of
       -- A rigid instance is covered only by an ambient at that very
       -- rigid variable: the bound travels with the occurrence that
       -- contributed it.
-      SSk sk -> (b.bsClass, SSk sk) `elem` strippedAmbients ctx
+      SSk sk -> Ambient b.bsClass (SSk sk) `elem` strippedAmbients ctx
       g -> case classNamed ctx b.bsClass of
         Nothing -> False
-        Just c -> gToS `map` classInstances c & elem g
-    (&) x f = f x
+        Just c -> g `elem` map gToS (classInstances c)
 
 -- | Every ground and rigid type a parameter could be instantiated at
 -- here, whether or not a bound allows it.
 instantiationTargets :: Ctx -> [STy]
 instantiationTargets ctx = map gToS ctx.ctxUniv ++ rigidTargets ctx
 
-strippedAmbients :: Ctx -> [(Text, STy)]
+-- | The ambient signatures, with their types fully resolved.
+strippedAmbients :: Ctx -> [Ambient]
 strippedAmbients ctx =
-  [(n, stripSTy ctx.ctxSk t) | (n, t) <- ctx.ctxAmbients]
+  [Ambient a.cls (stripSTy ctx.ctxSk a.ty) | a <- ctx.ctxAmbients]
 
+-- | Look up a class of this program by name.
 classNamed :: Ctx -> Text -> Maybe ClassFn
 classNamed ctx n = List.find (\c -> c.cfName == n) ctx.ctxClasses
 
@@ -260,7 +270,7 @@ classNamed ctx n = List.find (\c -> c.cfName == n) ctx.ctxClasses
 -- declared instance if it is ground.
 classesAt :: Ctx -> STy -> [Text]
 classesAt ctx t = case stripSTy ctx.ctxSk t of
-  SSk sk -> [n | (n, at) <- strippedAmbients ctx, at == SSk sk]
+  SSk sk -> [a.cls | a <- strippedAmbients ctx, a.ty == SSk sk]
   g -> [c.cfName | c <- ctx.ctxClasses, g `elem` map gToS (classInstances c)]
 
 -- | A body tell's instantiation for one parameter, respecting the
@@ -285,9 +295,11 @@ pickFrom cands ctx =
     (rigid, ground) = List.partition isRigid cands
     isRigid t = isSkTy (stripSTy ctx.ctxSk t)
 
+-- | A ground type as an implementation-site type.
 gToS :: GTy -> STy
 gToS (GTy c as) = SCon c (map gToS as)
 
+-- | A ground type as a declaration type.
 gToD :: GTy -> DTy
 gToD (GTy c as) = DCon c (map gToD as)
 
@@ -306,6 +318,7 @@ gToD (GTy c as) = DCon c (map gToD as)
 genProgram :: Gen Program
 genProgram = genProgramWith Closed
 
+-- | 'genProgram' for the given regime.
 genProgramWith :: Mode -> Gen Program
 genProgramWith mode = do
   defs <- genAdts
@@ -379,8 +392,9 @@ genAdts = do
       nParams <- Gen.frequency [(2, pure 0), (3, pure 1), (2, pure 2)]
       let params = take nParams [TvName "A", TvName "B"]
           earlier = fixedAdts ++ reverse acc
-      (cs, ctorIx') <- genCtors earlier params ctorIx
-      let used =
+      drawn <- genCtors earlier params ctorIx
+      let cs = drawn.ctors
+          used =
             [ p
             | p <- params,
               any (mentionsTv p) (concatMap (.ctorFields) (NE.toList cs))
@@ -391,20 +405,27 @@ genAdts = do
                 adtParams = used,
                 adtCtors = cs
               }
-      go (k - 1) (tyIx + 1) ctorIx' (def : acc)
+      go (k - 1) (tyIx + 1) drawn.next (def : acc)
 
+-- | Does the type mention this parameter?
 mentionsTv :: TvName -> DTy -> Bool
 mentionsTv v t = case t of
   DVar w -> v == w
   DCon _ as -> any (mentionsTv v) as
 
-genCtors :: [AdtDef] -> [TvName] -> Int -> Gen (NonEmpty CtorDef, Int)
+-- | Constructors drawn for one type, and the next free name index.
+data Ctors = Ctors {ctors :: NonEmpty CtorDef, next :: Int}
+
+-- | 1–3 constructors, named from the given index on. Returns the next
+-- free index.
+genCtors :: [AdtDef] -> [TvName] -> Int -> Gen Ctors
 genCtors earlier params start = do
   extra <- Gen.int (Range.constant 0 2)
   c0 <- genCtor earlier params start
   rest <- traverse (genCtor earlier params) [start + 1 .. start + extra]
-  pure (c0 :| rest, start + extra + 1)
+  pure (Ctors (c0 :| rest) (start + extra + 1))
 
+-- | One constructor with 0–2 fields.
 genCtor :: [AdtDef] -> [TvName] -> Int -> Gen CtorDef
 genCtor earlier params ix = do
   fs <- Gen.list (Range.constant 0 2) (genFieldTy earlier params)
@@ -424,6 +445,8 @@ genFieldTy earlier params =
         ++ [(2, genAdtApp earlier params) | not (null earlier)]
     )
 
+-- | A type with no nested applications: a base type, a parameter, or a
+-- non-parametric earlier definition.
 genLeafTy :: [AdtDef] -> [TvName] -> Gen DTy
 genLeafTy earlier params =
   Gen.frequency
@@ -435,6 +458,7 @@ genLeafTy earlier params =
            ]
     )
 
+-- | An earlier definition applied at leaf types.
 genAdtApp :: [AdtDef] -> [TvName] -> Gen DTy
 genAdtApp earlier params = do
   d <- Gen.element earlier
@@ -488,9 +512,9 @@ genClasses univ
 
 -- | The skolems an occurrence's @requiring@ clause constrains, with
 -- the class that constrains them.
-boundedSkolemsOf :: Sig -> [Skolem] -> [(Skolem, Text)]
+boundedSkolemsOf :: Sig -> [Skolem] -> [BoundedSkolem]
 boundedSkolemsOf sig sks =
-  [ (sk, b.bsClass)
+  [ BoundedSkolem sk b.bsClass
   | b <- sig.sigBounds,
     (tv, sk) <- zip sig.sigTvs sks,
     tv == b.bsTv
@@ -505,14 +529,15 @@ boundedSkolemsOf sig sks =
 -- bound. The generator would then build a goal instance the query
 -- type-check rejects (YCHR-60012). Every pin — literal, match, shared
 -- variable, type predicate — goes through this.
-pinOk :: [ClassFn] -> [(Skolem, Text)] -> Skolem -> STy -> Bool
+pinOk :: [ClassFn] -> [BoundedSkolem] -> Skolem -> STy -> Bool
 pinOk cls bounded sk t =
-  all ok [nm | (s', nm) <- bounded, s' == sk]
+  all ok [b.cls | b <- bounded, b.skolem == sk]
   where
     ok nm = case List.find (\c -> c.cfName == nm) cls of
       Nothing -> True
       Just c -> t `elem` map gToS (classInstances c)
 
+-- | Is this a type constructor without parameters?
 nonParametricCon :: TyCon -> Bool
 nonParametricCon c = case c of
   CInt -> True
@@ -591,6 +616,7 @@ genSig mode univ adts cls ix = do
     genBoundness = Gen.frequency [(2, pure Ground), (1, pure MayBeUnbound)]
     mkArg t b = ArgSpec {argTy = t, argErased = False, argBound = b}
 
+-- | A constraint argument's declared type.
 genArgDTy :: [GTy] -> [AdtDef] -> [TvName] -> Gen DTy
 genArgDTy univ adts tvs =
   Gen.frequency
@@ -620,6 +646,7 @@ genParamAdtApp parametric tvs = do
 -- Rules
 -- ---------------------------------------------------------------------------
 
+-- | 1–6 rules.
 genRules :: [GTy] -> [AdtDef] -> [ClassFn] -> NonEmpty Sig -> Gen [Rule]
 genRules univ adts cls sigList = do
   n <- Gen.int (Range.linear 1 6)
@@ -628,6 +655,7 @@ genRules univ adts cls sigList = do
 -- | Which of the three CHR rule shapes to generate.
 data RuleKind = KSimplify | KPropagate | KSimpagate
 
+-- | One rule. The index names it.
 genRule :: [GTy] -> [AdtDef] -> [ClassFn] -> NonEmpty Sig -> Int -> Gen Rule
 genRule univ adts cls sigList ix = do
   kind <- Gen.element [KSimplify, KPropagate, KSimpagate]
@@ -641,20 +669,20 @@ genRule univ adts cls sigList ix = do
       -- First occurrence wins for a repeated (aliased) variable: HNF
       -- renames the later occurrences away and keeps the first, so
       -- the checker types the surviving name at its first position.
-      -- The occurrences' types need not resolve equal any more — a
-      -- pair meeting inside a shared constructor teaches the checker
-      -- nothing — so which one the scope records is load-bearing.
+      -- The occurrences' types may resolve differently — a pair
+      -- meeting inside a shared constructor teaches the checker
+      -- nothing — so which one the scope records matters.
       scope0 =
         Map.fromListWith
           (\_ old -> old)
-          (concatMap (headVars skHead) (NE.toList heads_))
+          [(v.name, v.ty) | v <- concatMap (headVars skHead) (NE.toList heads_)]
       -- Every head occurrence of a bounded declaration contributes its
       -- bound as an ambient signature at that occurrence's own rigid
       -- variable. The rule head is an implementation site, so it
       -- /assumes/ the bound; a body tell of the same constraint is a
       -- use site and must discharge it.
       ambients =
-        [ (b.bsClass, substD (occSub h) (DVar b.bsTv))
+        [ Ambient b.bsClass (substD (occSub h) (DVar b.bsTv))
         | h <- NE.toList heads_,
           b <- h.headSig.sigBounds
         ]
@@ -672,7 +700,7 @@ genRule univ adts cls sigList ix = do
       -- as readily.
       tainted =
         Set.fromList
-          [ n
+          [ v.name
           | h <- NE.toList heads_,
             (spec, ty, p) <-
               zip3
@@ -680,7 +708,7 @@ genRule univ adts cls sigList ix = do
                 (NE.toList (headArgTys h))
                 (NE.toList h.pats),
             spec.argBound == MayBeUnbound,
-            (n, _) <- patVars skHead ty p
+            v <- patVars skHead ty p
           ]
       ctxHead =
         Ctx
@@ -696,24 +724,26 @@ genRule univ adts cls sigList ix = do
   -- Boundness first, then evidence: both establish a fact that is used
   -- to their right and nothing to their left, and a variable has to be
   -- known bound before a type predicate on it can succeed.
-  (modeGs, ctxM) <- genModeGuards ctxHead
-  (ev, ctx0) <- genEvidenceGuards ctxM
+  modeGs <- genModeGuards ctxHead
+  ev <- genEvidenceGuards modeGs.ctx
+  let ctx0 = ev.ctx
   gs <- Gen.list (Range.constant 0 2) (genGuard ctx0)
   nBinds <- Gen.int (Range.constant 0 2)
-  (ctx1, binds) <- foldM genBind (ctx0, []) [0 .. nBinds - 1]
-  (gateGs, gateItems, ctx2) <- genGatedBind ctx1
+  binds <- foldM genBind (Binds [] ctx0) [0 .. nBinds - 1]
+  let ctx1 = binds.ctx
+  gate <- genGatedBind ctx1
   tellItems <-
-    genTells ctx2 sigList (minimum (fmap (.headSig.stratum) heads_))
+    genTells ctx1 sigList (minimum (fmap (.headSig.stratum) heads_))
   pure
     Rule
       { ruleName = "r" <> tshow ix,
         ruleHead = rh,
-        ruleEvidence = modeGs ++ ev,
-        guards = gs ++ gateGs,
-        body = binds ++ gateItems ++ tellItems,
+        ruleEvidence = modeGs.guards ++ ev.guards,
+        guards = gs ++ gate.guards,
+        body = binds.items ++ gate.items ++ tellItems,
         ruleTaintedHead = tainted,
         -- What is *still* possibly-unbound after the mode guards ran.
-        ruleTainted = taintedAll ctx2 ctx2.ctxTainted binds,
+        ruleTainted = taintedAll ctx1 ctx1.ctxTainted binds.items,
         ruleSkHead = skHead,
         ruleSk = ctx1.ctxSk
       }
@@ -767,14 +797,19 @@ genHead ::
 genHead adts cls sigList hIx sk = do
   sig <- Gen.element (NE.toList sigList)
   let (sks, sk0) = freshSkolems (length sig.sigTvs) sk
-      bnd = boundedSkolemsOf sig sks
+      penv =
+        PatEnv
+          { adts = adts,
+            classes = cls,
+            bounded = boundedSkolemsOf sig sks
+          }
       sub = Map.fromList (zip sig.sigTvs (map SSk sks))
       t0 :| ts = fmap (substD sub) (sigArgDTys sig)
-  (p0, sk1) <- genPat adts cls bnd sk0 2 [0, hIx] t0
+  (p0, sk1) <- genPat penv sk0 2 [0, hIx] t0
   (rest, skN) <-
     foldM
       ( \(acc, skAcc) (i, t) -> do
-          (p, skAcc') <- genPat adts cls bnd skAcc 2 [i, hIx] t
+          (p, skAcc') <- genPat penv skAcc 2 [i, hIx] t
           pure (acc ++ [p], skAcc')
       )
       ([], sk1)
@@ -800,22 +835,20 @@ genHead adts cls sigList hIx sk = do
 -- freshness and the rigidity are both load-bearing: @typecheck_match_beta_rigid@
 -- pins that the parameters a @GuardMatch@ introduces are rigid, not
 -- flexible, so a body may not then treat the field as a concrete type.
--- Getting that wrong here is the drift this stage exists to catch, so
+-- Getting that wrong here is the drift this test exists to catch, so
 -- the generator does exactly what the spec says and lets the checker
 -- disagree if it will.
 --
 -- Threads the skolem state because a pin at one argument position is
 -- visible to the next: @c(X, 5)@ at @c(T, T)@ types @X@ as @int@.
 genPat ::
-  [AdtDef] ->
-  [ClassFn] ->
-  [(Skolem, Text)] ->
+  PatEnv ->
   SkolemEnv ->
   Int ->
   [Int] ->
   STy ->
   Gen (Pat, SkolemEnv)
-genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
+genPat penv sk d path ty = Gen.frequency (common ++ specific)
   where
     common =
       [ (6, pure (PVar (varName path) ty, sk)),
@@ -832,15 +865,15 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
       SCon _ _ -> []
     lit g = (,sk) <$> g
     consPat skIn el rest = do
-      (h, sk1) <- genPat adts cls bnd skIn (d - 1) (0 : path) el
-      (t, sk2) <- genPat adts cls bnd sk1 (d - 1) (1 : path) rest
+      (h, sk1) <- genPat penv skIn (d - 1) (0 : path) el
+      (t, sk2) <- genPat penv sk1 (d - 1) (1 : path) rest
       pure (PCons h t, sk2)
     genCtorPat skIn def args = do
       c <- Gen.element (NE.toList def.adtCtors)
       (ps, skN) <-
         foldM
           ( \(acc, skAcc) (i, t) -> do
-              (p, skAcc') <- genPat adts cls bnd skAcc (d - 1) (i : path) t
+              (p, skAcc') <- genPat penv skAcc (d - 1) (i : path) t
               pure (acc ++ [p], skAcc')
           )
           ([], skIn)
@@ -869,7 +902,7 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
     -- application of this constructor"; a class instance is
     -- non-parametric, so an application with arguments never matches
     -- one and the check is decided by the constructor alone.
-    allowed = pinOk cls bnd
+    allowed = pinOk penv.classes penv.bounded
     pinTo src s t g = do
       p <- g
       pure (p, pinOrKeep src s t sk)
@@ -881,7 +914,7 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
       (ps, skN) <-
         foldM
           ( \(acc, skAcc) (i, t) -> do
-              (p, skAcc') <- genPat adts cls bnd skAcc (d - 1) (i : path) t
+              (p, skAcc') <- genPat penv skAcc (d - 1) (i : path) t
               pure (acc ++ [p], skAcc')
           )
           ([], sk2)
@@ -890,8 +923,17 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
     -- A pin can only fail its occurs check, which cannot happen here:
     -- the target is built from skolems allocated a moment ago.
     pinOrKeep src s t env = fromMaybe env (pinSkolem src s t env)
-    adtsInScope = adts
+    adtsInScope = penv.adts
 
+-- | What 'genPat' needs that stays fixed for one head occurrence.
+data PatEnv = PatEnv
+  { adts :: [AdtDef],
+    classes :: [ClassFn],
+    -- | The occurrence's bounded skolems; see 'pinOk'.
+    bounded :: [BoundedSkolem]
+  }
+
+-- | A variable name from a position path, e.g. @V0_1_0@.
 varName :: [Int] -> Text
 varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
 
@@ -952,8 +994,8 @@ maybeAlias cls sk hs
                   ++ [(1, Gen.element plain) | not (null plain)]
               )
   where
-    alias (keep, drop_, sk') =
-      pure (fmap (renameHead drop_ keep) hs, notePins sk sk')
+    alias a =
+      pure (fmap (renameHead a.renamed a.keep) hs, notePins sk a.env)
     vs = concatMap (headVars sk) (NE.toList hs)
     -- 'eqUnifySTy' is the checker's own @GuardEqual@ discipline —
     -- skolem merges and pins go into the static model, parameter
@@ -963,11 +1005,11 @@ maybeAlias cls sk hs
     -- outermost-constructor mismatch, a forcing conflict) is simply
     -- not offered.
     pairs =
-      [ (a, b, sk')
-      | (a, ta) <- vs,
-        (b, tb) <- vs,
-        a < b,
-        Just sk' <- [eqUnifySTy ta tb sk],
+      [ Alias {keep = a.name, renamed = b.name, env = sk'}
+      | a <- vs,
+        b <- vs,
+        a.name < b.name,
+        Just sk' <- [eqUnifySTy a.ty b.ty sk],
         -- The merge may pin a bounded parameter; the same gate as
         -- every other pin applies (see 'pinOk').
         pinsRespectBounds sk'
@@ -999,10 +1041,10 @@ maybeAlias cls sk hs
     -- so pins and forcings are still preferred over plain aliases.
     (merging, plain) =
       List.partition
-        ( \(_, _, sk') ->
+        ( \a ->
             not
-              ( Map.null (Map.difference sk'.skBind sk.skBind)
-                  && Map.null (Map.difference sk'.skForce sk.skForce)
+              ( Map.null (Map.difference a.env.skBind sk.skBind)
+                  && Map.null (Map.difference a.env.skForce sk.skForce)
               )
         )
         pairs
@@ -1011,8 +1053,12 @@ maybeAlias cls sk hs
     -- a parameter identification, both of which the evidence guards
     -- also produce in abundance.
     skMerges = filter isSkMerge merging
-    isSkMerge (_, _, sk') =
-      any isSkTy (Map.elems (Map.difference sk'.skBind sk.skBind))
+    isSkMerge a =
+      any isSkTy (Map.elems (Map.difference a.env.skBind sk.skBind))
+
+-- | A candidate alias: rename 'renamed' to 'keep', giving the skolem
+-- state 'env'.
+data Alias = Alias {keep :: Text, renamed :: Text, env :: SkolemEnv}
 
 -- | Record, for coverage, which of the bindings a merge added pinned a
 -- skolem to a concrete type rather than aliasing it to another skolem.
@@ -1028,6 +1074,7 @@ notePins before after =
     concreteBindings =
       Map.filter (not . isSkTy) (Map.difference after.skBind before.skBind)
 
+-- | Rename one pattern variable throughout a head occurrence.
 renameHead :: Text -> Text -> HeadC -> HeadC
 renameHead from to h = h {pats = fmap go h.pats}
   where
@@ -1051,6 +1098,9 @@ mkRuleHead kind hs = case (kind, hs) of
 -- Guards
 -- ---------------------------------------------------------------------------
 
+-- | Guards drawn so far, and the context they leave to their right.
+data Guarded = Guarded {guards :: [Expr], ctx :: Ctx}
+
 -- | 0–2 type-predicate guards, each pinning one still-unpinned rigid
 -- variable that some in-scope variable is typed at exactly.
 --
@@ -1069,38 +1119,43 @@ mkRuleHead kind hs = case (kind, hs) of
 -- already-concrete variable is either redundant (if it agrees) or a
 -- contradiction (if it does not), and a contradiction makes the rule
 -- dead code — YCHR-20104, which the oracle treats as a failure.
-genEvidenceGuards :: Ctx -> Gen ([Expr], Ctx)
+genEvidenceGuards :: Ctx -> Gen Guarded
 genEvidenceGuards ctx0
-  | null (candidates ctx0) = pure ([], ctx0)
+  | null (candidates ctx0) = pure (Guarded [] ctx0)
   | otherwise = do
       -- Weighted towards none. Every pin turns a rigid variable
       -- concrete, so evidence competes for exactly the variables a body
       -- tell would otherwise instantiate a callee's parameter at; at
       -- 2:3:1 that shape fell from 10% of programs to 2%.
       n <- Gen.frequency [(4, pure 0), (3, pure 1), (1, pure 2)]
-      go n ([], ctx0)
+      go n (Guarded [] ctx0)
   where
-    go :: Int -> ([Expr], Ctx) -> Gen ([Expr], Ctx)
+    go :: Int -> Guarded -> Gen Guarded
     go 0 acc = pure acc
-    go k (gs, ctx) = case candidates ctx of
-      [] -> pure (gs, ctx)
+    go k (Guarded gs ctx) = case candidates ctx of
+      [] -> pure (Guarded gs ctx)
       cs -> do
-        (n, s) <- Gen.element cs
-        (fn, t, src) <-
+        v <- Gen.element cs
+        fn <-
           Gen.element
-            [ alt
-            | alt@(_, t, _) <-
-                [ (PredInteger, SCon CInt [], PinTypePred),
-                  (PredBoolean, SCon CBool [], PinTypePred)
-                ],
-              t `elem` predTys,
-              pinOk ctx.ctxClasses ctx.ctxBounded s t
+            [ p
+            | p <- [PredInteger, PredBoolean],
+              predTy p `elem` predTys,
+              pinOk ctx.ctxClasses ctx.ctxBounded v.skolem (predTy p)
             ]
-        let sk' = fromMaybe ctx.ctxSk (pinSkolem src s t ctx.ctxSk)
-        go (k - 1) (gs ++ [EPred fn n (SSk s)], ctx {ctxSk = sk'})
+        let sk' =
+              fromMaybe
+                ctx.ctxSk
+                (pinSkolem PinTypePred v.skolem (predTy fn) ctx.ctxSk)
+        go
+          (k - 1)
+          Guarded
+            { guards = gs ++ [EPred fn v.name (SSk v.skolem)],
+              ctx = ctx {ctxSk = sk'}
+            }
     candidates ctx =
-      [ (n, s)
-      | (n, t) <- scopeTys ctx,
+      [ RigidVar {name = n, skolem = s}
+      | TypedVar n t <- scopeTys ctx,
         SSk s <- [t],
         not (Map.member s ctx.ctxSk.skPinned),
         -- A force-constrained skolem's instance is already fixed by
@@ -1114,6 +1169,12 @@ genEvidenceGuards ctx0
         any (pinOk ctx.ctxClasses ctx.ctxBounded s) predTys
       ]
     predTys = [SCon CInt [], SCon CBool []]
+    predTy p = case p of
+      PredInteger -> SCon CInt []
+      PredBoolean -> SCon CBool []
+
+-- | An in-scope variable whose type is a bare skolem.
+data RigidVar = RigidVar {name :: Text, skolem :: Skolem}
 
 -- | 0–2 boundness guards, each on a variable that may hold no value
 -- yet, removing it from the taint for everything to their right.
@@ -1127,28 +1188,29 @@ genEvidenceGuards ctx0
 -- Deliberately __not__ evidence: its success entails that a term holds
 -- a value, not what type that value has, so it pins no skolem and the
 -- type model is untouched (§Non-forms).
-genModeGuards :: Ctx -> Gen ([Expr], Ctx)
+genModeGuards :: Ctx -> Gen Guarded
 genModeGuards ctx0
-  | Set.null ctx0.ctxTainted = pure ([], ctx0)
+  | Set.null ctx0.ctxTainted = pure (Guarded [] ctx0)
   | otherwise = do
       -- Weighted towards clearing at most one. A boundness guard stops
       -- the rule firing until something binds the value, so clearing
       -- every tainted variable in a rule would make the rules that
       -- could do the binding unable to run.
       n <- Gen.frequency [(2, pure 0), (3, pure 1), (1, pure 2)]
-      go n ([], ctx0)
+      go n (Guarded [] ctx0)
   where
-    go :: Int -> ([Expr], Ctx) -> Gen ([Expr], Ctx)
+    go :: Int -> Guarded -> Gen Guarded
     go 0 acc = pure acc
-    go k (gs, ctx) = case Set.toList ctx.ctxTainted of
-      [] -> pure (gs, ctx)
+    go k (Guarded gs ctx) = case Set.toList ctx.ctxTainted of
+      [] -> pure (Guarded gs ctx)
       cs -> do
         v <- Gen.element cs
         pr <- Gen.element [PredNonvar, PredGround]
         go
           (k - 1)
-          ( gs ++ [EModePred pr v],
-            ctx {ctxTainted = Set.delete v ctx.ctxTainted}
+          ( Guarded
+              (gs ++ [EModePred pr v])
+              ctx {ctxTainted = Set.delete v ctx.ctxTainted}
           )
 
 -- | A rule guard, anchored on a head variable whenever one is in scope.
@@ -1179,31 +1241,32 @@ genGuard ctx
             ++ [(3, Gen.element testable) | not (null testable)]
             ++ [(1, Gen.element anchors)]
         )
-        >>= uncurry (genGuardOn ctx)
+        >>= \v -> genGuardOn ctx v.name v.ty
   where
     anchors =
-      [ b
-      | b@(n, t) <- scopeTys ctx,
-        not (n `Set.member` ctx.ctxTainted),
-        anchorable n t
+      [ v
+      | v <- scopeTys ctx,
+        not (v.name `Set.member` ctx.ctxTainted),
+        anchorable v.name v.ty
       ]
-    testable = [b | b@(_, t) <- anchors, hasPredicate t]
+    testable = [v | v <- anchors, hasPredicate v.ty]
     -- Anchors whose type is still rigid and whose bound puts an
     -- overloaded predicate in scope. Preferred over the merely
     -- testable ones: this is the only place an overloaded operation
     -- can reach a rigid type, and left to compete on equal terms with
     -- every concrete anchor it lands in about 1% of programs.
     ambientAnchors =
-      [ b
-      | b@(_, t) <- anchors,
-        SSk _ <- [t],
-        not (null (classesAt ctx t))
+      [ v
+      | v <- anchors,
+        SSk _ <- [v.ty],
+        not (null (classesAt ctx v.ty))
       ]
     -- Every alternative draws the opposite operand with the anchor out
     -- of scope, so an anchor is only usable when its own type is still
     -- inhabited without it. Checking only the bare-rigid case is not
     -- enough: @t0(T)@ and @list(T)@ are just as uninhabited once the
     -- one variable carrying @T@ is gone.
+    --
     -- Usable /without/ a second value of its own type when an
     -- overloaded predicate applies to it directly: every other test
     -- needs an opposite operand, a unary class call does not.
@@ -1230,6 +1293,7 @@ genGuard ctx
                ]
         || not (null (classesAt ctx t))
 
+-- | The context with one variable out of scope.
 withoutVar :: Ctx -> Text -> Ctx
 withoutVar ctx n = ctx {ctxScope = Map.delete n ctx.ctxScope}
 
@@ -1290,10 +1354,14 @@ genGuardOn ctx n t =
 -- Body
 -- ---------------------------------------------------------------------------
 
+-- | Body bindings drawn so far, and the context with their variables in
+-- scope.
+data Binds = Binds {items :: [BodyItem], ctx :: Ctx}
+
 -- | One body binding: @W is E@ or @W = T@. Both bind a /fresh/
 -- variable, which is what keeps @=@ unfailable and the store ground.
-genBind :: (Ctx, [BodyItem]) -> Int -> Gen (Ctx, [BodyItem])
-genBind (ctx, acc) i = do
+genBind :: Binds -> Int -> Gen Binds
+genBind (Binds acc ctx) i = do
   t <- pickTarget ctx
   let w = "W" <> tshow i
   item <-
@@ -1301,7 +1369,7 @@ genBind (ctx, acc) i = do
       [ BIs w t <$> genExprRoot ctx t,
         BUnify w t <$> genSTermAt ctx 2 t
       ]
-  pure (ctx {ctxScope = Map.insert w t ctx.ctxScope}, acc ++ [item])
+  pure (Binds (acc ++ [item]) ctx {ctxScope = Map.insert w t ctx.ctxScope})
 
 -- | A rule that exists only to bind a store-resident variable.
 --
@@ -1329,15 +1397,16 @@ genPlantedBinder mode sigList
         [ (1, pure []),
           ( 4,
             do
-              (sig, i, g) <- Gen.element cands
-              st <- genClosedSTermAt g
+              slot <- Gen.element cands
+              let sig = slot.sig
+              st <- genClosedSTermAt slot.ground
               let (sks, sk) = freshSkolems (length sig.sigTvs) emptySkolems
                   sub = Map.fromList (zip sig.sigTvs (map SSk sks))
                   tys = map (substD sub) (NE.toList (sigArgDTys sig))
                   names = ["P" <> tshow k | k <- [0 .. length tys - 1]]
                   pats = zipWith PVar names tys
-                  target = names !! i
-                  targetTy = tys !! i
+                  target = names !! slot.pos
+                  targetTy = tys !! slot.pos
                   taintedNames =
                     Set.fromList
                       [ n
@@ -1375,12 +1444,19 @@ genPlantedBinder mode sigList
     -- to be built for it, and at a type parameter there is nothing to
     -- build.
     cands =
-      [ (sig, i, g)
+      [ OpenSlot {sig = sig, pos = i, ground = g}
       | sig <- NE.toList sigList,
         (i, spec) <- zip [0 ..] (NE.toList sig.sigArgs),
         spec.argBound == MayBeUnbound,
         Just g <- [groundDTy spec.argTy]
       ]
+
+-- | A 'MayBeUnbound' argument position whose declared type is ground.
+data OpenSlot = OpenSlot {sig :: Sig, pos :: Int, ground :: GTy}
+
+-- | A gated binding: its @unifiable@ guard and its body item. Empty
+-- when none is drawn.
+data GatedBind = GatedBind {guards :: [Expr], items :: [BodyItem]}
 
 -- | A gated binding of a store-resident variable.
 --
@@ -1398,16 +1474,16 @@ genPlantedBinder mode sigList
 -- asks. The right-hand side is a /closed/ term for the same reason:
 -- a compound mentioning a free variable would be evaluated by
 -- @unifiable@'s own argument position.
-genGatedBind :: Ctx -> Gen ([Expr], [BodyItem], Ctx)
+genGatedBind :: Ctx -> Gen GatedBind
 genGatedBind ctx
-  | null cands = pure ([], [], ctx)
+  | null cands = pure (GatedBind [] [])
   | otherwise =
       Gen.frequency
-        [ (1, pure ([], [], ctx)),
+        [ (1, pure (GatedBind [] [])),
           ( 4,
             do
-              (n, t, g) <- Gen.element cands
-              st <- genClosedSTermAt g
+              c <- Gen.element cands
+              st <- genClosedSTermAt c.ground
               -- The taint is deliberately /not/ cleared. The variable is
               -- bound from this body item onward, but the guard-position
               -- observations sit to its left, where it is still free —
@@ -1415,19 +1491,23 @@ genGatedBind ctx
               -- the conservative reading: it only narrows what the
               -- items after it may do with the variable.
               pure
-                ( [EUnifiable (EVar n t) (sTermToExpr st)],
-                  [BUnify n t st],
-                  ctx
+                ( GatedBind
+                    [EUnifiable (EVar c.var.name c.var.ty) (sTermToExpr st)]
+                    [BUnify c.var.name c.var.ty st]
                 )
           )
         ]
   where
     cands =
-      [ (n, t, g)
-      | (n, t) <- scopeTys ctx,
-        n `Set.member` ctx.ctxTainted,
-        Just g <- [groundOf ctx.ctxSk t]
+      [ GroundedVar {var = v, ground = g}
+      | v <- scopeTys ctx,
+        v.name `Set.member` ctx.ctxTainted,
+        Just g <- [groundOf ctx.ctxSk v.ty]
       ]
+
+-- | A variable whose type has no skolem left, with that type as a
+-- ground type.
+data GroundedVar = GroundedVar {var :: TypedVar, ground :: GTy}
 
 -- | The smallest closed structural term of a ground type.
 genClosedSTermAt :: GTy -> Gen STerm
@@ -1548,7 +1628,7 @@ freqOr ctx who ty alts
             ++ ": no inhabitant at "
             ++ T.unpack (renderSTy (stripSTy ctx.ctxSk ty))
             ++ "; scope = "
-            ++ show [(n, renderSTy t) | (n, t) <- scopeTys ctx]
+            ++ show [(v.name, renderSTy v.ty) | v <- scopeTys ctx]
         )
   | otherwise = Gen.frequency alts
 
@@ -1563,6 +1643,7 @@ freqOr ctx who ty alts
 genExprRoot :: Ctx -> STy -> Gen Expr
 genExprRoot ctx ty = genNonVarAt ctx 2 ty
 
+-- | 'genExprRoot' at a given depth.
 genNonVarAt :: Ctx -> Int -> STy -> Gen Expr
 genNonVarAt ctx d ty =
   freqOr
@@ -1596,8 +1677,8 @@ structAlts ctx d ty = case stripSTy ctx.ctxSk ty of
       all (inhabited ctx) (ctorFieldTys def args c)
     ]
   SCon _ _ -> []
-  where
 
+-- | A constructor application with generated fields.
 genCtorExpr :: Ctx -> Int -> AdtDef -> [STy] -> CtorDef -> Gen Expr
 genCtorExpr ctx d def args c =
   ECtor c.ctorName
@@ -1636,7 +1717,7 @@ richAlts ctx d ty
   where
     ty' = stripSTy ctx.ctxSk ty
     sub = genExprAt ctx (d - 1)
-    call fn = ECall fn <$> traverse sub (map gToS (fst (libFnSig fn)))
+    call fn = ECall fn <$> traverse sub (map gToS (libFnSig fn).args)
     -- @copy_term(A) -> A@ at any inhabited type, which is the one way
     -- a polymorphic function is exercised at a rigid argument without
     -- a @requiring@ clause.
@@ -1671,6 +1752,7 @@ richAlts ctx d ty
         not (null (classesAt ctx t))
       ]
 
+-- | A well-typed right-hand side for @=@.
 genSTermAt :: Ctx -> Int -> STy -> Gen STerm
 genSTermAt ctx d ty = freqOr ctx "genSTermAt" ty (varAlt ++ structs)
   where
@@ -1750,7 +1832,7 @@ genGoal univ adts cls sigList rs = do
   nProbes <- Gen.int (Range.constant 0 2)
   ps <- traverse genProbe [0 .. nProbes - 1]
   let allTells = t0 : ts
-      plain = [(s, args) | (s, _, args) <- allTells] ++ seeded
+      plain = [Tell t.sig t.args | t <- allTells] ++ seeded
   pure
     Goal
       { tells = case plain of
@@ -1817,9 +1899,9 @@ genGoal univ adts cls sigList rs = do
     -- one. This is how anything gets into the store without a value:
     -- a bare variable in a goal argument is allocated fresh by the
     -- runtime, and whatever later binds it does so from another unit.
-    unboundsOf (s, sub, args) =
-      [ (n, groundD sub spec.argTy)
-      | (spec, e) <- zip (NE.toList s.sigArgs) args,
+    unboundsOf t =
+      [ UnboundVar n (groundD t.subst spec.argTy)
+      | (spec, e) <- zip (NE.toList t.sig.sigArgs) t.args,
         EVar n _ <- [e],
         "U" `T.isPrefixOf` n,
         spec.argBound == MayBeUnbound
@@ -1837,7 +1919,7 @@ genGoal univ adts cls sigList rs = do
               (map (groundD sub) (NE.toList (sigArgDTys s)))
               (NE.toList s.sigArgs)
           )
-      pure (s, sub, args)
+      pure GoalTell {sig = s, subst = sub, args = args}
     -- At a position willing to hold an unbound term, sometimes pass a
     -- fresh query variable instead of a value. The runtime allocates
     -- it, the constraint is stored holding nothing, and whatever binds
@@ -1850,10 +1932,10 @@ genGoal univ adts cls sigList rs = do
       | spec.argBound == MayBeUnbound =
           Gen.frequency
             [ (2, pure (EVar ("U" <> tshow tIx <> "_" <> tshow i) (gToS g))),
-              (3, genArgValue s (i, g))
+              (3, genArgValue s i g)
             ]
-      | otherwise = genArgValue s (i, g)
-    genArgValue s (i, g) = case Map.lookup (s.sigName, i) seeds of
+      | otherwise = genArgValue s i g
+    genArgValue s i g = case Map.lookup (ArgPos s.sigName i) seeds of
       Just ps@(_ : _)
         | null s.sigTvs ->
             Gen.frequency
@@ -1865,6 +1947,9 @@ genGoal univ adts cls sigList rs = do
       g <- Gen.element univ
       e <- genExprRoot goalCtx (gToS g)
       pure Probe {probeVar = "R" <> tshow i, probeTy = g, probeExpr = e}
+
+-- | A freely drawn goal tell, with the instantiation it was drawn at.
+data GoalTell = GoalTell {sig :: Sig, subst :: Map TvName GTy, args :: [Expr]}
 
 -- | Instantiate a whole rule head into goal tells that match it.
 --
@@ -1878,7 +1963,7 @@ genGoal univ adts cls sigList rs = do
 -- both. Left to independent draws that agreement is a coincidence, and
 -- the rates show it: two-head rules fired 22% of the time against 33%
 -- for single-head ones, and aliased rules only 12%.
-genRuleInstance :: [GTy] -> [ClassFn] -> Rule -> Gen (NonEmpty (Sig, [Expr]))
+genRuleInstance :: [GTy] -> [ClassFn] -> Rule -> Gen (NonEmpty Tell)
 genRuleInstance univ cls r = do
   assign <-
     Map.fromList
@@ -1887,7 +1972,7 @@ genRuleInstance univ cls r = do
   binding <-
     Map.fromList
       <$> traverse
-        (\(n, t) -> (n,) <$> genClosedLeafAt (groundTy t))
+        (\v -> (v.name,) <$> genClosedLeafAt (groundTy v.ty))
         (ruleVars r)
   traverse (headInstance groundTy binding) (ruleHeadList r.ruleHead)
   where
@@ -1905,7 +1990,7 @@ genRuleInstance univ cls r = do
     -- No instance at all would mean an unsatisfiable bound, which is
     -- a generator bug (see 'boundedTargets'), so it fails loudly
     -- rather than quietly building that rejected goal.
-    targetsFor sk = case [c | (s', c) <- boundedSkolems, s' == sk] of
+    targetsFor sk = case [b.cls | b <- boundedSkolems, b.skolem == sk] of
       [] -> filter determinedG univ
       names -> case [t | t <- univ, all (isInstance t) names] of
         [] ->
@@ -1919,12 +2004,7 @@ genRuleInstance univ cls r = do
       Just c -> t `elem` classInstances c
       Nothing -> True
     boundedSkolems =
-      [ (sk, b.bsClass)
-      | h <- ruleHeads r,
-        b <- h.headSig.sigBounds,
-        (tv, sk) <- zip h.headSig.sigTvs h.headSkolems,
-        tv == b.bsTv
-      ]
+      concat [boundedSkolemsOf h.headSig h.headSkolems | h <- ruleHeads r]
     classes =
       List.nub
         [ s
@@ -1942,12 +2022,17 @@ headInstance ::
   (STy -> GTy) ->
   Map Text Expr ->
   HeadC ->
-  Gen (Sig, [Expr])
+  Gen Tell
 headInstance groundTy binding h =
-  (h.headSig,)
+  Tell h.headSig
     <$> traverse
       (uncurry (patInstance binding))
       (zip (map groundTy (NE.toList (headArgTys h))) (NE.toList h.pats))
+
+-- | An argument position: a constraint symbol's name and a 0-based
+-- index. Only used as a map key, so no field names.
+data ArgPos = ArgPos Text Int
+  deriving (Eq, Ord)
 
 -- | Head patterns harvested from the generated rules, keyed by the
 -- constraint symbol and argument position they were found at.
@@ -1960,11 +2045,11 @@ headInstance groundTy binding h =
 -- Only /structured/ patterns are collected. A bare variable or wildcard
 -- constrains nothing, so seeding from it would be the same as drawing
 -- the argument freely.
-seedMap :: [Rule] -> Map (Text, Int) [Pat]
+seedMap :: [Rule] -> Map ArgPos [Pat]
 seedMap rs =
   Map.fromListWith
     (++)
-    [ ((h.headSig.sigName, i), [p])
+    [ (ArgPos h.headSig.sigName i, [p])
     | r <- rs,
       h <- ruleHeads r,
       (i, p) <- zip [0 ..] (NE.toList h.pats),

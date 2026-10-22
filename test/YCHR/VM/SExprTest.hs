@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Tests for the VM's s-expression format ("YCHR.Internal.VM.SExpr").
 module YCHR.VM.SExprTest (tests) where
 
 import Data.Map.Strict qualified as Map
@@ -16,6 +17,7 @@ import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize, vmVersion)
+import YCHR.TestHelpers (emptyProgram, funRefKey, histIds, mkProc)
 
 -- | Round-trip tests for the VM's S-expression serializer over 'VMProgram'.
 tests :: TestTree
@@ -38,30 +40,20 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program [] [] [] [] [] [] Map.empty []),
+  [ testCase "empty program" $ roundtrip emptyProgram,
     testCase "single empty procedure" $
       roundtrip
-        ( Program
-            [Types.Unqualified "foo"]
-            []
-            [mkProcedure "foo" [] []]
-            []
-            []
-            []
-            Map.empty
-            []
+        ( emptyProgram
+            { typeNames = [Types.Unqualified "foo"],
+              procedures = [mkProc "foo" [] []]
+            }
         ),
     testCase "procedure with params" $
       roundtrip
-        ( Program
-            [Types.Unqualified "leq"]
-            []
-            [mkProcedure "tell_leq2" ["X", "Y"] []]
-            []
-            []
-            []
-            Map.empty
-            []
+        ( emptyProgram
+            { typeNames = [Types.Unqualified "leq"],
+              procedures = [mkProc "tell_leq2" ["X", "Y"] []]
+            }
         ),
     testCase "let-val statement" $
       roundtrip (mkProg [LetVal "x" (Lit (IntLit 42))]),
@@ -96,7 +88,9 @@ roundtripTests =
                 "L1"
                 (ConstraintType 0)
                 "susp"
-                [(ArgIndex 0, Var "x"), (ArgIndex 1, Lit (IntLit 3))]
+                [ IndexCondition (ArgIndex 0) (Var "x"),
+                  IndexCondition (ArgIndex 1) (Lit (IntLit 3))
+                ]
                 [ExprStmt (FieldType (IdVar "susp"))]
             ]
         ),
@@ -199,47 +193,44 @@ roundtripTests =
       roundtrip (mkProg [LetVal "x" (Lit (TextLit "hello\nworld\t\"quoted\""))]),
     testCase "multi-procedure program" $
       roundtrip
-        ( Program
-            [Types.Unqualified "a", Types.Unqualified "b"]
-            []
-            [ mkProcedure
-                "tell_a1"
-                ["X"]
-                [ LetId
-                    "id"
-                    ( CreateConstraint
-                        (ConstraintType 0)
-                        [ Var
-                            "X"
-                        ]
-                    ),
-                  Store (IdVar "id"),
-                  ExprStmt (CallExpr "activate_a1" [AId (IdVar "id")])
+        ( emptyProgram
+            { typeNames = [Types.Unqualified "a", Types.Unqualified "b"],
+              procedures =
+                [ mkProc
+                    "tell_a1"
+                    ["X"]
+                    [ LetId
+                        "id"
+                        ( CreateConstraint
+                            (ConstraintType 0)
+                            [ Var
+                                "X"
+                            ]
+                        ),
+                      Store (IdVar "id"),
+                      ExprStmt (CallExpr "activate_a1" [AId (IdVar "id")])
+                    ],
+                  mkProc
+                    "activate_a1"
+                    ["susp"]
+                    [ LetId "id" (IdVar "susp"),
+                      LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
+                      Return (Lit (BoolLit False))
+                    ],
+                  mkProc
+                    "reactivate_dispatch"
+                    ["susp"]
+                    [ If
+                        ( BIsConstraintType
+                            (IdVar "susp")
+                            (ConstraintType 0)
+                        )
+                        [ExprStmt (CallExpr "activate_a1" [AId (IdVar "susp")])]
+                        []
+                    ]
                 ],
-              mkProcedure
-                "activate_a1"
-                ["susp"]
-                [ LetId "id" (IdVar "susp"),
-                  LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
-                  Return (Lit (BoolLit False))
-                ],
-              mkProcedure
-                "reactivate_dispatch"
-                ["susp"]
-                [ If
-                    ( BIsConstraintType
-                        (IdVar "susp")
-                        (ConstraintType 0)
-                    )
-                    [ExprStmt (CallExpr "activate_a1" [AId (IdVar "susp")])]
-                    []
-                ]
-            ]
-            []
-            []
-            []
-            Map.empty
-            [ConstraintType 1]
+              inertTypes = [ConstraintType 1]
+            }
         )
   ]
 
@@ -285,58 +276,77 @@ formatTests =
       assertContains
         ( serializeProg
             ( mkProgWithCallables
-                [(funRefKey "prelude:double" 1, "func_prelude__double1")]
+                [Callable (funRefKey "prelude:double" 1) "func_prelude__double1"]
             )
         )
         "(callables (\"/\" \"prelude:double\" 1 \"func_prelude__double1\"))",
     testCase "tellables entry serialization" $
       assertContains
         ( serializeProg
-            ( Program
-                []
-                []
-                [mkProcedure "p" [] []]
-                []
-                []
-                [ ( TellableKey {scope = Just "m", functor = "m__c", arity = 2},
-                    "tell_m__c2"
-                  )
-                ]
-                Map.empty
-                []
+            ( emptyProgram
+                { procedures = [mkProc "p" [] []],
+                  tellables =
+                    [ Tellable
+                        (TellableKey {scope = Just "m", functor = "m__c", arity = 2})
+                        "tell_m__c2"
+                    ]
+                }
             )
         )
         "(tellables (\"m\" \"m__c\" 2 \"tell_m__c2\"))",
     testCase "tellables-unqualified entry serialization" $
       assertContains
         ( serializeProg
-            ( Program
-                []
-                []
-                [mkProcedure "p" [] []]
-                []
-                []
-                []
-                ( Map.fromList
-                    [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
-                        UniqueTell "tell_m__c2"
-                      )
-                    ]
-                )
-                []
+            ( emptyProgram
+                { procedures = [mkProc "p" [] []],
+                  tellablesUnqualified =
+                    ( Map.fromList
+                        [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                            UniqueTell "tell_m__c2"
+                          )
+                        ]
+                    )
+                }
             )
         )
         "(tellables-unqualified (any \"c\" 2 \"tell_m__c2\"))",
     testCase "an ambiguous tellables-unqualified pair writes one field per candidate" $
       assertContains
         ( serializeProg
-            ( Program
-                []
-                []
-                [mkProcedure "p" [] []]
-                []
-                []
-                []
+            ( emptyProgram
+                { procedures = [mkProc "p" [] []],
+                  tellablesUnqualified =
+                    ( Map.fromList
+                        [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                            AmbiguousTell
+                              [ Types.QualifiedName "m" "c",
+                                Types.QualifiedName "n" "c"
+                              ]
+                          )
+                        ]
+                    )
+                }
+            )
+        )
+        ( "(tellables-unqualified (any \"c\" 2 "
+            <> "\"tell_m__c2\" \"tell_n__c2\"))"
+        ),
+    testCase "tellables entry roundtrip" $
+      roundtrip
+        ( emptyProgram
+            { procedures = [mkProc "p" [] [TellTerm "m" (Var "g") [Var "a"]]],
+              tellables =
+                [ Tellable
+                    (TellableKey {scope = Just "m", functor = "c", arity = 2})
+                    "tell_m__c2"
+                ]
+            }
+        ),
+    testCase "tellables-unqualified entry roundtrip" $
+      roundtrip
+        ( emptyProgram
+            { procedures = [mkProc "p" [] [TellTerm "m" (Var "g") [Var "a"]]],
+              tellablesUnqualified =
                 ( Map.fromList
                     [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
                         AmbiguousTell
@@ -346,43 +356,7 @@ formatTests =
                       )
                     ]
                 )
-                []
-            )
-        )
-        ( "(tellables-unqualified (any \"c\" 2 "
-            <> "\"tell_m__c2\" \"tell_n__c2\"))"
-        ),
-    testCase "tellables entry roundtrip" $
-      roundtrip
-        ( Program
-            []
-            []
-            [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
-            []
-            []
-            [(TellableKey {scope = Just "m", functor = "c", arity = 2}, "tell_m__c2")]
-            Map.empty
-            []
-        ),
-    testCase "tellables-unqualified entry roundtrip" $
-      roundtrip
-        ( Program
-            []
-            []
-            [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
-            []
-            []
-            []
-            ( Map.fromList
-                [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
-                    AmbiguousTell
-                      [ Types.QualifiedName "m" "c",
-                        Types.QualifiedName "n" "c"
-                      ]
-                  )
-                ]
-            )
-            []
+            }
         ),
     testCase "tell-term serialization" $
       assertContains
@@ -419,15 +393,9 @@ formatTests =
       let vmp =
             VMProgram
               { program =
-                  Program
-                    [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
-                    []
-                    []
-                    []
-                    []
-                    []
-                    Map.empty
-                    [],
+                  emptyProgram
+                    { typeNames = [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
+                    },
                 exportedSet =
                   Set.fromList
                     [ Types.QualifiedIdentifier "M" "leq" 2,
@@ -454,13 +422,12 @@ formatTests =
             Right vmp' -> vmp' @?= vmp
   ]
 
+-- | Serialize a program with empty exports and symbol table.
 serializeProg :: Program -> Text
 serializeProg = serialize . mkVMProg
 
 -- | The @(version N)@ header gates deserialization: this binary writes
--- and accepts only version 3, and a unit with no header is version 0 —
--- the pre-versioning format, which only a binary predating VM version
--- numbers could read.
+-- and accepts only version 3, and a unit with no header is version 0.
 versionTests :: [TestTree]
 versionTests =
   [ testCase "a version-3 program without the optional tables loads" $
@@ -527,12 +494,14 @@ versionTests =
         "duplicate (version N) header"
   ]
 
+-- | A minimal version-3 unit with one procedure.
 versionedProgramText :: Text
 versionedProgramText =
   "(vm-program (version 3) (program 0 (type-names) 0 (rule-names) (evaluables) "
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
 
+-- | 'versionedProgramText' without its version header.
 versionlessProgramText :: Text
 versionlessProgramText =
   "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables) "
@@ -552,7 +521,11 @@ countTests :: [TestTree]
 countTests =
   [ testCase "a declared type count that disagrees with (type-names) is rejected" $
       assertRejected
-        (T.replace "(program 0 (type-names)" "(program 1 (type-names)" versionedProgramText)
+        ( T.replace
+            "(program 0 (type-names)"
+            "(program 1 (type-names)"
+            versionedProgramText
+        )
         "declared type count 1 does not match the 0 entries in (type-names)",
     testCase "a declared rule count that disagrees with (rule-names) is rejected" $
       assertRejected
@@ -571,11 +544,10 @@ countTests =
 -- Non-negative slots
 -- ---------------------------------------------------------------------------
 
--- | The three IR slots the task moved to 'Word' (@GetArg@ index,
--- @FieldArg@'s @ArgIndex@, @BMatchTerm@ arity) plus the @Foreach@
--- condition index all previously decoded with a bare @fromInteger@,
--- which wraps a negative input to a large positive one. The checked
--- boundary must reject each of them by name.
+-- | The @Word@ slots of the IR (@GetArg@ index, @FieldArg@'s
+-- @ArgIndex@, @BMatchTerm@ arity, and the @Foreach@ condition index).
+-- A bare @fromInteger@ would wrap a negative input to a large positive
+-- one, so the reader must reject each of them by name.
 nonNegativeSlotTests :: [TestTree]
 nonNegativeSlotTests =
   [ testCase "a negative get-arg index is rejected" $
@@ -648,18 +620,23 @@ genCodecText =
           ]
       )
 
+-- | A name, possibly with characters that need escaping.
 genName :: Gen Name
 genName = Name <$> genCodecText
 
+-- | A loop label.
 genLabel :: Gen Label
 genLabel = Label <$> genCodecText
 
+-- | A rule id, negative ones included.
 genRuleId :: Gen RuleId
 genRuleId = RuleId <$> Gen.int (Range.linear (-3) 5)
 
+-- | A small constraint type.
 genConstraintType :: Gen ConstraintType
 genConstraintType = ConstraintType <$> Gen.int (Range.linear 0 4)
 
+-- | An argument index.
 genArgIndex :: Gen ArgIndex
 genArgIndex = ArgIndex <$> genWord
 
@@ -674,6 +651,7 @@ genWord = Gen.word (Range.linear 0 5)
 genHistoryIds :: Gen HistoryIds
 genHistoryIds = histIds <$> Gen.list (Range.linear 0 3) genIdExpr
 
+-- | Any literal.
 genLiteral :: Gen Literal
 genLiteral =
   Gen.choice
@@ -684,6 +662,7 @@ genLiteral =
       BoolLit <$> Gen.bool
     ]
 
+-- | A stack frame with arbitrary text fields.
 genStackFrame :: Gen StackFrame
 genStackFrame = do
   label <- genCodecText
@@ -751,6 +730,7 @@ genBoolExpr =
       BSoftGuard <$> Gen.small genBoolExpr
     ]
 
+-- | A value or id call argument.
 genCallArg :: Gen CallArg
 genCallArg =
   Gen.choice
@@ -794,7 +774,7 @@ genStmt =
         <*> genName
         <*> Gen.list
           (Range.linear 0 3)
-          ((,) <$> genArgIndex <*> Gen.small genValExpr)
+          (IndexCondition <$> genArgIndex <*> Gen.small genValExpr)
         <*> Gen.list (Range.linear 0 3) (Gen.small genStmt),
       DrainReactivationQueue
         <$> genName
@@ -805,38 +785,14 @@ genStmt =
 -- Helpers
 -- ---------------------------------------------------------------------------
 
--- | A propagation-history tuple in head-position order, the way
--- 'YCHR.Internal.Compile.buildHistoryIds' builds one.
-histIds :: [IdExpr] -> HistoryIds
-histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
-
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] [] Map.empty []
+mkProg body = emptyProgram {procedures = [mkProc "p" [] body]}
 
 -- | 'mkProg' with a non-empty callables table.
-mkProgWithCallables :: [(CallableKey, Name)] -> Program
+mkProgWithCallables :: [Callable] -> Program
 mkProgWithCallables callables =
-  Program [] [] [mkProcedure "p" [] []] [] callables [] Map.empty []
-
--- | A function-reference callables key, the shape
--- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.
-funRefKey :: Name -> Int -> CallableKey
-funRefKey identity arity =
-  CallableKey {functor = funRefFunctor, identity = identity, arity = arity}
-
--- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
--- doesn't affect serialization round-tripping or the format tests'
--- assertions, so a single neutral value (with no payload) keeps the
--- fixtures concise.
-mkProcedure :: Name -> [Name] -> [Stmt] -> Procedure
-mkProcedure n ps body =
-  Procedure
-    { name = n,
-      params = ps,
-      body = body,
-      procKind = PKReactivateDispatch
-    }
+  emptyProgram {procedures = [mkProc "p" [] []], callables = callables}
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram
@@ -847,6 +803,7 @@ mkVMProg prog =
       symbolTable = Types.mkSymbolTable []
     }
 
+-- | Assert that the first text contains the second.
 assertContains :: Text -> Text -> IO ()
 assertContains haystack needle =
   assertBool

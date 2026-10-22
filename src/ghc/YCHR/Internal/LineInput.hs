@@ -1,8 +1,8 @@
 -- | Line-input backend for the REPL, GHC build.
 --
 -- Wraps @haskeline@: prompt + history file + tab completion. The
--- twin module under @src\/mhs\/YCHR\/LineInput.hs@ provides a
--- bare-'getLine' implementation for MicroHS; the two are switched by
+-- twin module under @src\/mhs\/YCHR\/Internal\/LineInput.hs@ provides a
+-- bare-'getLine' implementation for MicroHs; the two are switched by
 -- @if impl(...)@ blocks in @ychr.cabal@.
 module YCHR.Internal.LineInput
   ( LineInputSettings (..),
@@ -32,7 +32,7 @@ import System.IO (IOMode (AppendMode, ReadMode), withFile)
 -- The 'historyFile' field is interpreted as an XDG-data-relative
 -- subpath (e.g. @\"ychr\/history\"@); the GHC backend resolves it via
 -- 'getXdgDirectory', creates the parent directory on demand, and checks
--- that the file is usable (writable and readable). The MicroHS backend
+-- that the file is usable (writable and readable). The MicroHs backend
 -- ignores both fields.
 data LineInputSettings = LineInputSettings
   { historyFile :: Maybe FilePath,
