@@ -78,7 +78,13 @@ import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Callable (..), CallableKey, Name (..), Procedure (..), Program (..))
+import YCHR.Internal.VM
+  ( Callable (..),
+    CallableKey,
+    Name (..),
+    Procedure (..),
+    Program (..),
+  )
 import YCHR.Internal.VM.Closure
   ( closureFailure,
     danglingCallables,
@@ -166,15 +172,16 @@ withCHR si hc action = withCHRExtra si hc [] [] action
 
 -- | Like 'withCHR' but merges extra procedures and extra callables
 -- (e.g. query-time lambda compilations and the dispatch entries for
--- them) into the tables visible to the action.
+-- them) into the tables visible to the action. Takes the callables as
+-- pairs, the shape 'YCHR.Run.PreparedQuery' exposes.
 withCHRExtra ::
   SessionInput ->
   HostCallRegistry ->
   [Procedure] ->
-  [Callable] ->
+  [(CallableKey, Name)] ->
   Chr a ->
   IO a
-withCHRExtra si hc extraProcs extraCallables action
+withCHRExtra si hc extraProcs extraPairs action
   | Just msg <- extraClosureFailure si extraProcs extraCallables = error msg
   | otherwise = do
       -- Query-time lambdas are compiled by the same CHR-to-VM compiler, so
@@ -205,6 +212,8 @@ withCHRExtra si hc extraProcs extraCallables action
               Config.exportedSet = si.exportedSet
             }
       runChr action env
+  where
+    extraCallables = map (uncurry Callable) extraPairs
 
 -- | Assert the procedure-name closure invariant for the query-time
 -- procedures and callables a session merges in.
@@ -238,8 +247,7 @@ extraClosureFailure si procs callables
 -- function and host-call boundaries). Used by the REPL's @:trace@
 -- one-shot dispatch. The handler is bound for the duration of the
 -- action; the session and its mutable state are fresh, so no clear-up
--- on the way out is needed. Takes the callables as pairs, the shape
--- 'YCHR.Run.PreparedQuery' exposes.
+-- on the way out is needed.
 withCHRExtraTraced ::
   SessionInput ->
   HostCallRegistry ->
@@ -249,7 +257,7 @@ withCHRExtraTraced ::
   Chr a ->
   IO a
 withCHRExtraTraced si hc extraProcs extraCallables handler action =
-  withCHRExtra si hc extraProcs (map (uncurry Callable) extraCallables) $ do
+  withCHRExtra si hc extraProcs extraCallables $ do
     env <- ask
     liftIO $ do
       writeIORef env.traceHandler (Just handler)

@@ -89,7 +89,6 @@ import YCHR.Internal.Types
     typeConstructors,
   )
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Callable (..))
 import YCHR.Run
   ( Error (..),
     PreparedQuery (..),
@@ -319,7 +318,7 @@ runOuterQueryWith timed opts prog line = do
               (toSessionInput prog)
               opts.hostCalls
               prep.extraProcs
-              (map (uncurry Callable) prep.extraCallables)
+              prep.extraCallables
               (executePreparedQuery prep.liftedGoals)
         end <- getCPUTime
         when timed (putStrLn (formatElapsed (end - start)))

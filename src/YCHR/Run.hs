@@ -240,7 +240,7 @@ runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
         liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
   unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
   let extraProcs = compileQueryLambdas lambdas
-      extraCallables = buildCallables lambdas
+      extraCallables = [(c.key, c.procName) | c <- buildCallables lambdas]
   withCHRExtra (toSessionInput cp) hostCalls extraProcs extraCallables $
     executePreparedQuery lifted
 
@@ -579,7 +579,7 @@ runProgramWithQuery typeChecker cp hostCalls src = do
     (toSessionInput cp)
     hostCalls
     prep.extraProcs
-    (map (uncurry Callable) prep.extraCallables)
+    prep.extraCallables
     (executePreparedQuery prep.liftedGoals)
 
 -- ---------------------------------------------------------------------------

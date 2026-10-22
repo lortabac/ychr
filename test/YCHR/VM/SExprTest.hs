@@ -363,7 +363,10 @@ formatTests =
             [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
             []
             []
-            [Tellable (TellableKey {scope = Just "m", functor = "c", arity = 2}) "tell_m__c2"]
+            [ Tellable
+                (TellableKey {scope = Just "m", functor = "c", arity = 2})
+                "tell_m__c2"
+            ]
             Map.empty
             []
         ),

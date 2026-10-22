@@ -177,7 +177,9 @@ programToSExpr prog =
         : SList (SAtom "tellables" : map tellableEntryToSExpr prog.tellables)
         : SList
           ( SAtom "tellables-unqualified"
-              : map (uncurry tellableResolutionToSExpr) (Map.toList prog.tellablesUnqualified)
+              : map
+                (uncurry tellableResolutionToSExpr)
+                (Map.toList prog.tellablesUnqualified)
           )
         : SList (SAtom "inert-types" : map constraintTypeToSExpr prog.inertTypes)
         : map procedureToSExpr prog.procedures

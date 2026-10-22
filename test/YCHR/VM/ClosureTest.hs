@@ -297,7 +297,9 @@ unionTests =
       testCase "an extra callables target must resolve in the union" $
         let compiled = procedureNames [mkProc "compiled" []]
             known = compiled <> procedureNames [mkProc "__lambda_0" []]
-         in danglingCallables known [Callable (CallableKey "__closure" "__lambda_0" 1) "ghost"]
+         in danglingCallables
+              known
+              [Callable (CallableKey "__closure" "__lambda_0" 1) "ghost"]
               @?= ["ghost"],
       testCase "withCHRExtra rejects an extra that calls an unknown procedure" $ do
         -- The pure checks above can pass while the wiring that runs them
