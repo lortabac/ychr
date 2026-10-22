@@ -47,6 +47,7 @@ import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
 import YCHR.Internal.PExpr qualified as PExpr
 import YCHR.Internal.Parsed (FunctionDeclKind (..))
 import YCHR.Internal.Parsed qualified as P
+import YCHR.Internal.Rename.Types (importListPermits, valueEntry)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( Aggregate (..),
@@ -425,21 +426,13 @@ buildDeclVisibility declKey mods =
         [im.node | im <- selfMod.imports]
 
     matchesImport providerName key im
-      | im.importModule == providerName = importListPermits key im.importItems
+      | im.importModule == providerName =
+          importListPermits valueEntry key im.importItems
       | otherwise = False
-
-    importListPermits _ Nothing = True
-    importListPermits key (Just decls) = any (matchesDecl key) decls
 
     exportPermits provider key = case provider.exports of
       Nothing -> True
-      Just annExports -> any (matchesDecl key) annExports.node
-
-    matchesDecl key (P.FunctionDecl fd') =
-      fd'.name == key.localName && fd'.arity == key.arity
-    matchesDecl key (P.ConstraintDecl cd) =
-      cd.name == key.localName && cd.arity == key.arity
-    matchesDecl _ _ = False
+      Just annExports -> importListPermits valueEntry key (Just annExports.node)
 
 -- | Look up the function-visibility table for a single module,
 -- returning the empty map for unknown modules.
