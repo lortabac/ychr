@@ -133,6 +133,6 @@ withState act = do
   case loaded of
     Nothing -> newCString (response statusError "Playground not initialised.\n")
     Just pg -> do
-      result <- act pg
-      writeIORef stateRef (Just result . playground)
-      newCString result . output
+      Step {playground = pg', output = out} <- act pg
+      writeIORef stateRef (Just pg')
+      newCString out
