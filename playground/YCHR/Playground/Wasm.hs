@@ -44,6 +44,7 @@ import Foreign.Ptr (Ptr)
 import System.IO.Unsafe (unsafePerformIO)
 import YCHR.Playground
   ( Playground,
+    Step (..),
     initPlayground,
     reload,
     response,
@@ -126,12 +127,12 @@ pgFree = free
 -- | Run an operation against the loaded playground, store the updated
 -- state, and marshal the response out. Reports a missing 'pgInit'
 -- instead of failing when the page calls out of order.
-withState :: (Playground -> IO (Playground, String)) -> IO (Ptr CChar)
+withState :: (Playground -> IO Step) -> IO (Ptr CChar)
 withState act = do
   loaded <- readIORef stateRef
   case loaded of
     Nothing -> newCString (response statusError "Playground not initialised.\n")
     Just pg -> do
-      (pg', out) <- act pg
+      Step {playground = pg', output = out} <- act pg
       writeIORef stateRef (Just pg')
       newCString out

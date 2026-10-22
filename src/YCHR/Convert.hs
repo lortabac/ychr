@@ -69,13 +69,13 @@ module YCHR.Convert
   )
 where
 
-import Control.Exception (throwIO)
 import Control.Monad.Trans.State.Strict (evalStateT)
 import Data.Bits (toIntegralSized)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
+import YCHR.Internal.Compile.Pipeline (compileOrThrow)
 import YCHR.Internal.Meta (termToValue, valueToTerm)
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
@@ -91,8 +91,6 @@ import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run
   ( CompiledProgram,
-    Error,
-    compileParsedModules,
     runProgramWithGoalDSL,
   )
 import YCHR.Types (Constraint (..), Name (..), Term (..))
@@ -456,11 +454,6 @@ runQueryWithHostCallRegistry stdlib hostCalls modules goal decode =
     Right _ -> do
       cp <- compileOrThrow stdlib modules
       runQueryCompiledWithHostCallRegistry hostCalls cp goal decode
-
-compileOrThrow :: StdLib -> [Module] -> IO CompiledProgram
-compileOrThrow stdlib modules = case compileParsedModules stdlib True modules of
-  Left err -> throwIO (err :: Error)
-  Right (cp, _warnings) -> pure cp
 
 -- ---------------------------------------------------------------------------
 -- Typed query wrapper over a compiled program

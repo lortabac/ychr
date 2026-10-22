@@ -20,7 +20,8 @@ import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (typeCheckProgram)
 import YCHR.Run
-  ( compileFiles,
+  ( PreparedGoal (..),
+    compileFiles,
     prepareGoalTerm,
     runGoalConstraint,
   )
@@ -99,8 +100,8 @@ loadCase name = do
   -- measures VM execution only. 'runGoalConstraint' takes the prepared
   -- goal as-is; the convenience entry point 'runProgramWithGoalDSL'
   -- would redo this work on every iteration.
-  (goal, _warnings) <- prepareGoalTerm prog parsedGoal
-  pure (BenchCase name prog goal)
+  prepared <- prepareGoalTerm prog parsedGoal
+  pure (BenchCase name prog prepared.constraint)
 
 -- | The host call registry used by all benchmarks. The same registry
 -- the golden test harness uses (@test/YCHR/GoldenTest.hs@), which is

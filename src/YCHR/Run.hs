@@ -48,7 +48,9 @@ module YCHR.Run
     -- $queryPipeline
     ExportResolution (..),
     resolveQueryConstraint,
+    QueryTell (..),
     resolveQueryTellOrThrow,
+    PreparedGoal (..),
     prepareGoal,
     prepareGoalTerm,
     goalShapeConstraint,
@@ -187,19 +189,32 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
           then Right (Types.QualifiedConstraint (Types.QualifiedName m n) cargs)
           else Left (ConstraintNotExported (Types.QualifiedName m n))
 
+-- | A goal resolved to the constraint it tells and its argument
+-- expressions.
+data QueryTell = QueryTell
+  { name :: Types.QualifiedName,
+    args :: [R.Expr]
+  }
+
+-- | A 'QueryTell' with the resolve diagnostics from typing its
+-- arguments.
+data CheckedQueryTell = CheckedQueryTell
+  { tell :: QueryTell,
+    errors :: [Diagnostic ResolveError]
+  }
+
 -- | 'resolveQueryConstraint' plus 'termToExpr' over the arguments, so they
--- evaluate like any tell-side argument; the inner list is the resolve
--- diagnostics from typing them.
+-- evaluate like any tell-side argument.
 resolveQueryTell ::
   CompiledProgram ->
   Constraint ->
-  Either GoalRejection ((Types.QualifiedName, [R.Expr]), [Diagnostic ResolveError])
+  Either GoalRejection CheckedQueryTell
 resolveQueryTell cp c = do
   qc <- resolveQueryConstraint cp c
   let (exprs, errs) =
         runWriter
           (traverse (termToExpr cp.queryFunctionVisibility queryLoc queryOrigin) qc.args)
-  pure ((qc.name, exprs), errs)
+  pure CheckedQueryTell {tell = QueryTell {name = qc.name, args = exprs}, errors = errs}
 
 -- | Run one host-built constraint; returns the goal's variable bindings.
 -- Arguments are canonicalized by 'prepareGoalTerm' first (rename errors
@@ -222,9 +237,9 @@ runProgramWithGoalDSLWithWarnings ::
   Constraint ->
   IO (Map Text Term, [Warning])
 runProgramWithGoalDSLWithWarnings cp hostCalls constraint = do
-  (prepared, ws) <- prepareGoalTerm cp constraint
-  bindings <- runGoalConstraint cp hostCalls prepared
-  pure (bindings, ws)
+  prepared <- prepareGoalTerm cp constraint
+  bindings <- runGoalConstraint cp hostCalls prepared.constraint
+  pure (bindings, prepared.warnings)
 
 -- | Run a goal with no renaming and no type checking. The goal /must/ come
 -- from 'prepareGoal' \/ 'prepareGoalTerm': a raw host-built 'Constraint'
@@ -236,9 +251,9 @@ runGoalConstraint ::
   Constraint ->
   IO (Map Text Term)
 runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
-  (qn, exprs) <- resolveQueryTellOrThrow cp constraint
+  qt <- resolveQueryTellOrThrow cp constraint
   let (lifted, lambdas, liftErrs) =
-        liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
+        liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qt.name qt.args]
   unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
   let extraProcs = compileQueryLambdas lambdas
       extraCallables = [(c.key, c.procName) | c <- buildCallables lambdas]
@@ -248,20 +263,19 @@ runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
 -- | Resolve a goal's name and arguments, throwing. A name that does not
 -- resolve, or resolves to a function, is 'GoalNotAConstraint'
 -- (@YCHR-20013@).
-resolveQueryTellOrThrow ::
-  CompiledProgram -> Constraint -> IO (Types.QualifiedName, [R.Expr])
+resolveQueryTellOrThrow :: CompiledProgram -> Constraint -> IO QueryTell
 resolveQueryTellOrThrow cp c = case resolveQueryTell cp c of
   Left rejection -> throwIO (GoalNotAConstraint c rejection)
-  Right ((qn, exprs), errs)
+  Right resolved
     | not
         ( Map.member
-            (Types.ConstraintKey qn (length exprs))
+            (Types.ConstraintKey resolved.tell.name (length resolved.tell.args))
             cp.desugaredProgram.constraintTypes
         ) ->
-        throwIO (GoalNotAConstraint c (NotAConstraintItem qn))
+        throwIO (GoalNotAConstraint c (NotAConstraintItem resolved.tell.name))
     | otherwise -> do
-        unless (null errs) (throwIO (ResolveErrors errs))
-        pure (qn, exprs)
+        unless (null resolved.errors) (throwIO (ResolveErrors resolved.errors))
+        pure resolved.tell
 
 queryLoc :: SourceLoc
 queryLoc = SourceLoc "<query>" 1 1
@@ -316,10 +330,16 @@ convertRuntimeErrorChr m = do
       )
     $ runReaderT m env
 
+-- | A canonicalized goal and its rename warnings.
+data PreparedGoal = PreparedGoal
+  { constraint :: Constraint,
+    warnings :: [Warning]
+  }
+
 -- | Parse and canonicalize a goal, with its rename warnings. Throws on
 -- parse or rename errors. Separate from running so the CLI can honour
 -- @--Werror@ before the goal runs.
-prepareGoal :: CompiledProgram -> Text -> IO (Constraint, [Warning])
+prepareGoal :: CompiledProgram -> Text -> IO PreparedGoal
 prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
   Left err -> throwIO (ParseError "<query>" err)
   Right parsed -> case either goalShapeConstraint Right parsed of
@@ -328,20 +348,22 @@ prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
 
 -- | 'prepareGoal' minus the parse: canonicalize a goal already in term
 -- form. Throws 'RenameErrors'.
-prepareGoalTerm :: CompiledProgram -> Constraint -> IO (Constraint, [Warning])
+prepareGoalTerm :: CompiledProgram -> Constraint -> IO PreparedGoal
 prepareGoalTerm cp original@(Constraint cname0 cargs0) = do
   expanded <-
     either (throwIO . RenameErrors) pure (expandQueryGoalWith cp.queryRenameEnv original)
   case expanded of
     [CompoundTerm cname cargs] -> do
-      renamedArgs <-
+      renamed <-
         either
           (throwIO . RenameErrors)
           pure
           (renameQueryArgsWith cp.queryRenameEnv cargs)
-      let ws = renamedArgs.warnings
-          warnings = [RenameWarnings ws | not (null ws)]
-      pure (Constraint cname renamedArgs.result, warnings)
+      pure
+        PreparedGoal
+          { constraint = Constraint cname renamed.result,
+            warnings = [RenameWarnings renamed.warnings | not (null renamed.warnings)]
+          }
     -- A macro expanding to a conjunction (or to zero goals, or to a
     -- bare variable/literal) cannot be represented as a single
     -- 'Constraint'. The single-goal entry points parse exactly one
@@ -373,8 +395,8 @@ runPreparedGoal ::
   IO (Map Text Term)
 runPreparedGoal typeChecker cp hostCalls original = do
   tcErrs <- case resolveQueryTell cp original of
-    Right ((qn, exprs), errs)
-      | null errs -> do
+    Right resolved
+      | null resolved.errors -> do
           -- Errors only: no warning channel here, and the checker's one
           -- warning (YCHR-20104) needs a guard, which a goal never has.
           -- 'prepareQuery' surfaces warnings if one is ever added.
@@ -384,7 +406,7 @@ runPreparedGoal typeChecker cp hostCalls original = do
               cp.desugaredProgram
               queryLoc
               (Just "query")
-              [D.BodyTell qn exprs]
+              [D.BodyTell resolved.tell.name resolved.tell.args]
           pure result.errors
     -- Resolution failed: the runtime path raises the same errors.
     _ -> pure []
@@ -400,8 +422,8 @@ runProgramWithGoal ::
   Text ->
   IO (Map Text Term)
 runProgramWithGoal typeChecker cp hostCalls src = do
-  (constraint, _ws) <- prepareGoal cp src
-  runPreparedGoal typeChecker cp hostCalls constraint
+  prepared <- prepareGoal cp src
+  runPreparedGoal typeChecker cp hostCalls prepared.constraint
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -410,12 +432,14 @@ runProgramWithGoal typeChecker cp hostCalls src = do
 -- | A query parsed, desugared, lambda-lifted, and type-checked.
 -- 'extraProcs' and 'extraCallables' (the lifted lambdas and their
 -- dispatch entries) must be added to the session before
--- 'executePreparedQuery'.
+-- 'executePreparedQuery'. 'warnings' are the rename and type-check
+-- warnings.
 data PreparedQuery = PreparedQuery
   { liftedGoals :: [D.BodyGoal],
     queryLambdas :: [D.Function],
     extraProcs :: [Procedure],
-    extraCallables :: [(CallableKey, Name)]
+    extraCallables :: [(CallableKey, Name)],
+    warnings :: [Warning]
   }
 
 -- | 'PreparedQuery' minus the type check. 'goalProgram' is the program to
@@ -479,7 +503,7 @@ resolveQueryGoals cp src = do
 
 -- | Parse, rename, desugar, lambda-lift, and type-check a query. The
 -- 'SessionInput' is the compiled type-checker; see 'runPreparedGoal'.
-prepareQuery :: SessionInput -> CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
+prepareQuery :: SessionInput -> CompiledProgram -> Text -> IO PreparedQuery
 prepareQuery typeChecker cp src = do
   resolved <- resolveQueryGoals cp src
   tcResult <-
@@ -490,11 +514,10 @@ prepareQuery typeChecker cp src = do
       (Just "query")
       resolved.liftedGoals
   unless (null tcResult.errors) (throwIO (TypeErrors tcResult.errors))
-  pure
-    ( prepareResolved resolved,
-      [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
-        ++ [TypeCheckWarnings tcResult.warnings | not (null tcResult.warnings)]
-    )
+  pure $
+    prepareResolved
+      resolved
+      [TypeCheckWarnings tcResult.warnings | not (null tcResult.warnings)]
 
 -- | 'prepareQuery' without the type check: parse, rename, desugar and
 -- lambda-lift the query, and report its rename warnings, but do not run
@@ -504,29 +527,30 @@ prepareQuery typeChecker cp src = do
 --
 -- Only the checker is skipped: parse, rename, resolve and desugar errors
 -- still throw, exactly as in 'prepareQuery'.
-prepareQueryUnchecked :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
+prepareQueryUnchecked :: CompiledProgram -> Text -> IO PreparedQuery
 prepareQueryUnchecked cp src = do
   resolved <- resolveQueryGoals cp src
-  pure
-    ( prepareResolved resolved,
-      [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
-    )
+  pure (prepareResolved resolved [])
 
 -- | Finish preparing a resolved query: compile its lifted lambdas and
 -- their callables dispatch entries into the extras the session needs.
--- Shared by 'prepareQuery' and 'prepareQueryUnchecked'.
+-- The warnings are the query's rename warnings followed by the given
+-- type-check ones. Shared by 'prepareQuery' and 'prepareQueryUnchecked'.
 --
 -- The extras are only the query's own lambdas. A callable the query
 -- reaches through a compiled function is already in the session's
 -- table, which is built from the program; nothing is regenerated
 -- per query.
-prepareResolved :: ResolvedQuery -> PreparedQuery
-prepareResolved resolved =
+prepareResolved :: ResolvedQuery -> [Warning] -> PreparedQuery
+prepareResolved resolved typeWarnings =
   PreparedQuery
     { liftedGoals = resolved.liftedGoals,
       queryLambdas = resolved.queryLambdas,
       extraProcs = compileQueryLambdas resolved.queryLambdas,
-      extraCallables = [(c.key, c.procName) | c <- buildCallables resolved.queryLambdas]
+      extraCallables = [(c.key, c.procName) | c <- buildCallables resolved.queryLambdas],
+      warnings =
+        [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
+          ++ typeWarnings
     }
 
 -- | Run the 'liftedGoals' of a 'PreparedQuery' in the current session, in
@@ -576,7 +600,7 @@ perKeyAliases classes k = Map.mapMaybe pick classes
 runProgramWithQuery ::
   SessionInput -> CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery typeChecker cp hostCalls src = do
-  (prep, _ws) <- prepareQuery typeChecker cp src
+  prep <- prepareQuery typeChecker cp src
   withCHRExtra
     (toSessionInput cp)
     hostCalls
