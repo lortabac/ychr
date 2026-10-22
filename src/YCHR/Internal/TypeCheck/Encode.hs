@@ -74,6 +74,7 @@ import YCHR.Internal.Types
     BoundSig (..),
     ConstraintKey (..),
     DataConstructor (..),
+    FunSignature (..),
     HeadArg (..),
     HeadConstraint (..),
     Name (..),
@@ -299,8 +300,8 @@ function f = do
         ]
     )
 
-funSig :: ([TypeExpr], TypeExpr) -> Term
-funSig (args, ret) = ast "fun_sig" [listTerm (map typeExpr args), typeExpr ret]
+funSig :: FunSignature -> Term
+funSig sig = ast "fun_sig" [listTerm (map typeExpr sig.argTypes), typeExpr sig.returnType]
 
 equation :: D.Equation -> Term
 equation eq =

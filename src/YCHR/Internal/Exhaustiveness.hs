@@ -54,6 +54,7 @@ import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( DataConstructor (..),
+    FunSignature (..),
     Name,
     Term (..),
     TypeDefinition (..),
@@ -108,9 +109,8 @@ checkFunction conEnv typeMap fd
   | fd.isOpen = []
   | [sig] <- fd.signatures,
     AnnP _ loc origin : _ <- fd.equations =
-      let (argTys, _) = sig
-          classify = colTypeOf typeMap
-          colTypes = map classify argTys
+      let classify = colTypeOf typeMap
+          colTypes = map classify sig.argTypes
           -- Only equations without a user guard count as covering.
           matrix =
             [ zipWith (termToPat conEnv typeMap) colTypes eq.args

@@ -40,6 +40,7 @@ import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     DataConstructor (..),
+    FunSignature (..),
     Name (..),
     QualifiedName (..),
     Term (..),
@@ -381,7 +382,7 @@ prettyConstraintDecl qn arity mArgTys bounds = case mArgTys of
 prettyFunctionDecl ::
   QualifiedName ->
   Int ->
-  [([TypeExpr], TypeExpr)] ->
+  [FunSignature] ->
   [BoundSig] ->
   Maybe TypeExpr ->
   DeclKind ->
@@ -397,17 +398,17 @@ prettyFunctionDecl qn arity sigs bounds refined kind =
           -- @name/arity@ form. This shape is not currently produced by
           -- the resolver but is handled here so the printer is total.
           ":- " ++ keyword ++ " " ++ renderAtom qn.baseName ++ "/" ++ show arity ++ "."
-        [(argTys, retTy)] ->
+        [sig] ->
           ":- "
             ++ keyword
             ++ " "
-            ++ prettyFunSig qn.baseName argTys retTy
+            ++ prettyFunSig qn.baseName sig.argTypes sig.returnType
             ++ reqStr
             ++ refStr
             ++ "."
         _ ->
-          let oneSig (argTys, retTy) =
-                "    (" ++ prettyFunSig qn.baseName argTys retTy ++ ")"
+          let oneSig sig =
+                "    (" ++ prettyFunSig qn.baseName sig.argTypes sig.returnType ++ ")"
            in ":- "
                 ++ keyword
                 ++ "\n"

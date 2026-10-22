@@ -51,6 +51,7 @@ import YCHR.Internal.Types
     BoundSig,
     ConstraintKey,
     ConstraintUse,
+    FunSignature,
     HeadArg,
     Name (..),
     QualifiedConstraint,
@@ -157,7 +158,7 @@ data AggregateConjunct
 data FunctionDef = FunctionDef
   { name :: QualifiedName,
     arity :: Int,
-    signatures :: [([TypeExpr], TypeExpr)],
+    signatures :: [FunSignature],
     isOpen :: Bool,
     -- | Bounds declared on this function via @requiring@. Empty when
     -- the function is unbounded.

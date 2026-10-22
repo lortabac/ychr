@@ -58,6 +58,7 @@ module YCHR.Internal.Types
     typeConstructors,
     DataConstructor (..),
     TypeExpr (..),
+    FunSignature (..),
 
     -- * Bounded polymorphism
     BoundSig (..),
@@ -377,6 +378,13 @@ data DataConstructor = DataConstructor
 data TypeExpr
   = TypeVar Text
   | TypeCon Name [TypeExpr]
+  deriving (Show, Eq)
+
+-- | One type signature of a function: argument types and return type.
+data FunSignature = FunSignature
+  { argTypes :: [TypeExpr],
+    returnType :: TypeExpr
+  }
   deriving (Show, Eq)
 
 -- | A required signature appearing inside a @requiring@ clause on a

@@ -48,6 +48,7 @@ import YCHR.Internal.Types
     ConstraintKey (..),
     ConstraintUse (..),
     DataConstructor (..),
+    FunSignature (..),
     HeadArg (..),
     Name (..),
     QualifiedConstraint (..),
@@ -1428,7 +1429,7 @@ resolveFunctions visMap inlineSet mods =
                 { name = qn,
                   arity = ar,
                   signatures =
-                    collectSignatures declPairs
+                    collectSignatures (map fst declPairs)
                       ++ collectExtensionSignatures mods qn ar,
                   isOpen = any (\(fd, _) -> fd.isOpen) declPairs,
                   requiring = concatMap (\(fd, _) -> fromMaybe [] fd.requiring) declPairs,
@@ -1448,10 +1449,10 @@ resolveFunctions visMap inlineSet mods =
    in (defs, concat defErrss)
 
 -- | Collect type signatures from a group of declarations for the same function.
-collectSignatures :: [(P.FunctionDeclBody, CollectedModule)] -> [([TypeExpr], TypeExpr)]
+collectSignatures :: [P.FunctionDeclBody] -> [FunSignature]
 collectSignatures decls =
-  [ (argTys, retTy)
-  | (fd, _) <- decls,
+  [ FunSignature argTys retTy
+  | fd <- decls,
     Just argTys <- [fd.argTypes],
     Just retTy <- [fd.returnType]
   ]
@@ -1460,9 +1461,9 @@ collectSignatures decls =
 -- directives in any module. Only signatures whose resolved target
 -- matches the given qualified name and arity are included.
 collectExtensionSignatures ::
-  [CollectedModule] -> QualifiedName -> Int -> [([TypeExpr], TypeExpr)]
+  [CollectedModule] -> QualifiedName -> Int -> [FunSignature]
 collectExtensionSignatures mods qn ar =
-  [ (argTys, retTy)
+  [ FunSignature argTys retTy
   | m <- mods,
     P.Ann d _ <- m.extensionTypes,
     P.ExtendClassTypeDecl ed <- [d],

@@ -234,7 +234,7 @@ data BodyGoal
 data Function = Function
   { name :: QualifiedName,
     arity :: Int,
-    signatures :: [([TypeExpr], TypeExpr)],
+    signatures :: [FunSignature],
     -- | Bounds declared on this function via @requiring@. Empty when
     -- the function is unbounded.
     requiring :: [BoundSig],
