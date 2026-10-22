@@ -22,6 +22,7 @@ import YCHR.Internal.Rename
   ( RenameError (..),
     RenameInputs (..),
     RenameWarning (..),
+    Renamed (..),
     defaultRenameInputs,
   )
 import YCHR.Internal.Rename qualified as Rn
@@ -34,11 +35,7 @@ import YCHR.Internal.Rename qualified as Rn
 -- existing tests concise.
 renameProgram ::
   [Module] ->
-  Either
-    [Diagnostic RenameError]
-    ( [CollectedModule],
-      [Diagnostic RenameWarning]
-    )
+  Either [Diagnostic RenameError] (Renamed [CollectedModule])
 renameProgram = Rn.renameProgram defaultRenameInputs . rewriteImports
 
 -- | Build an algebraic type definition positionally (the constructors
@@ -70,8 +67,8 @@ tests =
 singleRule :: Module -> IO Rule
 singleRule m = do
   renamed <- case renameProgram [m] of
-    Right ([r], _) -> return r
-    Right (mods, _) ->
+    Right (Renamed [r] _) -> return r
+    Right (Renamed mods _) ->
       assertFailure $ "expected 1 renamed module, got " ++ show (length mods)
     Left errs -> assertFailure $ "unexpected errors: " ++ show errs
   case renamed.rules of
@@ -353,8 +350,8 @@ alreadyQualifiedTests =
                 `importing` ["Order"]
                 `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedM) <- case renameProgram [modOrder, modM] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedM.rules of
@@ -380,8 +377,8 @@ alreadyQualifiedTests =
                 `importing` ["A", "B"]
                 `defining` [[qterm "A" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renamedC <- case renameProgram [modA, modB, modC] of
-          Right ([_, _, c], _) -> return c
-          Right (mods, _) ->
+          Right (Renamed [_, _, c] _) -> return c
+          Right (Renamed mods _) ->
             assertFailure $ "expected 3 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedC.rules of
@@ -618,8 +615,8 @@ multiModuleTests =
                                   )
                            ]
         (renamedOrder, renamedLogic) <- case renameProgram [modOrder, modLogic] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         (renamedOrder.rules, renamedLogic.rules)
@@ -671,7 +668,7 @@ multiModuleTests =
         -- the import-collapse that 'rewriteImports' performs), so the
         -- expected output is just the collected form of the input.
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right (rewriteImports [m], [])
+         in renameProgram [m] @?= Right (Renamed (rewriteImports [m]) [])
     ]
 
 --------------------------------------------------------------------------------
@@ -719,8 +716,8 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
@@ -774,8 +771,8 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) ->
+          Right (Renamed [a, b] _) -> return (a, b)
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
@@ -807,7 +804,7 @@ exportTests =
 -- | Rename a program and return the warnings (failing on errors).
 warningsOf :: [Module] -> IO [Diagnostic RenameWarning]
 warningsOf mods = case renameProgram mods of
-  Right (_, ws) -> pure ws
+  Right (Renamed _ ws) -> pure ws
   Left errs -> assertFailure $ "unexpected errors: " ++ show errs
 
 warningTests :: TestTree
@@ -1092,14 +1089,14 @@ warningTests =
                     ]
                 }
         case renameProgram [m] of
-          Right ([renamed], _) -> case renamed.typeDecls of
+          Right (Renamed [renamed] _) -> case renamed.typeDecls of
             [Ann td _] -> do
               td.name @?= Qualified "M" "tree"
               case typeConstructors td of
                 [dc] -> dc.conName @?= Qualified "M" "leaf"
                 dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
-          Right (mods, _) ->
+          Right (Renamed mods _) ->
             assertFailure $ "expected 1 module, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
       testCase "type references resolved across modules" $ do
@@ -1137,14 +1134,14 @@ warningTests =
                     ]
                 }
         case renameProgram [modA, modB] of
-          Right ([_, renamedB], _) -> case renamedB.typeDecls of
+          Right (Renamed [_, renamedB] _) -> case renamedB.typeDecls of
             [Ann td _] -> case typeConstructors td of
               [dc] -> case dc.conArgs of
                 [TypeCon colorName []] -> colorName @?= Qualified "A" "color"
                 args -> assertFailure $ "unexpected constructor args: " ++ show args
               dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
-          Right (mods, _) ->
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
     ]
@@ -1183,7 +1180,7 @@ importListTests =
                 }
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modOrder, modLogic] of
-          Right ([_, renamedLogic], _) -> case renamedLogic.rules of
+          Right (Renamed [_, renamedLogic] _) -> case renamedLogic.rules of
             [rule] ->
               rule.head.node
                 @?= Simplification
@@ -1195,7 +1192,7 @@ importListTests =
                   ]
                   []
             rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-          Right (mods, _) ->
+          Right (Renamed mods _) ->
             assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
       testCase "name NOT in import list is not resolved" $ do

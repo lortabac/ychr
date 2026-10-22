@@ -37,8 +37,9 @@ module YCHR.Internal.DeclMacro
   )
 where
 
+import Control.Monad (unless)
 import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, gets, modify')
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub)
 import Data.Map.Strict (Map)
@@ -59,18 +60,19 @@ import YCHR.Internal.Parser
     scanModuleTerms,
   )
 import YCHR.Internal.Pretty (termToPExpr)
-import YCHR.Internal.Rename (RenameError (..))
+import YCHR.Internal.Rename (RenameError (..), useFailureError)
 import YCHR.Internal.Rename.Macro
-  ( PrimitiveError (..),
-    importListPermitsMacro,
+  ( MacroState (..),
+    MacroUse (..),
+    UseResult (..),
+    expandStep,
+    freshBudget,
+    initialMacroState,
     instantiateBody,
-    isVariant,
-    macroDepthLimit,
-    macroExpansionBudget,
+    newMacroUse,
     renderExpansionChain,
-    selectClause,
-    termsSize,
   )
+import YCHR.Internal.Rename.Types (importListPermits, macroEntry)
 import YCHR.Internal.Types
   ( QualifiedIdentifier (..),
     QualifiedName (..),
@@ -180,8 +182,8 @@ buildDeclMacroEnv allScopes =
 -- | Modules that make macro @n\/a@ of the given kind visible: the
 -- module itself, plus imports that export it. Same as the renamer's
 -- @visibleMacroProviders@.
-providers :: DeclMacroEnv -> MacroScope -> MacroKind -> Text -> Int -> [Text]
-providers env scope kind n a =
+providers :: DeclMacroEnv -> MacroScope -> MacroKind -> UnqualifiedIdentifier -> [Text]
+providers env scope kind (UnqualifiedIdentifier n a) =
   filter
     ofKind
     ( nub
@@ -189,7 +191,7 @@ providers env scope kind n a =
             ++ [ mn
                | CollectedImport mn il <- scope.imports,
                  Set.member (QualifiedIdentifier mn n a) env.exported,
-                 importListPermitsMacro n a il
+                 importListPermits macroEntry (UnqualifiedIdentifier n a) il
                ]
         )
     )
@@ -202,28 +204,17 @@ providers env scope kind n a =
 -- Expansion
 -- ---------------------------------------------------------------------------
 
--- | A use in the current expansion chain.
-data Use = Use
-  { step :: ExpansionStep,
-    -- | Arguments as written, for the cycle check.
-    arguments :: [Term],
-    -- | 'termsSize' of 'arguments'. Cheap check before 'isVariant'.
-    argumentsSize :: Int,
-    -- | Uses in the chain, this one included.
-    depth :: Int
+-- | Where an expansion happens: the macro tables, the module, where the
+-- outermost directive is, and the chain of uses in progress (empty at
+-- top level).
+data ExpandCtx = ExpandCtx
+  { env :: DeclMacroEnv,
+    scope :: MacroScope,
+    loc :: SourceLoc,
+    chain :: [MacroUse]
   }
 
--- | Expansion state for one module (like the renamer's macro state).
-data ExpState = ExpState
-  { nextSeed :: Int,
-    -- | Expansions left for the current top-level use.
-    remaining :: Int,
-    -- | The current top-level use failed (limit hit, or error in a
-    -- nested use). Skip the rest silently, so the error shows once.
-    abandoned :: Bool
-  }
-
-type Expand = StateT ExpState (Writer [Diagnostic DeclMacroError])
+type Expand = StateT MacroState (Writer [Diagnostic DeclMacroError])
 
 -- | A module after expansion and conversion.
 data ExpandedModule = ExpandedModule
@@ -244,7 +235,7 @@ expandAndConvert :: DeclMacroEnv -> MacroScope -> [Ann PExpr] -> ExpandedModule
 expandAndConvert env scope terms =
   let defErrs = checkDefinitions scope
       (items, expErrs) =
-        runWriter (evalStateT (expandModule env scope terms) initialState)
+        runWriter (evalStateT (expandModule env scope terms) initialMacroState)
       (m, convErrs) = convertSourceItems scope.name items
    in ExpandedModule
         { converted = m,
@@ -260,9 +251,6 @@ expandAndConvert env scope terms =
                  ],
           splices = [si | si <- items, not (null si.expansion)]
         }
-  where
-    initialState =
-      ExpState {nextSeed = 0, remaining = macroExpansionBudget, abandoned = False}
 
 -- | Expand a module's top-level terms. Each top-level use gets a fresh
 -- budget. A failed use adds no clauses, so its partial output doesn't
@@ -273,61 +261,69 @@ expandModule env scope terms = concat <$> traverse top terms
     top t = case t.node of
       Compound ":-" [body]
         | not (isBuiltinDirective body.node) -> do
-            modify' (\st -> st {remaining = macroExpansionBudget, abandoned = False})
-            items <- directive env scope t.sourceLoc [] body
+            modify' freshBudget
+            items <- directive (ExpandCtx env scope t.sourceLoc []) body
             isAbandoned <- gets (.abandoned)
             pure (if isAbandoned then [] else items)
       _ -> pure [SourceItem t []]
 
 -- | Expand a non-built-in directive @:- T@, at top level (empty
--- @chain@) or nested. @loc@ is where the outermost directive is.
-directive ::
-  DeclMacroEnv -> MacroScope -> SourceLoc -> [Use] -> Ann PExpr -> Expand [SourceItem]
-directive env scope loc chain body = do
+-- chain) or nested.
+directive :: ExpandCtx -> Ann PExpr -> Expand [SourceItem]
+directive ctx body = do
   isAbandoned <- gets (.abandoned)
   if isAbandoned
     then pure []
-    else case useShape body.node of
+    else case directiveUse body.node of
       -- Variable, number, string or bad qualified name: not a clause.
-      Nothing -> failIn chain (DeclMacroParseError MalformedTopLevel)
-      Just (qual, n, rawArgs)
+      Nothing -> failIn (DeclMacroParseError MalformedTopLevel)
+      Just use
         -- Already reported as a duplicate; don't pile a mismatch on it.
-        | qual `elem` [Nothing, Just scope.name],
-          Set.member (UnqualifiedIdentifier n (length rawArgs)) (mixedKeys scope) ->
+        | use.qualifier `elem` [Nothing, Just ctx.scope.name],
+          let k = UnqualifiedIdentifier use.name (length use.args),
+          k `Set.member` mixedKeys ctx.scope ->
             pure []
-      Just (qual, n, rawArgs) -> case resolveUse env scope qual n (length rawArgs) of
-        Left err -> failIn chain err
-        Right prov -> expandUse env scope loc chain body prov n (map convertTerm rawArgs)
+        | otherwise -> case resolveUse ctx.env ctx.scope use of
+            Left err -> failIn err
+            Right prov ->
+              expandUse ctx body (QualifiedName prov use.name) (map convertTerm use.args)
   where
     -- A failed nested use kills the whole top-level use.
-    failIn c err = do
-      if null c then pure () else modify' (\st -> st {abandoned = True})
-      emit loc body.node c err
+    failIn err = do
+      unless (null ctx.chain) $ modify' (\st -> st {abandoned = True})
+      emit ctx body.node err
       pure []
 
+-- | A directive's term split into qualifier, name and arguments.
+data DirectiveUse = DirectiveUse
+  { qualifier :: Maybe Text,
+    name :: Text,
+    args :: [Ann PExpr]
+  }
+
 -- | Split a directive's term into qualifier, name and arguments.
-useShape :: PExpr -> Maybe (Maybe Text, Text, [Ann PExpr])
-useShape p = case p of
-  Compound ":" [Ann (Atom m) _, Ann (Atom n) _] -> Just (Just m, n, [])
-  Compound ":" [Ann (Atom m) _, Ann (Compound n as) _] -> Just (Just m, n, as)
+directiveUse :: PExpr -> Maybe DirectiveUse
+directiveUse p = case p of
+  Compound ":" [Ann (Atom m) _, Ann (Atom n) _] -> Just (DirectiveUse (Just m) n [])
+  Compound ":" [Ann (Atom m) _, Ann (Compound n as) _] ->
+    Just (DirectiveUse (Just m) n as)
   Compound ":" _ -> Nothing
-  Atom n -> Just (Nothing, n, [])
-  Compound n as -> Just (Nothing, n, as)
+  Atom n -> Just (DirectiveUse Nothing n [])
+  Compound n as -> Just (DirectiveUse Nothing n as)
   _ -> Nothing
 
 -- | Find the module that provides the macro a use names.
-resolveUse ::
-  DeclMacroEnv -> MacroScope -> Maybe Text -> Text -> Int -> Either DeclMacroError Text
-resolveUse env scope qual n a = case qual of
-  Nothing -> case providers env scope DeclMacro n a of
+resolveUse :: DeclMacroEnv -> MacroScope -> DirectiveUse -> Either DeclMacroError Text
+resolveUse env scope use = case use.qualifier of
+  Nothing -> case providers env scope DeclMacro key of
     [m] -> Right m
     []
-      | (g : _) <- providers env scope GoalMacro n a -> kindMismatch g
+      | (g : _) <- providers env scope GoalMacro key -> kindMismatch g
       | otherwise -> Left (UnknownDirective n a)
     ms -> Left (DeclMacroRenameError (AmbiguousName n a ms))
   Just m
-    | m `elem` providers env scope DeclMacro n a -> Right m
-    | m `elem` providers env scope GoalMacro n a -> kindMismatch m
+    | m `elem` providers env scope DeclMacro key -> Right m
+    | m `elem` providers env scope GoalMacro key -> kindMismatch m
     -- Own module, but no such macro.
     | m == scope.name -> Left (UnknownDirective n a)
     | not (Map.member m env.scopes) -> Left (DeclMacroRenameError (UnknownModule m))
@@ -335,93 +331,51 @@ resolveUse env scope qual n a = case qual of
         Left (DeclMacroRenameError (ModuleNotImported m n a))
     | otherwise -> Left (DeclMacroRenameError (NotExportedByModule m n a))
   where
+    n = use.name
+    a = length use.args
+    key = UnqualifiedIdentifier n a
     kindMismatch m =
       Left (DeclMacroRenameError (MacroKindMismatch (QualifiedName m n) a GoalMacro))
 
--- | Expand a resolved use: pick a clause, instantiate it, splice the
--- elements (expanding nested uses). Same checks as the renamer's
--- @expandMacroUse@.
-expandUse ::
-  DeclMacroEnv ->
-  MacroScope ->
-  SourceLoc ->
-  [Use] ->
-  Ann PExpr ->
-  Text ->
-  Text ->
-  [Term] ->
-  Expand [SourceItem]
-expandUse env scope loc chain body prov n useArgs = do
-  st <- get
-  case Map.lookup (QualifiedIdentifier prov n arity) env.definitions of
+-- | Expand a use of macro @qn@: pick a clause, instantiate it, splice
+-- the elements (expanding nested uses). The checks are the renamer's
+-- ('expandStep').
+expandUse :: ExpandCtx -> Ann PExpr -> QualifiedName -> [Term] -> Expand [SourceItem]
+expandUse ctx body qn useArgs =
+  case Map.lookup key ctx.env.definitions of
     Nothing -> pure [] -- defensive: 'resolveUse' only names real providers
-    Just def
-      | st.abandoned -> pure []
-      | useDepth > macroDepthLimit -> abandon (MacroExpansionTooDeep qn arity)
-      | st.remaining <= 0 -> abandon (MacroExpansionTooLarge qn arity)
-      | any repeats chain -> failNested chain (MacroCycle qn arity)
-      | otherwise -> case selectClause def.clauses useArgs of
-          Nothing -> failNested chain (NoMatchingMacroClause qn useArgs)
-          Just (binds, clause) -> do
-            modify' (\s' -> s' {remaining = s'.remaining - 1, nextSeed = s'.nextSeed + 1})
-            let chain' = use : chain
-            case instantiateBody "_decl_" st.nextSeed binds clause of
-              Left pe ->
-                failNested chain' (MalformedMacroPrimitive pe.operand pe.received)
-              Right elems -> concat <$> traverse (element env scope loc chain') elems
+    Just def -> do
+      r <- expandStep (instantiateBody "_decl_") ctx.chain use def
+      case r of
+        UseSkipped -> pure []
+        UseFailed c f -> do
+          let err = DeclMacroRenameError (useFailureError qn useArgs f)
+          emit ctx {chain = c} body.node err
+          pure []
+        UseExpanded elems ->
+          concat <$> traverse (element ctx {chain = use : ctx.chain}) elems
   where
-    arity = length useArgs
-    qn = QualifiedName prov n
-    useSize = termsSize useArgs
-    useDepth = case chain of
-      (u : _) -> u.depth + 1
-      [] -> 1
-    use =
-      Use
-        { step =
-            ExpansionStep
-              { macroModule = prov,
-                macroName = n,
-                macroArity = arity,
-                site = loc
-              },
-          arguments = useArgs,
-          argumentsSize = useSize,
-          depth = useDepth
-        }
-    repeats u =
-      (u.step.macroModule, u.step.macroName, u.step.macroArity) == (prov, n, arity)
-        && u.argumentsSize == useSize
-        && isVariant u.arguments useArgs
-    abandon err = do
-      modify' (\s' -> s' {abandoned = True})
-      emit loc body.node chain (DeclMacroRenameError err)
-      pure []
-    -- A nested error kills the top-level use, so a branching macro
-    -- reports it once.
-    failNested c err = do
-      if null chain then pure () else modify' (\s' -> s' {abandoned = True})
-      emit loc body.node c (DeclMacroRenameError err)
-      pure []
+    key = QualifiedIdentifier qn.moduleName qn.baseName (length useArgs)
+    use = newMacroUse qn useArgs ctx.loc ctx.chain
 
 -- | Splice one body element: report a forbidden clause, expand a nested
--- use, or keep the clause (with its chain). @chain@ is never empty
+-- use, or keep the clause (with its chain). The chain is never empty
 -- here. A forbidden clause kills the top-level use, like a failed
 -- nested use does.
-element :: DeclMacroEnv -> MacroScope -> SourceLoc -> [Use] -> Term -> Expand [SourceItem]
-element env scope loc chain t = do
+element :: ExpandCtx -> Term -> Expand [SourceItem]
+element ctx t = do
   isAbandoned <- gets (.abandoned)
   if isAbandoned
     then pure []
     else case forbiddenForm t of
       Just form -> do
         modify' (\st -> st {abandoned = True})
-        emit loc (termToPExpr t) chain (MacroDeclsForbiddenClause form)
+        emit ctx (termToPExpr t) (MacroDeclsForbiddenClause form)
         pure []
-      Nothing -> case relocate loc (termToPExpr t) of
+      Nothing -> case relocate ctx.loc (termToPExpr t) of
         Ann (Compound ":-" [body]) _
-          | not (isBuiltinDirective body.node) -> directive env scope loc chain body
-        p -> pure [SourceItem p (map (.step) chain)]
+          | not (isBuiltinDirective body.node) -> directive ctx body
+        p -> pure [SourceItem p (map (.step) ctx.chain)]
 
 -- | The forbidden form of a clause, if any: @:- module@,
 -- @:- use_module@, @:- macro@, @:- macro_decls@, or @Head ---> Body@.
@@ -479,11 +433,11 @@ mixedKeys scope =
         ]
 
 -- | Report an error at the outermost directive, with the chain.
-emit :: SourceLoc -> PExpr -> [Use] -> DeclMacroError -> Expand ()
-emit loc origin chain err =
-  lift (tell [Diagnostic Nothing (AnnP err loc origin) chainLines])
+emit :: ExpandCtx -> PExpr -> DeclMacroError -> Expand ()
+emit ctx origin err =
+  lift (tell [Diagnostic Nothing (AnnP err ctx.loc origin) chainLines])
   where
-    chainLines = renderExpansionChain (map (.step) chain)
+    chainLines = renderExpansionChain (map (.step) ctx.chain)
 
 -- | Give every node of a term the same location.
 relocate :: SourceLoc -> PExpr -> Ann PExpr

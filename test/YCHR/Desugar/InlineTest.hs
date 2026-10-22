@@ -27,7 +27,7 @@ import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parser (parseModule)
-import YCHR.Internal.Rename (defaultRenameInputs, renameProgram)
+import YCHR.Internal.Rename (Renamed (..), defaultRenameInputs, renameProgram)
 import YCHR.Internal.Resolve (resolveProgram)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types (QualifiedName (..))
@@ -45,8 +45,8 @@ inlinedProgram src = do
     [] -> pure ()
     errs -> assertFailure ("unexpected parse-validation errors: " ++ show errs)
   renamed <- case renameProgram defaultRenameInputs (rewriteImports [m]) of
-    Right (mods, []) -> pure mods
-    Right (_, warnings) ->
+    Right (Renamed mods []) -> pure mods
+    Right (Renamed _ warnings) ->
       assertFailure ("unexpected rename warnings: " ++ show (map diagMsg warnings))
     Left errs -> assertFailure ("unexpected rename errors: " ++ show (map diagMsg errs))
   resolved <- case resolveProgram renamed of

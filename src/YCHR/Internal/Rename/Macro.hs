@@ -17,11 +17,9 @@
 -- See [the macro reference](../../../../docs/reference/macros.md) for
 -- the user-facing specification this module implements.
 module YCHR.Internal.Rename.Macro
-  ( -- * Import-list permission
-    importListPermitsMacro,
-
-    -- * Clause selection
+  ( -- * Clause selection
     matchClause,
+    ClauseMatch (..),
     selectClause,
 
     -- * Instantiation
@@ -38,6 +36,17 @@ module YCHR.Internal.Rename.Macro
     macroExpansionBudget,
     isVariant,
     termsSize,
+
+    -- * Expansion steps
+    MacroUse (..),
+    newMacroUse,
+    stepKey,
+    MacroState (..),
+    initialMacroState,
+    freshBudget,
+    UseFailure (..),
+    UseResult (..),
+    expandStep,
 
     -- * Conjunctions
     flattenConj,
@@ -56,8 +65,8 @@ module YCHR.Internal.Rename.Macro
   )
 where
 
-import Control.Monad (foldM)
-import Control.Monad.Trans.State.Strict (State, evalState, get, put)
+import Control.Monad (foldM, unless)
+import Control.Monad.Trans.State.Strict (State, StateT, evalState, get, modify', put)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
@@ -65,31 +74,20 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import YCHR.Internal.Parsed
   ( AnnP (..),
-    Declaration (..),
     ExpansionStep (..),
     MacroClause (..),
-    MacroExportDeclBody (..),
+    MacroDef (..),
     SourceLoc (..),
   )
 import YCHR.Internal.Types
   ( Constraint (..),
     Identifier (..),
     Name (..),
+    QualifiedIdentifier (..),
+    QualifiedName (..),
     Term (..),
     UnqualifiedIdentifier (..),
   )
-
--- | Whether a @macro(name\/arity)@ entry in an import list permits
--- importing @(name, arity)@. 'Nothing' (no import list, i.e. plain
--- @use_module(M)@) permits everything; mirrors
--- 'YCHR.Internal.Rename.importListPermits' for the macro namespace.
-importListPermitsMacro :: Text -> Int -> Maybe [Declaration] -> Bool
-importListPermitsMacro _ _ Nothing = True
-importListPermitsMacro n arity (Just decls) = any match decls
-  where
-    match (MacroExportDecl MacroExportDeclBody {name = dn, arity = da}) =
-      dn == n && da == arity
-    match _ = False
 
 -- ---------------------------------------------------------------------------
 -- Clause selection
@@ -151,11 +149,20 @@ identical a b = a == b && not (hasWildcard a)
     hasWildcard (CompoundTerm _ ts) = any hasWildcard ts
     hasWildcard _ = False
 
--- | The first clause, top to bottom, whose head matches the arguments,
--- with the bindings of its head variables.
-selectClause :: [AnnP MacroClause] -> [Term] -> Maybe (Map Text Term, MacroClause)
+-- | A clause whose head matched a use, with the bindings of its head
+-- variables.
+data ClauseMatch = ClauseMatch
+  { bindings :: Map Text Term,
+    clause :: MacroClause
+  }
+
+-- | The first clause, top to bottom, whose head matches the arguments.
+selectClause :: [AnnP MacroClause] -> [Term] -> Maybe ClauseMatch
 selectClause clauses args =
-  case [(b, c.node) | c <- clauses, Just b <- [matchClause c.node.params args]] of
+  case [ ClauseMatch b c.node
+       | c <- clauses,
+         Just b <- [matchClause c.node.params args]
+       ] of
     (hit : _) -> Just hit
     [] -> Nothing
 
@@ -226,23 +233,22 @@ primitivesIn _ = []
 -- is itself a conjunction is spliced goal by goal.
 --
 -- Fresh names come from 'seed', distinct for every call within one
--- renaming run (see 'YCHR.Internal.Rename.freshMacroSeed'), not from
--- the use site's 'SourceLoc': all goals of one rule section share one
--- 'SourceLoc' (see 'YCHR.Internal.Parsed.Rule'), so two uses there
--- would alias their fresh variables.
-instantiateClause ::
-  Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
-instantiateClause seed binds clause =
-  concatMap flattenConj <$> instantiateBody "_macro_" seed binds clause
+-- renaming run ('MacroState.nextSeed'), not from the use site's
+-- 'SourceLoc': all goals of one rule section share one 'SourceLoc'
+-- (see 'YCHR.Internal.Parsed.Rule'), so two uses there would alias
+-- their fresh variables.
+instantiateClause :: Int -> ClauseMatch -> Either PrimitiveError [Term]
+instantiateClause seed m =
+  concatMap flattenConj <$> instantiateBody "_macro_" seed m
 
 -- | 'instantiateClause' without splitting on @,@ (a clause with a
 -- conjunction is still one clause). Fresh variables are
 -- @\<prefix\>\<seed\>_\<name\>@. Each macro kind has its own prefix
 -- and seed counter, so they can't clash.
-instantiateBody ::
-  Text -> Int -> Map Text Term -> MacroClause -> Either PrimitiveError [Term]
-instantiateBody prefix seed binds clause = traverse go clause.body
+instantiateBody :: Text -> Int -> ClauseMatch -> Either PrimitiveError [Term]
+instantiateBody prefix seed m = traverse go m.clause.body
   where
+    binds = m.bindings
     seedKey = Text.pack (show seed)
     freshen v = prefix <> seedKey <> "_" <> v
     go t = case t of
@@ -360,6 +366,136 @@ termsSize = sum . map size
     size _ = 1
 
 -- ---------------------------------------------------------------------------
+-- Expansion steps
+-- ---------------------------------------------------------------------------
+
+-- | One use in the chain of macro expansions in progress. Both macro
+-- kinds keep their chain as a list of these, innermost first.
+data MacroUse = MacroUse
+  { -- | The macro and where it is used (for a nested use, the
+    -- outermost use site).
+    step :: ExpansionStep,
+    -- | The use's arguments, as written, for the repeat check.
+    arguments :: [Term],
+    -- | 'termsSize' of 'arguments', compared before 'isVariant'.
+    argumentsSize :: Int,
+    -- | The number of uses in the chain, this one included.
+    depth :: Int
+  }
+
+-- | A use of macro @qn@ with these arguments, used at @site@, inside
+-- @chain@.
+newMacroUse :: QualifiedName -> [Term] -> SourceLoc -> [MacroUse] -> MacroUse
+newMacroUse qn args site chain =
+  MacroUse
+    { step =
+        ExpansionStep
+          { macroModule = qn.moduleName,
+            macroName = qn.baseName,
+            macroArity = length args,
+            site = site
+          },
+      arguments = args,
+      argumentsSize = termsSize args,
+      depth = case chain of
+        (u : _) -> u.depth + 1
+        [] -> 1
+    }
+
+-- | The module, name and arity of a chain entry.
+stepKey :: ExpansionStep -> QualifiedIdentifier
+stepKey s = QualifiedIdentifier s.macroModule s.macroName s.macroArity
+
+-- | The state macro expansion threads through one run.
+data MacroState = MacroState
+  { -- | The seed the next instantiation freshens its variables with.
+    nextSeed :: Int,
+    -- | Expansions the current top-level use may still cause (see
+    -- 'macroExpansionBudget').
+    remaining :: Int,
+    -- | Set once the current top-level use hit a limit, or failed in a
+    -- nested use: the rest of its expansion is skipped without further
+    -- diagnostics, so a macro that branches as it recurses reports the
+    -- problem once.
+    abandoned :: Bool
+  }
+
+-- | The state a run starts with.
+initialMacroState :: MacroState
+initialMacroState =
+  MacroState {nextSeed = 0, remaining = macroExpansionBudget, abandoned = False}
+
+-- | Start a top-level use: a full budget, nothing abandoned.
+freshBudget :: MacroState -> MacroState
+freshBudget st = st {remaining = macroExpansionBudget, abandoned = False}
+
+-- | Why a macro use did not expand.
+data UseFailure
+  = -- | The chain is already 'macroDepthLimit' uses deep.
+    UseTooDeep
+  | -- | The top-level use has already caused 'macroExpansionBudget'
+    -- expansions.
+    UseTooLarge
+  | -- | The same macro is being expanded higher up the chain with
+    -- variant arguments ('isVariant').
+    UseCycle
+  | -- | No clause's head matches the arguments.
+    UseNoClause
+  | -- | A construction primitive in the selected clause got a bad
+    -- operand.
+    UseBadPrimitive PrimitiveError
+
+-- | The outcome of 'expandStep'.
+data UseResult a
+  = -- | The top-level use was abandoned earlier: report nothing.
+    UseSkipped
+  | -- | Report the failure, with this chain.
+    UseFailed [MacroUse] UseFailure
+  | -- | The instantiated clause body.
+    UseExpanded a
+
+-- | One expansion step, the same for both macro kinds: check the limits
+-- and the repeat check, select a clause and instantiate it with a fresh
+-- seed. @chain@ is the chain the use is in, without the use itself. A
+-- bad primitive is reported with the use on the chain, every other
+-- failure without it.
+--
+-- A limit abandons the rest of the top-level use, and so does any
+-- failure in a nested use: a macro that branches as it recurses would
+-- otherwise report the same error once per branch.
+expandStep ::
+  (Monad m) =>
+  (Int -> ClauseMatch -> Either PrimitiveError a) ->
+  [MacroUse] ->
+  MacroUse ->
+  MacroDef ->
+  StateT MacroState m (UseResult a)
+expandStep instantiate chain use def = get >>= go
+  where
+    go st
+      | st.abandoned = pure UseSkipped
+      | use.depth > macroDepthLimit = abandon UseTooDeep
+      | st.remaining <= 0 = abandon UseTooLarge
+      | any repeats chain = failNested chain UseCycle
+      | otherwise = case selectClause def.clauses use.arguments of
+          Nothing -> failNested chain UseNoClause
+          Just m -> do
+            put st {nextSeed = st.nextSeed + 1, remaining = st.remaining - 1}
+            case instantiate st.nextSeed m of
+              Left pe -> failNested (use : chain) (UseBadPrimitive pe)
+              Right x -> pure (UseExpanded x)
+    abandon f = do
+      modify' (\st -> st {abandoned = True})
+      pure (UseFailed chain f)
+    failNested c f = do
+      unless (null chain) $ modify' (\st -> st {abandoned = True})
+      pure (UseFailed c f)
+    repeats u =
+      stepKey u.step == stepKey use.step
+        && u.argumentsSize == use.argumentsSize
+        && isVariant u.arguments use.arguments
+
+-- ---------------------------------------------------------------------------
 -- Conjunctions
 -- ---------------------------------------------------------------------------
 
@@ -450,31 +586,40 @@ renderExpansionChain :: [ExpansionStep] -> [Text]
 renderExpansionChain chain =
   let groups = runs chain
       shown = map renderGroup (take maxChainLines groups)
-      hidden = sum (map snd (drop maxChainLines groups))
+      hidden = sum (map (.count) (drop maxChainLines groups))
    in shown
         ++ [ "... and " <> tshow hidden <> " more enclosing expansions"
            | hidden > 0
            ]
   where
-    key u = (u.macroModule, u.macroName, u.macroArity)
     runs [] = []
     runs (u : us) =
-      let (same, rest) = span (\v -> key v == key u) us
-       in (u, 1 + length same) : runs rest
-    renderGroup (u, 1 :: Int) =
-      "in the expansion of " <> qn u <> ", used at " <> locText u.site
-    renderGroup (u, n) =
-      "in "
-        <> tshow n
-        <> " nested expansions of "
-        <> qn u
-        <> ", innermost used at "
-        <> locText u.site
+      let (same, rest) = span (\v -> stepKey v == stepKey u) us
+       in ChainRun u (1 + length same) : runs rest
+    renderGroup g
+      | g.count == 1 =
+          "in the expansion of " <> qn u <> ", used at " <> locText u.site
+      | otherwise =
+          "in "
+            <> tshow g.count
+            <> " nested expansions of "
+            <> qn u
+            <> ", innermost used at "
+            <> locText u.site
+      where
+        u = g.innermost
     qn u = u.macroModule <> ":" <> u.macroName <> "/" <> tshow u.macroArity
     locText loc =
       Text.pack loc.file <> ":" <> tshow loc.line <> ":" <> tshow loc.col
     tshow :: (Show a) => a -> Text
     tshow = Text.pack . show
+
+-- | Consecutive uses of the same macro in a chain: the innermost one
+-- and how many there are.
+data ChainRun = ChainRun
+  { innermost :: ExpansionStep,
+    count :: Int
+  }
 
 -- | Max lines 'renderExpansionChain' shows.
 maxChainLines :: Int

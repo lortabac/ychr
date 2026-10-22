@@ -117,6 +117,7 @@ import YCHR.Internal.Parser
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
 import YCHR.Internal.Rename
   ( RenameWarning,
+    Renamed (..),
     expandQueryGoalWith,
     renameQueryArgsWith,
     renameQueryGoalsWith,
@@ -333,13 +334,14 @@ prepareGoalTerm cp original@(Constraint cname0 cargs0) = do
     either (throwIO . RenameErrors) pure (expandQueryGoalWith cp.queryRenameEnv original)
   case expanded of
     [CompoundTerm cname cargs] -> do
-      (renamedArgs, ws) <-
+      renamedArgs <-
         either
           (throwIO . RenameErrors)
           pure
           (renameQueryArgsWith cp.queryRenameEnv cargs)
-      let warnings = [RenameWarnings ws | not (null ws)]
-      pure (Constraint cname renamedArgs, warnings)
+      let ws = renamedArgs.warnings
+          warnings = [RenameWarnings ws | not (null ws)]
+      pure (Constraint cname renamedArgs.result, warnings)
     -- A macro expanding to a conjunction (or to zero goals, or to a
     -- bare variable/literal) cannot be represented as a single
     -- 'Constraint'. The single-goal entry points parse exactly one
@@ -438,7 +440,7 @@ resolveQueryGoals cp src = do
           "<query>"
           src
       )
-  (renamed, renameWs) <-
+  renamed <-
     either
       (throwIO . RenameErrors)
       pure
@@ -448,7 +450,7 @@ resolveQueryGoals cp src = do
       )
   let vis = cp.queryFunctionVisibility
       (exprs, exprErrs) =
-        runWriter (traverse (termToExpr vis queryLoc queryOrigin) renamed)
+        runWriter (traverse (termToExpr vis queryLoc queryOrigin) renamed.result)
   unless (null exprErrs) (throwIO (ResolveErrors exprErrs))
   bodyGoals <-
     either
@@ -472,7 +474,7 @@ resolveQueryGoals cp src = do
               nameVisibility = cdp.nameVisibility,
               typeDefinitions = cdp.typeDefinitions
             },
-        renameWarnings = renameWs
+        renameWarnings = renamed.warnings
       }
 
 -- | Parse, rename, desugar, lambda-lift, and type-check a query. The

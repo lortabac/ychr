@@ -11,7 +11,8 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Internal.Parsed (ExpansionStep (..), MacroClause (..), SourceLoc (..))
 import YCHR.Internal.Rename.Macro
-  ( PrimitiveError (..),
+  ( ClauseMatch (..),
+    PrimitiveError (..),
     PrimitiveOperand (..),
     instantiateBody,
     instantiateClause,
@@ -95,7 +96,7 @@ variantTests =
 
 -- | Instantiate a clause with no head variables.
 instantiate :: [Term] -> Either PrimitiveError [Term]
-instantiate body = instantiateClause 0 Map.empty (MacroClause [] body)
+instantiate body = instantiateClause 0 (ClauseMatch Map.empty (MacroClause [] body))
 
 -- | The integer 1.
 one :: Term
@@ -108,22 +109,26 @@ instantiateTests =
     [ testCase "head variables are substituted, others freshened" $
         instantiateClause
           7
-          (Map.fromList [("X", atom "a")])
-          (MacroClause [var "X"] [app "p" [var "X", var "T"]])
+          ( ClauseMatch
+              (Map.fromList [("X", atom "a")])
+              (MacroClause [var "X"] [app "p" [var "X", var "T"]])
+          )
           @?= Right [app "p" [atom "a", var "_macro_7_T"]],
       testCase "a conjunction element is flattened" $
-        instantiateClause 0 Map.empty (MacroClause [] [app "," [atom "a", atom "b"]])
+        instantiate [app "," [atom "a", atom "b"]]
           @?= Right [atom "a", atom "b"],
       testCase "primitives are evaluated innermost first" $
         instantiateClause
           0
-          (Map.fromList [("F", atom "x"), ("X", IntTerm 1)])
-          ( MacroClause
-              [var "F", var "X"]
-              [ app
-                  "$compound"
-                  [app "$atom" [list [atom "get_", var "F"]], list [var "X"]]
-              ]
+          ( ClauseMatch
+              (Map.fromList [("F", atom "x"), ("X", IntTerm 1)])
+              ( MacroClause
+                  [var "F", var "X"]
+                  [ app
+                      "$compound"
+                      [app "$atom" [list [atom "get_", var "F"]], list [var "X"]]
+                  ]
+              )
           )
           @?= Right [app "get_x" [IntTerm 1]],
       testCase "an integer part contributes its decimal text" $
@@ -133,17 +138,10 @@ instantiateTests =
         let prim = app "$atom" [list [atom "a"]]
          in instantiateClause
               0
-              (Map.fromList [("G", prim)])
-              (MacroClause [var "G"] [var "G"])
+              (ClauseMatch (Map.fromList [("G", prim)]) (MacroClause [var "G"] [var "G"]))
               @?= Right [prim],
       testCase "a qualified functor builds a qualified compound" $
-        instantiateClause
-          0
-          Map.empty
-          ( MacroClause
-              []
-              [app "$compound" [CompoundTerm (Qualified "m" "f") [], list [one]]]
-          )
+        instantiate [app "$compound" [CompoundTerm (Qualified "m" "f") [], list [one]]]
           @?= Right [CompoundTerm (Qualified "m" "f") [one]],
       testCase "'$atom' rejects a result containing '__'" $
         instantiate [app "$atom" [list [atom "a_", atom "_b"]]]
@@ -155,8 +153,7 @@ instantiateTests =
         instantiateBody
           "_decl_"
           3
-          Map.empty
-          (MacroClause [] [app "," [atom "a", var "V"]])
+          (ClauseMatch Map.empty (MacroClause [] [app "," [atom "a", var "V"]]))
           @?= Right [app "," [atom "a", var "_decl_3_V"]]
     ]
 
