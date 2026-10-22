@@ -46,6 +46,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import YCHR.Internal.Collected (CollectedImport (..), collectedImport)
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.PExpr (PExpr (..))
 import YCHR.Internal.Parsed
@@ -106,7 +107,7 @@ data DeclMacroError
 -- macros (both kinds).
 data MacroScope = MacroScope
   { name :: Text,
-    imports :: [(Text, Maybe [Declaration])],
+    imports :: [CollectedImport],
     exports :: Maybe [Declaration],
     macros :: [AnnP MacroDef]
   }
@@ -118,14 +119,11 @@ scopeFromModule m =
   MacroScope
     { name = m.name,
       imports =
-        [("prelude", Nothing) | m.name /= "prelude"]
-          ++ [importOf i | AnnP i _ _ <- m.imports],
+        [CollectedImport "prelude" Nothing | m.name /= "prelude"]
+          ++ [collectedImport i | AnnP i _ _ <- m.imports],
       exports = (.node) <$> m.exports,
       macros = m.macros
     }
-  where
-    importOf (ModuleImport n il) = (n, il)
-    importOf (LibraryImport n il) = (n, il)
 
 -- | Scope of a module still in term form. The first argument is the
 -- name to use if there's no @:- module@.
@@ -189,7 +187,7 @@ providers env scope kind n a =
     ( nub
         ( [scope.name | Map.member (QualifiedIdentifier scope.name n a) env.definitions]
             ++ [ mn
-               | (mn, il) <- scope.imports,
+               | CollectedImport mn il <- scope.imports,
                  Set.member (QualifiedIdentifier mn n a) env.exported,
                  importListPermitsMacro n a il
                ]
@@ -333,7 +331,7 @@ resolveUse env scope qual n a = case qual of
     -- Own module, but no such macro.
     | m == scope.name -> Left (UnknownDirective n a)
     | not (Map.member m env.scopes) -> Left (DeclMacroRenameError (UnknownModule m))
-    | m `notElem` map fst scope.imports ->
+    | m `notElem` map (.importModule) scope.imports ->
         Left (DeclMacroRenameError (ModuleNotImported m n a))
     | otherwise -> Left (DeclMacroRenameError (NotExportedByModule m n a))
   where

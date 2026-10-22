@@ -504,10 +504,9 @@ data RenameCtx = RenameCtx
     -- ('UnknownModule').
     allModuleNames :: [Text],
     currentModule :: CollectedModule,
-    -- | @currentModule@'s imports as @(sourceModule, importItems)@
-    -- pairs. Computed once per module, since the visibility checks run
-    -- once per name.
-    moduleImports :: [(Text, Maybe [Declaration])],
+    -- | @currentModule@'s imports without their annotations. Computed
+    -- once per module, since the visibility checks run once per name.
+    moduleImports :: [CollectedImport],
     -- | Where each @(name, arity)@ macro is /declared/, mirroring
     -- 'declEnv' for the macro namespace. Built from every module's
     -- @macros@ field.
@@ -867,8 +866,7 @@ renameProgram inputs mods =
                     Map.findWithDefault Nothing m.name inputs.trailingLoc,
                   allModuleNames = map (.name) mods,
                   currentModule = m,
-                  moduleImports =
-                    [(imp.importModule, imp.importItems) | AnnP imp _ _ <- m.imports],
+                  moduleImports = [imp | AnnP imp _ _ <- m.imports],
                   macroDeclEnv = macroDeclEnv0,
                   macroExportEnv = macroExportEnv0,
                   macroDefTable = macroDefTable0,
@@ -2136,7 +2134,7 @@ validateQualified ctx loc origin m n arity
 -- qualified reference's target module is in scope at all (distinct from
 -- whether it exports the referenced name).
 importedModuleNames :: RenameCtx -> [Text]
-importedModuleNames ctx = map fst ctx.moduleImports
+importedModuleNames ctx = map (.importModule) ctx.moduleImports
 
 -- | All modules that can provide @(name, arity)@ to the current module:
 -- the current module itself if it declares the name, plus every imported
@@ -2151,7 +2149,7 @@ visibleProviders ctx n arity =
         filter
           ( \mn ->
               any
-                (\(imn, il) -> imn == mn && importListPermits n arity il)
+                (\imp -> imp.importModule == mn && importListPermits n arity imp.importItems)
                 ctx.moduleImports
           )
           (lookupExport (UnqualifiedIdentifier n arity) ctx.exportEnv)
@@ -2174,7 +2172,10 @@ visibleMacroProviders ctx kind n arity =
         filter
           ( \mn ->
               any
-                (\(imn, il) -> imn == mn && importListPermitsMacro n arity il)
+                ( \imp ->
+                    imp.importModule == mn
+                      && importListPermitsMacro n arity imp.importItems
+                )
                 ctx.moduleImports
           )
           (lookupExport (UnqualifiedIdentifier n arity) ctx.macroExportEnv)
@@ -2267,7 +2268,7 @@ buildVisibleFunctionNames mods self =
       visibleTo provider fd
     ]
   where
-    imports = [(imp.importModule, imp.importItems) | AnnP imp _ _ <- self.imports]
+    imports = [imp | AnnP imp _ _ <- self.imports]
 
     visibleTo provider fd
       | provider.name == self.name = True
@@ -2275,7 +2276,10 @@ buildVisibleFunctionNames mods self =
 
     importPermits provider fd =
       any
-        (\(imn, il) -> imn == provider.name && importListPermits fd.name fd.arity il)
+        ( \imp ->
+            imp.importModule == provider.name
+              && importListPermits fd.name fd.arity imp.importItems
+        )
         imports
 
     exportPermits provider fd = case provider.exports of
@@ -2363,7 +2367,7 @@ visibleDataCons mods ctx =
           [] -> Nothing
 
     importerAllowance mn n a allCons =
-      let relevant = [il | (imn, il) <- ctx.moduleImports, imn == mn]
+      let relevant = [imp.importItems | imp <- ctx.moduleImports, imp.importModule == mn]
        in if null relevant
             then Nothing
             else
@@ -2531,7 +2535,7 @@ typeImportProviders ctx n arity =
   filter
     ( \mn ->
         any
-          (\(imn, il) -> imn == mn && importListPermitsType n arity il)
+          (\imp -> imp.importModule == mn && importListPermitsType n arity imp.importItems)
           ctx.moduleImports
     )
     (lookupExport (UnqualifiedIdentifier n arity) ctx.typeExportEnv)
@@ -2619,7 +2623,7 @@ buildQueryRenameEnv mods =
             currentTrailingLoc = Nothing,
             allModuleNames = map (.name) mods,
             currentModule = queryMod,
-            moduleImports = [(m.name, Nothing) | m <- mods],
+            moduleImports = [CollectedImport m.name Nothing | m <- mods],
             macroDeclEnv = buildMacroDeclEnv mods,
             macroExportEnv = buildMacroExportEnv mods,
             macroDefTable = buildMacroDefTable mods,
