@@ -11,6 +11,7 @@
 module YCHR.Internal.Runtime.Store
   ( -- * Types
     Suspension (..),
+    StoredGroup (..),
 
     -- * Operations
     createConstraint,
@@ -43,6 +44,8 @@ import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import YCHR.Internal.Runtime.Index
   ( GroundKey,
+    IndexEntry (..),
+    PositionKey (..),
     candidateSlots,
     indexThreshold,
     insertConstraints,
@@ -175,24 +178,29 @@ storeConstraint sid = do
                   -- were registered when they were stored, so only
                   -- their keys are wanted here.
                   indexedPositions = IntSet.toAscList positions
-                  entriesOf s =
-                    zip indexedPositions
+                  keysOf s =
+                    zipWith PositionKey indexedPositions
                       <$> traverse (\j -> groundKey (suspArg s j)) indexedPositions
-                  withEntries (s, s') = fmap ((,) s) (entriesOf s')
+                  backlogEntry s s' = IndexEntry s <$> keysOf s'
               backlog <-
                 if typeIndexed cType si
                   then pure []
-                  else traverse withEntries (zip [0 ..] (toList owned))
+                  else sequence (zipWith backlogEntry [0 ..] (toList owned))
               keys <- traverse walk (zip [0 ..] susp.args)
-              let entries =
-                    [(j, key) | (j, key) <- zip [0 ..] keys, IntSet.member j positions]
+              let entry =
+                    IndexEntry
+                      slot
+                      [ PositionKey j key
+                      | (j, key) <- zip [0 ..] keys,
+                        IntSet.member j positions
+                      ]
               liftIO $ do
                 modifyIORef' storeByType append
                 -- The index is a persistent value behind one reference,
                 -- like the store it describes, so a search snapshot
                 -- restores the two together
                 -- ('YCHR.Internal.Runtime.Search').
-                let stores = backlog ++ [(slot, entries)]
+                let stores = backlog ++ [entry]
                 modifyIORef' storeIndex (insertConstraints cType stores)
               pure True
 
@@ -282,10 +290,8 @@ candidateSuspensions :: ConstraintType -> Int -> GroundKey -> Chr [Suspension]
 candidateSuspensions cType pos key = do
   SessionEnv {storeByType, storeIndex} <- ask
   let ConstraintType idx = cType
-  (snapshot, si) <- liftIO $ do
-    bt <- readIORef storeByType
-    sx <- readIORef storeIndex
-    pure (IntMap.findWithDefault Seq.empty idx bt, sx)
+  snapshot <- liftIO $ IntMap.findWithDefault Seq.empty idx <$> readIORef storeByType
+  si <- liftIO $ readIORef storeIndex
   let slots = candidateSlots cType pos key si
   if not (typeIndexed cType si) || IntSet.size slots >= Seq.length snapshot
     then pure (toList snapshot)
@@ -296,17 +302,26 @@ candidateSuspensions cType pos key = do
           Just susp <- [Seq.lookup slot snapshot]
         ]
 
--- | Return a snapshot of every constraint type in the store, paired with
--- its source name and the sequence of stored suspensions. Types are
+-- | The stored suspensions of one constraint type, with the type's
+-- source name.
+data StoredGroup = StoredGroup
+  { -- | The constraint type's source name.
+    typeName :: Name,
+    -- | Its suspensions in store order, dead ones included.
+    suspensions :: Seq Suspension
+  }
+
+-- | Return a snapshot of every constraint type in the store, with its
+-- source name and the sequence of stored suspensions. Types are
 -- returned in 'ConstraintType' index order. The returned 'Seq's are
 -- immutable snapshots; callers still need to filter out dead suspensions
 -- via 'isSuspAlive'.
-getAllStoredConstraints :: Chr [(Name, Seq Suspension)]
+getAllStoredConstraints :: Chr [StoredGroup]
 getAllStoredConstraints = do
   SessionEnv {storeByType, storeTypeNames} <- ask
   storeMap <- liftIO (readIORef storeByType)
   pure
-    [ (name, IntMap.findWithDefault Seq.empty i storeMap)
+    [ StoredGroup name (IntMap.findWithDefault Seq.empty i storeMap)
     | (i, name) <- IntMap.toAscList storeTypeNames
     ]
 

@@ -62,7 +62,6 @@ import YCHR.Internal.Runtime.Interpreter
     constraintTypeLabel,
     emitTrace,
     snapshotValues,
-    suspensionView,
   )
 import YCHR.Internal.Runtime.Monad
   ( Chr,
@@ -74,9 +73,9 @@ import YCHR.Internal.Runtime.Monad
   )
 import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Reactivation (drainQueue)
-import YCHR.Internal.Runtime.Store (aliveConstraint)
+import YCHR.Internal.Runtime.Store (aliveConstraint, lookupSusp)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
-import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
+import YCHR.Internal.Runtime.Types (CallVal (..), Suspension (..), Value (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
   ( Callable (..),
@@ -303,9 +302,9 @@ drainReactivation =
     alive <- aliveConstraint sid
     when alive $ do
       emitTrace $ do
-        (ct, vs) <- suspensionView sid
-        ctName <- constraintTypeLabel ct
-        ts <- snapshotValues vs
+        susp <- lookupSusp sid
+        ctName <- constraintTypeLabel susp.suspType
+        ts <- snapshotValues susp.args
         pure (TEReactivate sid ctName ts)
       void (callProc reactivateDispatchName [CId sid])
 

@@ -13,7 +13,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef
 import Data.Set qualified as Set
-import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Internal.Runtime.Monad (Chr, HistoryKey (..), SessionEnv (..))
 import YCHR.Internal.Runtime.Types (SuspensionId)
 import YCHR.Internal.VM (RuleId)
 
@@ -21,11 +21,11 @@ import YCHR.Internal.VM (RuleId)
 addHistory :: RuleId -> [SuspensionId] -> Chr ()
 addHistory ruleId ids = do
   SessionEnv {history} <- ask
-  liftIO $ modifyIORef' history (Set.insert (ruleId, ids))
+  liftIO $ modifyIORef' history (Set.insert (HistoryKey ruleId ids))
 
 -- | Check that a rule has /not/ fired with the given constraint identifiers.
 -- Returns 'True' if the entry is absent (i.e. the rule may fire).
 notInHistory :: RuleId -> [SuspensionId] -> Chr Bool
 notInHistory ruleId ids = do
   SessionEnv {history} <- ask
-  liftIO $ Set.notMember (ruleId, ids) <$> readIORef history
+  liftIO $ Set.notMember (HistoryKey ruleId ids) <$> readIORef history

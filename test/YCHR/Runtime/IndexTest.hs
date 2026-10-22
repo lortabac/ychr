@@ -197,12 +197,15 @@ stateTests =
         let si =
               insertConstraints
                 (ConstraintType 0)
-                [(3, [(0, Just (KInt 1))])]
+                [IndexEntry 3 [PositionKey 0 (Just (KInt 1))]]
                 emptyStoreIndex
          in candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.singleton 3,
       testCase "an unkeyable value lands in the fallback set of every key" $
         let si =
-              insertConstraints (ConstraintType 0) [(4, [(0, Nothing)])] emptyStoreIndex
+              insertConstraints
+                (ConstraintType 0)
+                [IndexEntry 4 [PositionKey 0 Nothing]]
+                emptyStoreIndex
          in do
               candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.singleton 4
               candidateSlots (ConstraintType 0) 0 (KInt 99) si @?= IntSet.singleton 4,
@@ -210,15 +213,20 @@ stateTests =
         let si =
               insertConstraints
                 (ConstraintType 0)
-                [(5, [(0, Just (KInt 1))])]
+                [IndexEntry 5 [PositionKey 0 (Just (KInt 1))]]
                 emptyStoreIndex
          in candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= IntSet.empty,
       testCase "entries accumulate per type and position" $
-        let type1 = insertConstraints (ConstraintType 1) [(2, [(0, Just (KInt 1))])]
+        let type1 =
+              insertConstraints
+                (ConstraintType 1)
+                [IndexEntry 2 [PositionKey 0 (Just (KInt 1))]]
             si =
               insertConstraints
                 (ConstraintType 0)
-                [(0, [(0, Just (KInt 1)), (1, Nothing)]), (1, [(0, Just (KInt 1))])]
+                [ IndexEntry 0 [PositionKey 0 (Just (KInt 1)), PositionKey 1 Nothing],
+                  IndexEntry 1 [PositionKey 0 (Just (KInt 1))]
+                ]
                 $ type1 emptyStoreIndex
          in do
               candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.fromList [0, 1]
@@ -227,7 +235,11 @@ stateTests =
               candidateSlots (ConstraintType 0) 0 (KInt 2) si @?= IntSet.empty,
       testCase "a type is indexed exactly once a store is filed for it" $
         let empty = emptyStoreIndex
-            one = insertConstraints (ConstraintType 0) [(0, [(0, Just (KInt 1))])] empty
+            one =
+              insertConstraints
+                (ConstraintType 0)
+                [IndexEntry 0 [PositionKey 0 (Just (KInt 1))]]
+                empty
          in do
               typeIndexed (ConstraintType 0) empty @?= False
               typeIndexed (ConstraintType 1) empty @?= False

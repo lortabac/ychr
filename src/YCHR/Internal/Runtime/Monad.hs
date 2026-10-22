@@ -16,6 +16,7 @@ module YCHR.Internal.Runtime.Monad
 
     -- * Session environment
     SessionEnv (..),
+    HistoryKey (..),
     SessionConfig (..),
     emptySessionConfig,
     programSessionConfig,
@@ -142,6 +143,14 @@ newtype HostCallFn = HostCallFn
   { runHostCall :: [Value] -> Chr Value
   }
 
+-- | A propagation history entry: a rule and the constraint ids it
+-- fired with.
+data HistoryKey = HistoryKey
+  { rule :: !RuleId,
+    ids :: ![SuspensionId]
+  }
+  deriving (Eq, Ord)
+
 -- | The mutable session state plus the immutable program-level lookups
 -- the runtime needs. All long-lived state lives here; per-procedure
 -- locals live above 'Chr' in the interpreter's own 'ReaderT' over an
@@ -189,7 +198,7 @@ data SessionEnv = SessionEnv
     -- | Counter for the next suspension id.
     storeNextId :: !(IORef Int),
     -- | Propagation history: which rules have fired with which id tuples.
-    history :: !(IORef (Set (RuleId, [SuspensionId]))),
+    history :: !(IORef (Set HistoryKey)),
     -- | Queue of constraint ids pending reactivation (filled by 'unify',
     -- drained by 'DrainReactivationQueue').
     reactQueue :: !(IORef (Seq SuspensionId)),

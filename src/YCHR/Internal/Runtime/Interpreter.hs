@@ -37,7 +37,6 @@ module YCHR.Internal.Runtime.Interpreter
     emitTrace,
     snapshotValue,
     snapshotValues,
-    suspensionView,
     constraintTypeLabel,
     lookupRuleName,
 
@@ -469,13 +468,6 @@ snapshotValue = valueToTerm Map.empty
 snapshotValues :: [Value] -> Chr [Term]
 snapshotValues = traverse snapshotValue
 
--- | Look up a suspension by id and return its constraint-type and
--- argument values. Used by trace-event builders that need both.
-suspensionView :: SuspensionId -> Chr (ConstraintType, [Value])
-suspensionView sid = do
-  susp <- lookupSusp sid
-  pure (susp.suspType, susp.args)
-
 -- | Look up a rule's display name from the session-cached
 -- 'ruleNames' table. Falls back to @__rule_N@ on miss.
 lookupRuleName :: SessionEnv -> RuleId -> Text
@@ -595,9 +587,9 @@ traceEntry proc args = case proc.slotProcKind of
     pure (TETell ctName ts)
   PKActivate _ -> emitTrace $ do
     let sid = activateSuspensionId args
-    (ct, vs) <- suspensionView sid
-    ctName <- constraintTypeLabel ct
-    ts <- snapshotValues vs
+    susp <- lookupSusp sid
+    ctName <- constraintTypeLabel susp.suspType
+    ts <- snapshotValues susp.args
     pure (TEActivate ctName sid ts)
   PKOccurrence ct n _ display -> emitTrace $ do
     ctName <- constraintTypeLabel ct
@@ -726,9 +718,9 @@ execStmt (SStore expr) = do
     -- than once for the same suspension; only the one that took
     -- effect is a trace event.
     when didStore $ emitTrace $ do
-      (ct, vs) <- suspensionView sid
-      ctName <- constraintTypeLabel ct
-      ts <- snapshotValues vs
+      susp <- lookupSusp sid
+      ctName <- constraintTypeLabel susp.suspType
+      ts <- snapshotValues susp.args
       pure (TEStore sid ctName ts)
   pure SFall
 execStmt (SKill expr) = do
@@ -754,9 +746,9 @@ execStmt (SDrainReactivationQueue suspSlot body) = do
       if alive
         then do
           emitTrace $ do
-            (ct, vs) <- suspensionView sid
-            ctName <- constraintTypeLabel ct
-            ts <- snapshotValues vs
+            susp <- lookupSusp sid
+            ctName <- constraintTypeLabel susp.suspType
+            ts <- snapshotValues susp.args
             pure (TEReactivate sid ctName ts)
           liftIO (unsafeWrite cells suspSlot (CellId sid))
           -- The compiler fixes this body to a single dispatch call
@@ -800,11 +792,16 @@ foreachCandidates cType conditions = do
       mDriver <- driverKey indexed conditions
       case mDriver of
         Nothing -> liftChr (toList <$> getStoreSnapshot cType)
-        Just (pos, key) -> liftChr (candidateSuspensions cType pos key)
+        Just probe -> liftChr (candidateSuspensions cType probe.position probe.key)
 
--- | The first index condition that can drive the store index, as its
--- argument position together with the ground key of the condition's
--- value.
+-- | An index lookup that a 'Foreach' condition drives: an argument
+-- position and the ground key of the condition's value.
+data IndexProbe = IndexProbe
+  { position :: !Int,
+    key :: !GroundKey
+  }
+
+-- | The first index condition that can drive the store index.
 --
 -- Two guards make the narrowing both sound and unobservable. The
 -- condition's value must be /non-raising/ by construction
@@ -815,7 +812,7 @@ foreachCandidates cType conditions = do
 -- is stable for the loop's duration. Anything else — including a
 -- compound term holding an unbound variable — falls through to the
 -- unindexed path, which evaluates the condition per candidate.
-driverKey :: IntSet -> [SIndexCondition] -> InterpM (Maybe (Int, GroundKey))
+driverKey :: IntSet -> [SIndexCondition] -> InterpM (Maybe IndexProbe)
 driverKey _ [] = pure Nothing
 driverKey indexed (SIndexCondition (ArgIndex pos) expr : rest)
   | nonRaising expr,
@@ -824,7 +821,7 @@ driverKey indexed (SIndexCondition (ArgIndex pos) expr : rest)
       value <- evalValExpr expr
       mkey <- liftChr (groundKey value)
       case mkey of
-        Just key -> pure (Just (fromIntegral pos, key))
+        Just key -> pure (Just (IndexProbe (fromIntegral pos) key))
         Nothing -> driverKey indexed rest
   | otherwise = driverKey indexed rest
 
@@ -1476,7 +1473,7 @@ applyClosure closure args = do
   v <- deref closure
   v' <- derefClosureHeader v
   case closureKey (length args) v' of
-    Just (key, captures) -> dispatch key captures
+    Just call -> dispatch call.key call.captures
     Nothing -> do
       mKey <- dynamicFunRefKey (length args) v'
       case mKey of
@@ -1572,31 +1569,42 @@ derefClosureHeader v = pure v
 -- (identity and quoted source form), passed through un-dereferenced —
 -- exactly what @GetArg@ handed the dispatched procedure. The header
 -- itself is dereferenced before this runs (see 'derefClosureHeader').
-closureKey :: Int -> Value -> Maybe (CallableKey, [Value])
+closureKey :: Int -> Value -> Maybe ClosureCall
 closureKey n v = case v of
   VTerm f (VAtom ident : rest)
     | f == funRefFunctor.unName,
       [VInt declared] <- rest,
       fromIntegral declared == n ->
         Just
-          ( CallableKey
-              { functor = funRefFunctor,
-                identity = Name ident,
-                arity = fromIntegral declared
-              },
-            []
-          )
+          ClosureCall
+            { key =
+                CallableKey
+                  { functor = funRefFunctor,
+                    identity = Name ident,
+                    arity = fromIntegral declared
+                  },
+              captures = []
+            }
     | f == lambdaClosureFunctor.unName,
       _sourceForm : captures <- rest ->
         Just
-          ( CallableKey
-              { functor = lambdaClosureFunctor,
-                identity = Name ident,
-                arity = n
-              },
-            captures
-          )
+          ClosureCall
+            { key =
+                CallableKey
+                  { functor = lambdaClosureFunctor,
+                    identity = Name ident,
+                    arity = n
+                  },
+              captures
+            }
   _ -> Nothing
+
+-- | A recognized closure: the key that selects its procedure, and the
+-- captured values passed before the call's own arguments.
+data ClosureCall = ClosureCall
+  { key :: !CallableKey,
+    captures :: ![Value]
+  }
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (deep deref mode)
