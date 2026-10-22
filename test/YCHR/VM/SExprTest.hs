@@ -17,7 +17,7 @@ import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize, vmVersion)
-import YCHR.TestHelpers (emptyProgram, histIds, mkProc)
+import YCHR.TestHelpers (emptyProgram, funRefKey, histIds, mkProc)
 
 -- | Round-trip tests for the VM's S-expression serializer over 'VMProgram'.
 tests :: TestTree
@@ -793,12 +793,6 @@ mkProg body = emptyProgram {procedures = [mkProc "p" [] body]}
 mkProgWithCallables :: [Callable] -> Program
 mkProgWithCallables callables =
   emptyProgram {procedures = [mkProc "p" [] []], callables = callables}
-
--- | A function-reference callables key, the shape
--- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.
-funRefKey :: Name -> Int -> CallableKey
-funRefKey identity arity =
-  CallableKey {functor = funRefFunctor, identity = identity, arity = arity}
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram

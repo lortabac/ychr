@@ -26,9 +26,9 @@ import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref, equal)
 import YCHR.Internal.Types (Term (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (CallableKey (..), Name (..), funRefFunctor, lambdaClosureFunctor)
+import YCHR.Internal.VM (CallableKey (..), Name (..), lambdaClosureFunctor)
 import YCHR.Run (runProgramWithQuery)
-import YCHR.TestHelpers (compileOrFail, runChrIn)
+import YCHR.TestHelpers (compileOrFail, funRefKey, runChrIn)
 
 -- | Runtime meta: 'read_term_from_string' and function-reference resolution.
 tests :: TestTree
@@ -93,11 +93,6 @@ readTermWithCallables cl s =
 -- is never used: the reader only reads the keys back.
 callableTable :: [CallableKey] -> CallableRegistry
 callableTable keys = Map.fromList [(k, Name "unused") | k <- keys]
-
--- | The key of the function reference @fun ident\/arity@.
-funRef :: Text -> Int -> CallableKey
-funRef ident arity =
-  CallableKey {functor = funRefFunctor, identity = Name ident, arity = arity}
 
 readTermTests :: TestTree
 readTermTests =
@@ -217,19 +212,22 @@ funRefTests =
   testGroup
     "fun name/arity"
     [ testCase "an unqualified name resolves to its flat identity" $ do
-        v <- readTermWithCallables (callableTable [funRef "prelude:double" 1]) "fun double/1"
+        v <-
+          readTermWithCallables
+            (callableTable [funRefKey "prelude:double" 1])
+            "fun double/1"
         case v of
           VTerm "/" [VAtom "prelude:double", VInt 1] -> pure ()
           _ -> assertFailure "unexpected reader result",
       testCase "a qualified name resolves exactly" $ do
-        v <- readTermWithCallables (callableTable [funRef "m:inc" 1]) "fun m:inc/1"
+        v <- readTermWithCallables (callableTable [funRefKey "m:inc" 1]) "fun m:inc/1"
         case v of
           VTerm "/" [VAtom "m:inc", VInt 1] -> pure ()
           _ -> assertFailure "unexpected reader result",
       testCase "a nested reference resolves" $ do
         v <-
           readTermWithCallables
-            (callableTable [funRef "prelude:double" 1])
+            (callableTable [funRefKey "prelude:double" 1])
             "wrap(fun double/1)"
         case v of
           VTerm "wrap" [VTerm "/" [VAtom "prelude:double", VInt 1]] -> pure ()
@@ -243,7 +241,7 @@ funRefTests =
             | "unknown function 'nope/1'" `isInfixOf` msg -> pure ()
           _ -> assertFailure "expected the reader to fail with a runtime error",
       testCase "an ambiguous name is a runtime error" $ do
-        let cl = callableTable [funRef "a:clash" 1, funRef "b:clash" 1]
+        let cl = callableTable [funRefKey "a:clash" 1, funRefKey "b:clash" 1]
         outcome <-
           try (readTermWithCallables cl "fun clash/1") ::
             IO (Either RuntimeErrorThrown Value)
@@ -252,12 +250,12 @@ funRefTests =
             | "ambiguous function reference 'clash/1'" `isInfixOf` msg -> pure ()
           _ -> assertFailure "expected the reader to fail with a runtime error",
       testCase "a variable name in fun stays data" $ do
-        v <- readTermWithCallables (callableTable [funRef "m:inc" 1]) "fun X/1"
+        v <- readTermWithCallables (callableTable [funRefKey "m:inc" 1]) "fun X/1"
         case v of
           VTerm "fun" [VTerm "/" [VVar _, VInt 1]] -> pure ()
           _ -> assertFailure "unexpected reader result",
       testCase "a reference inside quote resolves too" $ do
-        v <- readTermWithCallables (callableTable [funRef "m:inc" 1]) "quote(fun inc/1)"
+        v <- readTermWithCallables (callableTable [funRefKey "m:inc" 1]) "quote(fun inc/1)"
         case v of
           VTerm "quote" [VTerm "/" [VAtom "m:inc", VInt 1]] -> pure ()
           _ -> assertFailure "unexpected reader result",

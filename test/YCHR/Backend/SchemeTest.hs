@@ -34,6 +34,7 @@ tests =
       -- `%return` binding and the generated code referenced an unbound
       -- name.
       testCase "a loop-trapped Return keeps a %return escape" $ do
+        -- leq: its partner loops need the Return and Continue escapes.
         code <- schemeFor leqSource
         assertInfix "(lambda (%return)" code,
       testCase "a loop that names Continue keeps its continue escape" $ do

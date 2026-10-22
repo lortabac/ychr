@@ -185,19 +185,19 @@ makeGoldenTest root name = do
 -- up the case files.
 validate :: FilePath -> String -> DirFiles -> Either String TestSpec
 validate dir name files
-  | null chrs =
+  | null files.chrs =
       Left ("No .chr files in " ++ dir)
-  | null goals && null errors =
+  | null files.goals && null files.errors =
       Left ("No .goal or .error files in " ++ dir)
-  | not (null goals) && not (null errors) = do
+  | not (null files.goals) && not (null files.errors) = do
       -- Mixed-mode directory: each .goal must be paired with either a
       -- .expected (positive) or a .error (goal-negative). A bare .error
       -- (with no matching .goal) in the same directory is rejected
       -- because we'd otherwise have to disambiguate it from a regular
       -- compilation-negative case.
-      let goalNames = sort (map dropExtension goals)
-          expectedNames = map dropExtension expecteds
-          errorNames = map dropExtension errors
+      let goalNames = sort (map dropExtension files.goals)
+          expectedNames = map dropExtension files.expecteds
+          errorNames = map dropExtension files.errors
           (positiveMatched, unmatchedAfterExpected) =
             partition (`elem` expectedNames) goalNames
           (goalNegMatched, orphanGoals) =
@@ -219,7 +219,7 @@ validate dir name files
                       }
                 | c <- goalNegMatched
                 ]
-           in Right (TestSpec name chrs (sortCases (pcases ++ gncases)))
+           in Right (TestSpec name files.chrs (sortCases (pcases ++ gncases)))
         (gs, es, ers) ->
           Left
             ( "Orphan files in "
@@ -235,15 +235,15 @@ validate dir name files
                   )
                   ers
             )
-  | not (null errors) =
+  | not (null files.errors) =
       let ecases =
             [ Negative NegativeCase {name = dropExtension e, errorFile = dir </> e}
-            | e <- sort errors
+            | e <- sort files.errors
             ]
-       in Right (TestSpec name chrs ecases)
+       in Right (TestSpec name files.chrs ecases)
   | otherwise = do
-      let goalNames = sort (map dropExtension goals)
-          expectedNames = sort (map dropExtension expecteds)
+      let goalNames = sort (map dropExtension files.goals)
+          expectedNames = sort (map dropExtension files.expecteds)
           (matched, orphanGoals) =
             partition (`elem` expectedNames) goalNames
           orphanExpecteds = filter (`notElem` goalNames) expectedNames
@@ -253,7 +253,7 @@ validate dir name files
                 [ positiveCase dir c
                 | c <- matched
                 ]
-           in Right (TestSpec name chrs pcases)
+           in Right (TestSpec name files.chrs pcases)
         (gs, es) ->
           Left
             ( "Orphan files in "
@@ -262,11 +262,6 @@ validate dir name files
                 ++ concatMap (("\n  missing .expected for " ++) . (<.> "goal")) gs
                 ++ concatMap (("\n  missing .goal for " ++) . (<.> "expected")) es
             )
-  where
-    chrs = files.chrs
-    goals = files.goals
-    expecteds = files.expecteds
-    errors = files.errors
 
 -- | The positive case @c@ of directory @dir@.
 positiveCase :: FilePath -> String -> Case

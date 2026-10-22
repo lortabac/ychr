@@ -11,6 +11,7 @@ module YCHR.TestHelpers
     runChrEmpty,
     emptyProgram,
     mkProc,
+    funRefKey,
     histIds,
     leqSource,
     algebraicTD,
@@ -49,12 +50,14 @@ import YCHR.Internal.Types
     TypeKind (..),
   )
 import YCHR.Internal.VM
-  ( HistoryIds,
+  ( CallableKey (..),
+    HistoryIds,
     IdExpr,
     ProcKind (..),
     Procedure (..),
     Program (..),
     Stmt,
+    funRefFunctor,
     mkHistoryIds,
   )
 import YCHR.Internal.VM qualified as VM
@@ -135,6 +138,12 @@ mkProc n ps body =
       body = body,
       procKind = PKReactivateDispatch
     }
+
+-- | A function-reference callables key, the shape
+-- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.
+funRefKey :: VM.Name -> Int -> CallableKey
+funRefKey identity arity =
+  CallableKey {functor = funRefFunctor, identity = identity, arity = arity}
 
 -- | A propagation-history tuple in head-position order, the way
 -- 'YCHR.Internal.Compile.buildHistoryIds' builds one.

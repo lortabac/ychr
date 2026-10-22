@@ -16,7 +16,7 @@ import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM qualified as VM
-import YCHR.TestHelpers (compileOrFail, leqSource)
+import YCHR.TestHelpers (compileOrFail, funRefKey, leqSource)
 
 -- | The VM code 'YCHR.Internal.Compile.compile' emits for representative CHR programs.
 tests :: TestTree
@@ -475,12 +475,6 @@ callablesDispatchTests =
           (any (hasApplyClosure . (.body)) prog.program.procedures)
     ]
   where
-    funRefKey identity arity =
-      VM.CallableKey
-        { functor = VM.funRefFunctor,
-          identity = identity,
-          arity = arity
-        }
     lambdaKey identity arity =
       VM.CallableKey
         { functor = VM.lambdaClosureFunctor,
