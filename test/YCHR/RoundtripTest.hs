@@ -29,7 +29,13 @@ import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Parsed qualified as P
-import YCHR.Internal.Parser (Converted (..), builtinOps, parseConstraint, parseRule, parseTerm)
+import YCHR.Internal.Parser
+  ( Converted (..),
+    builtinOps,
+    parseConstraint,
+    parseRule,
+    parseTerm,
+  )
 import YCHR.Internal.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)

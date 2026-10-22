@@ -1197,7 +1197,10 @@ bodyOfWithLt :: Text -> IO [Term]
 bodyOfWithLt src = case mergeOps builtinOps [OpDecl 700 Xfx "<"] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
   Right table ->
-    parseAndExtract (fmap (.value) . parseModuleWith table "") (withFirstRule (.body.node)) src
+    parseAndExtract
+      (fmap (.value) . parseModuleWith table "")
+      (withFirstRule (.body.node))
+      src
 
 -- | Like 'bodyOf', but parses with @\\==@ added as a 700 xfx operator, the
 -- fixity the prelude declares, so a body can use the disequality operator
@@ -1206,7 +1209,10 @@ bodyOfWithBackslashEq :: Text -> IO [Term]
 bodyOfWithBackslashEq src = case mergeOps builtinOps [OpDecl 700 Xfx "\\=="] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
   Right table ->
-    parseAndExtract (fmap (.value) . parseModuleWith table "") (withFirstRule (.body.node)) src
+    parseAndExtract
+      (fmap (.value) . parseModuleWith table "")
+      (withFirstRule (.body.node))
+      src
 
 -- | The head of the module's first rule.
 headOf :: Text -> IO Head

@@ -332,10 +332,9 @@ data ModuleHeader = ModuleHeader
 collectModuleHeader :: String -> Text -> Either ParseError ModuleHeader
 collectModuleHeader sourceName src = do
   LeadingTerms terms tloc <- P.parseLeadingTerms firstPassTable sourceName src
-  let modPart = case terms of
-        (t : _) -> asModuleDirective t
-        [] -> Nothing
-      rest1 = if isJust modPart then drop 1 terms else terms
+  let (modPart, rest1) = case terms of
+        (t : ts) | Just md <- asModuleDirective t -> (Just md, ts)
+        _ -> (Nothing, terms)
       (importTerms, leftover) = span isImport rest1
       finalLoc = case leftover of
         [] -> tloc
@@ -556,7 +555,9 @@ failWithAll errs = Nothing <$ tell errs
 
 -- | A conversion result and its errors.
 data Converted a = Converted
-  { value :: a,
+  { -- | The converted value.
+    value :: a,
+    -- | Validation errors, in source order.
     errors :: [AnnP ParseValidationError]
   }
 
@@ -738,7 +739,8 @@ data ParseValidationError
 -- module; their errors are still returned.
 convertModule :: Text -> [Ann PExpr] -> Converted Module
 convertModule defaultName terms =
-  let (m, errs) = runWriter (convertSourceItems defaultName [SourceItem t [] | t <- terms])
+  let items = [SourceItem t [] | t <- terms]
+      (m, errs) = runWriter (convertSourceItems defaultName items)
    in Converted m [e.parseError | e <- errs]
 
 -- | A top-level term to convert, with the macro chain that generated
@@ -750,7 +752,9 @@ data SourceItem = SourceItem
 
 -- | A conversion error with the macro chain of its item.
 data ChainedError = ChainedError
-  { parseError :: AnnP ParseValidationError,
+  { -- | The error.
+    parseError :: AnnP ParseValidationError,
+    -- | The macro chain of the item (empty if the user wrote it).
     expansion :: [ExpansionStep]
   }
 
@@ -959,7 +963,10 @@ groupMacroClauses items = do
         cs@(first : _) <- [clausesOf k]
       ]
     undeclared =
-      [ AnnP (UndeclaredMacroClause k.localName k.arity) nc.clause.sourceLoc nc.clause.parsed
+      [ AnnP
+          (UndeclaredMacroClause k.localName k.arity)
+          nc.clause.sourceLoc
+          nc.clause.parsed
       | nc <- clauses,
         let k = clauseKey nc,
         Set.notMember k declaredKeys,
@@ -1171,7 +1178,8 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- (a one-line definition). Parsed as prefix op:
   -- Compound "macro" [Compound "--->" [head, body]]
   Compound kw [macroBody@(Ann (Compound "--->" [_, _]) _)]
-    | Just k <- macroKeyword kw -> maybe DirOther (macroDef k) <$> convertMacroClause macroBody
+    | Just k <- macroKeyword kw ->
+        maybe DirOther (macroDef k) <$> convertMacroClause macroBody
   Compound kw [other]
     | Just _ <- macroKeyword kw ->
         DirOther <$ tell [AnnP MalformedMacroHead other.sourceLoc other.node]
@@ -1179,7 +1187,8 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- Report it, or it would vanish.
   _
     | isBuiltinDirective body.node ->
-        DirOther <$ tell [AnnP (MalformedDirective (directiveName body.node)) loc body.node]
+        let err = MalformedDirective (directiveName body.node)
+         in DirOther <$ tell [AnnP err loc body.node]
   -- Anything else is a macro use or unknown. "YCHR.Internal.DeclMacro"
   -- handles both before this; here we just skip them.
   _ -> pure DirOther
@@ -1288,7 +1297,8 @@ convertExportItem (Ann pexpr loc) = case pexpr of
           )
       )
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    pure (Just (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing)))
+    pure
+      (Just (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing)))
   Compound "macro" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
     pure (Just (MacroExportDecl (MacroExportDeclBody name (fromInteger arity))))
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
@@ -1488,8 +1498,8 @@ convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
         }
 
     -- Add the two optional trailing clauses to a core.
-    withClauses (FunctionDeclBody n ar argTys retTy o k _ _) requiring refining =
-      FunctionDecl (FunctionDeclBody n ar argTys retTy o k requiring refining)
+    withClauses core requiring refining =
+      FunctionDecl core {requiring, refining}
 
     -- The typed spelling @name(type, ...) -> type@.
     typedCore sig = case sig.node of
@@ -1588,8 +1598,10 @@ convertTypeDefinition (Ann pexpr loc) = case pexpr of
                   )
               )
           (errs, _) -> failWithAll errs
-    _ -> failWith (AnnP MalformedTypeDefinition loc pexpr)
-  _ -> failWith (AnnP MalformedTypeDefinition loc pexpr)
+    _ -> malformed
+  _ -> malformed
+  where
+    malformed = failWith (AnnP MalformedTypeDefinition loc pexpr)
 
 -- | View an atom as a compound with no arguments.
 compoundView :: PExpr -> PExpr
@@ -1679,7 +1691,8 @@ convertMacroClause (Ann pexpr loc) = case pexpr of
     Compound mname rawParams
       | Set.notMember mname reservedMacroHeadNames ->
           case unfoldListStrict macroBody.node of
-            Nothing -> failWith (AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node)
+            Nothing ->
+              failWith (AnnP MalformedMacroBody macroBody.sourceLoc macroBody.node)
             Just elems ->
               let clause = MacroClause (map convertTerm rawParams) (map convertTerm elems)
                in pure (Just (NamedClause mname (AnnP clause loc pexpr)))
@@ -1784,7 +1797,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
     equation pat guardAnn rhs = case equationHead pat of
       Just c ->
         let rhsAnn = AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node
-            eqn = FunctionEquation c.name c.args guardAnn rhsAnn []
+            eqn = FunctionEquation (Unqualified c.name) c.args guardAnn rhsAnn []
          in pure (Just (AnnP eqn loc pexpr))
       Nothing -> failWith (AnnP MalformedFunctionEquation loc pexpr)
 
@@ -1793,15 +1806,21 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
 convertRhsSequence :: Ann PExpr -> NE.NonEmpty Term
 convertRhsSequence = fmap convertTerm . flattenComma1
 
--- | The function name and arguments of an equation LHS.
+-- | The function name and argument patterns of an equation LHS.
+data EquationHead = EquationHead
+  { name :: Text,
+    args :: [Term]
+  }
+
+-- | Read an equation LHS.
 --
 -- Handles prefix notation @name(args)@ and operator notation @X op Y@
 -- (which parses as @Compound op [X, Y]@). Returns 'Nothing' if the LHS
 -- is a literal, variable, wildcard, or string.
-equationHead :: Ann PExpr -> Maybe Constraint
+equationHead :: Ann PExpr -> Maybe EquationHead
 equationHead (Ann pexpr _) = case pexpr of
   -- Prefix: name(arg1, arg2, ...) — also covers operator notation.
-  Compound name args -> Just (Constraint (Unqualified name) (map convertTerm args))
+  Compound name args -> Just (EquationHead name (map convertTerm args))
   -- Bare atom (zero-arity function)
-  Atom name -> Just (Constraint (Unqualified name) [])
+  Atom name -> Just (EquationHead name [])
   _ -> Nothing
