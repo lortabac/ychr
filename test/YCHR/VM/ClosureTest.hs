@@ -48,6 +48,7 @@ import YCHR.Internal.VM.Closure
     danglingTargets,
     procedureNames,
   )
+import YCHR.TestHelpers (emptyProgram)
 
 -- | Closure checks: dangling calls and dispatch-table entries.
 tests :: TestTree
@@ -82,15 +83,10 @@ programWith ::
   [Callable] ->
   Program
 programWith procs evs cls =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      procedures = procs,
+  emptyProgram
+    { procedures = procs,
       evaluables = evs,
-      callables = cls,
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = []
+      callables = cls
     }
 
 -- ---------------------------------------------------------------------------

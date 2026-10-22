@@ -37,7 +37,7 @@ import YCHR.Internal.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, va
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Types (Constraint (..), Name (..), Term (..))
 import YCHR.Internal.VM qualified as VM
-import YCHR.TestHelpers (runChrEmpty)
+import YCHR.TestHelpers (genStringContent, runChrEmpty)
 
 -- ---------------------------------------------------------------------------
 -- Generators
@@ -69,19 +69,6 @@ genAtom =
         rest <- Gen.list (Range.linear 0 4) Gen.alphaNum
         pure (Text.pack (c : rest))
     ]
-
--- | Generate content for a 'TextTerm' (double-quoted string).
--- Includes plain text, embedded double quotes, backslashes, and escape chars.
-genStringContent :: Gen Text
-genStringContent =
-  Text.pack
-    <$> Gen.list
-      (Range.linear 0 10)
-      ( Gen.choice
-          [ Gen.alphaNum,
-            Gen.element [' ', '"', '\\', '\n', '\t']
-          ]
-      )
 
 -- | Generate a valid variable name (uppercase-starting).
 genVarName :: Gen Text

@@ -34,6 +34,7 @@ import YCHR.Internal.VM
     ValExpr (..),
     mkHistoryIds,
   )
+import YCHR.TestHelpers (emptyProgram, mkProc)
 
 -- | Interpreter slot assignment: scoping, shadowing, and totality on unbound names.
 tests :: TestTree
@@ -49,16 +50,6 @@ tests =
 -- ---------------------------------------------------------------------------
 -- Fixtures
 -- ---------------------------------------------------------------------------
-
--- | A procedure with the given name, parameters and body.
-mkProc :: Name -> [Name] -> [Stmt] -> Procedure
-mkProc n ps body =
-  Procedure
-    { name = n,
-      params = ps,
-      body = body,
-      procKind = PKReactivateDispatch
-    }
 
 -- | The lowered form of a procedure lowered on its own. The phase only
 -- lowers whole programs, so a one-procedure program is built for it.
@@ -77,15 +68,8 @@ lowerBody params body = (lowerSingle params body).slotProcBody
 -- | A program with the given procedures and nothing else.
 programWith :: [Procedure] -> Program
 programWith procs =
-  Program
-    { typeNames = [],
-      ruleNames = [],
-      procedures = procs,
-      evaluables = [],
-      callables = [],
-      tellables = [],
-      tellablesUnqualified = Map.empty,
-      inertTypes = []
+  emptyProgram
+    { procedures = procs
     }
 
 -- | A program whose only procedure is the given one.

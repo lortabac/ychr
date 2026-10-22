@@ -17,6 +17,7 @@ import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize, vmVersion)
+import YCHR.TestHelpers (emptyProgram, funRefKey, histIds, mkProc)
 
 -- | Round-trip tests for the VM's S-expression serializer over 'VMProgram'.
 tests :: TestTree
@@ -39,30 +40,20 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program [] [] [] [] [] [] Map.empty []),
+  [ testCase "empty program" $ roundtrip emptyProgram,
     testCase "single empty procedure" $
       roundtrip
-        ( Program
-            [Types.Unqualified "foo"]
-            []
-            [mkProcedure "foo" [] []]
-            []
-            []
-            []
-            Map.empty
-            []
+        ( emptyProgram
+            { typeNames = [Types.Unqualified "foo"],
+              procedures = [mkProc "foo" [] []]
+            }
         ),
     testCase "procedure with params" $
       roundtrip
-        ( Program
-            [Types.Unqualified "leq"]
-            []
-            [mkProcedure "tell_leq2" ["X", "Y"] []]
-            []
-            []
-            []
-            Map.empty
-            []
+        ( emptyProgram
+            { typeNames = [Types.Unqualified "leq"],
+              procedures = [mkProc "tell_leq2" ["X", "Y"] []]
+            }
         ),
     testCase "let-val statement" $
       roundtrip (mkProg [LetVal "x" (Lit (IntLit 42))]),
@@ -202,47 +193,44 @@ roundtripTests =
       roundtrip (mkProg [LetVal "x" (Lit (TextLit "hello\nworld\t\"quoted\""))]),
     testCase "multi-procedure program" $
       roundtrip
-        ( Program
-            [Types.Unqualified "a", Types.Unqualified "b"]
-            []
-            [ mkProcedure
-                "tell_a1"
-                ["X"]
-                [ LetId
-                    "id"
-                    ( CreateConstraint
-                        (ConstraintType 0)
-                        [ Var
-                            "X"
-                        ]
-                    ),
-                  Store (IdVar "id"),
-                  ExprStmt (CallExpr "activate_a1" [AId (IdVar "id")])
+        ( emptyProgram
+            { typeNames = [Types.Unqualified "a", Types.Unqualified "b"],
+              procedures =
+                [ mkProc
+                    "tell_a1"
+                    ["X"]
+                    [ LetId
+                        "id"
+                        ( CreateConstraint
+                            (ConstraintType 0)
+                            [ Var
+                                "X"
+                            ]
+                        ),
+                      Store (IdVar "id"),
+                      ExprStmt (CallExpr "activate_a1" [AId (IdVar "id")])
+                    ],
+                  mkProc
+                    "activate_a1"
+                    ["susp"]
+                    [ LetId "id" (IdVar "susp"),
+                      LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
+                      Return (Lit (BoolLit False))
+                    ],
+                  mkProc
+                    "reactivate_dispatch"
+                    ["susp"]
+                    [ If
+                        ( BIsConstraintType
+                            (IdVar "susp")
+                            (ConstraintType 0)
+                        )
+                        [ExprStmt (CallExpr "activate_a1" [AId (IdVar "susp")])]
+                        []
+                    ]
                 ],
-              mkProcedure
-                "activate_a1"
-                ["susp"]
-                [ LetId "id" (IdVar "susp"),
-                  LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
-                  Return (Lit (BoolLit False))
-                ],
-              mkProcedure
-                "reactivate_dispatch"
-                ["susp"]
-                [ If
-                    ( BIsConstraintType
-                        (IdVar "susp")
-                        (ConstraintType 0)
-                    )
-                    [ExprStmt (CallExpr "activate_a1" [AId (IdVar "susp")])]
-                    []
-                ]
-            ]
-            []
-            []
-            []
-            Map.empty
-            [ConstraintType 1]
+              inertTypes = [ConstraintType 1]
+            }
         )
   ]
 
@@ -295,51 +283,70 @@ formatTests =
     testCase "tellables entry serialization" $
       assertContains
         ( serializeProg
-            ( Program
-                []
-                []
-                [mkProcedure "p" [] []]
-                []
-                []
-                [ Tellable
-                    (TellableKey {scope = Just "m", functor = "m__c", arity = 2})
-                    "tell_m__c2"
-                ]
-                Map.empty
-                []
+            ( emptyProgram
+                { procedures = [mkProc "p" [] []],
+                  tellables =
+                    [ Tellable
+                        (TellableKey {scope = Just "m", functor = "m__c", arity = 2})
+                        "tell_m__c2"
+                    ]
+                }
             )
         )
         "(tellables (\"m\" \"m__c\" 2 \"tell_m__c2\"))",
     testCase "tellables-unqualified entry serialization" $
       assertContains
         ( serializeProg
-            ( Program
-                []
-                []
-                [mkProcedure "p" [] []]
-                []
-                []
-                []
-                ( Map.fromList
-                    [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
-                        UniqueTell "tell_m__c2"
-                      )
-                    ]
-                )
-                []
+            ( emptyProgram
+                { procedures = [mkProc "p" [] []],
+                  tellablesUnqualified =
+                    ( Map.fromList
+                        [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                            UniqueTell "tell_m__c2"
+                          )
+                        ]
+                    )
+                }
             )
         )
         "(tellables-unqualified (any \"c\" 2 \"tell_m__c2\"))",
     testCase "an ambiguous tellables-unqualified pair writes one field per candidate" $
       assertContains
         ( serializeProg
-            ( Program
-                []
-                []
-                [mkProcedure "p" [] []]
-                []
-                []
-                []
+            ( emptyProgram
+                { procedures = [mkProc "p" [] []],
+                  tellablesUnqualified =
+                    ( Map.fromList
+                        [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
+                            AmbiguousTell
+                              [ Types.QualifiedName "m" "c",
+                                Types.QualifiedName "n" "c"
+                              ]
+                          )
+                        ]
+                    )
+                }
+            )
+        )
+        ( "(tellables-unqualified (any \"c\" 2 "
+            <> "\"tell_m__c2\" \"tell_n__c2\"))"
+        ),
+    testCase "tellables entry roundtrip" $
+      roundtrip
+        ( emptyProgram
+            { procedures = [mkProc "p" [] [TellTerm "m" (Var "g") [Var "a"]]],
+              tellables =
+                [ Tellable
+                    (TellableKey {scope = Just "m", functor = "c", arity = 2})
+                    "tell_m__c2"
+                ]
+            }
+        ),
+    testCase "tellables-unqualified entry roundtrip" $
+      roundtrip
+        ( emptyProgram
+            { procedures = [mkProc "p" [] [TellTerm "m" (Var "g") [Var "a"]]],
+              tellablesUnqualified =
                 ( Map.fromList
                     [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
                         AmbiguousTell
@@ -349,46 +356,7 @@ formatTests =
                       )
                     ]
                 )
-                []
-            )
-        )
-        ( "(tellables-unqualified (any \"c\" 2 "
-            <> "\"tell_m__c2\" \"tell_n__c2\"))"
-        ),
-    testCase "tellables entry roundtrip" $
-      roundtrip
-        ( Program
-            []
-            []
-            [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
-            []
-            []
-            [ Tellable
-                (TellableKey {scope = Just "m", functor = "c", arity = 2})
-                "tell_m__c2"
-            ]
-            Map.empty
-            []
-        ),
-    testCase "tellables-unqualified entry roundtrip" $
-      roundtrip
-        ( Program
-            []
-            []
-            [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
-            []
-            []
-            []
-            ( Map.fromList
-                [ ( TellableKey {scope = Nothing, functor = "c", arity = 2},
-                    AmbiguousTell
-                      [ Types.QualifiedName "m" "c",
-                        Types.QualifiedName "n" "c"
-                      ]
-                  )
-                ]
-            )
-            []
+            }
         ),
     testCase "tell-term serialization" $
       assertContains
@@ -425,15 +393,9 @@ formatTests =
       let vmp =
             VMProgram
               { program =
-                  Program
-                    [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
-                    []
-                    []
-                    []
-                    []
-                    []
-                    Map.empty
-                    [],
+                  emptyProgram
+                    { typeNames = [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
+                    },
                 exportedSet =
                   Set.fromList
                     [ Types.QualifiedIdentifier "M" "leq" 2,
@@ -823,38 +785,14 @@ genStmt =
 -- Helpers
 -- ---------------------------------------------------------------------------
 
--- | A propagation-history tuple in head-position order, the way
--- 'YCHR.Internal.Compile.buildHistoryIds' builds one.
-histIds :: [IdExpr] -> HistoryIds
-histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
-
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] [] Map.empty []
+mkProg body = emptyProgram {procedures = [mkProc "p" [] body]}
 
 -- | 'mkProg' with a non-empty callables table.
 mkProgWithCallables :: [Callable] -> Program
 mkProgWithCallables callables =
-  Program [] [] [mkProcedure "p" [] []] [] callables [] Map.empty []
-
--- | A function-reference callables key, the shape
--- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.
-funRefKey :: Name -> Int -> CallableKey
-funRefKey identity arity =
-  CallableKey {functor = funRefFunctor, identity = identity, arity = arity}
-
--- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
--- doesn't affect serialization round-tripping or the format tests'
--- assertions, so a single neutral value (with no payload) keeps the
--- fixtures concise.
-mkProcedure :: Name -> [Name] -> [Stmt] -> Procedure
-mkProcedure n ps body =
-  Procedure
-    { name = n,
-      params = ps,
-      body = body,
-      procKind = PKReactivateDispatch
-    }
+  emptyProgram {procedures = [mkProc "p" [] []], callables = callables}
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram

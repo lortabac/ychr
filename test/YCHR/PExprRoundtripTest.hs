@@ -11,7 +11,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Internal.Loc (noAnn)
 import YCHR.Internal.PExpr
-import YCHR.TestHelpers (strip)
+import YCHR.TestHelpers (genStringContent, strip)
 
 -- ---------------------------------------------------------------------------
 -- Operator table
@@ -132,18 +132,6 @@ genLambda sub = do
           noAnn body
         ]
     )
-
--- | Generate a string literal body.
-genStringContent :: Gen Text
-genStringContent =
-  Text.pack
-    <$> Gen.list
-      (Range.linear 0 10)
-      ( Gen.choice
-          [ Gen.alphaNum,
-            Gen.element [' ', '"', '\\', '\n', '\t']
-          ]
-      )
 
 -- | Generate a non-operator PExpr (no operators in structure).
 genPExpr :: Gen PExpr

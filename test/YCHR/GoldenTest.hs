@@ -7,8 +7,10 @@ import Control.Monad (filterM)
 import Data.Char (isSpace)
 import Data.Foldable (traverse_)
 import Data.List (isInfixOf, partition, sort, sortOn)
+import Data.Map.Strict (Map)
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.Directory (doesDirectoryExist, listDirectory)
@@ -29,6 +31,7 @@ import YCHR.Run
     prepareGoal,
     runPreparedGoal,
   )
+import YCHR.Types (Term)
 
 -- | Test directories whose @.chr@ programs or goals deliberately
 -- reference bare atoms that the renamer cannot resolve — typically
@@ -104,17 +107,46 @@ expectsWarnings =
       "write_term_test"
     ]
 
--- | One case of a golden test directory. The 'String' is the case name.
+-- | One case of a golden test directory.
 data Case
   = -- | A @.goal@ / @.expected@ pair: the goal's bindings must match.
-    Positive String FilePath FilePath
+    Positive PositiveCase
   | -- | A bare @.error@: compilation or type checking must fail.
-    Negative String FilePath
+    Negative NegativeCase
   | -- | Compilation and program-level type-checking succeed, but running
     -- the goal must throw an error whose message contains every non-empty
     -- line of the @.error@ file. Encoded by colocating @<basename>.goal@
     -- and @<basename>.error@ in the same test directory.
-    GoalNegative String FilePath FilePath
+    GoalNegative GoalNegativeCase
+
+-- | The files of a 'Positive' case.
+data PositiveCase = PositiveCase
+  { name :: String,
+    goalFile :: FilePath,
+    expectedFile :: FilePath
+  }
+
+-- | The file of a 'Negative' case.
+data NegativeCase = NegativeCase
+  { name :: String,
+    errorFile :: FilePath
+  }
+
+-- | The files of a 'GoalNegative' case.
+data GoalNegativeCase = GoalNegativeCase
+  { name :: String,
+    goalFile :: FilePath,
+    errorFile :: FilePath
+  }
+
+-- | The files of a test directory, by extension. The @.chr@ paths
+-- include the directory; the others are bare file names.
+data DirFiles = DirFiles
+  { chrs :: [FilePath],
+    goals :: [FilePath],
+    expecteds :: [FilePath],
+    errors :: [FilePath]
+  }
 
 -- | A validated golden test directory.
 data TestSpec = TestSpec
@@ -138,38 +170,34 @@ makeGoldenTest :: FilePath -> String -> IO TestTree
 makeGoldenTest root name = do
   let dir = root </> name
   files <- sort <$> listDirectory dir
-  let chrs = [dir </> f | f <- files, takeExtension f == ".chr"]
-      goals = [f | f <- files, takeExtension f == ".goal"]
-      expecteds = [f | f <- files, takeExtension f == ".expected"]
-      errors = [f | f <- files, takeExtension f == ".error"]
-  pure $ case validate dir name chrs goals expecteds errors of
+  let dirFiles =
+        DirFiles
+          { chrs = [dir </> f | f <- files, takeExtension f == ".chr"],
+            goals = [f | f <- files, takeExtension f == ".goal"],
+            expecteds = [f | f <- files, takeExtension f == ".expected"],
+            errors = [f | f <- files, takeExtension f == ".error"]
+          }
+  pure $ case validate dir name dirFiles of
     Left msg -> testCase name (assertFailure msg)
     Right spec -> testGroup spec.testName (map (makeCase spec) spec.cases)
 
 -- | Check the discovery rules (see PROJECT.md, "Golden Tests") and pair
 -- up the case files.
-validate ::
-  FilePath ->
-  String ->
-  [FilePath] ->
-  [FilePath] ->
-  [FilePath] ->
-  [FilePath] ->
-  Either String TestSpec
-validate dir name chrs goals expecteds errors
-  | null chrs =
+validate :: FilePath -> String -> DirFiles -> Either String TestSpec
+validate dir name files
+  | null files.chrs =
       Left ("No .chr files in " ++ dir)
-  | null goals && null errors =
+  | null files.goals && null files.errors =
       Left ("No .goal or .error files in " ++ dir)
-  | not (null goals) && not (null errors) = do
+  | not (null files.goals) && not (null files.errors) = do
       -- Mixed-mode directory: each .goal must be paired with either a
       -- .expected (positive) or a .error (goal-negative). A bare .error
       -- (with no matching .goal) in the same directory is rejected
       -- because we'd otherwise have to disambiguate it from a regular
       -- compilation-negative case.
-      let goalNames = sort (map dropExtension goals)
-          expectedNames = map dropExtension expecteds
-          errorNames = map dropExtension errors
+      let goalNames = sort (map dropExtension files.goals)
+          expectedNames = map dropExtension files.expecteds
+          errorNames = map dropExtension files.errors
           (positiveMatched, unmatchedAfterExpected) =
             partition (`elem` expectedNames) goalNames
           (goalNegMatched, orphanGoals) =
@@ -179,14 +207,19 @@ validate dir name chrs goals expecteds errors
       case (orphanGoals, orphanExpecteds, orphanErrors) of
         ([], [], []) ->
           let pcases =
-                [ Positive c (dir </> c <.> "goal") (dir </> c <.> "expected")
+                [ positiveCase dir c
                 | c <- positiveMatched
                 ]
               gncases =
-                [ GoalNegative c (dir </> c <.> "goal") (dir </> c <.> "error")
+                [ GoalNegative
+                    GoalNegativeCase
+                      { name = c,
+                        goalFile = dir </> c <.> "goal",
+                        errorFile = dir </> c <.> "error"
+                      }
                 | c <- goalNegMatched
                 ]
-           in Right (TestSpec name chrs (sortCases (pcases ++ gncases)))
+           in Right (TestSpec name files.chrs (sortCases (pcases ++ gncases)))
         (gs, es, ers) ->
           Left
             ( "Orphan files in "
@@ -202,25 +235,25 @@ validate dir name chrs goals expecteds errors
                   )
                   ers
             )
-  | not (null errors) =
+  | not (null files.errors) =
       let ecases =
-            [ Negative (dropExtension e) (dir </> e)
-            | e <- sort errors
+            [ Negative NegativeCase {name = dropExtension e, errorFile = dir </> e}
+            | e <- sort files.errors
             ]
-       in Right (TestSpec name chrs ecases)
+       in Right (TestSpec name files.chrs ecases)
   | otherwise = do
-      let goalNames = sort (map dropExtension goals)
-          expectedNames = sort (map dropExtension expecteds)
+      let goalNames = sort (map dropExtension files.goals)
+          expectedNames = sort (map dropExtension files.expecteds)
           (matched, orphanGoals) =
             partition (`elem` expectedNames) goalNames
           orphanExpecteds = filter (`notElem` goalNames) expectedNames
       case (orphanGoals, orphanExpecteds) of
         ([], []) ->
           let pcases =
-                [ Positive c (dir </> c <.> "goal") (dir </> c <.> "expected")
+                [ positiveCase dir c
                 | c <- matched
                 ]
-           in Right (TestSpec name chrs pcases)
+           in Right (TestSpec name files.chrs pcases)
         (gs, es) ->
           Left
             ( "Orphan files in "
@@ -230,40 +263,58 @@ validate dir name chrs goals expecteds errors
                 ++ concatMap (("\n  missing .goal for " ++) . (<.> "expected")) es
             )
 
+-- | The positive case @c@ of directory @dir@.
+positiveCase :: FilePath -> String -> Case
+positiveCase dir c =
+  Positive
+    PositiveCase
+      { name = c,
+        goalFile = dir </> c <.> "goal",
+        expectedFile = dir </> c <.> "expected"
+      }
+
 -- | Sort cases by name.
 sortCases :: [Case] -> [Case]
 sortCases = sortOn caseName
   where
-    caseName (Positive n _ _) = n
-    caseName (Negative n _) = n
-    caseName (GoalNegative n _ _) = n
+    caseName (Positive c) = c.name
+    caseName (Negative c) = c.name
+    caseName (GoalNegative c) = c.name
 
 -- | Turn a case into a tasty test.
 makeCase :: TestSpec -> Case -> TestTree
 makeCase spec c = case c of
-  Positive cname gf ef -> testCase cname (runPositive spec gf ef)
-  Negative cname ef -> testCase cname (runNegative spec ef)
-  GoalNegative cname gf ef -> testCase cname (runGoalNegative spec gf ef)
+  Positive pc -> testCase pc.name (runPositive spec pc)
+  Negative nc -> testCase nc.name (runNegative spec nc)
+  GoalNegative gc -> testCase gc.name (runGoalNegative spec gc)
 
--- | Compile, type-check and run the goal; compare the printed bindings
--- with the @.expected@ file.
-runPositive :: TestSpec -> FilePath -> FilePath -> IO ()
-runPositive spec goalFile expectedFile = do
+-- | Compile and type-check the program, then read and prepare the goal
+-- in @goalFile@. Warnings fail the test unless allowed. Returns the
+-- action that runs the goal.
+prepareCaseGoal :: TestSpec -> FilePath -> IO (IO (Map Text Term))
+prepareCaseGoal spec goalFile = do
   (prog, ws) <-
     compileFiles stdlib False spec.chrFiles
       >>= either (assertFailure . show) pure
   checkWarnings spec "compile" ws
   typeCheckOrFail spec prog
   query <- TIO.readFile goalFile
-  expected <- readFile expectedFile
   prepared <- prepareGoal prog (T.strip query)
   checkWarnings spec "goal" prepared.warnings
-  bindings <-
+  pure $
     runPreparedGoal
       typeCheckerProgram
       prog
       defaultHostCallRegistry
       prepared.constraint
+
+-- | Compile, type-check and run the goal; compare the printed bindings
+-- with the @.expected@ file.
+runPositive :: TestSpec -> PositiveCase -> IO ()
+runPositive spec c = do
+  runGoal <- prepareCaseGoal spec c.goalFile
+  expected <- readFile c.expectedFile
+  bindings <- runGoal
   prettyBindings bindings @?= expected
 
 -- | Compile + program-typecheck must succeed; running the goal must throw
@@ -275,24 +326,11 @@ runPositive spec goalFile expectedFile = do
 -- pin a phrase from the actual error text to anchor the test against
 -- the intended failure path. Any other outcome (success, non-'Error'
 -- exception, missing substring) fails the test.
-runGoalNegative :: TestSpec -> FilePath -> FilePath -> IO ()
-runGoalNegative spec goalFile errorFile = do
-  (prog, ws) <-
-    compileFiles stdlib False spec.chrFiles
-      >>= either (assertFailure . show) pure
-  checkWarnings spec "compile" ws
-  typeCheckOrFail spec prog
-  query <- TIO.readFile goalFile
-  expectedSubstrings <- nonEmptyLines <$> readFile errorFile
-  prepared <- prepareGoal prog (T.strip query)
-  checkWarnings spec "goal" prepared.warnings
-  outcome <-
-    try @SomeException $
-      runPreparedGoal
-        typeCheckerProgram
-        prog
-        defaultHostCallRegistry
-        prepared.constraint
+runGoalNegative :: TestSpec -> GoalNegativeCase -> IO ()
+runGoalNegative spec c = do
+  runGoal <- prepareCaseGoal spec c.goalFile
+  expectedSubstrings <- nonEmptyLines <$> readFile c.errorFile
+  outcome <- try @SomeException runGoal
   case outcome of
     Right _ ->
       assertFailure
@@ -313,10 +351,10 @@ runGoalNegative spec goalFile errorFile = do
 
 -- | Compilation, or else type checking, must fail with a message that
 -- contains every non-empty line of the @.error@ file.
-runNegative :: TestSpec -> FilePath -> IO ()
-runNegative spec errorFile = do
+runNegative :: TestSpec -> NegativeCase -> IO ()
+runNegative spec c = do
   result <- compileFiles stdlib False spec.chrFiles
-  expectedSubstrings <- nonEmptyLines <$> readFile errorFile
+  expectedSubstrings <- nonEmptyLines <$> readFile c.errorFile
   case result of
     Left err -> assertAllPresent (displayMsg err) expectedSubstrings
     Right (prog, _ws) -> do

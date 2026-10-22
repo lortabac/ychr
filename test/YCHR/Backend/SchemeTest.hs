@@ -18,7 +18,7 @@ import Test.Tasty.HUnit (assertBool, testCase)
 import YCHR.Internal.Backend.Scheme (generateScheme)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.VM.SExpr (VMProgram (..))
-import YCHR.TestHelpers (compileOrFail)
+import YCHR.TestHelpers (compileOrFail, leqSource)
 
 -- | Scheme-backend control-flow codegen: when a 'Return' needs a @call\/cc@ escape.
 tests :: TestTree
@@ -34,6 +34,7 @@ tests =
       -- `%return` binding and the generated code referenced an unbound
       -- name.
       testCase "a loop-trapped Return keeps a %return escape" $ do
+        -- leq: its partner loops need the Return and Continue escapes.
         code <- schemeFor leqSource
         assertInfix "(lambda (%return)" code,
       testCase "a loop that names Continue keeps its continue escape" $ do
@@ -119,19 +120,6 @@ sumSource =
   \sum(N) | N > 0 -> N + sum(N - 1).\n\
   \\n\
   \compute(N, R) <=> R is sum(N).\n"
-
--- | The standard @leq@ handler. Its multi-headed occurrences carry
--- partner loops whose bodies hold a @Return@ (early drop) and a
--- @Continue@ (backjump), so at least one procedure must keep the escape.
-leqSource :: Text
-leqSource =
-  ":- module(order, [leq/2]).\n\
-  \:- chr_constraint leq/2.\n\
-  \\n\
-  \reflexivity @ leq(X, X) <=> true.\n\
-  \antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n\
-  \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
-  \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
 
 -- | A program that declares operators of its own. Their entries must
 -- reach the emitted table with their fixity and type, or a run-time

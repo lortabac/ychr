@@ -16,7 +16,7 @@ import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM qualified as VM
-import YCHR.TestHelpers (compileOrFail)
+import YCHR.TestHelpers (compileOrFail, funRefKey, leqSource)
 
 -- | The VM code 'YCHR.Internal.Compile.compile' emits for representative CHR programs.
 tests :: TestTree
@@ -131,22 +131,6 @@ assertForeachConditions prog procName expected =
     Just p -> case findForeach p.body of
       Nothing -> assertFailure $ "no Foreach in " ++ show procName
       Just f -> foreachConditions f @?= expected
-
--- ---------------------------------------------------------------------------
--- LEQ surface source
--- ---------------------------------------------------------------------------
-
--- | The leq program. A copy of the one in RunTest, so this module is
--- self-contained.
-leqSource :: Text
-leqSource =
-  ":- module(order, [leq/2]).\n\
-  \:- chr_constraint leq/2.\n\
-  \\n\
-  \reflexivity @ leq(X, X) <=> true.\n\
-  \antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n\
-  \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
-  \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
 
 -- ---------------------------------------------------------------------------
 -- Foreach index-condition pushdown
@@ -491,12 +475,6 @@ callablesDispatchTests =
           (any (hasApplyClosure . (.body)) prog.program.procedures)
     ]
   where
-    funRefKey identity arity =
-      VM.CallableKey
-        { functor = VM.funRefFunctor,
-          identity = identity,
-          arity = arity
-        }
     lambdaKey identity arity =
       VM.CallableKey
         { functor = VM.lambdaClosureFunctor,
