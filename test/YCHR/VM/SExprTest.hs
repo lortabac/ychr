@@ -97,7 +97,9 @@ roundtripTests =
                 "L1"
                 (ConstraintType 0)
                 "susp"
-                [(ArgIndex 0, Var "x"), (ArgIndex 1, Lit (IntLit 3))]
+                [ IndexCondition (ArgIndex 0) (Var "x"),
+                  IndexCondition (ArgIndex 1) (Lit (IntLit 3))
+                ]
                 [ExprStmt (FieldType (IdVar "susp"))]
             ]
         ),
@@ -807,7 +809,7 @@ genStmt =
         <*> genName
         <*> Gen.list
           (Range.linear 0 3)
-          ((,) <$> genArgIndex <*> Gen.small genValExpr)
+          (IndexCondition <$> genArgIndex <*> Gen.small genValExpr)
         <*> Gen.list (Range.linear 0 3) (Gen.small genStmt),
       DrainReactivationQueue
         <$> genName

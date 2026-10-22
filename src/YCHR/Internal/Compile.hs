@@ -1245,14 +1245,18 @@ bindGoalArgs ::
   Name ->
   VarMap ->
   HeadConstraint ->
-  ([(ArgIndex, ValExpr)], [Stmt], VarMap)
+  ([IndexCondition], [Stmt], VarMap)
 bindGoalArgs localName suspName vm0 hcon =
   List.foldl' step ([], [], vm0) (zip [0 ..] hcon.args)
   where
     step (conds, lets, vm) (i, arg) = case arg of
       HeadWildcard -> (conds, lets, vm)
       HeadVar v -> case lookupVar v vm of
-        Just expr -> (conds ++ [(ArgIndex i, expr)], lets, vm)
+        Just expr ->
+          ( conds ++ [IndexCondition {argIndex = ArgIndex i, expectedValue = expr}],
+            lets,
+            vm
+          )
         Nothing ->
           ( conds,
             lets ++ [LetVal (localName v) (FieldArg (IdVar suspName) (ArgIndex i))],
@@ -1348,7 +1352,7 @@ wrapInPartnerLoops activeCType occ condMap inner =
       let label = partLabel k
           suspVar = partSuspName k
           partArity = length partner.constraint.args
-          conds = [(c.argIndex, c.expectedValue) | c <- Map.findWithDefault [] k condMap]
+          conds = Map.findWithDefault [] k condMap
           -- Bind the partner's id and arguments as ordinary locals so
           -- the rest of the body can reference them by name. The id is
           -- the suspension itself: 'IdVar suspVar' is renamed to

@@ -59,6 +59,7 @@ module YCHR.Internal.VM.Types
 
     -- * Statements
     Stmt (..),
+    IndexCondition (..),
 
     -- * Expressions
     ValExpr (..),
@@ -381,8 +382,8 @@ data Stmt
     -- @Foreach label constraintType suspVar indexConditions body@
     --
     -- Iterates over all stored constraints of the given type that
-    -- satisfy the index conditions. Each condition @(i, expr)@ requires
-    -- that argument @i@ of the constraint is 'BEqual' to @expr@.
+    -- satisfy the index conditions. Each 'IndexCondition' requires
+    -- that its argument of the constraint is 'BEqual' to its value.
     --
     -- The current constraint suspension is bound to @suspVar@ in each
     -- iteration; reference it via 'IdVar' inside the body, and use
@@ -391,7 +392,7 @@ data Stmt
     -- The iterator must satisfy the robustness, correctness,
     -- completeness, and weak termination properties as specified
     -- in the CHR compilation literature.
-    Foreach Label ConstraintType Name [(ArgIndex, ValExpr)] [Stmt]
+    Foreach Label ConstraintType Name [IndexCondition] [Stmt]
   | -- | Jump to the next iteration of the labeled 'Foreach' loop.
     Continue Label
   | -- | Exit the labeled 'Foreach' loop.
@@ -668,6 +669,14 @@ historyIdsList (HistoryIds ids) = ids
 -- fresh tuple.
 historyIdsFromSerialized :: [IdExpr] -> HistoryIds
 historyIdsFromSerialized = HistoryIds
+
+-- | One index condition of a 'Foreach': argument @argIndex@ of the
+-- constraint must be 'BEqual' to @expectedValue@.
+data IndexCondition = IndexCondition
+  { argIndex :: !ArgIndex,
+    expectedValue :: !ValExpr
+  }
+  deriving (Show, Eq)
 
 -- | Variable or procedure name.
 newtype Name = Name {unName :: Text}

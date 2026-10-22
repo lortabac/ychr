@@ -79,6 +79,7 @@ import YCHR.Internal.VM.Types
     EvaluableKey (..),
     HistoryIds,
     IdExpr (..),
+    IndexCondition (..),
     Label (..),
     Literal (..),
     ProcKind (..),
@@ -334,6 +335,8 @@ deriving instance Generic Label
 
 deriving instance Generic ArgIndex
 
+deriving instance Generic IndexCondition
+
 deriving instance Generic Literal
 
 deriving instance Generic StackFrame
@@ -373,6 +376,9 @@ instance ToCode Label where
   toCode = genericToCode
 
 instance ToCode ArgIndex where
+  toCode = genericToCode
+
+instance ToCode IndexCondition where
   toCode = genericToCode
 
 instance ToCode Literal where

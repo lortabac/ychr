@@ -30,6 +30,7 @@ import YCHR.Internal.VM
     Evaluable (..),
     EvaluableKey (..),
     IdExpr (..),
+    IndexCondition (..),
     Literal (..),
     Name (..),
     ProcKind (..),
@@ -178,7 +179,7 @@ danglingTests =
                       "l"
                       (ConstraintType 0)
                       "s"
-                      [(ArgIndex 0, CallExpr "ghost1" [])]
+                      [IndexCondition (ArgIndex 0) (CallExpr "ghost1" [])]
                       [ BoolExprStmt
                           ( BAlive
                               (CreateConstraint (ConstraintType 1) [CallExpr "ghost2" []])

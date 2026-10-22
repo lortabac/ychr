@@ -51,6 +51,7 @@ import YCHR.Internal.VM.Types
     Callable (..),
     Evaluable (..),
     IdExpr (..),
+    IndexCondition (..),
     Name (..),
     Procedure (..),
     Program (..),
@@ -101,7 +102,7 @@ danglingCalls known = dedup . concatMap procedureCalls
           ++ concatMap stmtCalls thenStmts
           ++ concatMap stmtCalls elseStmts
       Foreach _ _ _ conds body ->
-        concatMap (valCalls . snd) conds ++ concatMap stmtCalls body
+        concatMap (valCalls . (.expectedValue)) conds ++ concatMap stmtCalls body
       Continue _ -> []
       Break _ -> []
       Return e -> valCalls e

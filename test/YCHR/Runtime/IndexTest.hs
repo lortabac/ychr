@@ -44,6 +44,7 @@ import YCHR.Internal.Types (ConstraintType (..), Name (..))
 import YCHR.Internal.VM
   ( ArgIndex (..),
     BoolExpr (..),
+    IndexCondition (..),
     Literal (..),
     ProcKind (..),
     Procedure (..),
@@ -113,7 +114,7 @@ programWith stmts =
 -- | A 'Foreach' with one condition on argument @pos@.
 foreach :: ConstraintType -> Word -> [Stmt] -> Stmt
 foreach cType pos body =
-  Foreach "L" cType "susp" [(ArgIndex pos, Lit (IntLit 0))] body
+  Foreach "L" cType "susp" [IndexCondition (ArgIndex pos) (Lit (IntLit 0))] body
 
 -- ---------------------------------------------------------------------------
 -- Keys

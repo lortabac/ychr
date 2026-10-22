@@ -844,7 +844,7 @@ compileBody stmts = compileStmts stmts
 -- the key bindings, so an unindexed type evaluates no condition and scans
 -- the whole bucket. A loop with no eligible condition emits a plain
 -- @store-snapshot@ call.
-compileForeach :: Label -> Int -> Name -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
+compileForeach :: Label -> Int -> Name -> [IndexCondition] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
   wrapBreak
     ( SList
@@ -897,7 +897,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     -- Only a total expression may be evaluated eagerly at loop entry; see
     -- 'nonRaising'. The conditions that stay are the only ones an index
     -- could ever be driven by.
-    eligible = [(i, e) | (ArgIndex i, e) <- conds, nonRaising e]
+    eligible = [c | c <- conds, nonRaising c.expectedValue]
     candidatesExpr = case eligible of
       [] -> snapshot
       _ ->
@@ -916,7 +916,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     -- indexing its position. A key found earlier wins: the `not` conjunct
     -- keeps a later condition from being evaluated at all, matching the
     -- interpreter's 'driverKey'.
-    keyBinding n (i, e) =
+    keyBinding n (IndexCondition (ArgIndex i) e) =
       [ SList
           [ SAtom (keyName n),
             SList
@@ -931,7 +931,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
       ]
       where
         priorKey = [SList [SAtom "not", SAtom (keyName (n - 1))] | n > 0]
-    keyClause (n, (i, _)) =
+    keyClause (n, IndexCondition (ArgIndex i) _) =
       SList
         [ SAtom (keyName n),
           SList
@@ -946,7 +946,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     ipName = "%ip-" <> lbl
     keyName n = "%key-" <> lbl <> "-" <> T.pack (show n)
 
-foreachInner :: Text -> Text -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
+foreachInner :: Text -> Text -> [IndexCondition] -> [Stmt] -> SExpr
 foreachInner lbl sv conds body =
   let aliveCheck = SList [SAtom "suspension-alive?", SAtom sv]
       condChecks = map compileCondition conds
@@ -970,7 +970,7 @@ foreachInner lbl sv conds body =
         | otherwise = compileBody body
    in SList [SAtom "when", guard, innerBody]
   where
-    compileCondition (ArgIndex i, e) =
+    compileCondition (IndexCondition (ArgIndex i) e) =
       SList
         [ SAtom "equal?/chr",
           SList [SAtom "constraint-arg", SAtom sv, SInt (fromIntegral i)],

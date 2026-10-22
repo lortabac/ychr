@@ -125,6 +125,7 @@ module YCHR.Internal.Interpreter.Slots
         slotProcKind
       ),
     SlotStmt (..),
+    SIndexCondition (..),
     SlotValExpr (..),
     SlotBoolExpr (..),
     SlotIdExpr (..),
@@ -148,6 +149,7 @@ import YCHR.Internal.VM.Types
     BoolExpr (..),
     CallArg (..),
     IdExpr (..),
+    IndexCondition (..),
     Label,
     Literal,
     Name,
@@ -299,7 +301,7 @@ data SlotStmt
   | SAssignVal Slot SlotValExpr
   | SAssignId Slot SlotIdExpr
   | SIf SlotBoolExpr [SlotStmt] [SlotStmt]
-  | SForeach Label ConstraintType Slot [(ArgIndex, SlotValExpr)] [SlotStmt]
+  | SForeach Label ConstraintType Slot [SIndexCondition] [SlotStmt]
   | SContinue Label
   | SBreak Label
   | SReturn SlotValExpr
@@ -311,6 +313,13 @@ data SlotStmt
   | SDrainReactivationQueue Slot [SlotStmt]
   | STellTerm Text SlotValExpr [SlotValExpr]
   | SPushFrame StackFrame
+  deriving (Show, Eq)
+
+-- | The slot phase's 'YCHR.Internal.VM.Types.IndexCondition'.
+data SIndexCondition = SIndexCondition
+  { argIndex :: !ArgIndex,
+    expectedValue :: !SlotValExpr
+  }
   deriving (Show, Eq)
 
 -- | Value-producing expressions, with local references slot-resolved
@@ -573,13 +582,13 @@ lowerStmt w = \case
      in (STellTerm sc goal' extras', w2)
   PushFrame frame -> (SPushFrame frame, w)
 
-lowerConditions :: Walker -> [(ArgIndex, ValExpr)] -> ([(ArgIndex, SlotValExpr)], Walker)
+lowerConditions :: Walker -> [IndexCondition] -> ([SIndexCondition], Walker)
 lowerConditions w0 = go w0 []
   where
     go w acc [] = (reverse acc, w)
-    go w acc ((idx, expr) : rest) =
+    go w acc (IndexCondition idx expr : rest) =
       let (expr', w') = lowerValExpr w expr
-       in go w' ((idx, expr') : acc) rest
+       in go w' (SIndexCondition idx expr' : acc) rest
 
 lowerValExpr :: Walker -> ValExpr -> (SlotValExpr, Walker)
 lowerValExpr w = \case

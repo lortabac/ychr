@@ -287,7 +287,10 @@ stmtToSExpr (Foreach lbl ct sv conds body) =
       labelToSExpr lbl,
       constraintTypeToSExpr ct,
       nameToSExpr sv,
-      SList [SList [SInt (fromIntegral i), valExprToSExpr e] | (ArgIndex i, e) <- conds],
+      SList
+        [ SList [SInt (fromIntegral i), valExprToSExpr e]
+        | IndexCondition (ArgIndex i) e <- conds
+        ],
       SList (map stmtToSExpr body)
     ]
 stmtToSExpr (Continue lbl) = SList [SAtom "continue", labelToSExpr lbl]
@@ -901,10 +904,10 @@ callArgFromSExpr (SList [SAtom "arg-val", e]) = AVal <$> valExprFromSExpr e
 callArgFromSExpr (SList [SAtom "arg-id", e]) = AId <$> idExprFromSExpr e
 callArgFromSExpr s = err ("expected call argument, got: " <> printSExpr s)
 
-condFromSExpr :: SExpr -> Err (ArgIndex, ValExpr)
+condFromSExpr :: SExpr -> Err IndexCondition
 condFromSExpr (SList [SInt i, e]) = do
   pos <- nonNegative "foreach condition index" i
-  (ArgIndex pos,) <$> valExprFromSExpr e
+  IndexCondition (ArgIndex pos) <$> valExprFromSExpr e
 condFromSExpr s = err ("expected (index expr), got: " <> printSExpr s)
 
 nameFromSExpr :: SExpr -> Err Name

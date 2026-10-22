@@ -19,7 +19,6 @@ module YCHR.Internal.Compile.Types
     isTakePlan,
     selectsMax,
     ResultMatch (..),
-    IndexCondition (..),
     CompiledGuards (..),
     CheckGuards (..),
 
@@ -56,7 +55,7 @@ import YCHR.Internal.Types
     RuleId,
   )
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (ArgIndex, BoolExpr, ConstraintType, Stmt, ValExpr)
+import YCHR.Internal.VM (BoolExpr, ConstraintType, IndexCondition, Stmt, ValExpr)
 import YCHR.Internal.VM qualified as VM
 
 -- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
@@ -310,17 +309,6 @@ instance Semigroup ResultMatch where
 
 instance Monoid ResultMatch where
   mempty = ResultMatch [] []
-
--- | A single index condition lifted out of an equality check guard onto
--- a partner 'YCHR.Internal.VM.Foreach' loop: argument @argIndex@ of the partner
--- must be 'YCHR.Internal.VM.Equal' to @expectedValue@. Produced by
--- 'YCHR.Internal.Compile.classifyEqual' and consumed by
--- 'YCHR.Internal.Compile.wrapInPartnerLoops', which projects it back to the
--- @(ArgIndex, ValExpr)@ pair the VM 'YCHR.Internal.VM.Foreach' instruction expects.
-data IndexCondition = IndexCondition
-  { argIndex :: ArgIndex,
-    expectedValue :: ValExpr
-  }
 
 -- | Per-partner index conditions lifted out of check guards by the
 -- 'YCHR.Internal.VM.Foreach' index-condition pushdown optimization. Each entry

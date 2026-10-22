@@ -84,6 +84,7 @@ import Data.Text.Shim qualified as T
 import YCHR.Internal.Interpreter.Slots
   ( CallTarget (..),
     ProcIx (..),
+    SIndexCondition (..),
     Slot,
     SlotBoolExpr (..),
     SlotCallArg (..),
@@ -809,7 +810,7 @@ execStmt (SPushFrame frame) = do
 -- for why the narrowed list is still a superset of the matches;
 -- 'driverKey' holds the two guards that keep the narrowing invisible to
 -- a program's behaviour.
-foreachCandidates :: ConstraintType -> [(ArgIndex, SlotValExpr)] -> InterpM [Suspension]
+foreachCandidates :: ConstraintType -> [SIndexCondition] -> InterpM [Suspension]
 foreachCandidates cType conditions = do
   mIndexed <- liftChr (indexedPositionsFor cType)
   case mIndexed of
@@ -833,9 +834,9 @@ foreachCandidates cType conditions = do
 -- is stable for the loop's duration. Anything else — including a
 -- compound term holding an unbound variable — falls through to the
 -- unindexed path, which evaluates the condition per candidate.
-driverKey :: IntSet -> [(ArgIndex, SlotValExpr)] -> InterpM (Maybe (Int, GroundKey))
+driverKey :: IntSet -> [SIndexCondition] -> InterpM (Maybe (Int, GroundKey))
 driverKey _ [] = pure Nothing
-driverKey indexed ((ArgIndex pos, expr) : rest)
+driverKey indexed (SIndexCondition (ArgIndex pos) expr : rest)
   | nonRaising expr,
     -- 'pos' is bounded by the constraint arity, so the conversion is safe.
     IntSet.member (fromIntegral pos) indexed = do
@@ -893,7 +894,7 @@ nonRaising (SFieldType _) = False
 execForeach ::
   Label ->
   Slot ->
-  [(ArgIndex, SlotValExpr)] ->
+  [SIndexCondition] ->
   [SlotStmt] ->
   [Suspension] ->
   InterpM Signal
@@ -922,9 +923,9 @@ execForeach lbl suspSlot conditions body (susp : rest) = do
               | l == lbl -> pure SFall
             _ -> pure sig
 
-checkConditions :: Suspension -> [(ArgIndex, SlotValExpr)] -> InterpM Bool
+checkConditions :: Suspension -> [SIndexCondition] -> InterpM Bool
 checkConditions _ [] = pure True
-checkConditions susp ((ArgIndex i, expr) : rest) = do
+checkConditions susp (SIndexCondition (ArgIndex i) expr : rest) = do
   v <- evalValExpr expr
   -- Store's argument accessor takes an 'Int'; 'i' is non-negative.
   let argVal = suspArg susp (fromIntegral i)

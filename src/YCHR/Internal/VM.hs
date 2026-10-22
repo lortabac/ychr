@@ -16,6 +16,7 @@ module YCHR.Internal.VM
 
     -- * Statements
     Stmt (..),
+    IndexCondition (..),
 
     -- * Expressions
     ValExpr (..),
