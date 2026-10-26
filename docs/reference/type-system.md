@@ -1243,9 +1243,15 @@ so using a known constructor with the wrong number of arguments is a
 type error (`ConstructorArityMismatch`, YCHR-60008), not a
 fall-through to `any`. The error names the declared arity, and the
 offending use is then typed `any` so it draws no second, downstream
-mismatch. The renamer reports the same mistake independently as
-warning `YCHR-20102`; a use the checker reports also draws the
-renamer's warning.
+mismatch.
+
+The renamer reports the same mistake as warning `YCHR-20102`, naming
+every arity the constructor is declared at (a name can have several,
+across types). Getting both diagnostics for one use is intended. The
+warning also fires under `--no-check`, and in a few spots the checker
+skips, e.g. the `is` in `f(X) -> Y is p(X), Y.`. Known gap: when a name
+is declared at several arities across modules, the checker misses a
+wrong-arity use and only the warning fires.
 
 ### Unknown constructors
 

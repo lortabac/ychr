@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+The constructor-arity warning now names every declared arity.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameWarning`'s
+  `DataConstructorArityMismatch` has a third field, the declared
+  arities (`NonEmpty Int`, sorted, no duplicates). The YCHR-20102
+  message names them ("declared with 1 or 3") instead of "a different
+  arity".
+
 Internal record fields drop their type prefixes.
 
 - **Breaking:** in `YCHR.Internal.Compile.Types`, `AggregatePlan`'s

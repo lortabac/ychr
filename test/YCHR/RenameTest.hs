@@ -2,6 +2,7 @@
 
 module YCHR.RenameTest (tests) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
@@ -882,7 +883,77 @@ warningTests =
                     ]
                 }
         ws <- warningsOf [m]
-        ws @?= [noDiag (AnnP (DataConstructorArityMismatch "foo" 2) dummyLoc (Atom ""))],
+        ws
+          @?= [ noDiag
+                  (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [])) dummyLoc (Atom ""))
+              ],
+      testCase "data constructor arity mismatch names every declared arity" $ do
+        -- 'foo' is visible at two arities here, one per imported module
+        -- (A declares foo/1, B declares foo/3). The warning must name
+        -- both, not just one of them.
+        let fooModule name arity =
+              (module' name)
+                { typeDecls =
+                    [ noAnn
+                        ( algebraicTD
+                            (Unqualified ("t" <> name))
+                            []
+                            [ DataConstructor
+                                (Unqualified "foo")
+                                (replicate arity (TypeCon (Unqualified "int") []))
+                            ]
+                            dummyLoc
+                        )
+                    ]
+                }
+            modA = fooModule "A" 1
+            modB = fooModule "B" 3
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [atom "true"]
+                               |- [term "foo" [var "X", var "Y"]]
+                           ]
+        ws <- warningsOf [modA, modB, modC]
+        ws
+          @?= [ noDiag
+                  (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [3])) dummyLoc (Atom ""))
+              ],
+      testCase "data constructor arity mismatch deduplicates repeated arities" $ do
+        -- 'foo' is visible at arity 1 from two modules (A and B both
+        -- declare it). The warning must list that arity once, not twice.
+        let fooModule name arity =
+              (module' name)
+                { typeDecls =
+                    [ noAnn
+                        ( algebraicTD
+                            (Unqualified ("t" <> name))
+                            []
+                            [ DataConstructor
+                                (Unqualified "foo")
+                                (replicate arity (TypeCon (Unqualified "int") []))
+                            ]
+                            dummyLoc
+                        )
+                    ]
+                }
+            modA = fooModule "A" 1
+            modB = fooModule "B" 1
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [atom "true"]
+                               |- [term "foo" [var "X", var "Y"]]
+                           ]
+        ws <- warningsOf [modA, modB, modC]
+        ws
+          @?= [ noDiag
+                  (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [])) dummyLoc (Atom ""))
+              ],
       testCase "no warning for reserved symbols" $ do
         let m =
               module' "M"

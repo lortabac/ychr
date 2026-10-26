@@ -37,6 +37,8 @@ module YCHR.Internal.Display
 where
 
 import Data.List (intercalate)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import System.Console.ANSI
   ( Color (..),
@@ -276,6 +278,12 @@ withHint msg hint = msg ++ "\n  Hint: " ++ hint
 displayQualifiedName :: Types.QualifiedName -> String
 displayQualifiedName qn = T.unpack (Types.flattenName (Types.qualifiedToName qn))
 
+-- | Render arities as "2", "1 or 3", "1, 2 or 3".
+displayArityList :: NonEmpty Int -> String
+displayArityList (n :| []) = show n
+displayArityList ns =
+  intercalate ", " (map show (NE.init ns)) ++ " or " ++ show (NE.last ns)
+
 -- | Convert a parsec 'Text.Parsec.Pos.SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
 sourceLocFromPos sp =
@@ -415,7 +423,7 @@ declMacroErrorCode (DeclMacroParseError e) = parseValidationErrorCode e
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
 renameWarningCode (UndeclaredDataConstructor _) = ErrorCode 20101
-renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
+renameWarningCode (DataConstructorArityMismatch _ _ _) = ErrorCode 20102
 renameWarningCode (UnusedMacroParameter _ _) = ErrorCode 20105
 
 -- | 2x1xx — exhaustiveness warnings (a pattern-matching warning, in the
@@ -1435,12 +1443,13 @@ renameWarningMsg (UndeclaredDataConstructor name) =
   withHint
     ("Undeclared data constructor '" ++ T.unpack name ++ "'")
     "declare it with :- chr_type, or check the spelling"
-renameWarningMsg (DataConstructorArityMismatch name arity) =
+renameWarningMsg (DataConstructorArityMismatch name arity declared) =
   "Data constructor '"
     ++ T.unpack name
     ++ "' used with "
     ++ show arity
-    ++ " argument(s) but declared with a different arity"
+    ++ " argument(s) but declared with "
+    ++ displayArityList declared
 renameWarningMsg (UnusedMacroParameter qn param) =
   withHint
     ( "Macro parameter '"

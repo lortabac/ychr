@@ -6,37 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Constructor arity mismatch double-reports `YCHR-20102` (warning) and `YCHR-60008` (error)
-
-**Documented claim.** `docs/reference/errors.md` (since removed) lists `YCHR-20102`
-(`DataConstructorArityMismatch`, *warning*, rename phase) and
-`YCHR-60008` (`ConstructorArityMismatch`, *error*, type-check phase) as
-separate codes.
-
-**Test.**
-
-    :- chr_type pr ---> p(int, int).
-    :- chr_constraint go/1.
-    go(R) <=> R = p(1).
-
-    ychr check
-
-**Expected.** Unclear from the spec whether both should fire for one
-mistake.
-
-**Actual.** Both fire for the single `p(1)`:
-
-    ctor_arity.chr:3:11: YCHR-20102  (warning)
-    Data constructor 'p' used with 1 argument(s) but declared with a different arity
-    ctor_arity.chr:3:11: YCHR-60008  (error)
-    Data constructor '<ctor_arity>:p' is used with 1 argument(s) but declared with 2
-
-**Notes.** Possibly by design: the codebase deliberately co-fires
-diagnostics elsewhere (the type-system spec calls out `YCHR-16013` +
-`YCHR-16007` co-firing as intentional). Flagged because the two messages
-restate the same defect at differing severities, and the warning's
-"a different arity" is vaguer than the error's exact "declared with 2".
-
 ## A single-signature `:- class` is type-checked as if declared `:- function`
 
 **Documented claim.** `docs/reference/type-system.md` §Signature
@@ -598,3 +567,61 @@ more than that.
 
 **Fix sketch.** Doc fix: say the user can't add equations *before* the
 use, or drop the sentence.
+
+## The arity checker misses a wrong-arity use when a constructor name has several arities
+
+**Documented claim.** `docs/reference/type-system.md` §Known
+constructors: using a declared constructor at the wrong arity is a
+type error (`ConstructorArityMismatch`, YCHR-60008), and the renamer's
+own `YCHR-20102` warning reports the same mistake independently.
+
+**Test.**
+
+    % a.chr
+    :- module(a, [type(ta/0)]).
+    :- chr_type ta ---> foo(int).
+
+    % b.chr
+    :- module(b, [type(tb/0)]).
+    :- chr_type tb ---> foo(int, int, int).
+
+    % c.chr
+    :- module(c, [go/1]).
+    :- use_module(a).
+    :- use_module(b).
+    :- chr_constraint go/1.
+    go(R) <=> R = foo(1, 2).
+
+    ychr check a.chr b.chr c.chr
+
+**Expected.** `foo` is declared at arity 1 (module `a`) and arity 3
+(module `b`); `foo(1, 2)` matches neither, so the checker should report
+`YCHR-60008` the same way it does when `foo` has only one declared
+arity.
+
+**Actual.**
+
+    === warning ===
+    c.chr:5:11: YCHR-20102
+    Data constructor 'foo' used with 2 argument(s) but declared with 1 or 3
+    R = foo(1, 2)
+
+Exit code 0. No `YCHR-60008` at all — the checker does not flag the
+mismatch when the name resolves to more than one visible arity, even
+though it does for the single-arity case
+(`test/golden/typecheck_constructor_arity`).
+
+**Notes.** `Rename.canonicalizeDataCon` qualifies a bare constructor
+only on an exact `(name, arity)` match, so `foo(1, 2)` reaches the
+checker as bare `foo`. The checker's alias table (`typechecker/env.chr`,
+`build_con_alias`) is keyed on the name alone and drops any name
+declared twice, so `canonicalize_con` leaves it bare, `lookup_con`
+misses, and `arity_use_of` takes its `nothing` case, as for an
+undeclared name. The renamer keys on `(name, arity)`, so it still sees
+`foo/1` and `foo/3`.
+
+**Fix sketch.** Give the checker's constructor-arity check a path for
+a bare name that is ambiguous only because of the alias table's
+coarser, arity-blind definition: look it up against every type
+declaring it (not just the alias table) and compare the used arity
+against the set, the way `Rename.warnUnknownDataCon` already does.

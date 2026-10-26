@@ -71,6 +71,8 @@ import Control.Monad.Trans.State.Strict (StateT, evalStateT, modify')
 import Control.Monad.Trans.Writer.CPS (Writer, WriterT, runWriter, runWriterT, tell)
 import Data.Foldable (traverse_)
 import Data.List (nub)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
@@ -340,8 +342,9 @@ data RenameWarning
     -- constructor (YCHR-20101). Carries the name.
     UndeclaredDataConstructor Text
   | -- | A declared data constructor used with the wrong number of
-    -- arguments (YCHR-20102). Carries the name and the arity used.
-    DataConstructorArityMismatch Text Int
+    -- arguments (YCHR-20102). Carries the name, the arity used, and
+    -- the arities it is declared at (sorted, no duplicates).
+    DataConstructorArityMismatch Text Int (NonEmpty Int)
   | -- | A head variable of a macro clause that occurs only once in the
     -- clause, in the head and not in the body: the corresponding
     -- argument is dropped. Variables whose name starts with @_@ are
@@ -349,10 +352,9 @@ data RenameWarning
     UnusedMacroParameter QualifiedName Text
   deriving (Eq, Show)
 
--- | Maps data constructor names to their declared arities (from type
--- declarations). A single name may be declared at several arities across
--- different types.
-type DataConEnv = Map Text [Int]
+-- | Maps data constructor names to their declared arities (sorted, no
+-- duplicates). A name may be declared at several arities across types.
+type DataConEnv = Map Text (NonEmpty Int)
 
 -- | Maps @(constructorName, arity)@ to the list of modules that declare it.
 -- Built from the same declarations as 'DataConEnv' but indexed and valued
@@ -536,7 +538,9 @@ visibleCons visible cons =
 
 -- | Map data-constructor names to their declared arities.
 buildDataConEnv :: [DeclaredCon] -> DataConEnv
-buildDataConEnv cons = Map.fromListWith (++) [(c.name, [c.arity]) | c <- cons]
+buildDataConEnv cons =
+  Map.map (NE.sort . NE.nub) $
+    Map.fromListWith (<>) [(c.name, c.arity :| []) | c <- cons]
 
 -- | The @(constructorName, arity) -> [declaringModule]@ index used by
 -- the renamer's data-constructor canonicalization.
@@ -631,7 +635,7 @@ conProvidersAnyArity :: RenameCtx -> Text -> [Text]
 conProvidersAnyArity ctx n =
   nub
     [ m
-    | arity <- Map.findWithDefault [] n ctx.dataConEnv,
+    | arity <- maybe [] NE.toList (Map.lookup n ctx.dataConEnv),
       m <- Map.findWithDefault [] (UnqualifiedIdentifier n arity) ctx.dataConProviders
     ]
 
@@ -2262,9 +2266,9 @@ warnUnknownDataCon :: RenameCtx -> Site -> Text -> Int -> Rename ()
 warnUnknownDataCon ctx site n arity =
   case Map.lookup n ctx.dataConEnv of
     Just arities
-      | arity `elem` arities -> pure ()
+      | arity `elem` NE.toList arities -> pure ()
       | otherwise ->
-          emitWarningIn ctx (annAt site (DataConstructorArityMismatch n arity))
+          emitWarningIn ctx (annAt site (DataConstructorArityMismatch n arity arities))
     Nothing -> emitWarningIn ctx (annAt site (UndeclaredDataConstructor n))
 
 -- ---------------------------------------------------------------------------
