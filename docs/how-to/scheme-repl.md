@@ -48,7 +48,8 @@ R = 55
 - `fib:fib/2` is the tell-procedure alias for constraint `fib:fib/2`,
   resolved at expand time — no per-call lookup.
 - A symbol starting with an uppercase letter or `_` is a fresh logical
-  variable and shows up in the printed bindings. Anything else passes
+  variable. An uppercase one shows up in the printed bindings; a
+  `_`-prefixed one is bound but not printed. Anything else passes
   through. For an atom spelled with a capital, pass a non-symbol
   carrier such as `(string->symbol "Foo")`.
 

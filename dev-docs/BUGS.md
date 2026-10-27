@@ -6,41 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `ychr run --show-bindings` does not filter `_`-prefixed variables
-
-**Documented claim.** `docs/reference/repl.md` §One-shot queries
-(lines 174–184): "Bindings are printed, except for variables whose name
-starts with `_` (`_X`) — Prolog convention; they are still bound, only
-the output is filtered." The same section describes `--show-bindings` as
-printing "the bindings one per line, sorted" without restating the
-filter.
-
-**Test.**
-
-    :- module(filt, [go/1]).
-    :- chr_constraint go/1.
-    go(_X) <=> _X = 1.
-
-    ychr run -g 'filt:go(_X)' --show-bindings filt.chr
-    printf 'filt:go(_X).\n:quit\n' | ychr repl --quiet filt.chr
-
-**Expected.** Either no `_X` line (the filter is a property of binding
-printing) or a line (the filter is REPL-only). The documentation does not
-settle it, which is the point of the entry.
-
-**Actual.** `run` prints `_X = 1`; the REPL prints nothing. Two variables
-behave the same way: `run` prints `_A = 1` and `_B = 2`, the REPL prints
-neither.
-
-**Notes.** The filtering sentence sits in the REPL section, so the doc
-does not clearly bind `--show-bindings`. Either way the two surfaces
-should not disagree on the same convention. Non-underscore variables
-print in both, and sorting is correct.
-
-**Fix sketch.** Decide which surface the convention belongs to and pin it
-in the spec; if the filter is meant for both, route `--show-bindings`
-through the same printer as the REPL.
-
 ## A module-qualified name in a `requiring` bound is parsed as `:/2`
 
 **Documented claim.** `docs/reference/type-system.md` §Declaration syntax
@@ -430,3 +395,70 @@ a bare name that is ambiguous only because of the alias table's
 coarser, arity-blind definition: look it up against every type
 declaring it (not just the alias table) and compare the used arity
 against the set, the way `Rename.warnUnknownDataCon` already does.
+
+## The Scheme `gen-driver` driver does not print variable aliases
+
+**Documented claim.** None; `run` and the Scheme driver disagree.
+`SchemeDriver`'s module haddock says it prints bindings "in the same
+format as `prettyBindings`."
+
+**Test.**
+
+    :- module(al, [al/2]).
+    :- chr_constraint al/2.
+    al(R, S) <=> R = S.
+
+    ychr run -g 'al:al(R, S)' --show-bindings al.chr
+    ychr gen-driver -g 'al:al(R, S)' al.chr > run.scm
+    # then run run.scm with guile against a `-t scheme` compile of al.chr
+
+**Expected.** Both surfaces print the same thing for two query
+variables unified together while still unbound.
+
+**Actual.** The Haskell `run --show-bindings` prints:
+
+    R = S
+    S = R
+
+The Scheme driver prints:
+
+    R = _
+    S = _
+
+**Notes.** `YCHR.Run.executePreparedQuery` groups query variables by
+`VarId` and prints each as another member of its alias class rather
+than a bare `_`. `SchemeDriver.generateDriver` and `pretty-term` have
+no such grouping, so an aliased unbound variable always prints `_`.
+The `(ychr repl)` `tell` helper has the same gap.
+
+**Fix sketch.** Port the alias-class grouping to the Scheme side, or
+document that it only shows raw unbound-variable output there.
+
+## The Scheme `(ychr repl)` `tell` helper gives `'R 'R` two different variables
+
+**Documented claim.** None stated explicitly, but the same symbol
+twice should be the same variable.
+
+**Test.**
+
+    :- module(al, [al/2]).
+    :- chr_constraint al/2.
+    al(R, S) <=> R = S.
+
+    ; after compiling al.chr to Scheme and importing it:
+    (tell s al:al/2 'R 'R)
+
+**Expected.** One fresh variable `R` passed as both arguments; since
+`al/2` unifies its two arguments, one `R = <value or _>` line prints.
+
+**Actual.** Two lines print:
+
+    R = _
+    R = _
+
+**Notes.** `process-args` calls `make-var` per occurrence with no
+symbol table, so `binds` gets two `R` entries.
+
+**Fix sketch.** Have `process-args` memoize symbol → variable within
+one call, so a repeat reuses the existing variable instead of making
+a new one.

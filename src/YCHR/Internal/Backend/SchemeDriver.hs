@@ -25,6 +25,7 @@ import YCHR.Internal.Backend.Scheme
 import YCHR.Internal.Compile (funcProcName)
 import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Compile.Pipeline (Error (..))
+import YCHR.Internal.Pretty (isHiddenBindingName)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
 import YCHR.Internal.Types (HeadArg (..), QualifiedName, Term (..), flattenName)
@@ -60,7 +61,8 @@ generateDriver moduleName qn args =
         -- name into a well-formed Scheme identifier.
         tellAlias = qualifiedAliasIdentifier (Types.qualifiedToName qn) arity
         varNames = nub (concatMap exprVars args)
-        sortedVars = sort varNames
+        -- Hidden names still get a let* binding, just aren't printed.
+        sortedVars = sort (filter (not . isHiddenBindingName) varNames)
         argExprs = map exprToScheme args
         tellCall = "(" <> tellAlias <> " %s " <> T.intercalate " " argExprs <> ")"
         bindingsCall = case sortedVars of

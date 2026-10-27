@@ -1038,7 +1038,7 @@ A test directory contains:
 - One or more `.chr` files. All `.chr` files in the directory are compiled together via `compileFiles`, so a test can exercise multi-file programs (imports, exports, cross-module visibility). Goals are module-qualified, so the harness does not need to designate a "main" file.
 - Any number of cases, of the three kinds below.
 
-**Positive cases** are pairs of `<case>.goal` and `<case>.expected` files. For each pair, the harness runs the goal via `runProgramWithGoal`, formats the resulting bindings with `prettyBindings`, and asserts equality with the `.expected` file (which uses `K = V` format, one binding per line, sorted alphabetically). A directory may contain any number of pairs.
+**Positive cases** are pairs of `<case>.goal` and `<case>.expected` files. For each pair, the harness runs the goal via `runProgramWithGoal`, formats the resulting bindings with `prettyBindings`, and asserts equality with the `.expected` file (which uses `K = V` format, one binding per line, sorted alphabetically, `_`-prefixed variables omitted). A directory may contain any number of pairs.
 
 **Compilation-negative cases** are bare `<case>.error` files (no matching `.goal`) containing a YCHR error code (e.g., `YCHR-20002`). For each one, the harness asserts that compilation (or type-checking) fails with a message containing that code. A directory of compilation-negative cases has no `.goal` files.
 

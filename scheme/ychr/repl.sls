@@ -20,6 +20,7 @@
 ;;;; Arguments that are uppercase-or-underscore-initial symbols (`'R`,
 ;;;; `'_X`) become fresh logical variables and are reported in the
 ;;;; printed bindings; other arguments are passed through unchanged.
+;;;; `_`-prefixed ones are not printed.
 (library (ychr repl)
   (export open-session tell)
   (import (rnrs) (ychr runtime) (ychr pretty))
@@ -52,8 +53,14 @@
                  (cons (cons (car args) v) binds))))
         (else (loop (cdr args) (cons (car args) out) binds)))))
 
+  ;; Drop _-prefixed names (see Pretty.isHiddenBindingName).
+  (define (visible-binds binds)
+    (filter
+     (lambda (b) (not (char=? (string-ref (symbol->string (car b)) 0) #\_)))
+     binds))
+
   (define (tell session proc . args)
     (let-values (((processed binds) (process-args session args)))
       (apply proc session processed)
-      (pretty-bindings binds)))
+      (pretty-bindings (visible-binds binds))))
 )

@@ -6,6 +6,7 @@ module YCHR.Internal.Pretty
     prettyTerm,
     prettyBindings,
     prettyQueryResult,
+    isHiddenBindingName,
 
     -- * Source text
     prettyTermSrc,
@@ -248,22 +249,33 @@ unquoteToPExpr t = runtimeToPExpr t
 -- User-facing output (binding map)
 -- ---------------------------------------------------------------------------
 
+-- | Binding names starting with @_@ are hidden when printed (Prolog
+-- convention). The variable is still bound.
+isHiddenBindingName :: Text -> Bool
+isHiddenBindingName = T.isPrefixOf "_"
+
 -- | Serialize a variable binding map to the golden file format.
 --
--- Keys are sorted alphabetically for determinism. Each line has the form
--- @K = V@ followed by a newline, matching the output of 'unlines'.
+-- Keys are sorted alphabetically for determinism, and @_@-prefixed
+-- names are omitted (see 'isHiddenBindingName'). Each remaining line
+-- has the form @K = V@ followed by a newline, matching the output of
+-- 'unlines'. If nothing is visible, returns @\"\"@.
 prettyBindings :: Map Text Term -> String
 prettyBindings m =
-  unlines [T.unpack k ++ " = " ++ prettyTerm v | (k, v) <- Map.toAscList m]
+  unlines
+    [ T.unpack k ++ " = " ++ prettyTerm v
+    | (k, v) <- Map.toAscList m,
+      not (isHiddenBindingName k)
+    ]
 
 -- | Render a variable binding map as a Prolog-style query result.
 --
--- Variables starting with @_@ are filtered out (internal/wildcard).
+-- Variables starting with @_@ are filtered out (see 'isHiddenBindingName').
 -- If no user-visible bindings remain, returns an empty string.
 -- Otherwise, comma-separated @K = V@ lines terminated with a dot.
 prettyQueryResult :: Map Text Term -> String
 prettyQueryResult m =
-  let visible = [(k, v) | (k, v) <- Map.toAscList m, not ("_" `T.isPrefixOf` k)]
+  let visible = [(k, v) | (k, v) <- Map.toAscList m, not (isHiddenBindingName k)]
    in case visible of
         [] -> ""
         _ -> formatBindings visible

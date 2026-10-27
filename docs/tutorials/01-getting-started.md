@@ -95,7 +95,8 @@ constraint. Nothing is printed on success:
 ychr run -g cake examples/bakery.chr
 ```
 
-`--show-bindings` prints the goal's variables, one per line:
+`--show-bindings` prints the goal's variables, one per line
+(a `_`-prefixed variable is bound but not printed):
 
 ```sh
 ychr run -g 'compute(10, R)' --show-bindings examples/fib.chr

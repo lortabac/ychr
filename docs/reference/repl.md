@@ -217,12 +217,15 @@ a query.
 Outside a live session each input is a goal run against a fresh
 store, discarded when the query returns. Bindings are printed, except
 for variables whose name starts with `_` (`_X`) — Prolog convention;
-they are still bound, only the output is filtered.
+they are still bound, only the output is filtered. This holds for
+every binding printer, the Scheme `tell` helper included (see
+[scheme-repl.md](../how-to/scheme-repl.md)).
 
 `ychr run -g GOAL` takes exactly one declared constraint (`cake`,
 `compute(5, R)`, `bakery:egg`); a bare expression, an `is`/`=` form, a
 conjunction or a function call is `YCHR-20013`. `--show-bindings`
-prints the bindings one per line, sorted. The REPL accepts any goal:
+prints the visible bindings one per line, sorted, as `K = V` with no
+trailing dot. The REPL accepts any goal:
 `1 + 1.`, `X = 2.`, `X is 1 + 1.`, conjunctions, constraint calls.
 
 A query that adds a constraint and fires nothing succeeds silently;

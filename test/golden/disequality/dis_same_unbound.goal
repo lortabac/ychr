@@ -1,1 +1,1 @@
-diseq:t(dis_same_unbound, R, _A, _A)
+diseq:t(dis_same_unbound, R, A, A)

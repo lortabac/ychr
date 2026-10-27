@@ -23,10 +23,22 @@
 (define (tell_baz__double2 s x y)
   (%unify s y (* (deref x) 2)))
 
+;;; Mock: y := x+1, z := x*2.
+(define (tell_qux__pair3 s x y z)
+  (%unify s y (+ (deref x) 1))
+  (%unify s z (* (deref x) 2)))
+
+;;; Mock: y := x+1, z := y (proves y got bound).
+(define (tell_qux__chain3 s x y z)
+  (%unify s y (+ (deref x) 1))
+  (%unify s z (deref y)))
+
 (define foo:succ/2 tell_foo__succ2)
 (define succ/2 tell_foo__succ2)
 (define baz:double/2 tell_baz__double2)
 (define double/2 tell_baz__double2)
+(define qux:pair/3 tell_qux__pair3)
+(define qux:chain/3 tell_qux__chain3)
 
 ;;; Capture everything the body writes to (current-output-port).
 ;;; `tell` reports bindings via `display`, so checking that channel is
@@ -102,6 +114,27 @@
                (lambda () (tell s foo:succ/2 10 r)))))
     (test-equal "no placeholder => empty output" "" out)
     (test-equal "var was still bound by the tell call" 11 (deref r))))
+
+;;; --------------------------------------------------------------------------
+;;; tell hides `_`-prefixed bindings from the printed output (same
+;;; convention as the REPL and `--show-bindings`), but still makes and
+;;; binds the variable.
+;;; --------------------------------------------------------------------------
+
+(test-group "tell hides a _-prefixed output but still binds it"
+  (let* ((s (open-session mock-program))
+         (z (make-var s))
+         (out (capture-stdout
+               (lambda () (tell s qux:chain/3 10 '_Y z)))))
+    (test-equal "_-prefixed binding is not printed" "" out)
+    (test-equal "_Y was bound" 11 (deref z))))
+
+(test-group "tell mixes visible and hidden outputs"
+  (let ((s (open-session mock-program)))
+    (test-equal "only the visible one prints"
+                "R = 11\n"
+                (capture-stdout
+                 (lambda () (tell s qux:pair/3 10 'R '_D))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Raw direct-call form (skipping tell): users who want full control

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+`run --show-bindings`, a `gen-driver` driver, and the Scheme `tell`
+helper now hide `_`-prefixed variables, like the REPL already did.
+
+- **Breaking:** `YCHR.Internal.Pretty.prettyBindings` drops
+  `_`-prefixed names too (new `isHiddenBindingName`), so
+  `--show-bindings` output changes. `YCHR.Run` result maps still hold
+  every variable.
+
 An unknown bare `use_module(M)` is now an error.
 
 - **Breaking:** a bare `:- use_module(M)` must name a module passed to

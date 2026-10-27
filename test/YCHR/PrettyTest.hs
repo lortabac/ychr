@@ -167,6 +167,18 @@ bindingsTests =
     [ testCase "prettyBindings sorted with trailing newline" $
         prettyBindings (Map.fromList [("R", IntTerm 55), ("X", Wildcard)])
           @?= "R = 55\nX = _\n",
+      -- Same filter as prettyQueryResult.
+      testCase "prettyBindings filters underscored names" $
+        prettyBindings
+          ( Map.fromList
+              [ ("R", IntTerm 1),
+                ("_hidden", CompoundTerm (Unqualified "x") [])
+              ]
+          )
+          @?= "R = 1\n",
+      testCase "prettyBindings all-underscore map is empty string" $
+        prettyBindings (Map.fromList [("_X", IntTerm 1), ("_Y", Wildcard)])
+          @?= "",
       -- Underscored names are internal/wildcard; filtering them out
       -- can leave the visible set empty even when the raw map is not.
       testCase "prettyQueryResult all-underscore map is empty string" $
