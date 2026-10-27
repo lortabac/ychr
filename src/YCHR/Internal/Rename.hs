@@ -55,6 +55,8 @@ module YCHR.Internal.Rename
     -- * Errors and warnings
     RenameError (..),
     HeadPart (..),
+    BadConjunct (..),
+    NonGoalKind (..),
     RenameWarning (..),
     Renamed (..),
     useFailureError,
@@ -315,14 +317,29 @@ data RenameError
     -- rule head: in a body, a query or a guard. Carries the functor's
     -- name and the arity used.
     AggregateOutsideHead Text Int
-  | -- | An aggregate's arguments are malformed: the wrong number of
-    -- them, or a goal conjunct that is neither a constraint, a nested
-    -- aggregate nor a @?@ guard. Carries the aggregate's functor name,
-    -- the arity the form requires, and the arity used.
-    MalformedAggregateGoal Text Int Int
+  | -- | An aggregate goal conjunct that is not a constraint, a nested
+    -- aggregate or a @?@ guard.
+    MalformedAggregateGoal BadConjunct
   | -- | A @?\/1@ guard outside an aggregate goal. It is recognized
     -- structurally inside one, and has no meaning anywhere else.
     GuardOutsideAggregateGoal
+  deriving (Eq, Show)
+
+-- | What is wrong with an aggregate goal conjunct, for
+-- 'MalformedAggregateGoal'.
+data BadConjunct
+  = -- | A function call (a @host:@ call too), with its resolved name
+    -- and arity. Usually a test missing its @?@.
+    ConjunctIsFunction Name Int
+  | -- | A built-in form (@=@, @;@, @true@, @tell@, @quote@, …), with
+    -- its name and arity.
+    ConjunctIsBuiltin Text Int
+  | -- | A number, a string or a variable.
+    ConjunctNotAGoal NonGoalKind
+  deriving (Eq, Show)
+
+-- | What kind of non-compound term a 'ConjunctNotAGoal' is.
+data NonGoalKind = NonGoalNumber | NonGoalString | NonGoalVariable
   deriving (Eq, Show)
 
 -- | A part of a rule head, for 'MacroEmptyHead'.
@@ -434,6 +451,10 @@ data RenameCtx = RenameCtx
     -- ambiguous across the two namespaces; see
     -- 'checkConstructorFunctionAmbiguity'.
     visibleFunNames :: Map Text [Text],
+    -- | Every function declared anywhere in the program, by declaring
+    -- module, name and arity. Used to reject a function call as an
+    -- aggregate goal conjunct ('isFunctionName').
+    functionKeys :: Set.Set QualifiedIdentifier,
     typeDeclEnv :: DeclEnv,
     typeExportEnv :: ExportEnv,
     -- | Operators exported by each module, keyed by module name. Used to
@@ -791,6 +812,12 @@ renameCtxFor mods inputs = ctxFor
     macroDeclEnv0 = buildMacroDeclEnv mods
     macroExportEnv0 = buildMacroExportEnv mods
     macroDefTable0 = buildMacroDefTable mods
+    functionKeys0 =
+      Set.fromList
+        [ QualifiedIdentifier m.name fd.name fd.arity
+        | m <- mods,
+          Ann (FunctionDecl fd) _ <- m.decls
+        ]
     ctxFor m =
       let ctx0 =
             RenameCtx
@@ -800,6 +827,7 @@ renameCtxFor mods inputs = ctxFor
                 dataConProviders = Map.empty,
                 allDataConProviders = allCons,
                 visibleFunNames = buildVisibleFunctionNames mods m,
+                functionKeys = functionKeys0,
                 typeDeclEnv = typeDeclEnv0,
                 typeExportEnv = typeExportEnv0,
                 operatorExports = inputs.operatorExports,
@@ -1262,12 +1290,12 @@ data HeadItem = HeadOk Constraint | HeadAggregate Aggregate | HeadDropped
 -- and the selection forms rename to an 'Aggregate'.
 renameCon :: RenameCtx -> Site -> Constraint -> Rename [HeadItem]
 renameCon ctx site (Constraint cname cargs)
-  | Just k <- aggregateKindOf cname (length cargs) =
+  | Just (k, args) <- aggregateForm cname cargs =
       -- Checked before 'classifyGoalName': a user may define a macro or
       -- function called @aggregate/4@, but the reserved aggregate
       -- functors always mean the aggregate form. The call site is the
       -- same shape, so the two cannot be told apart by name alone.
-      (: []) . HeadAggregate <$> renameAggregate ctx site k cargs
+      (: []) . HeadAggregate <$> renameAggregate ctx site k args
   | isPrimitiveName cname (length cargs) = do
       primitiveOutsideMacro ctx site cname (length cargs)
       pure [HeadDropped]
@@ -1312,18 +1340,25 @@ kindMismatch ctx site providerMod name arity =
   let qn = QualifiedName providerMod (unqualifiedText name)
    in emitErrorIn ctx (annAt site (MacroKindMismatch qn arity DeclMacro))
 
--- | The 'AggregateKind' a head conjunct names, if it names one. Only an
--- unqualified name matches: a qualified @M:aggregate@ is an ordinary
--- constraint, so a user module can shadow an aggregate name locally.
-aggregateKindOf :: Name -> Int -> Maybe AggregateKind
-aggregateKindOf (Qualified _ _) _ = Nothing
-aggregateKindOf (Unqualified n) arity = case (n, arity) of
-  ("aggregate", 4) -> Just AggPlain
-  ("argmin", 2) -> Just AggArgmin
-  ("argmax", 2) -> Just AggArgmax
-  ("takemin", 2) -> Just AggTakemin
-  ("takemax", 2) -> Just AggTakemax
+-- | The 'AggregateKind' a conjunct names, if it names one, and its
+-- arguments by role. Only an unqualified name matches: a qualified
+-- @M:aggregate@ is an ordinary constraint, so a user module can shadow
+-- an aggregate name locally.
+aggregateForm :: Name -> [Term] -> Maybe (AggregateKind, AggregateArgs)
+aggregateForm (Qualified _ _) _ = Nothing
+aggregateForm (Unqualified n) args = case (n, args) of
+  -- aggregate(Agg, Element, Goal, Result)
+  ("aggregate", [a, e, g, r]) ->
+    Just (AggPlain, AggregateArgs (Just a) (Just e) g (Just r))
+  ("argmin", [x, g]) -> selection AggArgmin x g
+  ("argmax", [x, g]) -> selection AggArgmax x g
+  ("takemin", [x, g]) -> selection AggTakemin x g
+  ("takemax", [x, g]) -> selection AggTakemax x g
   _ -> Nothing
+  where
+    -- argmin(X, Goal) and friends: X is the selection key, which takes
+    -- the place of the element. There is no result.
+    selection k x g = Just (k, AggregateArgs Nothing (Just x) g Nothing)
 
 -- | Rename one aggregate. The arguments are renamed like head or body
 -- terms, except the goal, whose conjuncts are classified structurally
@@ -1331,14 +1366,11 @@ aggregateKindOf (Unqualified n) arity = case (n, arity) of
 -- resolved like head constraints, since the rule observes the store
 -- through them.
 --
--- A malformed argument list (an aggregate at the wrong arity, or a goal
--- conjunct that is neither a constraint, a nested aggregate nor a @?@
--- guard) is reported and the aggregate dropped, so the rule keeps
--- compiling without it.
+-- A goal conjunct that is neither a constraint, a nested aggregate nor
+-- a @?@ guard is reported and dropped.
 renameAggregate ::
-  RenameCtx -> Site -> AggregateKind -> [Term] -> Rename Aggregate
-renameAggregate ctx site k cargs = do
-  args <- argTerms
+  RenameCtx -> Site -> AggregateKind -> AggregateArgs -> Rename Aggregate
+renameAggregate ctx site k args = do
   agg' <- traverse (renameTerm ctx site ResolveAll) args.agg
   -- The element / selection key is a pattern over each match, so it is
   -- renamed without resolving names: a bare name in it is a user-written
@@ -1349,7 +1381,7 @@ renameAggregate ctx site k cargs = do
   goal' <-
     concat
       <$> traverse
-        (renameConjunct ctx site k)
+        (renameConjunct ctx site)
         (flattenConj args.goal)
   pure
     Aggregate
@@ -1359,19 +1391,6 @@ renameAggregate ctx site k cargs = do
         goal = goal',
         result = fromMaybe Wildcard result'
       }
-  where
-    argTerms = case cargs of
-      -- aggregate(Agg, Element, Goal, Result)
-      [a, e, g, r] | k == AggPlain -> pure (AggregateArgs (Just a) (Just e) g (Just r))
-      -- argmin(X, Goal) and friends: X is the selection key, which takes
-      -- the place of the element. The Result is unused.
-      [x, g] | k /= AggPlain -> pure (AggregateArgs Nothing (Just x) g Nothing)
-      _ -> badArity
-
-    badArity = do
-      let err = MalformedAggregateGoal (aggregateName k) (requiredArity k) (length cargs)
-      emitErrorIn ctx (annAt site err)
-      pure (AggregateArgs Nothing Nothing (CompoundTerm (Unqualified "") []) Nothing)
 
 -- | An aggregate's arguments by role. A selection form has no
 -- aggregation term and no result; its key takes the element's place.
@@ -1382,16 +1401,9 @@ data AggregateArgs = AggregateArgs
     result :: Maybe Term
   }
 
--- | How many arguments an aggregate form takes, for diagnostics.
-requiredArity :: AggregateKind -> Int
-requiredArity AggPlain = 4
-requiredArity _ = 2
-
--- | Rename one conjunct of an aggregate goal. The enclosing aggregate's
--- kind is carried for diagnostics.
-renameConjunct ::
-  RenameCtx -> Site -> AggregateKind -> Term -> Rename [AggregateConjunct]
-renameConjunct ctx site outer t = case t of
+-- | Rename one conjunct of an aggregate goal.
+renameConjunct :: RenameCtx -> Site -> Term -> Rename [AggregateConjunct]
+renameConjunct ctx site t = case t of
   CompoundTerm n args | isGuardFunctor n (length args) -> do
     let g = case args of
           [g0] -> g0
@@ -1401,8 +1413,8 @@ renameConjunct ctx site outer t = case t of
     g' <- renameTerm ctx site ResolveAll g
     pure [AggGuard g']
   CompoundTerm n args
-    | Just k <- aggregateKindOf n (length args) ->
-        (: []) . AggNested <$> renameAggregate ctx site k args
+    | Just (k, aggArgs) <- aggregateForm n args ->
+        (: []) . AggNested <$> renameAggregate ctx site k aggArgs
     | isPrimitiveName n (length args) -> do
         primitiveOutsideMacro ctx site n (length args)
         pure []
@@ -1416,7 +1428,7 @@ renameConjunct ctx site outer t = case t of
             Just e ->
               concat
                 <$> traverse
-                  (renameConjunct e.ctx site outer)
+                  (renameConjunct e.ctx site)
                   (concatMap flattenConj e.goals)
         IsDeclMacro providerMod -> do
           kindMismatch ctx site providerMod n (length args)
@@ -1425,29 +1437,40 @@ renameConjunct ctx site outer t = case t of
           let err = AmbiguousName (unqualifiedText n) (length args) ms
           emitErrorIn ctx (annAt site err)
           pure []
-        -- A reserved name passes through 'resolveName' unqualified for the
-        -- forms that use it, which would reach Resolve as an internal
-        -- error; report the unknown constraint here, as 'renameCon' does
-        -- for a head.
+        -- A reserved name (@=@, @;@, @true@, …) is a built-in form, not
+        -- a constraint. 'resolveName' would pass it through unqualified
+        -- and Resolve would crash on it. Its args are still renamed for
+        -- their own errors.
         NotAMacro
           | Unqualified base <- n,
             isReserved base,
             null (visibleProviders ctx base (length args)) -> do
               traverse_ (renameTerm ctx site NoResolve) args
-              emitErrorIn ctx (annAt site (UnknownName base (length args)))
-              pure []
+              badConjunct (ConjunctIsBuiltin base (length args))
         NotAMacro -> do
           renamedName <- resolveName ResolveTop ctx site n (length args)
           renamedArgs <- traverse (renameTerm ctx site NoResolve) args
-          pure [AggConstraint (Constraint renamedName renamedArgs)]
-  _ -> do
-    -- The offending conjunct is not a constraint, an aggregate or a
-    -- guard. Report it against the enclosing aggregate at the arity it
-    -- was written with, which is the arity the user can see.
-    let arity = requiredArity outer
-        err = MalformedAggregateGoal (aggregateName outer) arity arity
-    emitErrorIn ctx (annAt site err)
-    pure []
+          if isFunctionName ctx renamedName (length args)
+            then badConjunct (ConjunctIsFunction renamedName (length args))
+            else pure [AggConstraint (Constraint renamedName renamedArgs)]
+  VarTerm _ -> badConjunct (ConjunctNotAGoal NonGoalVariable)
+  Wildcard -> badConjunct (ConjunctNotAGoal NonGoalVariable)
+  IntTerm _ -> badConjunct (ConjunctNotAGoal NonGoalNumber)
+  FloatTerm _ -> badConjunct (ConjunctNotAGoal NonGoalNumber)
+  TextTerm _ -> badConjunct (ConjunctNotAGoal NonGoalString)
+  where
+    badConjunct b = do
+      emitErrorIn ctx (annAt site (MalformedAggregateGoal b))
+      pure []
+
+-- | Whether a resolved name is a function: a @host:@ call, or a function
+-- some module declares at this arity. An unqualified name did not
+-- resolve, and 'resolveName' already reported it.
+isFunctionName :: RenameCtx -> Name -> Int -> Bool
+isFunctionName _ (Qualified "host" _) _ = True
+isFunctionName ctx (Qualified m n) arity =
+  Set.member (QualifiedIdentifier m n arity) ctx.functionKeys
+isFunctionName _ (Unqualified _) _ = False
 
 -- | Whether a name and arity are the @?\/1@ aggregate-goal guard.
 --
@@ -1458,14 +1481,6 @@ renameConjunct ctx site outer t = case t of
 isGuardFunctor :: Name -> Int -> Bool
 isGuardFunctor (Unqualified n) arity = n == "?" && arity == 1
 isGuardFunctor (Qualified _ _) _ = False
-
--- | The reserved functor name of an aggregate kind, for diagnostics.
-aggregateName :: AggregateKind -> Text
-aggregateName AggPlain = "aggregate"
-aggregateName AggArgmin = "argmin"
-aggregateName AggArgmax = "argmax"
-aggregateName AggTakemin = "takemin"
-aggregateName AggTakemax = "takemax"
 
 -- | Expand a macro use found in head position ('expandMacroUse'), and
 -- classify each resulting goal with 'headConjunct': a constraint-shaped
@@ -1614,7 +1629,7 @@ renameBodySeq ctx site t = case t of
 renameBodyGoal :: RenameCtx -> Site -> Term -> Rename [Term]
 renameBodyGoal ctx site t = case t of
   CompoundTerm name args
-    | Just _ <- aggregateKindOf name (length args) -> do
+    | Just _ <- aggregateForm name args -> do
         -- An aggregate reads the store to decide whether a rule applies,
         -- which is a head position. Refusing it here keeps the failure
         -- from surfacing as "unknown constraint aggregate/4".

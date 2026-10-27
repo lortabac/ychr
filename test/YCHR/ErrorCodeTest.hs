@@ -60,7 +60,13 @@ import YCHR.Internal.Display
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
 import YCHR.Internal.Parsed (MacroKind (..))
 import YCHR.Internal.Parser (ParseValidationError (..))
-import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..))
+import YCHR.Internal.Rename
+  ( BadConjunct (..),
+    HeadPart (..),
+    NonGoalKind (..),
+    RenameError (..),
+    RenameWarning (..),
+  )
 import YCHR.Internal.Rename.Macro (PrimitiveOperand (..))
 import YCHR.Internal.Resolve
   ( BoundTargetKind (..),
@@ -112,6 +118,10 @@ deriving instance Data RefiningViolation
 deriving instance Data BoundTargetKind
 
 deriving instance Data HeadPart
+
+deriving instance Data BadConjunct
+
+deriving instance Data NonGoalKind
 
 deriving instance Data PrimitiveOperand
 

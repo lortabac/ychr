@@ -159,41 +159,6 @@ read, rendered with its own code in `Display.hs`. Add a pytest for
 `ychr check missing.chr` and for `:recompile` after
 deleting a loaded file.
 
-## A function call in an aggregate goal is silently compiled as a constraint
-
-**Documented claim.** `docs/reference/aggregates.md` §Diagnostics:
-`YCHR-20041` (`MalformedAggregateGoal`) is "A goal conjunct that is
-neither a constraint, an aggregate nor a `?` guard."
-
-**Test.** Forget the `?` in front of a goal guard.
-
-    :- use_module(library(aggregates)).
-    :- chr_constraint p/1, k/1, res/1, go/1, ask/1.
-    p(X), count((k(Y), X == Y), N) ==> res(N).
-    res(N) \ ask(R) <=> R = N.
-    go(R) <=> k(1), k(2), k(1), p(1), ask(R).
-
-    ychr check --Werror
-    ychr run -g 'go(R)' --show-bindings
-
-**Expected.** `YCHR-20041`. A regular head rejects the same thing:
-`p(X), X == 1 ==> true` gives `YCHR-16002 'prelude:==' is declared as a
-function but appears in a rule head`.
-
-**Actual.** No diagnostic, `check --Werror` exits 0, and the run gives
-`R = 0` (`R = 2` with `? X == Y`). `ychr compile -t vm` lists a
-constraint type `(qualified "prelude" "==")` in `type-names`: the
-function name was made into a constraint type.
-
-**Notes.** Same with `Y > 1`, a user function `f(Y)`,
-`exists(X == 1)` and `count(1 + 1, N)`, and same on Scheme. A data
-constructor in the same spot is caught (`YCHR-20002`), so only
-functions get through. Missing a `?` is an easy typo, and it gives a
-wrong count with no warning.
-
-**Fix sketch.** Reject a goal conjunct that resolves to a function,
-like the head check does (`16002` or `20041`). Add a golden.
-
 ## `_` passed to a goal macro becomes several unrelated variables
 
 **Documented claim.** `docs/reference/macros.md` §Expanding a goal
@@ -255,30 +220,7 @@ aggregate goal."
 **Notes.** In a body `?` gives `20042` as documented, directly or through
 a macro. In a head it is `20002` every way: directly, in the removed
 part (`p(X) \ ? X > 5 <=> q`), or through a macro. No golden uses
-`20039`–`20042`.
-
-## Body control forms in an aggregate goal report `YCHR-20002`, not `YCHR-20041`
-
-**Documented claim.** `docs/reference/aggregates.md` §Diagnostics,
-`YCHR-20041`, as above.
-
-**Test.**
-
-    p(X), count((k(Y), Y = 1), N) ==> q.
-    p(X), count((k(Y) ; p(Y)), N) ==> q.
-    p(X), count(true, N) ==> q.
-
-    ychr check
-
-**Expected.** `YCHR-20041`.
-
-**Actual.** `YCHR-20002 Unknown name '=/2'`, `';/2'` and `'true/0'`.
-`20041` does fire for a number, a string or a variable conjunct
-(`count((k(Y), 1), N)`).
-
-**Notes.** That `20041` message says "Invalid aggregate
-'aggregate/4'", which names the core form and not the `count/2` the
-user wrote.
+`20039`, `20040` or `20042`.
 
 ## `aggregate/4` and the selection names can be declared, then are silently ignored
 
@@ -304,9 +246,9 @@ user wrote.
 **Actual.** Accepted with no warning, the core `argmin` wins
 (`R = 1`), and the macro is never used. `go <=> argmin(1, k(2))` gives
 `YCHR-20040` rather than an expansion. `:- macro aggregate(A, B, C, D)
----> [...]` is accepted too, and its head use gives "Invalid aggregate
-'aggregate/4'". `:- chr_constraint argmin/2` is accepted, but no tell of
-it can be written (`20040`).
+---> [...]` is accepted too, and its head use is read as the core
+form, so a variable goal gives `YCHR-20041`. `:- chr_constraint
+argmin/2` is accepted, but no tell of it can be written (`20040`).
 
 **Fix sketch.** Reserve the five names for constraints, functions and
 macros at those arities, or document which one wins.
@@ -546,3 +488,49 @@ symbol table, so `binds` gets two `R` entries.
 **Fix sketch.** Have `process-args` memoize symbol → variable within
 one call, so a repeat reuses the existing variable instead of making
 a new one.
+
+## `YCHR-16002` ignores arity
+
+**Documented claim.** PROJECT.md: function names "cannot collide with
+constraint declarations in the same module" (`YCHR-16016`). That check
+compares name and arity, so `f/1` as a constraint next to `f/2` as a
+function is legal.
+
+**Test.**
+
+    :- chr_constraint p/1, f/1.
+    :- function f/2.
+    f(X, Y) -> X + Y.
+    p(X), f(X) ==> true.
+
+    ychr check n1.chr
+
+**Expected.** No error: `f(X)` in the head is the constraint `f/1`.
+
+**Actual.**
+
+    YCHR-16002
+    '<n1>:f' is declared as a function but appears in a rule head
+
+**Notes.** `checkRuleHeads` (`Resolve.hs`) gets
+`Set.map qualifiedToName functionNames`, which drops the arity.
+
+## `host:foo(X)` in a rule head is accepted silently
+
+**Documented claim.** `docs/reference/language.md` §Host calls: host
+calls are allowed "in every evaluating position". A rule head is not
+one, and `YCHR-16002` rejects a function there.
+
+**Test.**
+
+    :- chr_constraint p/1, go/0.
+    p(X), host:foo(X) ==> true.
+    go <=> p(1).
+
+    ychr check --Werror
+
+**Expected.** An error, like an aggregate goal gives for `host:f(Y)`
+(`YCHR-20041`).
+
+**Actual.** No diagnostic, exit 0. `ychr compile -t vm` lists a
+constraint type `(qualified "host" "foo")`, and the rule never fires.

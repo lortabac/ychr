@@ -67,7 +67,13 @@ import YCHR.Internal.Parsed (AnnP (..), ExpansionStep (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Parser (ParseValidationError (..), SourceItem (..))
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTermSrc)
-import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..))
+import YCHR.Internal.Rename
+  ( BadConjunct (..),
+    HeadPart (..),
+    NonGoalKind (..),
+    RenameError (..),
+    RenameWarning (..),
+  )
 import YCHR.Internal.Rename.Macro
   ( PrimitiveOperand (..),
     macroDepthLimit,
@@ -412,7 +418,7 @@ renameErrorCode (MacroPrimitiveOutsideMacro _ _) = ErrorCode 20037
 renameErrorCode (MacroExpansionTooLarge _ _) = ErrorCode 20038
 renameErrorCode AggregateOnlyHead = ErrorCode 20039
 renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
-renameErrorCode (MalformedAggregateGoal _ _ _) = ErrorCode 20041
+renameErrorCode (MalformedAggregateGoal _) = ErrorCode 20041
 renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
@@ -1077,6 +1083,12 @@ declMacroErrorMsg (DeclMacroParseError e) = parseValidationErrorMsg e
 instance Display (Diagnostic RenameError) where
   displayMsg = displayDiagnostic SevError renameErrorCode renameErrorMsg
 
+-- | Hint for a bad aggregate goal conjunct.
+aggregateConjunctHint :: String
+aggregateConjunctHint =
+  "an aggregate goal conjunct must be a constraint, a nested aggregate"
+    ++ " or a '?' guard"
+
 renameErrorMsg :: RenameError -> String
 renameErrorMsg (AmbiguousName name arity candidates) =
   withHint
@@ -1364,14 +1376,32 @@ renameErrorMsg (AggregateOutsideHead name arity) =
     ( "an aggregate decides whether a rule applies, so it is a head"
         ++ " conjunct; it cannot appear in a body, a query or a guard"
     )
-renameErrorMsg (MalformedAggregateGoal name required actual) =
+renameErrorMsg (MalformedAggregateGoal (ConjunctIsFunction name arity)) =
   withHint
-    ("Invalid aggregate '" ++ T.unpack name ++ "/" ++ show actual ++ "'")
-    ( "expected "
-        ++ show required
-        ++ " arguments, and each goal conjunct"
-        ++ " to be a constraint, a nested aggregate or a '?' guard"
+    ( "'"
+        ++ displayName name
+        ++ "/"
+        ++ show arity
+        ++ "' in an aggregate goal is a function, not a constraint"
     )
+    "a test on each match is a guard conjunct: write '? Guard'"
+renameErrorMsg (MalformedAggregateGoal (ConjunctIsBuiltin name arity)) =
+  withHint
+    ( "'"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' in an aggregate goal is a built-in form, not a constraint"
+    )
+    aggregateConjunctHint
+renameErrorMsg (MalformedAggregateGoal (ConjunctNotAGoal kind)) =
+  withHint
+    (what kind ++ " in an aggregate goal is not a constraint")
+    aggregateConjunctHint
+  where
+    what NonGoalNumber = "A number"
+    what NonGoalString = "A string"
+    what NonGoalVariable = "A variable"
 renameErrorMsg GuardOutsideAggregateGoal =
   withHint
     "'?' guard outside an aggregate goal"

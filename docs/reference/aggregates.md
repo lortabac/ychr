@@ -98,6 +98,11 @@ variables bound by the conjuncts before it and filter matches before
 the conjuncts after it are searched. Like a rule guard, it is an
 ask-only boolean expression.
 
+Anything else is `YCHR-20041`: a function call, a built-in form like
+`=`, `;` or `true`, a number, a string or a variable. A test without its
+`?` is a function call, so `count((k(Y), X == Y), N)` is an error;
+write `count((k(Y), ? X == Y), N)`.
+
 `?/1` is recognized structurally inside an aggregate goal, as `,` is;
 outside one it has no meaning. `library(aggregates)` exports the
 operator `op(900, fy, '?')`. Without the operator, write the functor
@@ -621,7 +626,7 @@ lowers an aggregate in the occurrence procedure itself:
 |---|---|---|
 | YCHR-20039 | `AggregateOnlyHead` | A rule head consists of aggregates only. |
 | YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
-| YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard. |
+| YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard (see [Aggregate goals](#aggregate-goals)). |
 | YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal. |
 | YCHR-40002 | `UnboundVariable` | An `Element` variable the match cannot supply. |
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |

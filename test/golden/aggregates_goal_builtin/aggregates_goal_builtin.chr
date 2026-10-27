@@ -1,0 +1,14 @@
+% A built-in form or a non-compound term as an aggregate goal
+% conjunct is YCHR-20041.
+:- module(aggregates_goal_builtin, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, k/1, q/0.
+
+p(_), count((k(Y), Y = 1), _) ==> q.
+p(_), count((k(Y) ; p(Y)), _) ==> q.
+p(_), count(true, _) ==> q.
+p(_), count((k(Y), quote(Y)), _) ==> q.
+p(_), count((k(_), 1), _) ==> q.
+p(_), count((k(_), "s"), _) ==> q.
+p(X), count((k(_), X), _) ==> q.

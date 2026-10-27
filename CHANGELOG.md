@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+A function call or a built-in form (`=`, `;`, `true`, …) in an
+aggregate goal is now `YCHR-20041`. A test missing its `?`
+(`count((k(Y), X == Y), N)`) used to count nothing, silently.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameError`'s
+  `MalformedAggregateGoal` carries a new `BadConjunct` (with
+  `NonGoalKind`) instead of the aggregate's name and arities.
+
 `ychr FILES...` (no subcommand) no longer takes flags.
 
 - **Breaking:** put flags after the subcommand:
