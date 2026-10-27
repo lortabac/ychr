@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+A user module can no longer be named `prelude`.
+
+- **Breaking:** `prelude` is now a reserved module name (`YCHR-16019`,
+  alongside `host`). A user module named `prelude` used to compile and
+  silently replace the bundled prelude, with a `use_module` import list
+  on it misreported as `YCHR-20019` (a hint meant for the real prelude).
+  Other bundled library names can still be shadowed. `ychr check
+  libraries/prelude.chr` now fails too, since a file on the command
+  line is a user module.
+
 The constructor-arity warning now names every declared arity.
 
 - **Breaking:** `YCHR.Internal.Rename.RenameWarning`'s

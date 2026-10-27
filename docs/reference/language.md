@@ -116,7 +116,8 @@ supplied to the compiler; it is not looked up on any search path.
 `strings`, `meta`, `search`, `state` and `chr`
 ([`libraries/`](../../libraries/)) need an explicit import outside the
 REPL. The prelude is always imported, in full; an import list on it is
-rejected (`YCHR-20019`).
+rejected (`YCHR-20019`). `host` and `prelude` are reserved and cannot
+name a user module (`YCHR-16019`).
 
 `chr` is an empty compatibility module: it declares and exports
 nothing. It exists so that a Prolog module carrying

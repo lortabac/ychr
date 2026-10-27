@@ -972,7 +972,8 @@ validateImportLists mods ctx =
     -- item-by-item: reporting each item as an unknown import on top of
     -- the real diagnostic would be pure noise. The synthetic prelude
     -- imports added by the pipeline carry no item list, so they never
-    -- reach this arm.
+    -- reach this arm. "prelude" here always names the bundled prelude:
+    -- a user module can't carry that name (YCHR-16019).
     checkImport annImp = do
       let imp = annImp.node
           site = siteOf annImp

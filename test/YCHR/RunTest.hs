@@ -9,9 +9,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.DSL (module')
 import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
+import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Display (displayMsg)
+import YCHR.Internal.Parsed (AnnP (..))
+import YCHR.Internal.Resolve (ResolveError (..))
 import YCHR.Internal.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Internal.Types
   ( Constraint (..),
@@ -31,6 +35,7 @@ import YCHR.Run
     Value (..),
     Warning (..),
     compileModules,
+    compileParsedModules,
     equal,
     newVar,
     prepareQuery,
@@ -58,7 +63,8 @@ tests =
       goalWarningTests,
       guardErrorTests,
       arityOverloadTests,
-      uncheckedQueryTests
+      uncheckedQueryTests,
+      reservedModuleNameTests
     ]
 
 -- | The constraint type of a declared constraint. Errors if absent.
@@ -825,4 +831,30 @@ uncheckedQueryTests =
               (not (null prepared.liftedGoals))
             assertBool "expected no type-check warnings" $
               null [() | TypeCheckWarnings _ <- prepared.warnings]
+    ]
+
+-- | A user module named @prelude@ or @host@ is YCHR-16019, also on the
+-- DSL path. An ordinary name still compiles.
+reservedModuleNameTests :: TestTree
+reservedModuleNameTests =
+  testGroup
+    "Reserved module names"
+    [ testCase "a user module named prelude is rejected as ReservedModuleName" $
+        case compileParsedModules stdlib True [module' "prelude"] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "prelude") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail for a module named prelude",
+      testCase "a user module named host is rejected as ReservedModuleName" $
+        case compileParsedModules stdlib True [module' "host"] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "host") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail for a module named host",
+      testCase "an ordinary module name still compiles" $
+        case compileParsedModules stdlib True [module' "ordinary"] of
+          Right _ -> pure ()
+          Left err -> assertFailure $ "expected success, got: " ++ displayMsg err
     ]

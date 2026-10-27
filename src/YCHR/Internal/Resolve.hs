@@ -14,6 +14,9 @@ module YCHR.Internal.Resolve
     resolveProgram,
     termToExpr,
 
+    -- * Checks
+    checkReservedModuleNames,
+
     -- * Visibility
     FunVisibility,
     buildQueryFunctionVisibility,
@@ -83,8 +86,7 @@ data ResolveError
     FunctionInRuleHead Name
   | -- | A name collides with a reserved built-in.
     ReservedName Name
-  | -- | A user module is declared with a reserved name (currently
-    -- only @host@, which is wired in as the host-call qualifier).
+  | -- | A user module has a reserved name (@host@ or @prelude@).
     ReservedModuleName Text
   | -- | A constraint name reached the resolve phase without being
     -- module-qualified by the renamer. Indicates a renamer bug rather
@@ -255,7 +257,6 @@ resolveProgram mods =
       eqErrors = checkEquations constraintNames mods
       headErrors = checkRuleHeads (Set.map qualifiedToName functionNames) mods
       reservedErrors = checkReservedNames mods
-      reservedModuleErrors = checkReservedModuleNames mods
       orphanEqErrors = checkOrphanEquations functionNames mods
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
       extendsBoundedErrors = checkExtendsBounded funcRequiring mods
@@ -277,7 +278,6 @@ resolveProgram mods =
         eqErrors
           ++ headErrors
           ++ reservedErrors
-          ++ reservedModuleErrors
           ++ orphanEqErrors
           ++ extendsClosedErrors
           ++ extendsBoundedErrors
@@ -1251,15 +1251,15 @@ checkReservedNames mods =
     declNames (P.FunctionDecl fd) = [fd.name]
     declNames _ = []
 
--- | Reserved names that cannot be used as user module names. Currently
--- just @host@, which is wired in as the host-call qualifier in
--- @Resolve.termToExpr@; allowing it as a user module name would shadow
--- the user's own functions at their definition site.
+-- | Names a user module can't take: @host@ (the host-call qualifier in
+-- 'termToExpr') and @prelude@ (a user module would replace the
+-- bundled one).
 reservedModuleNames :: Set Text
-reservedModuleNames = Set.fromList ["host"]
+reservedModuleNames = Set.fromList ["host", "prelude"]
 
--- | Check that no module uses a reserved name.
-checkReservedModuleNames :: [CollectedModule] -> [Diagnostic ResolveError]
+-- | Reject user modules with a reserved name. Pass user modules only:
+-- the bundled prelude is named @prelude@ too.
+checkReservedModuleNames :: [P.Module] -> [Diagnostic ResolveError]
 checkReservedModuleNames mods =
   [ noDiag (P.AnnP (ReservedModuleName m.name) m.nameLoc (PExpr.Atom ""))
   | m <- mods,

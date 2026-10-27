@@ -103,6 +103,7 @@ import YCHR.Internal.Resolve
   ( FunVisibility,
     ResolveError,
     buildQueryFunctionVisibility,
+    checkReservedModuleNames,
     resolveProgram,
   )
 import YCHR.Internal.StdLib (StdLib (..))
@@ -410,6 +411,7 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
         [scopeFromModule m | m <- libraryMods, Set.notMember m.name userModNames]
       macroEnv = buildDeclMacroEnv (userScopes ++ libScopes)
   checkDuplicateModules (map fst inputs) scanned
+  checkReservedModules scanned
   let expanded =
         [ expandAndConvert macroEnv scope ts
         | (scope, ts) <- zip userScopes userTerms
@@ -524,6 +526,9 @@ finalizeCompilation ::
   Either Error (CompiledProgram, [Warning])
 finalizeCompilation libraryMods opExports sources parsed = do
   checkDuplicateModules sources.inputPaths parsed
+  -- For the DSL path ('compileParsedModules'). 'compileModules' already
+  -- checked 'scanned'.
+  checkReservedModules parsed
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
   -- providers for every name the library exports and make each use
@@ -532,7 +537,8 @@ finalizeCompilation libraryMods opExports sources parsed = do
   -- @pairs@ pulls the embedded @maybe@ into the closure alongside the
   -- one given on the command line. The explicitly supplied module wins;
   -- 'compileModules' and 'compileParsedModules' bias the operator-export
-  -- map the same way.
+  -- map the same way. (A user module can't be named @prelude@, so the
+  -- prelude is never dropped.)
   --
   -- This deduplicates across the two /sources/ of modules. Two user
   -- modules that declare the same name still collide, which is a genuine
@@ -670,6 +676,12 @@ checkDuplicateModules inputPaths parsed = do
     [] -> pure ()
     _ -> Left (CollectErrors duplicateModuleDiags)
 
+-- | 'checkReservedModuleNames' over user modules, as a 'ResolveErrors'.
+checkReservedModules :: [Module] -> Either Error ()
+checkReservedModules mods = case checkReservedModuleNames mods of
+  [] -> pure ()
+  errs -> Left (ResolveErrors errs)
+
 -- | Prepend a synthetic @use_module(library(prelude))@ to a user module so
 -- the renamer treats prelude exports as visible.
 --
@@ -679,16 +691,9 @@ checkDuplicateModules inputPaths parsed = do
 -- equivalent import entry; one that writes a /narrowed/ prelude import is
 -- rejected by 'YCHR.Internal.Rename.validateImportLists' (YCHR-20019)
 -- rather than silently getting the full prelude anyway.
---
--- A user module /named/ @prelude@ is the one exception, mirroring
--- 'YCHR.Internal.Collect.addLibraryPrelude': it supplies the prelude
--- rather than importing it, and a self-import would give its own
--- declarations a second, imported provider — enough to make @bool@ and
--- @list@ resolve inconsistently against the built-ins.
 addPreludeImport :: Module -> Module
-addPreludeImport m
-  | m.name == "prelude" = m
-  | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
+addPreludeImport m =
+  m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
 -- | 'compileModules', reading each module's source from disk.
 --

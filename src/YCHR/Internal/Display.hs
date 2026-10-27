@@ -712,7 +712,14 @@ resolveErrorMsg (ReservedName name) =
 resolveErrorMsg (ReservedModuleName name) =
   withHint
     ("'" ++ T.unpack name ++ "' is a reserved name and cannot be used as a module name")
-    "'host' is the wired-in host-call qualifier; rename the module"
+    -- One hint per name in 'reservedModuleNames', plus a fallback.
+    ( case name of
+        "host" -> "'host' is the wired-in host-call qualifier; rename the module"
+        "prelude" ->
+          "'prelude' is the bundled prelude, imported implicitly by every "
+            ++ "module; rename the module"
+        _ -> "rename the module"
+    )
 resolveErrorMsg (UnqualifiedConstraintName name) =
   withHint
     ( "Internal error: unqualified constraint name reached the resolve phase ('"
