@@ -1,0 +1,19 @@
+YCHR-20040
+Aggregate 'argmin/2' outside a rule head
+argmin(Y, k(Y))
+Aggregate 'takemin/2' outside a rule head
+takemin(Y, k(Y))
+Aggregate 'aggregate/4' outside a rule head
+N > 0, aggregate(aggregates:count_spec, 1, k(_), 0)
+R is aggregate(aggregates:count_spec, 1, k(_), 0), q
+R is '$call'(fun(_Y) -> aggregate(aggregates:count_spec, 1, k(_), 0) end, 1)
+not(aggregate(aggregates:count_spec, 1, k(_), 0))
+R is 1 + aggregate(aggregates:count_spec, 1, k(_), 0), q
+aggregate(argmin(Y, k(Y)), E, k(E), N) > 0
+p(X), aggregate(aggregates:count_spec, 1, (k(Y), '?'(aggregate(aggregates:count_spec, 1, k(_), 0))), N)
+aggregates_outside_head.chr:20:8: YCHR-20040
+aggregate(aggregates:count_spec, 1, k(_), 0) > 0
+aggregates_outside_head.chr:20:60: YCHR-20040
+Aggregate 'argmax/2' outside a rule head
+argmax(Z, k(Z))
+argmin(V, k(V)) > 0

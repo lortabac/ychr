@@ -180,28 +180,41 @@ declaration is dead weight.
 `argmax/2`, `takemin/2` and `takemax/2` now are (`YCHR-20043`,
 `Rename.ReservedAggregateName`).
 
-## An aggregate in a guard or an expression does not report `YCHR-20040`
+## An aggregate form inside a constraint argument does not report `YCHR-20040`
 
-**Documented claim.** `docs/reference/aggregates.md` §Diagnostics:
-`YCHR-20040` (`AggregateOutsideHead`) is "`aggregate/4` or a selection
-form outside a rule head". Its hint says "it cannot appear in a body, a
-query or a guard".
+**Documented claim.** `docs/reference/aggregates.md` §Reserved names:
+`aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2` and `takemax/2`
+outside a rule head are `YCHR-20040` (`AggregateOutsideHead`) unless
+a data constructor with that name and arity is visible — the same
+section already notes "constraint arguments are not checked yet";
+this entry tracks closing that gap.
 
 **Test.**
 
-    p(X) ==> argmin(Y, k(Y)) | q.
-    p(X) ==> takemin(Y, k(Y)) | q.
-    p(X), count(k(Y), N) ==> N > 0, aggregate(aggregates:count_spec, 1, k(_), 0) | q.
-    p(X), count(k(Y), N) ==> N > 0 | R is aggregate(aggregates:count_spec, 1, k(_), 0), q.
+    :- use_module(library(aggregates)).
+    :- chr_constraint go/0, r/1, k/1.
+    go <=> r(1 + argmin(1, k(1))).
 
     ychr check
+    ychr run -g go
 
-**Expected.** `YCHR-20040`.
+**Expected.** `YCHR-20040` from `ychr check`.
 
-**Actual.** In a guard: `YCHR-30002 This expression cannot evaluate to
-a boolean and is not valid as a guard`. In an `is` right-hand side: the
-warning `YCHR-20101 Undeclared data constructor 'aggregate'`. `20040`
-only fires for a body goal or a query goal.
+**Actual.** `ychr check` passes with only `YCHR-20101 Undeclared data
+constructor 'argmin'`. `ychr run -g go` then fails at runtime with
+`YCHR-60001 arithmetic host call: expected 2 numeric arguments of same
+type, got 2`.
+
+**Notes.** A constraint (tell) argument is renamed in `NoResolve`
+mode — the same mode a head pattern gets — so `renameTerm`'s
+aggregate-form check, which only fires in `ResolveTop`/`ResolveAll`
+(`isResolving`), never sees it. Fine for head patterns, which are
+data, but a tell argument is evaluated.
+
+**Fix sketch.** Tell arguments need their own `ResolveMode` (or a
+flag on `NoResolve`) distinct from head/equation patterns, so the
+aggregate-form check — and anything else gated on `isResolving` —
+can tell the two apart.
 
 ## `argmin` with NaN keys picks a different match than the spec's definition
 

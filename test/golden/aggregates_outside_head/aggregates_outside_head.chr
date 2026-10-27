@@ -1,0 +1,27 @@
+% aggregate/4 and the selection forms outside a rule head are
+% YCHR-20040: in a guard, an 'is' RHS, a function or lambda body, or
+% nested in another expression. A data constructor with the same
+% name/arity is exempt (see aggregates_reserved_other_arity).
+:- module(aggregates_outside_head, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, k/1, q/0.
+
+p(X) ==> argmin(Y, k(Y)) | q.
+p(X) ==> takemin(Y, k(Y)) | q.
+p(X), count(k(Y), N) ==> N > 0, aggregate(aggregates:count_spec, 1, k(_), 0) | q.
+p(X), count(k(Y), N) ==> N > 0 | R is aggregate(aggregates:count_spec, 1, k(_), 0), q.
+p(X) ==> R is '$call'(fun(_Y) -> aggregate(aggregates:count_spec, 1, k(_), 0) end, 1) | q.
+p(X) ==> not(aggregate(aggregates:count_spec, 1, k(_), 0)) | q.
+p(X) ==> true | R is 1 + aggregate(aggregates:count_spec, 1, k(_), 0), q.
+p(X) ==> aggregate(argmin(Y, k(Y)), E, k(E), N) > 0 | q.
+
+:- function f/1.
+f(X) | aggregate(aggregates:count_spec, 1, k(_), 0) > 0 -> argmax(Z, k(Z)).
+
+p(X), aggregate(aggregates:count_spec, 1, (k(Y), ? aggregate(aggregates:count_spec, 1, k(_), 0)), N) ==> q.
+
+% A data constructor at another arity (argmin/3) does not exempt argmin/2.
+:- chr_type triple ---> argmin(int, int, int).
+
+p(X) ==> argmin(V, k(V)) > 0 | q.

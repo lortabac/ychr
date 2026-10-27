@@ -6,12 +6,20 @@
 :- use_module(library(aggregates)).
 
 :- chr_constraint argmin/3, k/1, p/0, best/1, best3/1, show/1,
-   main/1, ask/1, agg_result/1.
+   main/1, ask/1, agg_result/1, mk_call/1, is_arg/1, lambda_arg/1.
 
 :- function takemax/3.
 takemax(X, Y, Z) -> X + Y + Z.
 
 :- chr_type pair ---> argmax(int, int).
+
+% The data constructor also works in a function body, an 'is' RHS and a lambda body.
+:- function mk/2.
+mk(A, B) -> argmax(A, B).
+
+mk_call(R) <=> R is mk(1, 2).
+is_arg(R) <=> R is argmax(1, 2).
+lambda_arg(R) <=> R is '$call'(fun(A) -> argmax(A, A) end, 3).
 
 :- macro_decls argmin/2.
 argmin(Name, Arity) ---> [(:- chr_constraint '$compound'(Name, [Arity]))].

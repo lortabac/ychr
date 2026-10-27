@@ -665,6 +665,14 @@ conProvidersAnyArity ctx n =
       m <- Map.findWithDefault [] (UnqualifiedIdentifier n arity) ctx.dataConProviders
     ]
 
+-- | Whether @name@ is visible as a data constructor at exactly
+-- @arity@. A qualified name is never a reserved aggregate key.
+-- 'dataConEnv' already holds only what this module can see.
+isVisibleDataConAt :: RenameCtx -> Name -> Int -> Bool
+isVisibleDataConAt _ (Qualified _ _) _ = False
+isVisibleDataConAt ctx (Unqualified n) arity =
+  maybe False (elem arity . NE.toList) (Map.lookup n ctx.dataConEnv)
+
 -- | All declared constraints and functions across all modules, indexed by
 -- @(name, arity)@. Functions and constraints share a namespace, so both
 -- kinds of declaration are included.
@@ -1776,6 +1784,17 @@ renameTerm ctx site mode t = case t of
   CompoundTerm name args
     | isPrimitiveName name (length args) -> do
         primitiveOutsideMacro ctx site name (length args)
+        pure t
+  -- An aggregate form (@aggregate/4@, @argmin/2@, ...) is only valid as a
+  -- head conjunct or an aggregate goal conjunct, both handled before we
+  -- get here. In any other resolving position it is misplaced, unless a
+  -- data constructor with that name and arity is visible.
+  CompoundTerm name args
+    | isResolving mode,
+      Just _ <- aggregateForm name args,
+      not (isVisibleDataConAt ctx name (length args)) -> do
+        let err = AggregateOutsideHead (unqualifiedText name) (length args)
+        emitErrorIn ctx (annAt site err)
         pure t
   -- Special case: @is@ LHS is a pattern (no resolution), RHS is an expression.
   CompoundTerm (Unqualified "is") [lhs, rhs] | isResolving mode -> do

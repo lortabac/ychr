@@ -1375,7 +1375,7 @@ renameErrorMsg (AggregateOutsideHead name arity) =
   withHint
     ("Aggregate '" ++ T.unpack name ++ "/" ++ show arity ++ "' outside a rule head")
     ( "an aggregate decides whether a rule applies, so it is a head"
-        ++ " conjunct; it cannot appear in a body, a query or a guard"
+        ++ " conjunct; it cannot appear anywhere else"
     )
 renameErrorMsg (MalformedAggregateGoal (ConjunctIsFunction name arity)) =
   withHint

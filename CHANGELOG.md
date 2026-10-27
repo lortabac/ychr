@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+An aggregate form (`aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2`,
+`takemax/2`) in a guard, an `is` right-hand side, a function or lambda
+body, or nested in another expression is now `YCHR-20040`
+(`AggregateOutsideHead`), not `YCHR-30002` or a `YCHR-20101` warning.
+A visible data constructor of the same name and arity is still read
+as data. Constraint arguments are not checked yet.
+
 A constraint, function or goal macro declared at `aggregate/4`,
 `argmin/2`, `argmax/2`, `takemin/2` or `takemax/2` is now
 `YCHR-20043` (`ReservedAggregateName`), not silently accepted and

@@ -67,10 +67,13 @@ User-defined aggregates are ordinary aggregators:
 ### Reserved names
 
 `aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2` and `takemax/2` are
-read as aggregate forms in every rule head, with no import. Declaring
-a constraint, function or goal macro at one of these keys is
-`ReservedAggregateName` (YCHR-20043). Other arities, data constructors
-and declaration macros are fine.
+aggregate forms in every rule head, with no import. Anywhere else (a
+guard, an `is` right-hand side, a function body) they are
+`AggregateOutsideHead` (YCHR-20040), unless a data constructor with
+that name and arity is visible. Then they are data. Constraint
+arguments are not checked yet. Declaring a constraint, function or
+goal macro at one of these keys is `ReservedAggregateName`
+(YCHR-20043). Other arities and declaration macros are fine.
 
 ### Typing
 
@@ -633,7 +636,7 @@ lowers an aggregate in the occurrence procedure itself:
 | Code | Name | Condition |
 |---|---|---|
 | YCHR-20039 | `AggregateOnlyHead` | A rule head consists of aggregates only. |
-| YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
+| YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head (see [Reserved names](#reserved-names)). |
 | YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard (see [Aggregate goals](#aggregate-goals)). |
 | YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal, including a rule head. |
 | YCHR-20043 | `ReservedAggregateName` | A constraint, function or goal macro declared at one of the five aggregate-form keys (see [Reserved names](#reserved-names)). |
