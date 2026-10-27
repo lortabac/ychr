@@ -77,7 +77,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -323,6 +323,11 @@ data RenameError
   | -- | A @?\/1@ guard outside an aggregate goal. It is recognized
     -- structurally inside one, and has no meaning anywhere else.
     GuardOutsideAggregateGoal
+  | -- | A constraint, function or goal macro declared at an
+    -- aggregate-form key (@aggregate\/4@, @argmin\/2@, …). The head
+    -- reads that key as the aggregate form, so the declaration is
+    -- never used. Carries the name and arity.
+    ReservedAggregateName Text Int
   deriving (Eq, Show)
 
 -- | What is wrong with an aggregate goal conjunct, for
@@ -1092,6 +1097,8 @@ locAtOrAfter a b = (a.line, a.col) >= (b.line, b.col)
 --   * 'MacroPrimitiveOutsideMacro' — a construction primitive in a
 --     clause's head patterns, which are never evaluated; or a
 --     constraint or function declared with a primitive's reserved name.
+--   * 'ReservedAggregateName' — a constraint, function or goal macro
+--     declared at one of the five aggregate-form keys.
 --
 -- Plus the 'UnusedMacroParameter' warning for a head variable that
 -- occurs only once in its clause and whose name does not start with
@@ -1102,17 +1109,23 @@ checkMacroDefinitions ctx = do
   traverse_ checkCollision m.macros
   traverse_ checkClauses m.macros
   traverse_ checkReservedDecl m.decls
+  traverse_ checkReservedMacro m.macros
   where
     m = ctx.currentModule
     self = m.name
     declKeys = Set.fromList [k | Ann d _ <- m.decls, Just k <- [declNameArity d]]
 
+    -- 'checkReservedMacro' already reports these; don't report them
+    -- twice.
+    isReservedGoalMacro d = d.kind == GoalMacro && isAggregateFormKey d.name d.arity
+
     checkDuplicate seen annDef =
       let key = UnqualifiedIdentifier annDef.node.name annDef.node.arity
        in if Set.member key seen
             then do
-              let err = DuplicateMacro key.localName key.arity
-              emitErrorIn ctx (annAt (siteOf annDef) err)
+              unless (isReservedGoalMacro annDef.node) $
+                let err = DuplicateMacro key.localName key.arity
+                 in emitErrorIn ctx (annAt (siteOf annDef) err)
               pure seen
             else pure (Set.insert key seen)
 
@@ -1121,8 +1134,12 @@ checkMacroDefinitions ctx = do
     checkCollision annDef =
       let key = UnqualifiedIdentifier annDef.node.name annDef.node.arity
           err = MacroNameCollision (QualifiedName self key.localName) key.arity
-       in when (annDef.node.kind == GoalMacro && Set.member key declKeys) $
-            emitErrorIn ctx (annAt (siteOf annDef) err)
+       in when
+            ( annDef.node.kind == GoalMacro
+                && Set.member key declKeys
+                && not (isReservedGoalMacro annDef.node)
+            )
+            (emitErrorIn ctx (annAt (siteOf annDef) err))
 
     checkClauses annDef = traverse_ (checkClause annDef.node) annDef.node.clauses
 
@@ -1153,10 +1170,24 @@ checkMacroDefinitions ctx = do
       Just (UnqualifiedIdentifier n a)
         | isConstraintOrFunctionDecl d,
           isPrimitiveName (Unqualified n) a ->
-            let origin =
-                  Compound "/" [Ann (Atom n) loc, Ann (PExpr.Int (toInteger a)) loc]
+            let origin = slashOrigin n a loc
              in emitErrorIn ctx (AnnP (MacroPrimitiveOutsideMacro n a) loc origin)
+        | isConstraintOrFunctionDecl d,
+          isAggregateFormKey n a ->
+            let origin = slashOrigin n a loc
+             in emitErrorIn ctx (AnnP (ReservedAggregateName n a) loc origin)
       _ -> pure ()
+
+    slashOrigin n a loc =
+      Compound "/" [Ann (Atom n) loc, Ann (PExpr.Int (toInteger a)) loc]
+
+    -- Declaration macros are directives, never head conjuncts, so
+    -- they're exempt.
+    checkReservedMacro annDef =
+      let d = annDef.node
+          err = ReservedAggregateName d.name d.arity
+       in when (d.kind == GoalMacro && isAggregateFormKey d.name d.arity) $
+            emitErrorIn ctx (annAt (siteOf annDef) err)
 
     selfDeclaresAndExports n a =
       let key = UnqualifiedIdentifier n a
@@ -1291,10 +1322,9 @@ data HeadItem = HeadOk Constraint | HeadAggregate Aggregate | HeadDropped
 renameCon :: RenameCtx -> Site -> Constraint -> Rename [HeadItem]
 renameCon ctx site (Constraint cname cargs)
   | Just (k, args) <- aggregateForm cname cargs =
-      -- Checked before 'classifyGoalName': a user may define a macro or
-      -- function called @aggregate/4@, but the reserved aggregate
-      -- functors always mean the aggregate form. The call site is the
-      -- same shape, so the two cannot be told apart by name alone.
+      -- Checked before 'classifyGoalName'. The aggregate-form keys are
+      -- reserved ('ReservedAggregateName'), so this shape always means
+      -- the aggregate form.
       (: []) . HeadAggregate <$> renameAggregate ctx site k args
   -- @?/1@ is only a guard inside an aggregate goal. Rule guards use
   -- @|@, so @? X@ in a head (kept or removed) is
@@ -1347,9 +1377,7 @@ kindMismatch ctx site providerMod name arity =
    in emitErrorIn ctx (annAt site (MacroKindMismatch qn arity DeclMacro))
 
 -- | The 'AggregateKind' a conjunct names, if it names one, and its
--- arguments by role. Only an unqualified name matches: a qualified
--- @M:aggregate@ is an ordinary constraint, so a user module can shadow
--- an aggregate name locally.
+-- arguments by role. Only an unqualified name matches.
 aggregateForm :: Name -> [Term] -> Maybe (AggregateKind, AggregateArgs)
 aggregateForm (Qualified _ _) _ = Nothing
 aggregateForm (Unqualified n) args = case (n, args) of
@@ -1365,6 +1393,11 @@ aggregateForm (Unqualified n) args = case (n, args) of
     -- argmin(X, Goal) and friends: X is the selection key, which takes
     -- the place of the element. There is no result.
     selection k x g = Just (k, AggregateArgs Nothing (Just x) g Nothing)
+
+-- | Whether @name\/arity@ is a key 'aggregateForm' matches. Asks
+-- 'aggregateForm' itself, so the two can't drift.
+isAggregateFormKey :: Text -> Int -> Bool
+isAggregateFormKey n a = isJust (aggregateForm (Unqualified n) (replicate a Wildcard))
 
 -- | Rename one aggregate. The arguments are renamed like head or body
 -- terms, except the goal, whose conjuncts are classified structurally

@@ -64,6 +64,14 @@ User-defined aggregates are ordinary aggregators:
                    E, G, R) ].
 ```
 
+### Reserved names
+
+`aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2` and `takemax/2` are
+read as aggregate forms in every rule head, with no import. Declaring
+a constraint, function or goal macro at one of these keys is
+`ReservedAggregateName` (YCHR-20043). Other arities, data constructors
+and declaration macros are fine.
+
 ### Typing
 
 `library(aggregates)` declares the aggregator type, over elements of
@@ -628,6 +636,7 @@ lowers an aggregate in the occurrence procedure itself:
 | YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
 | YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard (see [Aggregate goals](#aggregate-goals)). |
 | YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal, including a rule head. |
+| YCHR-20043 | `ReservedAggregateName` | A constraint, function or goal macro declared at one of the five aggregate-form keys (see [Reserved names](#reserved-names)). |
 | YCHR-40002 | `UnboundVariable` | An `Element` variable the match cannot supply. |
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
 | YCHR-40004 | `AggregateNestedTake` | A `takemin`/`takemax` inside an aggregate goal. |

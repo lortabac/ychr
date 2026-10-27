@@ -1,0 +1,3 @@
+% A typed :- chr_constraint at a reserved key.
+:- module(aggregates_reserved_decl_typed_constraint, []).
+:- chr_constraint argmin(int, int).

@@ -124,6 +124,13 @@ A declaration with no clauses is allowed; every use of it is
   `extend_function/1`, `extend_class/1`, `extend_class_type/1`,
   `inline/1`, `constraint_use/1`, `macro/1` and `macro_decls/1`.
   Other arities of those names are allowed.
+- A goal macro also may not have the name and arity of one of the five
+  aggregate forms — `aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2`,
+  `takemax/2` (it would always read as the aggregate form):
+  `ReservedAggregateName`; see
+  [aggregates.md](aggregates.md#reserved-names). A declaration macro
+  is a directive, not a goal, so it is exempt, and other arities of
+  these names are allowed.
 - A head variable that occurs only once in its clause, in the head and
   not in the body, is a warning (`UnusedMacroParameter`): the
   corresponding argument is dropped. Write `_`, or a variable whose
@@ -731,6 +738,7 @@ Errors:
 | `MacroExpansionTooLarge` | YCHR-20038 | A use written in a rule, a query or a top-level directive causes more than 100000 expansions (see [Recursion and termination](#recursion-and-termination)). |
 | `MalformedMacroPrimitive` | YCHR-20036 | An operand of `'$compound'` or `'$atom'` breaks the rules under [Construction primitives](#construction-primitives). |
 | `MacroPrimitiveOutsideMacro` | YCHR-20037 | A primitive remains after expansion: it was not written in a macro body. |
+| `ReservedAggregateName` | YCHR-20043 | A goal macro is declared at one of the five aggregate-form keys (see [Heads](#heads)). |
 
 Declaration-macro errors. All 15xxx codes come before conversion:
 `MacroDeclsForbiddenClause` and `UnknownDirective` from expansion (see

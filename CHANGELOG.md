@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+A constraint, function or goal macro declared at `aggregate/4`,
+`argmin/2`, `argmax/2`, `takemin/2` or `takemax/2` is now
+`YCHR-20043` (`ReservedAggregateName`), not silently accepted and
+then ignored. Other arities, data constructors, and declaration
+macros still work.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameError` has a new
+  constructor, `ReservedAggregateName Text Int`.
+
 A `?` guard in a rule head (kept or removed part, or from a macro) is
 now `YCHR-20042` (`GuardOutsideAggregateGoal`), not `YCHR-20002`.
 

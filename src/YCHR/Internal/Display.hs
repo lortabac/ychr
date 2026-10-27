@@ -420,6 +420,7 @@ renameErrorCode AggregateOnlyHead = ErrorCode 20039
 renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
 renameErrorCode (MalformedAggregateGoal _) = ErrorCode 20041
 renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
+renameErrorCode (ReservedAggregateName _ _) = ErrorCode 20043
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1407,6 +1408,19 @@ renameErrorMsg GuardOutsideAggregateGoal =
     "'?' guard outside an aggregate goal"
     ( "a '? Guard' conjunct is recognized inside an aggregate's goal;"
         ++ " write a rule guard with '|' and a body goal directly"
+    )
+renameErrorMsg (ReservedAggregateName name arity) =
+  withHint
+    ( "'"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' is an aggregate form and cannot be declared as a"
+        ++ " constraint, function or macro"
+    )
+    ( "aggregate/4, argmin/2, argmax/2, takemin/2 and takemax/2 are"
+        ++ " recognized in every rule head without an import; choose"
+        ++ " another name or arity"
     )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint

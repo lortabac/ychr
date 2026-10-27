@@ -1,0 +1,4 @@
+% A typed :- function signature at a reserved key.
+:- module(aggregates_reserved_decl_typed_function, []).
+:- function aggregate(int, int, int, int) -> int.
+aggregate(A, _, _, _) -> A.

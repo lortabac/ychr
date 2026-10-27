@@ -159,41 +159,26 @@ read, rendered with its own code in `Display.hs`. Add a pytest for
 `ychr check missing.chr` and for `:recompile` after
 deleting a loaded file.
 
-## `aggregate/4` and the selection names can be declared, then are silently ignored
+## `?/1` can be declared, then is silently ignored
 
 **Documented claim.** `docs/reference/macros.md` §Heads and
 §Diagnostics list the reserved symbols a macro head may not use
-(`,`, `;`, …, `tell`, `$compound`, `$atom`). `aggregate`, `argmin`,
-`argmax`, `takemin` and `takemax` are not in the list. A goal macro is
-"recognized by name and arity in goal positions".
+(`,`, `;`, …, `tell`, `$compound`, `$atom`). `?` is not in the list.
 
 **Test.**
 
-    :- chr_constraint k/1, p/0, best/1, go/1, ask/1.
-    :- macro argmin(X, G) ---> [k(X), G].
-    p, argmin(X, k(X)) ==> best(X).
-    best(X) \ ask(R) <=> R = X.
-    go(R) <=> k(3), k(1), p, ask(R).
+    :- chr_constraint '?'/1.
+    :- macro '?'(X) ---> [go].
 
-    ychr run -g 'go(R)' --show-bindings
+**Expected.** Rejected, like the aggregate keys.
 
-**Expected.** Either the macro expands (the head becomes
-`p, k(X), k(X)`, which never fires here) or the definition is rejected.
+**Actual.** Both are accepted with no warning, but every use — head,
+body, or through the macro — reports `YCHR-20042` regardless, so the
+declaration is dead weight.
 
-**Actual.** Accepted with no warning, the core `argmin` wins
-(`R = 1`), and the macro is never used. `go <=> argmin(1, k(2))` gives
-`YCHR-20040` rather than an expansion. `:- macro aggregate(A, B, C, D)
----> [...]` is accepted too, and its head use is read as the core
-form, so a variable goal gives `YCHR-20041`. `:- chr_constraint
-argmin/2` is accepted, but no tell of it can be written (`20040`).
-
-**Fix sketch.** Reserve the five names for constraints, functions and
-macros at those arities, or document which one wins.
-
-`?/1` has the same problem: `:- chr_constraint '?'/1.` and `:- macro
-'?'(X) ---> [...]` are both accepted with no warning, but every use —
-head, body, or through the macro — reports `YCHR-20042` regardless, so
-the declaration is dead weight. Same fix: reserve `?/1` too.
+**Fix sketch.** Reserve `?/1`, the way `aggregate/4`, `argmin/2`,
+`argmax/2`, `takemin/2` and `takemax/2` now are (`YCHR-20043`,
+`Rename.ReservedAggregateName`).
 
 ## An aggregate in a guard or an expression does not report `YCHR-20040`
 

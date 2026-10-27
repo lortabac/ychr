@@ -1,0 +1,8 @@
+YCHR-20043
+'argmin/2' is an aggregate form
+'aggregate/4' is an aggregate form
+'takemax/2' is an aggregate form
+'argmax/2' is an aggregate form
+'takemin/2' is an aggregate form
+YCHR-20040
+Aggregate 'argmin/2' outside a rule head

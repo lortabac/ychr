@@ -1,0 +1,4 @@
+% A multi-signature :- class at a reserved key.
+:- module(aggregates_reserved_decl_class, []).
+:- class (argmax(int, int) -> int), (argmax(float, float) -> float).
+argmax(X, _) -> X.
