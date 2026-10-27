@@ -25,7 +25,8 @@ ychr --help
 
 `make install` puts `ychr` on your `$PATH` (usually `~/.cabal/bin` or
 `~/.local/bin`). `--help` lists the subcommands: `repl`, `run`,
-`compile`, `gen-driver`, `check`.
+`compile`, `gen-driver`, `check`. `ychr FILE` with no subcommand is
+shorthand for `ychr repl FILE`.
 
 ## 3. The example program
 

@@ -92,7 +92,7 @@ same code. What a terminal-only REPL has and the page does not is
 does nothing, since there is nothing to exit.
 
 Type checking is deliberately *not* automatic. `Reload` and goals behave
-like `ychr --no-check`; only the **Typecheck** button runs the checker,
+like `ychr repl --no-check`; only the **Typecheck** button runs the checker,
 and it reloads first so that what it checks is what the editor says — a
 reload that does not compile ends the action, since the check would
 otherwise describe the program still loaded from before.

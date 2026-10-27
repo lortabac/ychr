@@ -126,34 +126,38 @@ from "your import list doesn't let it through" — the fix differs.
 **Fix sketch.** Give `NotExportedByModule` (or a sibling error) a case
 for "exported, but excluded by your own import list."
 
-## The global `--quiet` before a subcommand is treated as a file name
+## A missing input file crashes with an uncaught `IOException`
 
-**Documented claim.** `ychr --help` shows
-`ychr [COMMAND | [--quiet] [--Werror] [--no-check] [FILES...]]`, which
-reads as though the global flags may precede a subcommand;
-`docs/reference/repl.md` documents `--quiet` for the REPL.
+**Documented claim.** None stated; every other compile failure
+(parse, rename, resolve, type errors) goes through the diagnostic
+envelope (`=== error ===`, a YCHR code) and exits 1.
 
 **Test.**
 
-    ychr --quiet repl w.chr
-    ychr --quiet check w.chr
+    ychr check missing.chr
+    ychr run -g go missing.chr
+    ychr compile missing.chr
+    ychr gen-driver -g go missing.chr
+    ychr repl missing.chr
 
 **Actual.**
 
     ychr: Uncaught exception ghc-internal:GHC.Internal.IO.Exception.IOException:
-    repl: openFile: does not exist (No such file or directory)
+    missing.chr: openFile: does not exist (No such file or directory)
 
-`--quiet` is swallowed, `repl`/`check` is parsed as an input file, and
-the command fails on a missing file; `ychr --quiet repl` exits 0.
-`ychr repl --quiet` (flag after the subcommand) works as documented.
+No YCHR code, no banner. `TIO.readFile` in `compileFiles`
+(`src/YCHR/Internal/Compile/Pipeline.hs`, around line 729) is
+unhandled. The REPL's `:recompile` (`src/YCHR/Internal/Repl.hs`,
+around line 276) hits the same path if a loaded file is deleted
+before the next `:recompile`, killing the session instead of
+reporting the error and keeping the previous program.
 
-**Notes.** Per-subcommand `--help` correctly omits `--quiet`
-(`ychr check --help`), so `ychr check --quiet` being rejected is
-consistent; only the global placement misbehaves.
-
-**Fix sketch.** Either accept the global flags before a subcommand and
-apply them to it, or reword the usage line so the flags are shown only
-where they are honoured.
+**Fix sketch.** A new `FileReadError FilePath Text` constructor on
+the `Error` type (`Compile/Pipeline.hs`, re-exported by `YCHR.Run`),
+returned by `compileFiles` from a `try @IOException` around the
+read, rendered with its own code in `Display.hs`. Add a pytest for
+`ychr check missing.chr` and for `:recompile` after
+deleting a loaded file.
 
 ## A function call in an aggregate goal is silently compiled as a constraint
 

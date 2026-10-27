@@ -188,6 +188,15 @@ checkParser =
     <$> (CheckOpts <$> werrorFlag <*> dumpSplicesFlag)
     <*> filesArg
 
+-- | @ychr FILES...@: same as @ychr repl FILES...@ with default flags.
+-- No flags here: optparse would pick this branch on a leading flag
+-- and read the subcommand name as a file.
+defaultCommandParser :: Parser Command
+defaultCommandParser = Repl defaultReplOpts <$> filesArg
+  where
+    defaultReplOpts =
+      ReplOpts {quiet = False, werror = False, noCheck = False, dumpSplices = False}
+
 commandParser :: Parser Command
 commandParser =
   subparser
@@ -222,7 +231,7 @@ commandParser =
           "check"
           (info (checkParser <**> helper) (progDesc "Type-check the program"))
     )
-    <|> replParser
+    <|> defaultCommandParser
 
 main :: IO ()
 main = do

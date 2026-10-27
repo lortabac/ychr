@@ -6,6 +6,10 @@
 ychr repl [--quiet] [--no-check] [--Werror] [--dump-splices] [FILES...]
 ```
 
+`ychr FILES...` (no subcommand) is short for `ychr repl FILES...` with
+default flags. Flags go after the subcommand: `ychr --quiet repl` is
+a usage error.
+
 Loads the files (or none), prints warnings and type-check messages,
 shows the `ychr> ` prompt. The full standard library is auto-loaded;
 no `:- use_module(library(...))` is needed for prelude, meta, search or

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+`ychr FILES...` (no subcommand) no longer takes flags.
+
+- **Breaking:** put flags after the subcommand:
+  `ychr repl --quiet FILES...`. `ychr --quiet repl` used to read
+  `repl` as a file and crash; it's now a usage error.
+
 A `requiring` bound can name a qualified function (`m:name(...) ->
 τ`). The YCHR-16009 message says when the name is a constraint or a
 data constructor.
