@@ -140,8 +140,8 @@ matchOne env (pat, arg) = case pat of
   _ -> if pat == arg then Just env else Nothing
 
 -- | Two argument terms are identical: the same structure, atoms and
--- variables. A term containing @_@ is never identical to anything,
--- since each @_@ is a distinct anonymous variable.
+-- variables. A term containing @_@ is never identical to anything:
+-- matching sees the arguments as written, where each @_@ is distinct.
 identical :: Term -> Term -> Bool
 identical a b = a == b && not (hasWildcard a)
   where
@@ -222,8 +222,10 @@ primitivesIn _ = []
 --   and the pass never descends into that term, so a primitive that
 --   arrives through an argument is never evaluated;
 -- * every other variable is renamed to a fresh one, so it cannot clash
---   with any variable of the use site; @_@ stays a distinct anonymous
---   variable;
+--   with any variable of the use site; a @_@ written in the body stays
+--   a distinct anonymous variable;
+-- * every @_@ inside an argument becomes a fresh named variable, shared
+--   by every copy of that argument; distinct @_@s stay distinct;
 -- * a compound of the template is rebuilt once its arguments are done,
 --   and a construction primitive is evaluated then, so primitives are
 --   evaluated innermost first. The pass goes everywhere, @quote\/1@
@@ -248,9 +250,20 @@ instantiateClause seed m =
 instantiateBody :: Text -> Int -> ClauseMatch -> Either PrimitiveError [Term]
 instantiateBody prefix seed m = traverse go m.clause.body
   where
-    binds = m.bindings
     seedKey = Text.pack (show seed)
     freshen v = prefix <> seedKey <> "_" <> v
+    -- Name each @_@ of an argument, numbered over all bindings in key
+    -- order. A source variable can't start with a digit, so these names
+    -- can't clash with 'freshen'ed ones.
+    binds = evalState (traverse nameWildcards m.bindings) (1 :: Int)
+    nameWildcards :: Term -> State Int Term
+    nameWildcards t = case t of
+      Wildcard -> do
+        n <- get
+        put (n + 1)
+        pure (VarTerm (freshen (Text.pack (show n))))
+      CompoundTerm f as -> CompoundTerm f <$> traverse nameWildcards as
+      _ -> pure t
     go t = case t of
       VarTerm v -> Right (fromMaybe (VarTerm (freshen v)) (Map.lookup v binds))
       CompoundTerm f as -> do

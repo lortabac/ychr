@@ -169,7 +169,8 @@ site:
   variable, and binds to it. A variable repeated in one head matches
   only arguments that are *identical* terms: the same structure, the
   same atoms, the same variables. An argument that contains `_` is
-  never identical to anything, since each `_` is a distinct variable.
+  never identical to anything: matching sees each `_` as a distinct
+  variable.
 - `_` matches any argument and binds nothing.
 - Any other pattern matches an argument with the same principal
   functor and arity, and with each argument matching recursively.
@@ -282,12 +283,13 @@ Expanding the use `Name(A1, ..., An)` of a goal macro:
    (see [Patterns](#patterns)).
 2. Take a copy of the clause body in which every variable not bound
    by the match is replaced by a fresh variable. Fresh variables
-   cannot clash with any variable of the use site. Each `_` stays a
-   distinct anonymous variable.
+   cannot clash with any variable of the use site. Each `_` written in
+   the body stays a distinct anonymous variable.
 3. Replace each head variable with the argument term it was bound to,
    and evaluate the
    [construction primitives](#construction-primitives) written in the
-   body.
+   body. Every `_` in an argument becomes a fresh named variable,
+   shared by every copy of that argument.
 4. Splice the resulting goals into the enclosing conjunction, in list
    order, at the position of the use: kept head, removed head, or
    body. An element that is itself a conjunction is flattened into it.
@@ -309,6 +311,11 @@ that many times:
 
 r <=> twice(f(1)).   % calls f(1) twice: r <=> p(f(1)), p(f(1)).
 ```
+
+A `_` argument is shared too: with
+`:- macro both(X) ---> [k(X), j(X)].`, `both(_)` is `k(V), j(V)`, so
+`count(both(_), N)` counts the pairs with equal arguments. Distinct
+`_`s stay distinct: `both(f(_, _))` is `k(f(V1, V2)), j(f(V1, V2))`.
 
 **Validity.** An expansion must be valid where it lands. A head
 expansion that contains anything other than a conjunction of
@@ -447,7 +454,11 @@ in two clauses becomes two unrelated clause variables named `X`, one in
 each. Freshening (step 2) guarantees that a body variable never
 captures a variable of the arguments. A freshened variable, such as `N`
 or `M` in the `counter` example, appears in diagnostics under its fresh
-name.
+name. A `_` in an argument works like a named variable (step 3):
+`:- mk(_).` with `mk(X) ---> [(a(X), b(X) ==> c)]` gives
+`a(_decl_0_1), b(_decl_0_1) ==> c.` In a type position it is a type
+variable: `:- state(k, _).` means `:- state(k, T).`, which fails the
+type checker ([state.md](state.md)).
 
 **Generated names.** Generated declarations belong to the using
 module. A generated `:- chr_constraint clicks/1` declares
@@ -784,9 +795,10 @@ Each module is first scanned for its name, imports, exports and
 macros (clauses may come before their declaration; the declaration
 sets the kind). Then expansion runs once per module, with that module's
 visibility. Generated clauses get the location of the outermost use
-directive. Fresh variables are named `_decl_<n>_<Name>` (goal macros
-use `_macro_<n>_<Name>`), so a goal macro inside a generated rule
-can't capture them. Generated rules and equations remember the macro
+directive. Fresh variables are named `_decl_<n>_<Name>`, and an
+argument's `_`s `_decl_<n>_1`, `_decl_<n>_2`, … (goal macros use
+`_macro_` instead), so a goal macro inside a generated rule can't
+capture them. Generated rules and equations remember the macro
 chain, and renaming errors on them show it after any goal-macro chain.
 Everything after conversion only sees the generated clauses; goal
 macros in them are expanded by the renamer as usual.

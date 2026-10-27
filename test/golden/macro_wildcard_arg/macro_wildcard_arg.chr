@@ -1,0 +1,54 @@
+% A `_` passed to a macro is one variable shared by every copy of that
+% argument in the body.
+:- module(macro_wildcard_arg,
+          [aggregate_join/1, aggregate_guard/1, head_join/2, body_shared/1,
+           distinct_wildcards/1, nested_select/1, single_copy/1]).
+:- use_module(library(aggregates)).
+
+:- chr_type answer ---> yes ; no ; same ; different.
+:- chr_constraint k/1, j/1, ask/1, res/1.
+res(N) \ ask(R) <=> R = N.
+
+% `both(_)` joins k and j on one value.
+:- macro both(X) ---> [k(X), j(X)].
+:- chr_constraint p/0, aggregate_join/1.
+p, count(both(_), N) ==> res(N).
+aggregate_join(R) <=> k(1), k(2), j(1), j(3), p, ask(R).
+
+% A guard on the shared variable sees the matched value.
+:- macro big(X) ---> [k(X), ? X > 5].
+:- chr_constraint q/0, aggregate_guard/1.
+q, count(big(_), N) ==> res(N).
+aggregate_guard(R) <=> k(1), k(7), k(9), q, ask(R).
+
+% In a rule head: fires only when the two arguments are equal.
+:- chr_constraint a/1, b/1, hit_ask/1, head_join/2.
+:- macro ab(X) ---> [a(X), b(X)].
+ab(_) \ hit_ask(R) <=> R = yes.
+hit_ask(R) <=> R = no.
+head_join(X, R) <=> a(1), b(X), hit_ask(R).
+
+% In a body.
+:- macro pair_of(X, P) ---> [P = f(X, X)].
+:- chr_constraint body_shared/1.
+body_shared(Y) <=> pair_of(_, P), P = f(1, Y).
+
+% Distinct `_`s stay distinct; each one is shared by its copies.
+:- chr_type pr ---> f(int, int).
+:- chr_constraint k2/1, j2/1, r/0, distinct_wildcards/1.
+:- macro dup(X) ---> [k2(X), j2(X)].
+r, count(dup(f(_, _)), N) ==> res(N).
+distinct_wildcards(R) <=> k2(f(1, 2)), j2(f(1, 2)), j2(f(2, 1)), r, ask(R).
+
+% A copied `_` matches a repeated head variable of a nested macro.
+:- macro inner/3.
+inner(A, A, R) ---> [R = same].
+inner(_, _, R) ---> [R = different].
+:- macro outer(Y, R) ---> [inner(Y, Y, R)].
+:- chr_constraint nested_select/1.
+nested_select(R) <=> outer(_, R).
+
+% A `_` with one copy still matches anything.
+:- chr_constraint edge/2, s/0, single_copy/1.
+s, count(edge(_, 2), C) ==> res(C).
+single_copy(R) <=> edge(1, 2), edge(3, 2), edge(1, 4), s, ask(R).

@@ -20,6 +20,9 @@ static type checker is specified in [type-system.md](type-system.md).
   `_` alone is the anonymous variable; each occurrence is distinct. In a
   rule head or equation pattern it is the wildcard: it matches anything
   and binds nothing. Everywhere else it is an ordinary fresh variable.
+  A `_` passed to a macro becomes a fresh named variable, shared by
+  every copy of that argument
+  ([macros.md](macros.md#expanding-a-goal-macro)).
 - Integers: decimal digits, optional `-`, arbitrary precision. No `_`
   separators, no hex/octal/binary.
 - Floats: `digits.digits`, optional `-`. No exponent.

@@ -46,7 +46,7 @@
 % goal has no solution is a runtime error too.
 %
 % The type is fixed at the declaration and must be ground (`int`,
-% `string`, `list(int)`, ...); a type variable makes the holder
+% `string`, `list(int)`, ...); a type variable (or `_`) makes the holder
 % polymorphic, and the generated rules then fail the type checker. The
 % runner's own list is `list(pair(K, any))`, like master's, so one
 % `run_states` may carry keys of different value types.

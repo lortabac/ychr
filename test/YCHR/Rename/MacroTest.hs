@@ -95,6 +95,11 @@ variantTests =
 instantiate :: [Term] -> Either PrimitiveError [Term]
 instantiate body = instantiateClause 0 (ClauseMatch Map.empty (MacroClause [] body))
 
+-- | Instantiate a clause whose head variables are bound as given.
+instantiateWith :: Int -> [(Text, Term)] -> [Term] -> Either PrimitiveError [Term]
+instantiateWith seed bs body =
+  instantiateClause seed (ClauseMatch (Map.fromList bs) (MacroClause [] body))
+
 -- | The integer 1.
 one :: Term
 one = IntTerm 1
@@ -151,7 +156,29 @@ instantiateTests =
           "_decl_"
           3
           (ClauseMatch Map.empty (MacroClause [] [app "," [atom "a", var "V"]]))
-          @?= Right [app "," [atom "a", var "_decl_3_V"]]
+          @?= Right [app "," [atom "a", var "_decl_3_V"]],
+      testCase "a '_' copied twice is one shared variable" $
+        instantiateWith 7 [("X", Wildcard)] [app "p" [var "X"], app "q" [var "X"]]
+          @?= Right [app "p" [var "_macro_7_1"], app "q" [var "_macro_7_1"]],
+      testCase "a '_' used once is named too" $
+        instantiateWith 7 [("X", app "f" [Wildcard])] [app "p" [var "X"]]
+          @?= Right [app "p" [app "f" [var "_macro_7_1"]]],
+      testCase "distinct '_'s stay distinct" $
+        let f = app "f" [var "_macro_0_1", var "_macro_0_2"]
+         in instantiateWith 0 [("X", app "f" [Wildcard, Wildcard])] [var "X", var "X"]
+              @?= Right [f, f],
+      testCase "two copied parameters get different variables" $
+        let v1 = var "_macro_0_1"
+            v2 = var "_macro_0_2"
+            body = [var "X", var "X", var "Y", var "Y"]
+         in instantiateWith 0 [("X", Wildcard), ("Y", Wildcard)] body
+              @?= Right [v1, v1, v2, v2],
+      testCase "instantiateBody shares a copied '_' too" $
+        instantiateBody
+          "_decl_"
+          3
+          (ClauseMatch (Map.fromList [("X", Wildcard)]) (MacroClause [] [var "X", var "X"]))
+          @?= Right [var "_decl_3_1", var "_decl_3_1"]
     ]
 
 chainTests :: TestTree

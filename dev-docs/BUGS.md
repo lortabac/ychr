@@ -159,42 +159,6 @@ read, rendered with its own code in `Display.hs`. Add a pytest for
 `ychr check missing.chr` and for `:recompile` after
 deleting a loaded file.
 
-## `_` passed to a goal macro becomes several unrelated variables
-
-**Documented claim.** `docs/reference/macros.md` §Expanding a goal
-macro, step 3: "Replace each head variable with the argument term it
-was bound to." §Patterns: "An argument that contains `_` is never
-identical to anything, since each `_` is a distinct variable."
-`docs/reference/language.md` §Lexical syntax: "`_` alone is the
-anonymous variable; each occurrence is distinct."
-
-**Test.** A parameter used twice, called with `_`.
-
-    :- use_module(library(aggregates)).
-    :- chr_constraint k/1, j/1, p/0, res/1, go/1, ask/1.
-    :- macro both(X) ---> [k(X), j(X)].
-    p, count(both(_), N) ==> res(N).
-    res(N) \ ask(R) <=> R = N.
-    go(R) <=> k(1), k(2), j(1), j(3), p, ask(R).
-
-    ychr run -g 'go(R)' --show-bindings
-
-**Expected.** Read together, the spec implies two unrelated
-variables: the argument `_` is copied once per occurrence of `X`. That
-is surprising, since a user would likely expect a join, as with
-`both(Z)`, and nothing warns.
-
-**Actual.** `R = 4` (cross product). `both(Z)` gives `R = 1`. No
-warning, `--Werror` passes. With `:- macro big(X) ---> [k(X), ? X > 5]`,
-`count(big(_), N)` evaluates `? _ > 5`, which is an instantiation
-error, so the aggregate is undefined and the rule never fires. Both
-backends agree.
-
-**Fix sketch.** Either keep the behavior and say so plainly in
-§Expanding a goal macro (call-by-name), or change it. If the copies
-stay distinct, warn when a `_` argument binds a parameter that
-occurs more than once in the body.
-
 ## A `?` guard in a rule head reports `YCHR-20002`, not `YCHR-20042`
 
 **Documented claim.** `docs/reference/aggregates.md` §Diagnostics:

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Breaking:** a `_` passed to a macro is now one variable, shared by
+  every copy of that argument. With `both(X) ---> [k(X), j(X)]`,
+  `count(both(_), N)` now counts the pairs with equal arguments, like
+  `both(Z)`. Same for declaration macros: `:- state(k, _).` is a type
+  variable and fails like `:- state(k, T).` (`YCHR-60001`, was
+  `YCHR-15009`).
+
 A function call or a built-in form (`=`, `;`, `true`, …) in an
 aggregate goal is now `YCHR-20041`. A test missing its `?`
 (`count((k(Y), X == Y), N)`) used to count nothing, silently.

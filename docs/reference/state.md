@@ -108,7 +108,7 @@ new_count(1), put_count("a").   % type error: string vs int
 
 `Type` must be a ground type (`int`, `string`, `list(int)`, …). A type
 variable makes the holder polymorphic, and the generated rules then fail
-the type checker.
+the type checker. So is a `_`, as in `:- state(k, _).`
 
 The runner's own values are not checked. `KVs` is a `list(pair(K, any))`,
 and the goal's constraints are told by their bare name with the prelude's
