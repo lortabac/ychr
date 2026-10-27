@@ -1,0 +1,6 @@
+YCHR-20042
+'?' guard outside an aggregate goal
+'?'(X > 5) \ p(X)
+q(X) \ '?'(X > 5)
+in the expansion of aggregates_guard_in_head:guarded/1
+r(X), guarded(X)

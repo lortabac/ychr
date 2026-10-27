@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+A `?` guard in a rule head (kept or removed part, or from a macro) is
+now `YCHR-20042` (`GuardOutsideAggregateGoal`), not `YCHR-20002`.
+
 - **Breaking:** a `_` passed to a macro is now one variable, shared by
   every copy of that argument. With `both(X) ---> [k(X), j(X)]`,
   `count(both(_), N)` now counts the pairs with equal arguments, like

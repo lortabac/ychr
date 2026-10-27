@@ -159,33 +159,6 @@ read, rendered with its own code in `Display.hs`. Add a pytest for
 `ychr check missing.chr` and for `:recompile` after
 deleting a loaded file.
 
-## A `?` guard in a rule head reports `YCHR-20002`, not `YCHR-20042`
-
-**Documented claim.** `docs/reference/aggregates.md` §Diagnostics:
-`YCHR-20042` (`GuardOutsideAggregateGoal`) is "A `?` guard outside an
-aggregate goal."
-
-**Test.**
-
-    :- use_module(library(aggregates)).
-    :- chr_constraint p/1, go/0.
-    p(X), ? X > 5 ==> true.
-    go <=> true.
-
-    ychr check
-
-**Expected.** `YCHR-20042`.
-
-**Actual.**
-
-    YCHR-20002
-    Unknown name '?/1'
-
-**Notes.** In a body `?` gives `20042` as documented, directly or through
-a macro. In a head it is `20002` every way: directly, in the removed
-part (`p(X) \ ? X > 5 <=> q`), or through a macro. No golden uses
-`20039`, `20040` or `20042`.
-
 ## `aggregate/4` and the selection names can be declared, then are silently ignored
 
 **Documented claim.** `docs/reference/macros.md` §Heads and
@@ -216,6 +189,11 @@ argmin/2` is accepted, but no tell of it can be written (`20040`).
 
 **Fix sketch.** Reserve the five names for constraints, functions and
 macros at those arities, or document which one wins.
+
+`?/1` has the same problem: `:- chr_constraint '?'/1.` and `:- macro
+'?'(X) ---> [...]` are both accepted with no warning, but every use —
+head, body, or through the macro — reports `YCHR-20042` regardless, so
+the declaration is dead weight. Same fix: reserve `?/1` too.
 
 ## An aggregate in a guard or an expression does not report `YCHR-20040`
 

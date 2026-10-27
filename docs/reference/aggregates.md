@@ -627,7 +627,7 @@ lowers an aggregate in the occurrence procedure itself:
 | YCHR-20039 | `AggregateOnlyHead` | A rule head consists of aggregates only. |
 | YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
 | YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard (see [Aggregate goals](#aggregate-goals)). |
-| YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal. |
+| YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal, including a rule head. |
 | YCHR-40002 | `UnboundVariable` | An `Element` variable the match cannot supply. |
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
 | YCHR-40004 | `AggregateNestedTake` | A `takemin`/`takemax` inside an aggregate goal. |

@@ -1296,6 +1296,12 @@ renameCon ctx site (Constraint cname cargs)
       -- functors always mean the aggregate form. The call site is the
       -- same shape, so the two cannot be told apart by name alone.
       (: []) . HeadAggregate <$> renameAggregate ctx site k args
+  -- @?/1@ is only a guard inside an aggregate goal. Rule guards use
+  -- @|@, so @? X@ in a head (kept or removed) is
+  -- 'GuardOutsideAggregateGoal', not an unknown constraint.
+  | isGuardFunctor cname (length cargs) = do
+      emitErrorIn ctx (annAt site GuardOutsideAggregateGoal)
+      pure [HeadDropped]
   | isPrimitiveName cname (length cargs) = do
       primitiveOutsideMacro ctx site cname (length cargs)
       pure [HeadDropped]
