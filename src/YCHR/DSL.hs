@@ -164,7 +164,9 @@ module' name =
       exports = Nothing
     }
 
--- | Append plain @use_module(M)@ imports.
+-- | Append plain @use_module(M)@ imports. Each @M@ must be another
+-- module in the same compile call, or @prelude@ (else YCHR-10005).
+-- Use 'library' for bundled libraries.
 --
 -- > module' "Logic" `importing` ["Order", "Util"]
 importing :: Module -> [Text] -> Module

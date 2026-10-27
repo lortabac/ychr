@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+An unknown bare `use_module(M)` is now an error.
+
+- **Breaking:** a bare `:- use_module(M)` must name a module passed to
+  the same compile call, or `prelude`. Anything else is now
+  `YCHR-10005` (`CollectError`'s new `UnknownModuleImport`, with a
+  `BareImportHint`). A typo or `host` used to be ignored; a bundled
+  library name like `lists` worked only when the library was already
+  loaded (always true in the REPL and DSL). Import bundled libraries
+  with `use_module(library(M))`; in the DSL, `importing ["lists"]`
+  becomes `` `library` "lists" ``.
+
 A user module can no longer be named `prelude`.
 
 - **Breaking:** `prelude` is now a reserved module name (`YCHR-16019`,

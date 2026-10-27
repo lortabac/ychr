@@ -37,10 +37,12 @@ import Data.Text.IO qualified as TIO
 import Text.Parsec (ParseError)
 import YCHR.Internal.Collect
   ( CollectError (..),
+    ModuleImportScope (..),
     addLibraryPrelude,
     resolveLibraryClosure,
     rewriteImports,
     selfNamedLibraryImports,
+    unknownModuleImports,
   )
 import YCHR.Internal.Collected (CollectedModule)
 import YCHR.Internal.Compile (CompileError, compile)
@@ -341,8 +343,8 @@ data ExportResolution
 -- (@embed\/YCHR\/Embedded.hs@) does exactly that.
 --
 -- The 'Bool' is @includeStdlib@: pass 'True' to make the bundled
--- libraries (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@,
--- @search@, @chr@) available for
+-- libraries (@prelude@, @aggregates@, @chr@, @lists@, @maybe@, @meta@,
+-- @pairs@, @search@, @state@, @strings@) available for
 -- @:- use_module(library(…))@, which is what you almost always want —
 -- the prelude supplies arithmetic and comparison. 'False' compiles
 -- against nothing but the given modules; the CLI uses it so that a
@@ -412,6 +414,7 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
       macroEnv = buildDeclMacroEnv (userScopes ++ libScopes)
   checkDuplicateModules (map fst inputs) scanned
   checkReservedModules scanned
+  checkModuleImports stdlib scanned
   let expanded =
         [ expandAndConvert macroEnv scope ts
         | (scope, ts) <- zip userScopes userTerms
@@ -483,6 +486,11 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
+  -- Same checks, same order, as 'compileModules', so both report the
+  -- same code.
+  checkDuplicateModules [] parsed
+  checkReservedModules parsed
+  checkModuleImports stdlib parsed
   finalizeCompilation libraryMods opExports noSourceInfo parsed
 
 -- | What compiling from source text knows about the user modules beyond
@@ -681,6 +689,20 @@ checkReservedModules :: [Module] -> Either Error ()
 checkReservedModules mods = case checkReservedModuleNames mods of
   [] -> pure ()
   errs -> Left (ResolveErrors errs)
+
+-- | 'unknownModuleImports' over user modules, as a 'CollectErrors'. The
+-- importable set is every name in @mods@ plus @prelude@; @stdlib@ names
+-- the bundled libraries, for the hint only.
+checkModuleImports :: Map Text Module -> [Module] -> Either Error ()
+checkModuleImports stdlib mods = case unknownModuleImports scope mods of
+  [] -> pure ()
+  errs -> Left (CollectErrors errs)
+  where
+    scope =
+      ModuleImportScope
+        { importable = Set.insert "prelude" (Set.fromList (map (.name) mods)),
+          bundledLibraries = Map.keysSet stdlib
+        }
 
 -- | Prepend a synthetic @use_module(library(prelude))@ to a user module so
 -- the renamer treats prelude exports as visible.

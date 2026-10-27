@@ -32,7 +32,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Internal.Collect (CollectError (..))
+import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.ConstraintUse (ConstraintUseError (..), OccurrenceRole (..))
 import YCHR.Internal.DeclMacro (DeclMacroError (..))
@@ -96,6 +96,8 @@ instance Data QualifiedName where
   dataTypeOf _ = mkNoRepType "YCHR.Types.QualifiedName"
 
 deriving instance Data CollectError
+
+deriving instance Data BareImportHint
 
 deriving instance Data ParseValidationError
 

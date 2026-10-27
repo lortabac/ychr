@@ -110,14 +110,16 @@ current module imports `m` and `m` exports `name`. Unimported module:
 `:- use_module(library(M))` names a bundled library: `M` is resolved
 from the standard library map, and an unknown name is rejected
 (`YCHR-10001`). A bare `:- use_module(M)` names a *user module*
-supplied to the compiler; it is not looked up on any search path.
-`:- use_module` directives come before everything else in the file
-(`YCHR-20007`). The bundled libraries `lists`, `maybe`, `pairs`,
-`strings`, `meta`, `search`, `state` and `chr`
-([`libraries/`](../../libraries/)) need an explicit import outside the
-REPL. The prelude is always imported, in full; an import list on it is
-rejected (`YCHR-20019`). `host` and `prelude` are reserved and cannot
-name a user module (`YCHR-16019`).
+supplied to the compiler, or `prelude`. It is not looked up on any
+search path. Any other name, including a bundled library or `host`,
+is rejected (`YCHR-10005`). `:- use_module` directives
+come before everything else in the file (`YCHR-20007`). The bundled
+libraries `aggregates`, `chr`, `lists`, `maybe`, `meta`, `pairs`,
+`search`, `state` and `strings`
+([`libraries/`](../../libraries/)) need an explicit `library(...)`
+import outside the REPL. The prelude is always imported, in full; an
+import list on it is rejected (`YCHR-20019`). `host` and `prelude` are
+reserved and cannot name a user module (`YCHR-16019`).
 
 `chr` is an empty compatibility module: it declares and exports
 nothing. It exists so that a Prolog module carrying
@@ -176,8 +178,8 @@ constraint or a function, exported and imported with
 `macro(Name/Arity)`:
 
 ```prolog
-:- module(aggregates, [macro(count/2)]).
-:- use_module(aggregates, [macro(count/2)]).
+:- module(shapes, [macro(count/2)]).
+:- use_module(shapes, [macro(count/2)]).
 ```
 
 A module with no export list exports every macro it defines, same as

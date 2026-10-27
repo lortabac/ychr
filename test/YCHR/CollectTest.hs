@@ -3,6 +3,7 @@
 module YCHR.CollectTest (tests) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.DSL (module')
@@ -61,8 +62,45 @@ tests =
           [foo, prelude] -> do
             length foo.imports @?= 1
             length prelude.imports @?= 0
-          mods -> fail $ "expected 2 modules, got " ++ show (length mods)
+          mods -> fail $ "expected 2 modules, got " ++ show (length mods),
+      unknownModuleImportTests
     ]
+
+-- | 'unknownModuleImports': a bare @use_module(M)@ for a supplied module
+-- or @prelude@ is fine; anything else is 'UnknownModuleImport' with the
+-- hint that matches why.
+unknownModuleImportTests :: TestTree
+unknownModuleImportTests =
+  testGroup
+    "unknownModuleImports"
+    [ testCase "supplied module is importable" $
+        hints ["other"] (bareImport "other") @?= [],
+      testCase "prelude is always importable" $
+        hints [] (bareImport "prelude") @?= [],
+      testCase "bundled library name gets BundledLibraryName hint" $
+        hintsWithLibs [] ["lists"] (bareImport "lists") @?= [BundledLibraryName],
+      testCase "host gets HostQualifier hint" $
+        hints [] (bareImport "host") @?= [HostQualifier],
+      testCase "header-less module name gets HeaderlessModule hint" $
+        hints ["<a>"] (bareImport "a") @?= [HeaderlessModule],
+      testCase "unknown name with no likely cause gets no hint" $
+        hints [] (bareImport "nosuchmodule") @?= [NoBareImportHint],
+      testCase "header-less takes priority over bundled library when both match" $
+        hintsWithLibs ["<a>"] ["a"] (bareImport "a") @?= [HeaderlessModule]
+    ]
+  where
+    bareImport n = (module' "user") {imports = [noAnnP (ModuleImport n Nothing)]}
+    hints supplied = hintsWithLibs supplied []
+    hintsWithLibs supplied libs m =
+      [ h
+      | Diagnostic _ (AnnP (UnknownModuleImport _ h) _ _) _ <-
+          unknownModuleImports
+            ModuleImportScope
+              { importable = Set.insert "prelude" (Set.fromList supplied),
+                bundledLibraries = Set.fromList libs
+              }
+            [m]
+      ]
 
 -- | Is this a 'CircularLibraryImport'?
 isCircularError :: Diagnostic CollectError -> Bool

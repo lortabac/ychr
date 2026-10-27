@@ -1,0 +1,4 @@
+:- module(user_a, [go/1]).
+:- use_module(a).
+:- chr_constraint go/1.
+go(X) <=> z(X).

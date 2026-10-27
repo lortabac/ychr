@@ -190,8 +190,9 @@ should be verified with locally.
 
 ## Limits
 
-- One program at a time, compiled from a single buffer; `:- use_module`
-  of the bundled libraries works, importing files from disk does not.
+- One program at a time, compiled from a single buffer;
+  `:- use_module(library(...))` of the bundled libraries works,
+  importing files from disk does not.
 - One-shot queries only. A live session (the terminal REPL's `:begin`)
   would need the session environment to be held across calls, which the
   bridge does not do yet.

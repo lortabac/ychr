@@ -50,7 +50,7 @@ import System.Console.ANSI
   )
 import Text.Parsec.Error qualified as PE
 import Text.Parsec.Pos (SourcePos, sourceColumn, sourceLine, sourceName)
-import YCHR.Internal.Collect (CollectError (..))
+import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.Compile.Pipeline
   ( Error (..),
@@ -303,6 +303,7 @@ collectErrorCode (UnknownLibrary _) = ErrorCode 10001
 collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 collectErrorCode (SelfNamedLibraryImport _) = ErrorCode 10003
 collectErrorCode (DuplicateModuleName _ _) = ErrorCode 10004
+collectErrorCode (UnknownModuleImport _ _) = ErrorCode 10005
 
 -- | 15xxx — parse validation phase
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
@@ -979,6 +980,30 @@ collectErrorMsg (DuplicateModuleName name paths) =
         ++ intercalate ", " paths
     )
     "a module name may be declared in exactly one input; give the modules distinct names"
+collectErrorMsg (UnknownModuleImport name hint) =
+  withHint
+    ("Unknown module '" ++ T.unpack name ++ "'")
+    (bareImportHintText name hint)
+
+-- | The hint text for 'UnknownModuleImport', picked by 'BareImportHint'.
+bareImportHintText :: T.Text -> BareImportHint -> String
+bareImportHintText name BundledLibraryName =
+  "'"
+    ++ T.unpack name
+    ++ "' is a bundled library; import it with ':- use_module(library("
+    ++ T.unpack name
+    ++ ")).'"
+bareImportHintText _ HostQualifier =
+  "'host:' is a built-in qualifier and needs no import"
+bareImportHintText name HeaderlessModule =
+  "a file without a ':- module' header is named '<"
+    ++ T.unpack name
+    ++ ">'; give it a ':- module("
+    ++ T.unpack name
+    ++ ")' header"
+bareImportHintText _ NoBareImportHint =
+  "a bare use_module names a module supplied to the compiler;"
+    ++ " check the name, or pass the module's file"
 
 instance Display (Diagnostic DeclMacroError) where
   displayMsg = displayDiagnostic SevError declMacroErrorCode declMacroErrorMsg
@@ -1068,7 +1093,9 @@ renameErrorMsg (ModuleNotImported modName name arity) =
     )
     ( "add ':- use_module("
         ++ T.unpack modName
-        ++ ").' to import it"
+        ++ ").' (or ':- use_module(library("
+        ++ T.unpack modName
+        ++ ")).' for a bundled library)"
     )
 renameErrorMsg (UnknownModule modName) =
   withHint

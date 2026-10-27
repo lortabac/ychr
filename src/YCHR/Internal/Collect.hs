@@ -18,12 +18,18 @@
 --   * 'selfNamedLibraryImports' reports a module that imports the
 --     library of its own name.
 --
+--   * 'unknownModuleImports' reports a bare @use_module(M)@ naming
+--     neither a supplied module nor @prelude@.
+--
 --   * 'addLibraryPrelude' prepends a @prelude@ import to each library
 --     module (except the prelude itself).
 module YCHR.Internal.Collect
   ( CollectError (..),
+    BareImportHint (..),
+    ModuleImportScope (..),
     resolveLibraryClosure,
     selfNamedLibraryImports,
+    unknownModuleImports,
     rewriteImports,
     addLibraryPrelude,
   )
@@ -53,6 +59,25 @@ data CollectError
   | -- | Two user modules declare the same name. Carries the name and
     -- the file paths that declare it, in input order.
     DuplicateModuleName Text [FilePath]
+  | -- | A bare @use_module(M)@ names a module that is neither a
+    -- supplied module nor @prelude@. Carries the name and a hint
+    -- about why, if a likely cause is known.
+    UnknownModuleImport Text BareImportHint
+  deriving (Show, Eq)
+
+-- | Why a bare 'ModuleImport' name went unmatched, used to pick a hint
+-- for 'UnknownModuleImport'.
+data BareImportHint
+  = -- | The name is a bundled library, importable only via
+    -- @use_module(library(M))@.
+    BundledLibraryName
+  | -- | @host@ is a built-in qualifier, not a module.
+    HostQualifier
+  | -- | A module named @\<M\>@ exists, which is what a header-less
+    -- file named @M.chr@ is called.
+    HeaderlessModule
+  | -- | No likely cause found.
+    NoBareImportHint
   deriving (Show, Eq)
 
 -- | Walk the transitive closure of library imports.
@@ -138,6 +163,34 @@ selfNamedLibraryImports mods =
     AnnP (LibraryImport n _) loc p <- m.imports,
     n == m.name
   ]
+
+-- | The two name sets 'unknownModuleImports' checks a bare import
+-- against.
+data ModuleImportScope = ModuleImportScope
+  { -- | Every name a bare @use_module@ may legally give: every
+    -- supplied module, plus @prelude@.
+    importable :: Set Text,
+    -- | Bundled library names. Only consulted for the hint, since a
+    -- bundled library is never itself importable.
+    bundledLibraries :: Set Text
+  }
+
+-- | Report each bare @use_module(M)@ whose @M@ is not in
+-- 'importable'. The header-less check comes first, since a file can
+-- share its name with a library.
+unknownModuleImports :: ModuleImportScope -> [Module] -> [Diagnostic CollectError]
+unknownModuleImports scope mods =
+  [ noDiag (AnnP (UnknownModuleImport n (bareImportHint n)) loc p)
+  | m <- mods,
+    AnnP (ModuleImport n _) loc p <- m.imports,
+    Set.notMember n scope.importable
+  ]
+  where
+    bareImportHint n
+      | n == "host" = HostQualifier
+      | Set.member ("<" <> n <> ">") scope.importable = HeaderlessModule
+      | Set.member n scope.bundledLibraries = BundledLibraryName
+      | otherwise = NoBareImportHint
 
 -- | Add a prelude import to every library module that does not already
 -- declare itself to be the prelude.

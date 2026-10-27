@@ -6,61 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## An unknown bare `use_module(M)` is silently ignored
-
-**Documented claim.** `docs/reference/language.md` §Modules (lines
-93–97): a qualified name "is valid only if the current module imports `m`
-and `m` exports `name`. Unimported module: `YCHR-20014` … Unknown
-module: `YCHR-20015`." The import surface is elsewhere documented as
-validated (`YCHR-20005`, `YCHR-20007`, `YCHR-20019`, `YCHR-10001`), and
-the DSL separates `importing` (user modules) from `library` (bundled)
-(`docs/reference/dsl.md:40-41`).
-
-**Test.**
-
-    :- module(bare, [go/2]).
-    :- use_module(nosuchmodule).
-    :- chr_constraint go/2.
-    go(X, R) <=> R is length(X).
-
-    ychr check bare.chr
-    ychr run -g 'bare:go([1,2],R)' --show-bindings bare.chr
-
-**Expected.** A diagnostic naming `nosuchmodule`, or at least a warning
-that the import brought nothing into scope.
-`use_module(library(nosuchmodule))` correctly gives
-`YCHR-10001 Unknown library 'nosuchmodule'`, so the `library(...)` form
-*is* validated.
-
-**Actual.**
-
-    === warning ===
-    bare.chr:4:14: YCHR-20101
-    Undeclared data constructor 'length'
-      Hint: declare it with :- chr_type, or check the spelling
-    R is length(X)
-    R = length([1, 2])
-    check exit=0, run exit=0
-
-Nothing mentions `nosuchmodule`. `length` degrades to an opaque
-constructor, `is` returns the unevaluated compound, and the query
-"succeeds" with the wrong value. A control declaring a local `len/1`
-gives `R = 2`, so only the import is bogus. The same silent path swallows
-`use_module(lists)`, `use_module(prelude)`, and any other bare name that
-is not one of the supplied user modules.
-
-**Notes.** `compileModules` takes its user modules from the command line,
-so "the module does not exist" is partly a property of the invocation and
-a host embedding may supply the module separately — that is the argument
-for treating this as a design question rather than a plain defect. The
-counter-argument is the failure mode: a typo yields a wrong *value*, and
-the `library(...)` form gets exactly the validation the bare form lacks.
-
-**Fix sketch.** After Collect, reject a bare import whose name is neither
-a supplied module nor a bundled library name; reuse `YCHR-20015`
-(`UnknownModule`) if that is the intended code, or add one. Add the bare
-counterpart of `test/golden/unknown_library`.
-
 ## `ychr run --show-bindings` does not filter `_`-prefixed variables
 
 **Documented claim.** `docs/reference/repl.md` §One-shot queries

@@ -13,7 +13,7 @@
 -- % Line comments
 --
 -- :- module(order, [leq\/2]). -- Export list specifies visible constraints.
--- :- use_module(stdlib).
+-- :- use_module(library(lists)).
 --
 -- :- chr_constraint leq\/2.
 -- :- chr_constraint fib\/2, upto\/1.
@@ -399,8 +399,8 @@ collectModuleHeader sourceName src = do
 --     @op(...)@ entries inside the item list.
 --
 -- Operators of unknown source modules (e.g. @use_module(missing_lib)@)
--- contribute nothing here; the resulting unknown-library or unknown-import
--- error is reported elsewhere.
+-- contribute nothing here; the resulting unknown-library, unknown-module,
+-- or unknown-import error is reported elsewhere.
 buildModuleOpTable ::
   -- | Built-in operators
   OpTable ->

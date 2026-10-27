@@ -9,8 +9,9 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.DSL (module')
+import YCHR.DSL (importing, module')
 import YCHR.Embedded (stdlib, typeCheckerProgram)
+import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Display (displayMsg)
@@ -64,7 +65,8 @@ tests =
       guardErrorTests,
       arityOverloadTests,
       uncheckedQueryTests,
-      reservedModuleNameTests
+      reservedModuleNameTests,
+      unknownModuleImportTests
     ]
 
 -- | The constraint type of a declared constraint. Errors if absent.
@@ -858,3 +860,60 @@ reservedModuleNameTests =
           Right _ -> pure ()
           Left err -> assertFailure $ "expected success, got: " ++ displayMsg err
     ]
+
+-- | A bare @use_module(M)@ naming anything but a supplied module or
+-- @prelude@ is 'UnknownModuleImport' (YCHR-10005), on both
+-- 'compileModules' (so the REPL and CLI see it) and 'compileParsedModules'
+-- (the DSL path).
+unknownModuleImportTests :: TestTree
+unknownModuleImportTests =
+  testGroup
+    "Unknown module imports"
+    [ testCase "bare use_module of a bundled library is rejected (REPL/CLI path)" $
+        expectUnknownModuleImport
+          "lists"
+          BundledLibraryName
+          (compileModules stdlib True [("m.chr", ":- module(m).\n:- use_module(lists).\n")]),
+      testCase "DSL importing of a bundled library is rejected" $
+        expectUnknownModuleImport
+          "lists"
+          BundledLibraryName
+          (compileParsedModules stdlib True [module' "m" `importing` ["lists"]]),
+      testCase "DSL importing of an unknown name is rejected" $
+        expectUnknownModuleImport
+          "nosuch"
+          NoBareImportHint
+          (compileParsedModules stdlib True [module' "m" `importing` ["nosuch"]]),
+      testCase "DSL importing of a supplied module compiles" $
+        case compileParsedModules stdlib True [module' "a", module' "b" `importing` ["a"]] of
+          Right _ -> pure ()
+          Left err -> assertFailure $ "expected success, got: " ++ displayMsg err,
+      -- A module named "host" is both a reserved name (YCHR-16019) and,
+      -- with this bad import, a candidate for YCHR-10005. Both entry
+      -- points must agree on which fires first.
+      testCase "a reserved module name with a bad import is ReservedModuleName (text path)" $
+        case compileModules
+          stdlib
+          True
+          [("m.chr", ":- module(host).\n:- use_module(nosuch).\n")] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "host") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail",
+      testCase "a reserved module name with a bad import is ReservedModuleName (DSL path)" $
+        case compileParsedModules stdlib True [(module' "host") `importing` ["nosuch"]] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "host") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail"
+    ]
+  where
+    expectUnknownModuleImport name hint result = case result of
+      Left (CollectErrors [Diagnostic _ (AnnP (UnknownModuleImport n h) _ _) _])
+        | n == name && h == hint ->
+            pure ()
+      Left other ->
+        assertFailure $ "expected UnknownModuleImport, got: " ++ displayMsg other
+      Right _ -> assertFailure "expected compilation to fail"
