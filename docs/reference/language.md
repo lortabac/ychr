@@ -315,7 +315,8 @@ overloads a name across several signatures; the equations still form
 one top-to-bottom set. `:- open_function` / `:- open_class` are the
 cross-module counterparts. `requiring` is allowed on `:- function`,
 `:- open_function` and `:- chr_constraint`, never on a class form
-(YCHR-15005). Overloading rules:
+(YCHR-15005). A one-signature `:- class` checks like the matching
+`:- function`. Overloading rules:
 [type-system.md](type-system.md#signature-overloading).
 
 ### Refinement predicates

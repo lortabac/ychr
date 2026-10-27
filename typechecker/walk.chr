@@ -433,6 +433,7 @@ build_function_facts_bounded @
            df_function_bounds(N, A, Encoded)
            | More].
 
+% Same count-based split as `walk_funs_class`/`walk_funs_plain` below.
 build_function_facts_single @
     build_function_facts([fun_def(N, A, [S], _, _)|Fs], Out) <=>
     encode_one_sig(S, Sig),
@@ -1509,6 +1510,10 @@ walk_funs_nil @
 % checked per candidate signature in the search below, one branch each,
 % and consume no unit id here. `pure.chr`'s `fun_unit_count` makes the
 % same split.
+%
+% The split is on signature count, not declaration kind: a
+% one-signature class goes to `walk_funs_plain` and checks like a
+% function (type-system.md §Signature Overloading).
 walk_funs_class @
     walk_funs(Env, Facts, [F|Fs], Unit) <=> fun_sig_count(F) > 1 |
     walk_class_fun(Env, Facts, F),
@@ -1713,6 +1718,9 @@ check_fun_stmt_apply @
 % made for it (`class_eq_try1`). A failed attempt's bindings are rolled
 % back with its branch, and the committed one keeps only the values of
 % the copy's variables, which nothing else holds.
+%
+% This whole search only runs for two-or-more signatures: a
+% one-signature class never gets here, see `walk_funs_class` above.
 
 % Whether one (equation x signature) attempt fitted. The verdict is
 % local to the attempt: `attempt_ok` lets the branch reach quiescence,

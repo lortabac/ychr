@@ -6,69 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## A single-signature `:- class` is type-checked as if declared `:- function`
-
-**Documented claim.** `docs/reference/type-system.md` §Signature
-Overloading describes the class equation-checking discipline for
-`:- class` without a signature-count carve-out: each equation is
-checked per candidate signature, a guard's evidence fact that
-contradicts the candidate "counts as failure to check under that
-signature" (no warning), and an equation that checks under *no*
-signature is the `YCHR-60006` `NoMatchingOverload` error. The same
-section permits a single-signature `:- class` ("verbose but legal")
-without saying it checks differently.
-
-**Test.**
-
-    :- class (sz(int) -> int).
-    sz(N) | boolean(N) -> 0.
-
-    ychr check
-
-**Expected.** Per the class discipline: the `boolean(N)` evidence
-contradicts the only candidate signature, so the equation checks under
-no signature — error `YCHR-60006`.
-
-**Actual.** Warning `YCHR-20104` (inaccessible branch) and the program
-compiles — the single-signature-function disposition, where a
-contradicting evidence fact marks the equation dead instead of failing
-a candidate:
-
-    cls1.chr:2:1: YCHR-20104
-    <<function m:sz>>
-    This can never fire: a guard requires 'prelude:bool' where the type is 'int'
-
-With two signatures, `:- class (sz(int) -> int), (sz(string) -> int).`
-and an equation contradicting both, the same shape is the documented
-`YCHR-60006` error.
-
-**Cause.** `walk_funs` (`typechecker/walk.chr`) partitions on
-`fun_sig_count(F) > 1`, so a 1-signature class goes down the plain-
-function path (`check_equation`) instead of the per-signature attempt
-branches of `walk_class_fun`. Use sites are affected the same way:
-`build_function_facts` emits `function_sigs` (residual overload
-resolution) only for 2+ signatures, so a 1-sig class's calls go through
-the unify path — in rigid corner cases that reports `YCHR-60001`
-inconsistencies where the resolution path reports `YCHR-60006`. The
-declaration kind (`:- class` vs `:- function`) is not consulted; only
-the signature count is.
-`D.Function` currently does not record the kind, so the partition has
-nothing else to look at.
-
-**Impact.** Corner-case only: programs where a 1-sig class's equation
-(or use) is rejected/warned differently than the same program with a
-second signature, or than the spec's class discipline prescribes.
-`test/golden/class_single_sig/` pins only the accept path.
-
-**Fix sketch.** Decide which side gives: either thread the declaration
-kind into `D.Function` and partition class functions by kind rather
-than signature count (making 1-sig classes take the per-signature
-path), or amend `docs/reference/type-system.md` §Signature Overloading
-to state that a single-signature class checks exactly like the
-equivalent `:- function`. Whichever way, pin the chosen behavior with
-a test (`YCHR-60006` golden, or a `TypeCheckTest` case asserting the
-warning).
-
 ## A user module named `prelude` trips `YCHR-20019` with a hint that is wrong for it
 
 **Documented claim.** `docs/reference/errors.md` (since removed) describes `YCHR-20019`

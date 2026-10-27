@@ -1021,10 +1021,9 @@ scrutinizes:
   contains ordinary errors reports those and omits the warning: a
   warning never suppresses an error (§Inaccessible branches).
   `--Werror` promotes the warning, as with exhaustiveness
-  (§Exhaustiveness checking). (During per-signature checking of a
-  `:- class` equation, a contradiction instead counts as failure under
-  that candidate signature and emits nothing — §Signature Overloading
-  §Equation checking.)
+  (§Exhaustiveness checking). (In a multi-signature `:- class`, a
+  contradiction just fails that candidate and emits nothing —
+  §Signature Overloading. A one-signature class gets the warning.)
 - **`any`** — inert. Nothing narrows `any` (§The role of `any`);
   findings about `any`-typed code are reserved for a planned opt-in
   warning pass.
@@ -1315,10 +1314,12 @@ The check is deliberately narrow:
   they never cause a warning (they count as always covered). A nested
   constructor field is checked under the same rule, at the field's
   declared type.
-- Only **closed, single-signature** functions are checked.
-  `:- open_function` and `:- open_class` may gain equations in other
-  modules, so a local gap might be filled elsewhere; multi-signature
-  `:- class` functions have no single column type to enumerate.
+- Only **closed, single-signature** functions are checked. A
+  single-signature `:- class` counts here too — it checks like a
+  `:- function` (§Signature Overloading). `:- open_function` and
+  `:- open_class` may gain equations in other modules, so a local gap
+  might be filled elsewhere; multi-signature `:- class` functions have
+  no single column type to enumerate.
 - An equation with a **user guard** does not count as covering its
   pattern, since the guard may fail at runtime. A variable or wildcard
   pattern covers a position exhaustively.
@@ -1991,7 +1992,14 @@ set. Mixing the two forms for the same name+arity is `MixedDeclKinds`
 (YCHR-16012).
 
 A single-signature `:- class` is legal but verbose; idiomatic
-single-signature code uses `:- function`.
+single-signature code uses `:- function`. A class with one signature
+checks like a `:- function` with that signature. A guard that
+contradicts it makes the equation dead (YCHR-20104), and a bad call is
+`InconsistentTypes` (YCHR-60001), not `NoMatchingOverload`. Signatures
+are counted after every `:- extend_class_type`, and duplicates count.
+So a one-signature `:- open_class` switches to the rules below once
+another module adds a second signature, and a warning can then become
+YCHR-60006. An untyped class checks like an untyped function.
 
 ### Declaration syntax
 
@@ -2019,8 +2027,8 @@ would.
 
 ### Resolution
 
-At a call to an overloaded class the checker filters the declared
-signatures by consistency with the known argument types:
+At a call to a multi-signature overloaded class the checker filters
+the declared signatures by consistency with the known argument types.
 
 - If all surviving signatures are **equal after substitution** — in
   the common case, exactly one is consistent: the checker applies
@@ -2065,8 +2073,9 @@ instantiation):
 
 ### Equation checking
 
-Each equation of an overloaded class is checked against the declared
-signatures and accepted if it type-checks under at least one, with its
+Each equation of a multi-signature overloaded class is checked against
+the declared signatures and accepted if it type-checks under at least
+one, with its
 parameters typed by that signature's argument types and its RHS
 checked against its return type. An equation that type-checks under
 none is `NoMatchingOverload` (YCHR-60006).
