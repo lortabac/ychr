@@ -9,6 +9,7 @@ module YCHR.Internal.Resolve
   ( -- * Errors
     ResolveError (..),
     RefiningViolation (..),
+    BoundTargetKind (..),
 
     -- * Resolution
     resolveProgram,
@@ -110,11 +111,10 @@ data ResolveError
     -- the enclosing declaration's flattened name and the offending
     -- variable name.
     UnboundBoundVariable Text Text
-  | -- | A @requiring@ clause names a function that is not declared in
-    -- the program (or is declared at a different arity). Carries the
-    -- enclosing declaration's flattened name, the bound function's
-    -- flattened name, and the bound's arity.
-    UnknownBoundFunction Text Text Int
+  | -- | A @requiring@ bound names no function at that arity. Carries
+    -- the declaration's flattened name, the bound's 'Name', its
+    -- arity, and what the name is instead.
+    UnknownBoundFunction Text Name Int BoundTargetKind
   | -- | The bound graph contains a cycle. Carries the flattened names
     -- of the declarations on the cycle in source order.
     BoundCycle [Text]
@@ -239,6 +239,16 @@ data RefiningViolation
     RefiningRepeatedParameter Text
   deriving (Eq, Show)
 
+-- | What a bound's name is, when it isn't a function.
+data BoundTargetKind
+  = -- | Nothing by this name/arity is declared anywhere in scope.
+    BoundTargetMissing
+  | -- | The name resolves to a constraint, not a function.
+    BoundTargetConstraint
+  | -- | The name resolves to a data constructor, not a function.
+    BoundTargetConstructor
+  deriving (Eq, Show)
+
 -- | Flatten modules into a single resolved program: collect the
 -- constraint and function declarations, group equations under their
 -- function declarations, translate guards and bodies to 'R.Expr', and
@@ -248,6 +258,7 @@ resolveProgram :: [CollectedModule] -> Either [Diagnostic ResolveError] R.Progra
 resolveProgram mods =
   let constraintNames = buildConstraintNames mods
       functionNames = buildFunctionNames mods
+      dataConNames = buildDataConNames mods
       conTypes = collectConstraintTypes mods
       conBounds = collectConstraintBounds mods
       typeDefs = [td.node | m <- mods, td <- m.typeDecls]
@@ -260,7 +271,8 @@ resolveProgram mods =
       orphanEqErrors = checkOrphanEquations functionNames mods
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
       extendsBoundedErrors = checkExtendsBounded funcRequiring mods
-      boundedDeclErrors = checkBoundedDeclarations functionNames mods
+      boundedDeclErrors =
+        checkBoundedDeclarations functionNames constraintNames dataConNames mods
       refiningDeclErrors = checkRefiningDeclarations mods
       multiSigErrors = checkMultiSigOnFunction mods
       mixedKindErrors = checkMixedDeclKinds mods
@@ -318,6 +330,18 @@ buildConstraintNames mods =
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.ConstraintDecl cd <- [d]
+    ]
+
+-- | Every data constructor declared by any module, as (declaring
+-- module, constructor name) pairs. No arity: data constructors are
+-- name-only in the type system (see 'ConstructorFunctionCollision').
+buildDataConNames :: [CollectedModule] -> Set QualifiedName
+buildDataConNames mods =
+  Set.fromList
+    [ QualifiedName m.name (unqualifiedText dc.conName)
+    | m <- mods,
+      P.Ann td _ <- m.typeDecls,
+      dc <- typeConstructors td
     ]
 
 buildFunctionNames :: [CollectedModule] -> Set QualifiedName
@@ -950,8 +974,10 @@ checkExtendsBounded funcRequiring mods =
 --   * 'UnboundBoundVariable' — a type variable in the @requiring@
 --     clause has no occurrence in the enclosing declaration's primary
 --     signature.
---   * 'UnknownBoundFunction' — the bound's named function (with that
---     exact arity) is not declared anywhere in the program.
+--   * 'UnknownBoundFunction' — the bound's name (with that exact
+--     arity) is not declared as a function anywhere in the program;
+--     carries a 'BoundTargetKind' saying what it resolves to instead
+--     (a constraint, a data constructor, or nothing at all).
 --   * 'BoundCycle' — the bound graph (with vertices for every function
 --     and bounded constraint, and edges from each declaration to the
 --     functions named in its @requiring@ clause) contains a cycle.
@@ -959,8 +985,12 @@ checkExtendsBounded funcRequiring mods =
 -- All three checks run together so the user sees every shape of bound
 -- error in a single pass.
 checkBoundedDeclarations ::
-  Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
-checkBoundedDeclarations functionNames mods =
+  Set QualifiedName ->
+  Set QualifiedIdentifier ->
+  Set QualifiedName ->
+  [CollectedModule] ->
+  [Diagnostic ResolveError]
+checkBoundedDeclarations functionNames constraintNames dataConNames mods =
   let funcBounds =
         [ BoundedDecl
             { name = QualifiedName m.name fd.name,
@@ -1006,28 +1036,40 @@ checkBoundedDeclarations functionNames mods =
       unknownErrs =
         [ noDiag
             ( P.AnnP
-                (UnknownBoundFunction declText (flattenName bs.name) bs.arity)
+                (UnknownBoundFunction declText bs.name bs.arity kind)
                 bs.loc
                 bd.origin
             )
         | bd <- allBounded,
           let declText = qualifiedToLooseText bd.name,
           bs <- bd.bounds,
-          not (boundResolvesToFunction bs)
+          Just kind <- [boundTargetProblem bs]
         ]
       cycleErrs = detectBoundCycles allBounded
    in varErrs ++ unknownErrs ++ cycleErrs
   where
     qualifiedToLooseText qn = flattenName (qualifiedToName qn)
-    boundResolvesToFunction bs = case bs.name of
-      Qualified m n -> Set.member (QualifiedName m n) functionNames
-      Unqualified _ ->
-        -- If the renamer left the name 'Unqualified', no visible
-        -- provider exposes a function (or anything else) at this
-        -- name/arity, so the dedicated 'UnknownBoundFunction'
-        -- diagnostic is ours to emit; the renamer does not report
-        -- this case as the generic YCHR-20002.
-        False
+    -- 'Nothing' means the bound resolves to a function, so there's no
+    -- error; 'Just' names what it resolves to instead.
+    boundTargetProblem bs = case bs.name of
+      Qualified m n
+        | Set.member (QualifiedName m n) functionNames -> Nothing
+        | Set.member (QualifiedIdentifier m n bs.arity) constraintNames ->
+            Just BoundTargetConstraint
+        | Set.member (QualifiedName m n) dataConNames ->
+            Just BoundTargetConstructor
+        | otherwise -> Just BoundTargetMissing
+      Unqualified n
+        -- Left 'Unqualified' by the renamer: no visible function at
+        -- this name/arity. Look for a constraint or constructor of
+        -- that name in any module.
+        | any
+            (\qi -> qi.localName == n && qi.arity == bs.arity)
+            (Set.toList constraintNames) ->
+            Just BoundTargetConstraint
+        | any (\qn -> qn.baseName == n) (Set.toList dataConNames) ->
+            Just BoundTargetConstructor
+        | otherwise -> Just BoundTargetMissing
     -- Takes the declaration's name rather than the declaration record:
     -- a helper that projected @.name@ off its argument would be inferred
     -- as 'HasField'-polymorphic, which MicroHs does not generalize, so

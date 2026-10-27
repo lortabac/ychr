@@ -2202,6 +2202,11 @@ the bound is vacuously satisfied at every substitution — opting
 callers out of bound discipline for that function, exactly like an
 explicit `g(any, ..., any) -> any` signature.
 
+A bound name may be module-qualified (`m:name(...) -> τᵣ`); it
+resolves like any qualified reference (see
+[language.md §Modules](language.md#modules)). A qualified bound naming
+a constraint is still `UnknownBoundFunction`.
+
 ### Type-variable scoping
 
 Type variables in a `requiring` clause are those of the enclosing

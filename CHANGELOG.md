@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+A `requiring` bound can name a qualified function (`m:name(...) ->
+τ`). The YCHR-16009 message says when the name is a constraint or a
+data constructor.
+
+- **Breaking:** `YCHR.Internal.Resolve.ResolveError`'s
+  `UnknownBoundFunction` carries the bound's `Name` (instead of its
+  already-flattened `Text`) plus a new `BoundTargetKind` saying what
+  the name resolves to instead of a function.
+
 `run --show-bindings`, a `gen-driver` driver, and the Scheme `tell`
 helper now hide `_`-prefixed variables, like the REPL already did.
 

@@ -6,45 +6,125 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## A module-qualified name in a `requiring` bound is parsed as `:/2`
+## The `:` compound reaches constraint and function declarations unparsed
 
-**Documented claim.** `docs/reference/type-system.md` §Declaration syntax
-(1497–1512) defines a bound as `name(τ₁, …, τₙ) -> τᵣ`.
-`docs/reference/language.md` §Modules (lines 93–97) defines what `m:name`
-means in every other position. Nothing says whether a bound name may be
-qualified.
+**Documented claim.** `docs/reference/language.md` §Modules defines
+`module:name` as a qualified reference, resolved the same way in
+every position.
 
 **Test.**
 
-    :- module(useq, [foo/2]).
-    :- use_module(lib).                       % lib declares gt/2
-    :- chr_constraint foo(T, T) requiring lib:gt(T, T) -> bool.
-    foo(X, Y) <=> gt(X, Y).
+    :- module(oc, [fun sz/1]).
+    :- open_class sz(int) -> int.
+    sz(X) -> X.
 
-    ychr check lib.chr useq.chr
+    :- module(o1, []).
+    :- use_module(oc).
+    :- function oc:foo(int) -> int.
 
-**Expected.** A qualified bound resolves, or is rejected with a message
-that names the qualifier problem.
+    ychr check oc.chr o1.chr
+
+**Expected.** Either a qualified declaration name is rejected (a
+declaration always targets the current module), or `oc:foo` resolves
+as a genuine qualified reference.
+
+**Actual.** `ychr check` exits 0. `convertFunctionDecl`'s `typedCore`
+(`src/YCHR/Internal/Parser.hs`; `convertConstraintDecl`'s generic arm
+has the same shape, for `:- chr_constraint oc:foo(int).`) matches the
+raw `Compound ":" [Atom "oc", ...]` term, so the declaration is
+silently named `:/2` rather than `foo` in module `oc`. No diagnostic.
+
+**Fix sketch.** Reject a `Compound ":"` declaration head with a
+dedicated parse error before the generic arm can match it.
+
+## `:- extend_class_type`/`:- extend_class` cannot name their target qualified
+
+**Documented claim.** `dev-docs/PROJECT.md` §Closed and Open Functions
+says extension directives "resolve their target through the importing
+module's imports," implying `module:name` is legitimate there too.
+
+**Test.**
+
+    :- module(oc, [fun sz/1]).
+    :- open_class sz(int) -> int.
+    sz(X) -> X.
+
+    :- module(o3, []).
+    :- use_module(oc).
+    :- extend_class_type oc:sz(string) -> int.
+    :- extend_class oc:sz(S) -> 0.
+
+    ychr check oc.chr o3.chr
+
+**Expected.** Either the qualified target resolves (as `sz` with no
+qualifier already does), or a diagnostic names the qualifier.
+
+**Actual.** Both lines report `YCHR-20002 Unknown name ':/2'`. The
+unqualified spelling (`extend_class_type sz(string) -> int.`) works.
+
+**Notes.** Same parser gap as the entry above. `renameDeclaration`'s
+`ExtendClassTypeDecl` case already resolves a qualified `Name` through
+imports, so this is plausibly a real feature once the parser stops
+reading `oc:sz` as `:/2`.
+
+**Fix sketch.** Give the two directives' head-parsing the same
+`Compound ":"` special case `convertConstraint` has.
+
+## `prettyBoundSig` drops a bound's module qualifier
+
+**Documented claim.** None stated.
+
+**Test.** Pretty-print a `requiring` clause naming a qualified bound,
+e.g. via the REPL's `:info` command (`renderInfoEntry`, which calls
+`prettyConstraintDecl` → `prettyRequiring` → `prettyBoundSig`).
+
+**Expected.** `requiring lib:gt(T, T) -> bool`.
+
+**Actual.** `prettyBoundSig` renders `unqualifiedText b.name`:
+`requiring gt(T, T) -> bool`, qualifier silently dropped.
+
+**Notes.** Not as cosmetic as it looks: `renameBoundSig` always
+resolves a bound to `Qualified`, so every bound reaching this has a
+module to lose.
+
+**Fix sketch.** `flattenName b.name` is not a drop-in fix:
+`renderAtom` of the whole flattened text would quote `lib:gt` as one
+atom. Build `module ++ ":" ++ renderAtom baseName` instead.
+
+## A restricted import list makes `validateQualified` say the module doesn't export the name
+
+**Documented claim.** `docs/reference/language.md` §Modules:
+`validateQualified`'s own Haddock already distinguishes "not exported"
+from "excluded by a restricted import list"; the message doesn't.
+
+**Test.**
+
+    :- module(implib, [gt/2, other/1]).
+    :- function gt(int, int) -> bool.
+    gt(X, Y) -> X > Y.
+
+    :- module(impuser, [bar/2]).
+    :- use_module(implib, [other/1]).   % import list omits gt/2
+    :- chr_constraint bar(int, int).
+    bar(X, Y) <=> implib:gt(X, Y) | true.
+
+    ychr check implib.chr impuser.chr
+
+**Expected.** A message distinguishing "`implib` doesn't export this"
+from "your import list doesn't let it through" — the fix differs.
 
 **Actual.**
 
     === error ===
-    useq.chr:3:39: YCHR-16009
-    'useq:foo' requires ':/2' but no such function is declared
-      Hint: declare ':- function :/2.' (or import a module that does)
+    impuser.chr:4:15: YCHR-20009
+    Module 'implib' does not export 'gt/2'
 
-The qualifier is dropped and the bound name becomes the operator `:`. The
-same happens for `prelude:'>'(T, T) -> bool` and for a library function
-(`strings:string_length(T) -> int`). Unqualified bounds, including
-imported ones, work.
+`implib` *does* export `gt/2`; the restriction is `impuser`'s own
+`use_module(implib, [other/1])`. Same for a `requiring` bound naming
+`implib:gt` — general `validateQualified` gap, not specific to bounds.
 
-**Notes.** The error and the hint are both unusable: `:- function :/2.`
-does not parse. If qualification is not meant to be supported, the
-diagnostic should say that instead of naming `:/2`.
-
-**Fix sketch.** Either parse the qualified name as a qualified bound
-target, or reject it with a diagnostic that quotes the qualifier. Pin
-whichever with a golden.
+**Fix sketch.** Give `NotExportedByModule` (or a sibling error) a case
+for "exported, but excluded by your own import list."
 
 ## The global `--quiet` before a subcommand is treated as a file name
 

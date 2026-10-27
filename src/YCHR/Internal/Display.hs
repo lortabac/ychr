@@ -74,7 +74,11 @@ import YCHR.Internal.Rename.Macro
     macroExpansionBudget,
     primitiveOfOperand,
   )
-import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
+import YCHR.Internal.Resolve
+  ( BoundTargetKind (..),
+    RefiningViolation (..),
+    ResolveError (..),
+  )
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck
   ( ConstructorDecl (..),
@@ -348,7 +352,7 @@ resolveErrorCode (OrphanFunctionEquation _ _) = ErrorCode 16006
 -- and extend-on-bounded checks all live in the resolve phase.
 resolveErrorCode (ExtendTypeOnBoundedFunction _) = ErrorCode 16007
 resolveErrorCode (UnboundBoundVariable _ _) = ErrorCode 16008
-resolveErrorCode (UnknownBoundFunction _ _ _) = ErrorCode 16009
+resolveErrorCode (UnknownBoundFunction _ _ _ _) = ErrorCode 16009
 resolveErrorCode (BoundCycle _) = ErrorCode 16010
 resolveErrorCode (MultiSigOnFunction _) = ErrorCode 16011
 resolveErrorCode (MixedDeclKinds _) = ErrorCode 16012
@@ -664,7 +668,9 @@ parseValidationErrorMsg MalformedOpaqueTypeDefinition =
 parseValidationErrorMsg MalformedBoundSig =
   withHint
     "Invalid bound signature"
-    "expected 'name(t1, ..., tn) -> tret' (or 'name -> tret' for arity zero)"
+    ( "expected 'name(t1, ..., tn) -> tret' or 'module:name(t1, ..., tn)"
+        ++ " -> tret' (arity zero: 'name -> tret' / 'module:name -> tret')"
+    )
 parseValidationErrorMsg MalformedFunctionEquation =
   withHint
     "Invalid function equation"
@@ -779,21 +785,10 @@ resolveErrorMsg (InvalidRefining declName violation) =
         ++ " be a base type or a type constructor applied to distinct type"
         ++ " variables"
     )
-resolveErrorMsg (UnknownBoundFunction declName boundName arity) =
+resolveErrorMsg (UnknownBoundFunction declName boundName arity kind) =
   withHint
-    ( "'"
-        ++ T.unpack declName
-        ++ "' requires '"
-        ++ T.unpack boundName
-        ++ "/"
-        ++ show arity
-        ++ "' but no such function is declared"
-    )
-    "declare ':- function "
-    ++ T.unpack boundName
-    ++ "/"
-    ++ show arity
-    ++ ".' (or import a module that does)"
+    (unknownBoundFunctionSentence declName boundName arity kind)
+    (unknownBoundFunctionHint boundName arity kind)
 resolveErrorMsg (BoundCycle names) =
   withHint
     ( "Cyclic 'requiring' clause: "
@@ -916,6 +911,56 @@ resolveErrorMsg (ConstructorFunctionCollision name) =
     ( "qualifying cannot tell them apart inside one module; rename one of"
         ++ " them (arity does not separate them either)"
     )
+
+-- | Headline for 'UnknownBoundFunction'.
+unknownBoundFunctionSentence :: T.Text -> Types.Name -> Int -> BoundTargetKind -> String
+unknownBoundFunctionSentence declName boundName arity BoundTargetMissing =
+  "'"
+    ++ T.unpack declName
+    ++ "' requires "
+    ++ boundNameSlashArity boundName arity
+    ++ " but no such function is declared"
+unknownBoundFunctionSentence _ boundName arity BoundTargetConstraint =
+  boundNameSlashArity boundName arity ++ " is a constraint, not a function"
+unknownBoundFunctionSentence _ boundName arity BoundTargetConstructor =
+  boundNameSlashArity boundName arity ++ " is a data constructor, not a function"
+
+boundNameSlashArity :: Types.Name -> Int -> String
+boundNameSlashArity boundName arity =
+  "'" ++ T.unpack (Types.flattenName boundName) ++ "/" ++ show arity ++ "'"
+
+-- | Hint for 'UnknownBoundFunction'. Only a missing user name can be
+-- fixed by declaring it; a @host:@ name, a constraint or a
+-- constructor gets 'requiringNamesAFunction'.
+unknownBoundFunctionHint :: Types.Name -> Int -> BoundTargetKind -> String
+unknownBoundFunctionHint _ _ BoundTargetConstraint = requiringNamesAFunction
+unknownBoundFunctionHint _ _ BoundTargetConstructor = requiringNamesAFunction
+unknownBoundFunctionHint (Types.Unqualified n) arity BoundTargetMissing =
+  "declare ':- function "
+    ++ T.unpack n
+    ++ "/"
+    ++ show arity
+    ++ ".' (or import a module that does)"
+unknownBoundFunctionHint (Types.Qualified "host" n) arity BoundTargetMissing =
+  "'host:"
+    ++ T.unpack n
+    ++ "/"
+    ++ show arity
+    ++ "' is a host call, not a declared function; "
+    ++ requiringNamesAFunction
+unknownBoundFunctionHint (Types.Qualified m n) arity BoundTargetMissing =
+  "declare ':- function "
+    ++ T.unpack n
+    ++ "/"
+    ++ show arity
+    ++ ".' in module '"
+    ++ T.unpack m
+    ++ "'"
+
+requiringNamesAFunction :: String
+requiringNamesAFunction =
+  "'requiring' can only name a declared function (':- function',"
+    ++ " ':- open_function', ':- class', or ':- open_class')"
 
 -- | The specific problem with a 'refining' clause, as a sentence
 -- fragment following the declaration's name.

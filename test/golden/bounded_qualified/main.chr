@@ -1,0 +1,24 @@
+:- module(main, [pick_user/1, pick_prelude/1, check_len/1]).
+:- use_module(lib).
+:- use_module(library(prelude)).
+:- use_module(library(strings)).
+
+% A 'requiring' bound naming a function in another user module.
+:- chr_constraint pick_user(int).
+:- function pick_max_user(T, T) -> T requiring lib:gt(T, T) -> bool.
+pick_max_user(X, Y) | lib:gt(X, Y) -> X.
+pick_max_user(_, Y) -> Y.
+pick_user(R) <=> R is pick_max_user(3, 4).
+
+% A 'requiring' bound naming a prelude function.
+:- chr_constraint pick_prelude(int).
+:- function pick_max_prelude(T, T) -> T requiring prelude:'>'(T, T) -> bool.
+pick_max_prelude(X, Y) | prelude:'>'(X, Y) -> X.
+pick_max_prelude(_, Y) -> Y.
+pick_prelude(R) <=> R is pick_max_prelude(5, 2).
+
+% A 'requiring' bound naming a bundled library function.
+:- chr_constraint check_len(int).
+:- function strlen_bound(T) -> int requiring strings:string_length(T) -> int.
+strlen_bound(X) -> strings:string_length(X).
+check_len(R) <=> R is strlen_bound("hello").

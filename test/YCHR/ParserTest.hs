@@ -80,6 +80,19 @@ stripModLoc m =
       exports = fmap (noAnnP . (.node)) m.exports
     }
 
+-- | Parse a module and return the first declaration's @requiring@
+-- bounds, each with its location stripped for structural comparison.
+firstRequiring :: Text -> Either ParseError (Maybe [BoundSig])
+firstRequiring src = do
+  m <- p src
+  pure $ case map (.node) m.decls of
+    (FunctionDecl fd : _) -> fmap (map stripBoundSigLoc) fd.requiring
+    (ConstraintDecl cd : _) -> fmap (map stripBoundSigLoc) cd.requiring
+    _ -> Nothing
+  where
+    stripBoundSigLoc :: BoundSig -> BoundSig
+    stripBoundSigLoc (BoundSig n a at rt _) = BoundSig n a at rt dummyLoc
+
 -- ---------------------------------------------------------------------------
 -- Directives
 -- ---------------------------------------------------------------------------
@@ -290,6 +303,38 @@ directiveTests =
                     Nothing
                 )
             ],
+      testCase "requiring bound with a qualified name" $
+        firstRequiring
+          ":- function pick(T, T) -> T requiring lib:gt(T, T) -> bool."
+          @?= Right
+            ( Just
+                [ BoundSig
+                    (Qualified "lib" "gt")
+                    2
+                    [TypeVar "T", TypeVar "T"]
+                    (TypeCon (Unqualified "bool") [])
+                    dummyLoc
+                ]
+            ),
+      testCase "requiring bound with a qualified, zero-arity name" $
+        firstRequiring ":- function pick(T) -> T requiring lib:k -> int."
+          @?= Right
+            ( Just
+                [ BoundSig
+                    (Qualified "lib" "k")
+                    0
+                    []
+                    (TypeCon (Unqualified "int") [])
+                    dummyLoc
+                ]
+            ),
+      testCase "requiring bound with a variable qualifier is malformed" $ do
+        -- A variable module part isn't a qualified name.
+        (map (.node) . (.decls))
+          <$> p ":- function pick(T, T) -> T requiring X:gt(T, T) -> bool."
+          @?= Right []
+        pErrs ":- function pick(T, T) -> T requiring X:gt(T, T) -> bool."
+          @?= Right [MalformedBoundSig],
       testCase "macro nullary head, single goal body" $
         macroShapes <$> p ":- macro foo ---> [bar]."
           @?= Right [("foo", 0, [([], [atom "bar"])])],

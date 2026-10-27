@@ -395,9 +395,9 @@ data FunSignature = FunSignature
 -- @(name, arity)@ without re-counting).
 --
 -- The 'name' field follows the same Unqualified-to-Qualified
--- progression as 'Constraint.name': the parser emits 'Unqualified',
--- the renamer rewrites it to 'Qualified', and the resolver checks
--- it against the program's declared functions.
+-- progression as 'Constraint.name': the parser emits 'Unqualified' or,
+-- for @m:name@, 'Qualified'; the renamer makes it 'Qualified'; the
+-- resolver checks it.
 data BoundSig = BoundSig
   { name :: Name,
     arity :: Int,

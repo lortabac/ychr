@@ -347,9 +347,7 @@ prettyFunSig name argTys retTy =
     ++ ") -> "
     ++ prettyTypeExpr retTy
 
--- | Render a single bound signature in a @requiring@ clause, using
--- the bound's base name (qualified-name module is dropped to match
--- the surface @requiring@ form).
+-- | Render a bound signature. Drops the module qualifier.
 prettyBoundSig :: BoundSig -> String
 prettyBoundSig b = prettyFunSig (unqualifiedText b.name) b.argTypes b.returnType
 

@@ -2370,10 +2370,10 @@ renameBoundSig ctx _ bs = do
         loc = bs.loc
       }
   where
-    boundSigName b = case b.name of
-      Unqualified t -> t
-      Qualified _ t -> t
-    site = Site bs.loc (Atom (boundSigName bs))
+    -- Display only: keep the qualifier in the diagnostic's node line.
+    site = case bs.name of
+      Unqualified t -> Site bs.loc (Atom t)
+      Qualified m t -> Site bs.loc (Compound ":" [noAnn (Atom m), noAnn (Atom t)])
     resolveBoundName = case bs.name of
       Qualified m n -> do
         validateQualified ctx site m n bs.arity

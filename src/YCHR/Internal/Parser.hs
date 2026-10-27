@@ -465,7 +465,7 @@ The qualified-name forms @module:name@ and @module:name(args)@ are
 intercepted before the generic 'Compound' fallback. Without this, the parser
 would emit a 2-ary @':'@ constructor with two unrelated children, and the
 renamer would have to undo that downstream. The same handling is mirrored in
-'convertConstraint' and 'convertTypeExpr'.
+'convertConstraint', 'convertTypeExpr', and 'convertBoundSig'.
 -}
 
 -- | Convert a 'PExpr' to a 'Term'.
@@ -1526,33 +1526,27 @@ leftToList = either pure (const [])
 
 -- | Convert a single bound signature inside a @requiring@ clause. The
 -- expected shape is @name(τ₁, ..., τₙ) -> τᵣ@; a bare @name -> τᵣ@ is
--- treated as a zero-arity bound. A malformed shape (or a malformed type
--- inside) is returned as 'Left'; the enclosing declaration is then
--- dropped.
+-- treated as a zero-arity bound. The name may be module-qualified
+-- (@module:name(...) -> τᵣ@), same as any other reference. A malformed
+-- shape (or a malformed type inside) is returned as 'Left'; the
+-- enclosing declaration is then dropped.
+--
+-- See Note [Qualified name handling].
 convertBoundSig :: Ann PExpr -> Either (AnnP ParseValidationError) BoundSig
 convertBoundSig (Ann pexpr loc) = case pexpr of
-  Compound "->" [Ann (Compound name args) _, ret] -> do
-    argTypes <- traverse convertTypeExpr args
-    returnType <- convertTypeExpr ret
-    Right
-      BoundSig
-        { name = Unqualified name,
-          arity = length args,
-          argTypes,
-          returnType,
-          loc
-        }
-  Compound "->" [Ann (Atom name) _, ret] -> do
-    returnType <- convertTypeExpr ret
-    Right
-      BoundSig
-        { name = Unqualified name,
-          arity = 0,
-          argTypes = [],
-          returnType,
-          loc
-        }
+  Compound "->" [Ann (Compound ":" [Ann (Atom m) _, Ann (Compound n args) _]) _, ret] ->
+    build (Qualified m n) args ret
+  Compound "->" [Ann (Compound ":" [Ann (Atom m) _, Ann (Atom n) _]) _, ret] ->
+    build (Qualified m n) [] ret
+  Compound "->" [Ann (Compound ":" _) _, _] -> Left (AnnP MalformedBoundSig loc pexpr)
+  Compound "->" [Ann (Compound name args) _, ret] -> build (Unqualified name) args ret
+  Compound "->" [Ann (Atom name) _, ret] -> build (Unqualified name) [] ret
   _ -> Left (AnnP MalformedBoundSig loc pexpr)
+  where
+    build name args ret = do
+      argTypes <- traverse convertTypeExpr args
+      returnType <- convertTypeExpr ret
+      Right BoundSig {name, arity = length args, argTypes, returnType, loc}
 
 -- | Convert a PExpr to a 'TypeExpr'.
 --

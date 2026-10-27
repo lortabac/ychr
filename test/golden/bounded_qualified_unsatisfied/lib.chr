@@ -1,0 +1,6 @@
+:- module(lib, [gt/2]).
+:- use_module(library(prelude)).
+
+% int and float overloads only, no string one.
+:- class (gt(int, int) -> bool), (gt(float, float) -> bool).
+gt(X, Y) -> X > Y.
