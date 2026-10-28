@@ -506,6 +506,34 @@ def test_repl_dynamic_tell(ychr_bin, tmp_path):
     )
 
 
+def test_info_qualified_bound(ychr_bin, tmp_path):
+    """A `requiring` bound from another module prints qualified:
+    `main:pick` bounds on `lib:gt`."""
+    (tmp_path / "lib.chr").write_text(
+        ":- module(lib, [fun gt/2]).\n\n"
+        ":- function gt(int, int) -> bool.\n"
+        "gt(X, Y) -> X > Y.\n"
+    )
+    (tmp_path / "main.chr").write_text(
+        ":- module(main, [fun pick/2]).\n"
+        ":- use_module(lib).\n\n"
+        ":- function pick(T, T) -> T requiring gt(T, T) -> bool.\n"
+        "pick(X, Y) | gt(X, Y) -> X.\n"
+        "pick(X, Y) -> Y.\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(tmp_path / "lib.chr"), str(tmp_path / "main.chr")],
+        input=":info main:pick\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stdout == (
+        "main:pick\n"
+        ":- function pick(T, T) -> T requiring lib:gt(T, T) -> bool.\n"
+    )
+
+
 def test_info_cross_module_ambiguity(ychr_bin, tmp_path):
     """Two modules exporting the same `(name, arity)` make `:info NAME`
     refuse to guess. The user's documented choice is to error and list

@@ -2155,8 +2155,8 @@ The `requiring` clause is a comma-separated list of *bound signatures*
 :- function max(T, T) -> T requiring '>'(T, T) -> bool.
 
 :- function clamp(T, T, T) -> T requiring
-    '>'(T, T) -> bool,
-    '<'(T, T) -> bool.
+    ('>'(T, T) -> bool),
+    ('<'(T, T) -> bool).
 
 :- function lookup(K, list(pair(K, V))) -> option(V) requiring
     '=='(K, K) -> bool.

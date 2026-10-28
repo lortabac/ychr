@@ -5,8 +5,25 @@ module YCHR.PrettyTest (tests) where
 import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Internal.Pretty (prettyBindings, prettyQueryResult, prettyTerm, renderAtom)
-import YCHR.Internal.Types (Name (..), Term (..))
+import YCHR.Internal.Desugared qualified as D
+import YCHR.Internal.Loc (dummyLoc)
+import YCHR.Internal.Pretty
+  ( DeclKind (DKFunction),
+    prettyBindings,
+    prettyConstraintDecl,
+    prettyFunctionDecl,
+    prettyQueryResult,
+    prettyTerm,
+    renderAtom,
+  )
+import YCHR.Internal.Types
+  ( BoundSig (..),
+    FunSignature (..),
+    Name (..),
+    QualifiedName (..),
+    Term (..),
+    TypeExpr (..),
+  )
 
 -- | Pretty-printer tests: term rendering, quoting, lists, closures, and binding maps.
 tests :: TestTree
@@ -17,7 +34,8 @@ tests =
       renderAtomTests,
       listRenderingTests,
       closureUnwrapTests,
-      bindingsTests
+      bindingsTests,
+      requiringBoundQualificationTests
     ]
 
 basicTests :: TestTree
@@ -205,3 +223,74 @@ bindingsTests =
           )
           @?= "R = 42.\n"
     ]
+
+-- | A `requiring` bound prints qualified only when its module differs
+-- from the declaring one.
+requiringBoundQualificationTests :: TestTree
+requiringBoundQualificationTests =
+  testGroup
+    "requiring clause qualifies a bound only when its module differs"
+    [ testCase "bound declared in the same module prints bare" $
+        prettyConstraintDecl
+          (QualifiedName "main" "leq")
+          2
+          (Just [tvar, tvar])
+          [bound "main" "lt"]
+          @?= ":- chr_constraint leq(T, T) requiring lt(T, T) -> bool.",
+      testCase "bound from a library prints module-qualified" $
+        prettyConstraintDecl
+          (QualifiedName "main" "leq")
+          2
+          (Just [tvar, tvar])
+          [bound "lib" "gt"]
+          @?= ":- chr_constraint leq(T, T) requiring lib:gt(T, T) -> bool.",
+      testCase "bound naming a prelude operator quotes the operator" $
+        prettyConstraintDecl
+          (QualifiedName "main" "leq")
+          2
+          (Just [tvar, tvar])
+          [bound "prelude" ">="]
+          @?= ":- chr_constraint leq(T, T) requiring prelude:'>='(T, T) -> bool.",
+      testCase "bound from a module name that needs quoting" $
+        prettyConstraintDecl
+          (QualifiedName "main" "leq")
+          2
+          (Just [tvar, tvar])
+          [bound "my lib" "gt"]
+          @?= ":- chr_constraint leq(T, T) requiring 'my lib':gt(T, T) -> bool.",
+      -- ':info max' itself must stay unchanged: a function requiring a
+      -- bound declared in its own module prints that bound bare.
+      testCase "requiring on a function declaration: own-module bound stays bare" $
+        prettyFunctionDecl
+          D.Function
+            { D.name = QualifiedName "prelude" "max",
+              D.arity = 2,
+              D.signatures = [FunSignature [tvar, tvar] tvar],
+              D.requiring = [bound "prelude" "gt"],
+              D.refining = Nothing,
+              D.lambdaArity = Nothing,
+              D.inline = False,
+              D.equations = []
+            }
+          DKFunction
+          @?= ":- function max(T, T) -> T requiring gt(T, T) -> bool.",
+      -- `,` binds tighter than `->`, so bare bounds don't reparse.
+      testCase "two or more bounds are each wrapped in parens" $
+        prettyConstraintDecl
+          (QualifiedName "main" "leq")
+          2
+          (Just [tvar, tvar])
+          [bound "main" "lt", bound "main" "gt"]
+          @?= ":- chr_constraint leq(T, T) requiring (lt(T, T) -> bool), (gt(T, T) -> bool)."
+    ]
+  where
+    tvar = TypeVar "T"
+    boolTy = TypeCon (Unqualified "bool") []
+    bound m n =
+      BoundSig
+        { name = Qualified m n,
+          arity = 2,
+          argTypes = [tvar, tvar],
+          returnType = boolTy,
+          loc = dummyLoc
+        }

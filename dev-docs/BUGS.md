@@ -6,27 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `prettyBoundSig` drops a bound's module qualifier
-
-**Documented claim.** None stated.
-
-**Test.** Pretty-print a `requiring` clause naming a qualified bound,
-e.g. via the REPL's `:info` command (`renderInfoEntry`, which calls
-`prettyConstraintDecl` → `prettyRequiring` → `prettyBoundSig`).
-
-**Expected.** `requiring lib:gt(T, T) -> bool`.
-
-**Actual.** `prettyBoundSig` renders `unqualifiedText b.name`:
-`requiring gt(T, T) -> bool`, qualifier silently dropped.
-
-**Notes.** Not as cosmetic as it looks: `renameBoundSig` always
-resolves a bound to `Qualified`, so every bound reaching this has a
-module to lose.
-
-**Fix sketch.** `flattenName b.name` is not a drop-in fix:
-`renderAtom` of the whole flattened text would quote `lib:gt` as one
-atom. Build `module ++ ":" ++ renderAtom baseName` instead.
-
 ## `fun m:name/arity` is always rejected as "does not export `name/0`"
 
 **Documented claim.** `docs/reference/language.md` §Scheme backend
@@ -399,3 +378,35 @@ itself) and is otherwise ignored. The `ExtendClassTypeDecl` arms of
 **Fix sketch.** Give the DSL a modifier that appends to
 `extensionTypes` (like `withExtensions`), or have `declaring` route
 `ExtendClassTypeDecl` there. Then drop the arms above.
+
+## An unparenthesized multi-bound `requiring` clause silently keeps only the first bound
+
+**Documented claim.** type-system.md §Declaration syntax: the
+`requiring` clause is a comma-separated list of bound signatures. Its
+`clamp` example now puts each bound in parens; written bare it breaks:
+
+    :- function clamp(T, T, T) -> T requiring
+        '>'(T, T) -> bool,
+        '<'(T, T) -> bool.
+
+**Test.** Give this `clamp` a body and a goal that calls it, then
+`ychr check`.
+
+**Actual.** `:info clamp:clamp` shows the clause back almost verbatim:
+
+    :- function clamp(T, T, T) -> T requiring prelude:'>'(T, T) -> bool, T < T -> bool.
+
+but there is only one `BoundSig`, for `>`, whose return type is the
+junk compound `->(,(bool, <(T, T)), bool)` — the `<` bound is
+swallowed. `clamp`'s own body then fails to type-check:
+
+    Type mismatch: '->(,(prelude:bool, <(T#20, T#20)), prelude:bool)' does not match 'prelude:bool'
+
+**Notes.** `,` (1000) binds tighter than `->` (1110), so `r1, b2 ->
+r2` parses as `->(','(r1, b2), r2)` inside the first bound.
+`convertBoundSig` (`Parser.hs`) accepts any compound as a return type.
+The comment above `requiring` in `builtinOps` says the list is a
+clean comma chain; that only holds when each bound is parenthesized.
+
+**Fix sketch.** Reject a bound whose return type is headed by `,` or
+`->` (except a `fun(...) -> T` lambda type).

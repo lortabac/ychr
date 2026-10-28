@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+`:info` prints a `requiring` bound from another module qualified
+(`lib:gt(T, T) -> bool`). It used to drop the module.
+
+`:info` prints each bound of a multi-bound `requiring` clause in
+parens (`requiring (g(T) -> T), (k(U) -> U)`), so the output parses
+back.
+
 A definition head written `m:name` (a declaration, a type or
 constructor head, a top-level equation) is now `YCHR-15029`
 (`QualifiedDefinitionName`), even with the module's own name. Some

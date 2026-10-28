@@ -95,6 +95,9 @@ declaration. Built-in types (`int`, `float`, `string`, `any`) print
 (`call/2`), qualified (`prelude:max`), or any combination. A bare name
 matching several arities prints all of them; a bare `name/arity`
 exported by more than one module is reported as ambiguous — qualify it.
+A `requiring` bound prints qualified (`lib:gt`) unless it names
+something in `NAME`'s own module; two or more bounds each print in
+parens, so the output parses back.
 
 ```ychr-repl
 ychr> :info int

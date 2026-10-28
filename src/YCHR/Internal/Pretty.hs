@@ -335,28 +335,53 @@ prettyTypeExpr = PE.prettyPExpr prettyOps . typeExprToPExpr
 prettyQualifiedName :: QualifiedName -> String
 prettyQualifiedName (QualifiedName m n) = renderAtom m ++ ":" ++ renderAtom n
 
--- | Render a function signature @name(T1, ..., Tn) -> Tret@. The name
--- is rendered through 'renderAtom' so operator names like @'+'@ quote
--- correctly. Used for both standalone declarations and elements of a
--- multi-sig @:- class@ list.
-prettyFunSig :: Text -> [TypeExpr] -> TypeExpr -> String
-prettyFunSig name argTys retTy =
-  renderAtom name
+-- | Render a function signature @name(T1, ..., Tn) -> Tret@, given the
+-- name already rendered to source text. Used for both standalone
+-- declarations and elements of a multi-sig @:- class@ list.
+prettyFunSigNamed :: String -> [TypeExpr] -> TypeExpr -> String
+prettyFunSigNamed renderedName argTys retTy =
+  renderedName
     ++ "("
     ++ intercalate ", " (map prettyTypeExpr argTys)
     ++ ") -> "
     ++ prettyTypeExpr retTy
 
--- | Render a bound signature. Drops the module qualifier.
-prettyBoundSig :: BoundSig -> String
-prettyBoundSig b = prettyFunSig (unqualifiedText b.name) b.argTypes b.returnType
+-- | Render a function signature @name(T1, ..., Tn) -> Tret@. The name
+-- is rendered through 'renderAtom' so operator names like @'+'@ quote
+-- correctly.
+prettyFunSig :: Text -> [TypeExpr] -> TypeExpr -> String
+prettyFunSig name = prettyFunSigNamed (renderAtom name)
 
--- | Render a list of bounds as the @requiring B1, B2, ..., Bn@ trailer
--- (no leading space, no trailing period). Empty input renders as the
--- empty string so callers can append unconditionally.
-prettyRequiring :: [BoundSig] -> String
-prettyRequiring [] = ""
-prettyRequiring bs = " requiring " ++ intercalate ", " (map prettyBoundSig bs)
+-- | Render a bound's name, given the module it is declared in (@home@).
+-- A bound from @home@ prints bare; any other prints qualified, e.g.
+-- @prelude:'>='@.
+prettyBoundName :: Text -> Name -> String
+prettyBoundName home name = case name of
+  Qualified m n | m /= home -> prettyQualifiedName (QualifiedName m n)
+  _ -> renderAtom (unqualifiedText name)
+
+-- | Render a bound signature, given the module it is declared in (see
+-- 'prettyBoundName').
+prettyBoundSig :: Text -> BoundSig -> String
+prettyBoundSig home b =
+  prettyFunSigNamed (prettyBoundName home b.name) b.argTypes b.returnType
+
+-- | Render a list of bounds as the @requiring B1, B2, ..., Bn@ trailer,
+-- with a leading space when non-empty (no trailing period). Empty
+-- input renders as the empty string so callers can append
+-- unconditionally. @home@ is the module the bounds are declared in
+-- (see 'prettyBoundName').
+--
+-- With two or more bounds each one gets parens
+-- (@requiring (B1), (B2)@): @,@ binds tighter than @->@, so bare
+-- @B1, B2@ reparses as one bound. One bound needs no parens.
+prettyRequiring :: Text -> [BoundSig] -> String
+prettyRequiring _ [] = ""
+prettyRequiring home [b] = " requiring " ++ prettyBoundSig home b
+prettyRequiring home bs =
+  " requiring " ++ intercalate ", " (map (parenthesized . prettyBoundSig home) bs)
+  where
+    parenthesized s = "(" ++ s ++ ")"
 
 -- | Render a refinement type as the @refining T@ trailer (no leading
 -- space, no trailing period). 'Nothing' renders as the empty string so
@@ -380,7 +405,7 @@ prettyConstraintDecl qn arity mArgTys bounds = case mArgTys of
       ++ "("
       ++ intercalate ", " (map prettyTypeExpr argTys)
       ++ ")"
-      ++ prettyRequiring bounds
+      ++ prettyRequiring qn.moduleName bounds
       ++ "."
 
 -- | Render a function-flavored declaration (@:- function@,
@@ -399,7 +424,7 @@ prettyFunctionDecl f kind =
       sigs = f.signatures
       keyword = declKindKeyword kind
       isFunction = kind == DKFunction || kind == DKOpenFunction
-      reqStr = if isFunction then prettyRequiring f.requiring else ""
+      reqStr = if isFunction then prettyRequiring qn.moduleName f.requiring else ""
       refStr = if kind == DKFunction then prettyRefining f.refining else ""
    in case sigs of
         [] ->
