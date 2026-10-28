@@ -51,6 +51,8 @@ R = 55
   variable. The same symbol twice in one call is one variable; a bare
   `_` is fresh each time. Uppercase ones are printed, `_`-prefixed
   ones are not. Anything else passes through as an atom.
+- Two query variables that end up unified but still unbound print as
+  each other (`A = B`, `B = A`), the same as `ychr run --show-bindings`.
 - `(string->symbol "Foo")` is still `'Foo`, so it's still a variable.
   For a capitalized atom, skip `tell` and call the alias directly:
   `(fib:fib/2 s 10 r)` with `r` from `make-var`. There a symbol is

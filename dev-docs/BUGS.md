@@ -200,44 +200,6 @@ coarser, arity-blind definition: look it up against every type
 declaring it (not just the alias table) and compare the used arity
 against the set, the way `Rename.warnUnknownDataCon` already does.
 
-## The Scheme `gen-driver` driver does not print variable aliases
-
-**Documented claim.** None; `run` and the Scheme driver disagree.
-`SchemeDriver`'s module haddock says it prints bindings "in the same
-format as `prettyBindings`."
-
-**Test.**
-
-    :- module(al, [al/2]).
-    :- chr_constraint al/2.
-    al(R, S) <=> R = S.
-
-    ychr run -g 'al:al(R, S)' --show-bindings al.chr
-    ychr gen-driver -g 'al:al(R, S)' al.chr > run.scm
-    # then run run.scm with guile against a `-t scheme` compile of al.chr
-
-**Expected.** Both surfaces print the same thing for two query
-variables unified together while still unbound.
-
-**Actual.** The Haskell `run --show-bindings` prints:
-
-    R = S
-    S = R
-
-The Scheme driver prints:
-
-    R = _
-    S = _
-
-**Notes.** `YCHR.Run.executePreparedQuery` groups query variables by
-`VarId` and prints each as another member of its alias class rather
-than a bare `_`. `SchemeDriver.generateDriver` and `pretty-term` have
-no such grouping, so an aliased unbound variable always prints `_`.
-The `(ychr repl)` `tell` helper has the same gap.
-
-**Fix sketch.** Port the alias-class grouping to the Scheme side, or
-document that it only shows raw unbound-variable output there.
-
 ## `YCHR-16002` ignores arity
 
 **Documented claim.** PROJECT.md: function names "cannot collide with

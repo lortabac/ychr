@@ -217,7 +217,7 @@
   ;;; Mirrors `runtimeToPExpr` in YCHR.Internal.Pretty: it shapes a
   ;;; runtime value into the node form the renderer consumes. Nodes are
   ;;; tagged vectors:
-  ;;;   #(wildcard) #(int n) #(float x) #(text s)
+  ;;;   #(wildcard) #(var name) #(int n) #(float x) #(text s)
   ;;;   #(atom name) #(compound name (node ...)) #(opaque value)
   ;;; A mangled `module__name` splits into the `:` compound, so the
   ;;; infix renderer can parenthesize the qualified form exactly as
@@ -229,13 +229,18 @@
   ;;; dev-docs/SCHEME_BACKEND_GAPS.md ("Closure pretty-printing").
   ;;; ---------------------------------------------------------------------
 
-  (define (value->pexpr v)
+  ;; ALIASES maps a var id to the name to print for it (see
+  ;; key-aliases). With '() every unbound var prints as _.
+  (define (value->pexpr aliases v)
     (let ((d (deref v)))
       (cond
-        ;; An unbound variable has no alias on the Scheme side, so it is
-        ;; a wildcard — the form `valueToTerm` gives a variable with no
-        ;; alias.
-        ((var? d) (vector 'wildcard))
+        ;; An unbound variable prints under its alias if one was
+        ;; assigned (it shares a class with another printed name —
+        ;; see `key-aliases`); otherwise it is a wildcard, the form
+        ;; `valueToTerm` gives a variable with no alias.
+        ((var? d)
+         (let ((found (assv (var-id d) aliases)))
+           (if found (vector 'var (cdr found)) (vector 'wildcard))))
         ;; Scheme booleans are the atoms `true`/`false` at the Term
         ;; level (`valueToTerm`).
         ((boolean? d) (vector 'atom (if d "true" "false")))
@@ -249,7 +254,8 @@
         ((symbol? d) (atom->pexpr d))
         ((term? d)
          (let ((f (term-functor d))
-               (args (map value->pexpr (vector->list (term-args d)))))
+               (args (map (lambda (a) (value->pexpr aliases a))
+                          (vector->list (term-args d)))))
            (cond
              ;; Canonicalized nil, in the bare and the mangled spelling.
              ((and (nil-functor? f) (null? args)) (vector 'atom "[]"))
@@ -294,6 +300,7 @@
     (let ((kind (vector-ref p 0)))
       (cond
         ((eq? kind 'wildcard) "_")
+        ((eq? kind 'var) (vector-ref p 1))
         ((eq? kind 'int)
          (let ((n (vector-ref p 1)))
            (if (negative? n)
@@ -413,25 +420,78 @@
       (else (string-append " | " (render-pexpr max-arg-prec p)))))
 
   ;; Pretty-print a CHR value, matching Haskell prettyTerm exactly.
+  ;; No aliases: every unbound variable prints as `_`.
   (define (pretty-term v)
-    (render-pexpr max-prec (value->pexpr v)))
+    (render-pexpr max-prec (value->pexpr '() v)))
+
+  ;; Binding names starting with `_` are hidden when printed (Prolog
+  ;; convention; mirrors Pretty.isHiddenBindingName on the Haskell
+  ;; side). The variable is still bound.
+  (define (hidden-name? sym)
+    (let ((s (symbol->string sym)))
+      (and (> (string-length s) 0) (char=? (string-ref s 0) #\_))))
+
+  ;; The names in BS (a list of (symbol . value), already sorted)
+  ;; whose value dereferences to the unbound variable ID, in BS's
+  ;; order.
+  (define (alias-class id bs)
+    (let loop ((rest bs) (acc '()))
+      (cond
+        ((null? rest) (reverse acc))
+        ((eqv? (get-var-id (cdr (car rest))) id)
+         (loop (cdr rest) (cons (car (car rest)) acc)))
+        (else (loop (cdr rest) acc)))))
+
+  ;; The display name for K in the ascending NAMES list: the one right
+  ;; after K, wrapping to the first (canonical) name; if K isn't in
+  ;; NAMES (it's some other printed key, or it was excluded as
+  ;; hidden), the canonical name.
+  (define (display-name k names)
+    (let ((tail (memq k names)))
+      (if (and tail (pair? (cdr tail)))
+          (cadr tail)
+          (car names))))
+
+  ;; Var-id -> name alist for printing key K. Groups BS by the unbound
+  ;; var each value derefs to; in a class of 2+, each name shows the
+  ;; next one (see display-name). Singletons add nothing, so they print
+  ;; as _. Mirrors buildAliasClasses / perKeyAliases in YCHR.Run.
+  ;; Names in BS must be distinct.
+  (define (key-aliases k bs)
+    (let loop ((rest bs) (seen '()) (acc '()))
+      (if (null? rest)
+          acc
+          (let* ((id (get-var-id (cdr (car rest))))
+                 (new? (and id (not (memv id seen))))
+                 (names (and new? (alias-class id bs))))
+            (loop (cdr rest)
+                  (if new? (cons id seen) seen)
+                  (if (and names (>= (length names) 2))
+                      (cons (cons id (symbol->string (display-name k names))) acc)
+                      acc))))))
 
   ;; Format an alist of ((symbol . value) ...) bindings as
   ;;   Name = pretty-term\n
-  ;; one per line, sorted by symbol name. Matches the output of
-  ;; YCHR.Internal.Pretty.prettyBindings on the Haskell side. Returns a string.
+  ;; one per line, sorted by symbol name, `_`-prefixed names dropped.
+  ;; Matches the output of YCHR.Internal.Pretty.prettyBindings, alias
+  ;; printing included: two query variables unified together but still
+  ;; unbound print as each other (see `key-aliases`). Returns a
+  ;; string.
   (define (bindings->string bs)
-    (let ((sorted (list-sort
-                   (lambda (a b)
-                     (string<? (symbol->string (car a))
-                               (symbol->string (car b))))
-                   bs)))
+    (let* ((visible (filter (lambda (b) (not (hidden-name? (car b)))) bs))
+           (sorted (list-sort
+                    (lambda (a b)
+                      (string<? (symbol->string (car a))
+                                (symbol->string (car b))))
+                    visible)))
       (let-values (((port extract) (open-string-output-port)))
         (for-each
          (lambda (b)
            (put-string port (symbol->string (car b)))
            (put-string port " = ")
-           (put-string port (pretty-term (cdr b)))
+           (put-string port (render-pexpr max-prec
+                                           (value->pexpr (key-aliases (car b) sorted)
+                                                          (cdr b))))
            (put-char port #\newline))
          sorted)
         (extract))))

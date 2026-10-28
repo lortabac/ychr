@@ -6,6 +6,11 @@ The Scheme `(ychr repl)` `tell` now passes the same variable for a
 repeated symbol (`'R 'R`); it used to make two and print `R` twice. A
 bare `'_` still gets a fresh variable each time.
 
+The Scheme `gen-driver` driver and `(ychr repl)` `tell` now print query
+variables that are unified together but still unbound as each other
+(`A = B`, `B = A`), as `ychr run --show-bindings` does. They used to
+print `_`.
+
 A missing or unreadable input file is now `YCHR-50005`, reported like
 any other compile error, instead of an uncaught `IOException`.
 `:recompile` keeps the previous program loaded when this happens, and

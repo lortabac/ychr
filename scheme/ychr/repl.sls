@@ -60,14 +60,10 @@
                        (cons v out)
                        (cons (cons (car args) v) binds)))))))))
 
-  ;; Drop _-prefixed names (see Pretty.isHiddenBindingName).
-  (define (visible-binds binds)
-    (filter
-     (lambda (b) (not (char=? (string-ref (symbol->string (car b)) 0) #\_)))
-     binds))
-
   (define (tell session proc . args)
     (let-values (((processed binds) (process-args session args)))
       (apply proc session processed)
-      (pretty-bindings (visible-binds binds))))
+      ;; bindings->string hides _-names and handles aliases, so pass
+      ;; BINDS as is.
+      (pretty-bindings binds)))
 )
