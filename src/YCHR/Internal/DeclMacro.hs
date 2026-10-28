@@ -330,6 +330,9 @@ resolveUse env scope use = case use.qualifier of
     | not (Map.member m env.scopes) -> Left (DeclMacroRenameError (UnknownModule m))
     | m `notElem` map (.importModule) scope.imports ->
         Left (DeclMacroRenameError (ModuleNotImported m n a))
+    -- Exported, but the import list leaves it out.
+    | Set.member (QualifiedIdentifier m n a) env.exported ->
+        Left (DeclMacroRenameError (ExcludedByImportList m n a))
     | otherwise -> Left (DeclMacroRenameError (NotExportedByModule m n a))
   where
     n = use.name

@@ -670,7 +670,7 @@ Two consequences follow:
 A user who imports `library(aggregates)` in full can use `count/2`.
 With `:- use_module(library(aggregates), [macro(count/2)])` the
 expansion's reference to `aggregates:count_spec` fails
-(YCHR-20009), and the diagnostic says that the reference came from
+(YCHR-20044), and the diagnostic says that the reference came from
 `count/2` and suggests widening the import list.
 
 **Definition-time check.** A qualified name `M:x` in a macro body,
@@ -708,9 +708,9 @@ ychr check graph.chr
 
 ```
 === error ===
-graph.chr:5:1: YCHR-20009
-Module 'aggregates' does not export 'count_spec/0'
-  Hint: check the spelling and the export list of 'aggregates'
+graph.chr:5:1: YCHR-20044
+Module 'aggregates' exports 'count_spec/0', but the import list for 'aggregates' leaves it out
+  Hint: add it to the import list, or import 'aggregates' in full
   in the expansion of aggregates:count/2, used at graph.chr:5:1
   in the expansion of graph:in_degree/2, used at graph.chr:5:1
 node(N), in_degree(N, C)
@@ -720,9 +720,10 @@ The chain covers:
 
 - expansion-time errors (the ones below);
 - renaming errors and warnings (`YCHR-20001`–`YCHR-20022`,
-  `YCHR-20101`, `YCHR-20102`) reached while renaming expanded code: a
-  goal-macro expansion, or a rule or equation a declaration macro
-  generated (goal macros first, then declaration macros);
+  `YCHR-20044`, `YCHR-20101`, `YCHR-20102`) reached while renaming
+  expanded code: a goal-macro expansion, or a rule or equation a
+  declaration macro generated (goal macros first, then declaration
+  macros);
 - errors in clauses a declaration macro generated (15xxx
   parse-validation errors, with that clause's chain).
 

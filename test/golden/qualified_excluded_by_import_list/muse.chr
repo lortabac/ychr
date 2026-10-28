@@ -1,0 +1,4 @@
+:- module(muse, [go/0]).
+:- use_module(mlib, [macro(one/1), item/1]).   % leaves out both/2
+:- chr_constraint go/0.
+go <=> mlib:both(1, 2).

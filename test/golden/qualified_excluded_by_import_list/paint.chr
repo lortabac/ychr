@@ -1,0 +1,4 @@
+:- module(paint, [paint/1]).
+:- use_module(colors, [type(col/0, [red])]).   % leaves out green
+:- chr_constraint paint/1.
+paint(X) <=> X = colors:green.

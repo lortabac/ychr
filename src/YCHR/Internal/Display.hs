@@ -421,6 +421,7 @@ renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
 renameErrorCode (MalformedAggregateGoal _) = ErrorCode 20041
 renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
 renameErrorCode (ReservedAggregateName _ _) = ErrorCode 20043
+renameErrorCode (ExcludedByImportList _ _ _) = ErrorCode 20044
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1421,6 +1422,22 @@ renameErrorMsg (ReservedAggregateName name arity) =
     ( "aggregate/4, argmin/2, argmax/2, takemin/2 and takemax/2 are"
         ++ " recognized in every rule head without an import; choose"
         ++ " another name or arity"
+    )
+renameErrorMsg (ExcludedByImportList modName name arity) =
+  withHint
+    ( "Module '"
+        ++ T.unpack modName
+        ++ "' exports '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "', but the import list for '"
+        ++ T.unpack modName
+        ++ "' leaves it out"
+    )
+    ( "add it to the import list, or import '"
+        ++ T.unpack modName
+        ++ "' in full"
     )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint

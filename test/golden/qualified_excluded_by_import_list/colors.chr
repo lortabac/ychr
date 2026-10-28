@@ -1,0 +1,2 @@
+:- module(colors, [type(col/0)]).
+:- chr_type col ---> red ; green.

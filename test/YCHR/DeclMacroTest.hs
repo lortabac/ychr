@@ -337,7 +337,7 @@ diagnosticTests =
         es <- declErrors [("p.chr", p1), ("m.chr", user)]
         errNodes es
           @?= [ UnknownDirective "d" 0,
-                DeclMacroRenameError (NotExportedByModule "p" "d" 0)
+                DeclMacroRenameError (ExcludedByImportList "p" "d" 0)
               ],
       testCase "a goal and a declaration macro with one key, then used" $ do
         es <-

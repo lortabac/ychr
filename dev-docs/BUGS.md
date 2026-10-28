@@ -91,40 +91,46 @@ module to lose.
 `renderAtom` of the whole flattened text would quote `lib:gt` as one
 atom. Build `module ++ ":" ++ renderAtom baseName` instead.
 
-## A restricted import list makes `validateQualified` say the module doesn't export the name
+## `fun m:name/arity` is always rejected as "does not export `name/0`"
 
-**Documented claim.** `docs/reference/language.md` §Modules:
-`validateQualified`'s own Haddock already distinguishes "not exported"
-from "excluded by a restricted import list"; the message doesn't.
+**Documented claim.** `docs/reference/language.md` §Scheme backend
+portability: "a qualified `module:name` — which the string reader
+accepts but a source `fun` does not — picks one exactly". So a source
+`fun m:name/arity` is unsupported, but the error should say so.
 
 **Test.**
 
-    :- module(implib, [gt/2, other/1]).
+    :- module(implib, [gt/2]).
     :- function gt(int, int) -> bool.
     gt(X, Y) -> X > Y.
 
-    :- module(impuser, [bar/2]).
-    :- use_module(implib, [other/1]).   % import list omits gt/2
+    :- module(funuser, [bar/2]).
+    :- use_module(implib).
     :- chr_constraint bar(int, int).
-    bar(X, Y) <=> implib:gt(X, Y) | true.
+    bar(X, Y) <=> '$call'(fun implib:gt/2, X, Y) | true.
 
-    ychr check implib.chr impuser.chr
+    ychr check implib.chr funuser.chr
 
-**Expected.** A message distinguishing "`implib` doesn't export this"
-from "your import list doesn't let it through" — the fix differs.
+**Expected.** Either accepted (`implib` is imported in full and
+exports `gt/2`), or an error that says a qualified `fun` reference is
+not supported.
 
 **Actual.**
 
     === error ===
-    impuser.chr:4:15: YCHR-20009
-    Module 'implib' does not export 'gt/2'
+    funuser.chr:4:15: YCHR-20009
+    Module 'implib' does not export 'gt/0'
 
-`implib` *does* export `gt/2`; the restriction is `impuser`'s own
-`use_module(implib, [other/1])`. Same for a `requiring` bound naming
-`implib:gt` — general `validateQualified` gap, not specific to bounds.
+The term parses as `fun((implib:gt)/2)`. `renameTerm`'s two `fun`
+arms (`src/YCHR/Internal/Rename.hs`) only match
+`CompoundTerm (Unqualified fname) []` under the `/`, so the qualified
+name falls through to the generic case and is checked as `gt/0`.
+PROJECT.md already notes the same miss for a query
+(`fun prelude:max/2`).
 
-**Fix sketch.** Give `NotExportedByModule` (or a sibling error) a case
-for "exported, but excluded by your own import list."
+**Fix sketch.** Add a `fun` arm for a `Qualified m fname` under the
+`/`: validate it at `farity` and keep the qualified name (then update
+the language.md sentence), or reject it with its own error.
 
 ## A missing input file crashes with an uncaught `IOException`
 
@@ -210,6 +216,10 @@ mode — the same mode a head pattern gets — so `renameTerm`'s
 aggregate-form check, which only fires in `ResolveTop`/`ResolveAll`
 (`isResolving`), never sees it. Fine for head patterns, which are
 data, but a tell argument is evaluated.
+
+The shared mode also makes a qualified visible macro in a head
+argument (`h(mlib:both(1, 2))`) report `YCHR-20025`, though macros.md
+says head arguments are opaque data. Splitting the modes fixes both.
 
 **Fix sketch.** Tell arguments need their own `ResolveMode` (or a
 flag on `NoResolve`) distinct from head/equation patterns, so the

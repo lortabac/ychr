@@ -1,0 +1,4 @@
+:- module(vmlib, [macro(both/2), macro(same/2), item/1]).
+:- chr_constraint item/1.
+:- macro both(X, Y) ---> [item(X), item(Y)].
+:- macro same(X, Y) ---> [item(X), item(Y)].

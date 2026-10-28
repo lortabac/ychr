@@ -133,10 +133,10 @@ data RenameError
     -- not export (YCHR-20005). Carries the source module, name, and arity.
     UnknownImport Text Text Int
   | -- | A qualified reference @M:n/a@ where @M@ /is/ imported by the
-    -- current module but does not export @(n, arity)@ (or the name is
-    -- excluded by a restricted import list). Carries the source module
-    -- name, the name, and the arity. See 'ModuleNotImported' and
-    -- 'UnknownModule' for the not-imported / non-existent cases.
+    -- current module but does not export @(n, arity)@. Carries the
+    -- source module name, the name, and the arity. See
+    -- 'ModuleNotImported', 'UnknownModule' and 'ExcludedByImportList'
+    -- for the other cases.
     NotExportedByModule Text Text Int
   | -- | A qualified reference @M:n/a@ where module @M@ exists in the
     -- program but the current module never imports it (qualification
@@ -328,6 +328,11 @@ data RenameError
     -- reads that key as the aggregate form, so the declaration is
     -- never used. Carries the name and arity.
     ReservedAggregateName Text Int
+  | -- | A qualified reference @M:n/a@ where @M@ exports @(n, arity)@ but
+    -- the current module's import list for @M@ leaves it out. Covers
+    -- constraints, functions, macros and data constructors. Carries the
+    -- module, the name, and the arity.
+    ExcludedByImportList Text Text Int
   deriving (Eq, Show)
 
 -- | What is wrong with an aggregate goal conjunct, for
@@ -448,8 +453,11 @@ data RenameCtx = RenameCtx
     -- diagnostics for qualified references: if a missing
     -- @'Qualified' m n@ matches an entry whose providers include @m@,
     -- the user named a real-but-hidden constructor and gets
-    -- 'NonExportedConstructor'; otherwise 'NotExportedByModule'.
+    -- 'NonExportedConstructor' (or 'ExcludedByImportList' if @m@
+    -- exports it); otherwise 'NotExportedByModule'.
     allDataConProviders :: DataConProviders,
+    -- | Like 'allDataConProviders', restricted to exported constructors.
+    exportedDataConProviders :: DataConProviders,
     -- | Functions visible to the current module, keyed by base name
     -- with no arity and with constraints excluded. Paired with
     -- 'dataConEnv' (also name-keyed) to decide whether a bare name is
@@ -822,6 +830,8 @@ renameCtxFor mods inputs = ctxFor
     typeExportEnv0 = buildTypeExportEnv mods
     cons = declaredCons mods
     allCons = buildDataConProviders cons
+    exportedCons = exportedDataCons mods
+    exportedConProviders = buildDataConProviders (visibleCons exportedCons cons)
     macroDeclEnv0 = buildMacroDeclEnv mods
     macroExportEnv0 = buildMacroExportEnv mods
     macroDefTable0 = buildMacroDefTable mods
@@ -839,6 +849,7 @@ renameCtxFor mods inputs = ctxFor
                 dataConEnv = Map.empty,
                 dataConProviders = Map.empty,
                 allDataConProviders = allCons,
+                exportedDataConProviders = exportedConProviders,
                 visibleFunNames = buildVisibleFunctionNames mods m,
                 functionKeys = functionKeys0,
                 typeDeclEnv = typeDeclEnv0,
@@ -855,7 +866,7 @@ renameCtxFor mods inputs = ctxFor
                 macroChain = [],
                 declChain = []
               }
-          visible = visibleCons (visibleDataCons mods ctx0) cons
+          visible = visibleCons (visibleDataCons mods exportedCons ctx0) cons
        in ctx0
             { dataConEnv = buildDataConEnv visible,
               dataConProviders = buildDataConProviders visible
@@ -2082,12 +2093,16 @@ resolveName _ ctx site name@(Qualified m n) arity = do
 --     module never imports it (qualification does not bypass the
 --     import requirement). The current module itself is exempt: it
 --     never imports itself, yet its own declarations are in scope;
+--   * 'MacroOutsideGoalPosition' (YCHR-20025) iff @M:n/a@ is a
+--     visible goal macro: a macro is not a value;
+--   * 'ExcludedByImportList' (YCHR-20044) iff @M@ is another module
+--     that exports @(n, arity)@ as a constraint, function, macro or
+--     constructor, but the import list leaves it out;
 --   * constructor-flavored ('NonExportedConstructor', YCHR-20010) iff
 --     @M@ declares @(n, arity)@ as a constructor anywhere — the user
 --     named a real but hidden ctor;
 --   * 'NotExportedByModule' (YCHR-20009) otherwise — @M@ is imported
---     but does not export @(n, arity)@ (or a restricted import list
---     excludes it).
+--     but does not export @(n, arity)@.
 --
 -- Callers return the 'Qualified' name unchanged so traversal can continue.
 validateQualified ::
@@ -2100,12 +2115,25 @@ validateQualified ctx site m n arity
   | m /= ctx.currentModule.name && m `notElem` importedModuleNames ctx =
       emitErrorIn ctx (annAt site (ModuleNotImported m n arity))
   | m `elem` Map.findWithDefault [] key ctx.dataConProviders = pure ()
+  -- A visible macro isn't left out, it's just not a value here.
+  | Just _ <- isVisibleMacro ctx (Qualified m n) arity =
+      emitErrorIn ctx (annAt site (MacroOutsideGoalPosition (QualifiedName m n) arity))
+  | m /= ctx.currentModule.name && exportedByModule =
+      emitErrorIn ctx (annAt site (ExcludedByImportList m n arity))
   | m `elem` Map.findWithDefault [] key ctx.allDataConProviders =
       emitErrorIn ctx (annAt site (NonExportedConstructor m n arity))
   | otherwise =
       emitErrorIn ctx (annAt site (NotExportedByModule m n arity))
   where
     key = UnqualifiedIdentifier n arity
+    -- Exported macro that the import list hides.
+    macroHidden =
+      m `elem` lookupExport key ctx.macroExportEnv
+        && m `notElem` importProviders ctx (macroNames ctx) key
+    exportedByModule =
+      m `elem` lookupExport key ctx.exportEnv
+        || macroHidden
+        || m `elem` Map.findWithDefault [] key ctx.exportedDataConProviders
 
 -- | Every module the current module imports. Used to decide whether a
 -- qualified reference's target module is in scope at all (distinct from
@@ -2287,16 +2315,48 @@ importListPermitsCons k allCons (Just decls) =
     TheseConstructors xs -> Set.fromList xs
     NoTypeEntry -> Set.empty
 
+-- | For each type, the constructor names its module exports. A module
+-- with no export list exports them all, as does a @type(t/n)@ entry
+-- with no constructor list. A type the module doesn't export at all is
+-- left out.
+exportedDataCons :: [CollectedModule] -> Map DeclaredType (Set.Set Text)
+exportedDataCons mods =
+  Map.fromList
+    [ (declaredType m.name td, names)
+    | m <- mods,
+      Ann td _ <- m.typeDecls,
+      Just names <- [allowance m td]
+    ]
+  where
+    allowance m td =
+      let allCons = typeConNames td
+       in case m.exports of
+            Nothing -> Just allCons
+            Just exports -> case typeExportEntry (typeKey td) exports.node of
+              AllConstructors -> Just allCons
+              TheseConstructors xs -> Just (Set.fromList xs)
+              NoTypeEntry -> Nothing
+
+-- | Every constructor name declared on a type.
+typeConNames :: TypeDefinition -> Set.Set Text
+typeConNames td =
+  Set.fromList [unqualifiedText dc.conName | dc <- typeConstructors td]
+
 -- | For each type visible to the current module, the set of constructor
 -- names also visible. Locally declared types contribute every declared
--- constructor; imported types contribute @exporterAllowlist ∩
--- importerAllowlist@ where each side defaults to "all constructors" when
--- its @type(...)@ clause has no constructor list. A type with an empty
--- constructor set still appears in the map: the type itself remains
--- visible (type-level visibility is governed independently by
--- 'resolveTypeName'), only its constructors are hidden.
-visibleDataCons :: [CollectedModule] -> RenameCtx -> Map DeclaredType (Set.Set Text)
-visibleDataCons mods ctx =
+-- constructor; imported types contribute @exported ∩
+-- importerAllowlist@, where the importer side defaults to "all
+-- constructors" when its @type(...)@ clause has no constructor list. A
+-- type with an empty constructor set still appears in the map: the type
+-- itself remains visible (type-level visibility is governed
+-- independently by 'resolveTypeName'), only its constructors are
+-- hidden.
+visibleDataCons ::
+  [CollectedModule] ->
+  Map DeclaredType (Set.Set Text) ->
+  RenameCtx ->
+  Map DeclaredType (Set.Set Text)
+visibleDataCons mods exported ctx =
   Map.fromList
     [ entry
     | m <- mods,
@@ -2305,24 +2365,16 @@ visibleDataCons mods ctx =
     ]
   where
     entryFor m td =
-      let k = typeKey td
-          allCons =
-            Set.fromList [unqualifiedText dc.conName | dc <- typeConstructors td]
+      let dt = declaredType m.name td
+          allCons = typeConNames td
        in if m.name == ctx.currentModule.name
-            then Just (declaredType m.name td, allCons)
-            else case ( exporterAllowance m k allCons,
-                        importerAllowance m.name k allCons
+            then Just (dt, allCons)
+            else case ( Map.lookup dt exported,
+                        importerAllowance m.name (typeKey td) allCons
                       ) of
               (Just expSet, Just impSet) ->
-                Just (declaredType m.name td, Set.intersection expSet impSet)
+                Just (dt, Set.intersection expSet impSet)
               _ -> Nothing
-
-    exporterAllowance m k allCons = case m.exports of
-      Nothing -> Just allCons
-      Just exports -> case typeExportEntry k exports.node of
-        AllConstructors -> Just allCons
-        TheseConstructors xs -> Just (Set.fromList xs)
-        NoTypeEntry -> Nothing
 
     importerAllowance mn k allCons =
       let relevant = [imp.importItems | imp <- ctx.moduleImports, imp.importModule == mn]

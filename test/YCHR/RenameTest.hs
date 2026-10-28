@@ -1288,6 +1288,33 @@ importListTests =
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modOrder, modLogic]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
+      testCase "qualified name left out by the import list" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2, "geq" // 2]
+                `exporting` ["leq" // 2, "geq" // 2]
+            modLogic =
+              (module' "Logic")
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Order"
+                            ( Just
+                                [ ConstraintDecl
+                                    ( ConstraintDeclBody
+                                        "geq"
+                                        2
+                                        Nothing
+                                        Nothing
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                }
+                `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        renameProgram [modOrder, modLogic]
+          @?= Left [noDiag (AnnP (ExcludedByImportList "Order" "leq" 2) dummyLoc (Atom ""))],
       testCase "error for import list item not exported" $ do
         let modOrder =
               module' "Order"

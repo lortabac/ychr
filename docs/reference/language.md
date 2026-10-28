@@ -105,10 +105,12 @@ name and arity, an unqualified use is rejected (`YCHR-20001`;
 with the prelude, rename yours.
 
 Qualifying does not bypass imports: `m:name` is valid only if the
-current module imports `m` and `m` exports `name`. Unimported module:
-`YCHR-20014` (`ModuleNotImported`). Unknown module: `YCHR-20015`
-(`UnknownModule`). Imported module without that export: `YCHR-20009`
-(`NotExportedByModule`).
+current module imports `m` and the import makes `name` visible.
+Unimported module: `YCHR-20014` (`ModuleNotImported`). Unknown module:
+`YCHR-20015` (`UnknownModule`). Imported module without that export:
+`YCHR-20009` (`NotExportedByModule`). Imported module that exports it,
+but whose import list leaves it out: `YCHR-20044`
+(`ExcludedByImportList`).
 
 `:- use_module(library(M))` names a bundled library: `M` is resolved
 from the standard library map, and an unknown name is rejected
@@ -163,7 +165,9 @@ A constructor named in either list but not declared on the type:
 but excluded by the exporter's allowlist: `YCHR-20011` ("declared but
 not visible", distinct from "unknown"). A qualified reference
 `palette:green` to a constructor outside `palette`'s allowlist:
-`YCHR-20010`. Bare and qualified syntax see the same view of the module.
+`YCHR-20010`; to one `palette` exports but your import list leaves
+out: `YCHR-20044`. Bare and qualified syntax see the same view of the
+module.
 
 ### Opaque types
 

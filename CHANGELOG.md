@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+A qualified name `m:x` that `m` exports but your
+`use_module(m, [...])` list leaves out is now `YCHR-20044`
+(`ExcludedByImportList`), not `YCHR-20009`/`YCHR-20010`. Same for
+constraints, functions, macros and data constructors.
+
+A visible goal macro written qualified where a value goes
+(`item(m:mac(1))`, a `requiring` bound) is now `YCHR-20025`, not
+`YCHR-20009`.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameError` has a new
+  constructor, `ExcludedByImportList Text Text Int`.
+
 An aggregate form (`aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2`,
 `takemax/2`) in a guard, an `is` right-hand side, a function or lambda
 body, or nested in another expression is now `YCHR-20040`
