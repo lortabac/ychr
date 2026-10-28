@@ -70,6 +70,7 @@ import YCHR.Internal.Rename
 import YCHR.Internal.Rename.Macro (PrimitiveOperand (..))
 import YCHR.Internal.Resolve
   ( BoundTargetKind (..),
+    ExtensionDirective (..),
     RefiningViolation (..),
     ResolveError (..),
   )
@@ -116,6 +117,8 @@ deriving instance Data ResolveError
 deriving instance Data RefiningViolation
 
 deriving instance Data BoundTargetKind
+
+deriving instance Data ExtensionDirective
 
 deriving instance Data HeadPart
 

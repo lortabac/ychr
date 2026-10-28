@@ -10,6 +10,7 @@ module YCHR.Internal.Resolve
     ResolveError (..),
     RefiningViolation (..),
     BoundTargetKind (..),
+    ExtensionDirective (..),
 
     -- * Resolution
     resolveProgram,
@@ -39,7 +40,7 @@ import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -203,6 +204,17 @@ data ResolveError
     -- different one. Reported on every entry after the first. Carries
     -- the local name and arity as written.
     ConstraintUseConflictingDeclaration Text Int
+  | -- | An extension directive targets something that is not a
+    -- function: a constraint, a data constructor or a @host:@ call.
+    -- Carries the directive and the resolved target.
+    ExtensionTargetNotFunction ExtensionDirective Name
+  deriving (Eq, Show)
+
+-- | The three extension directives.
+data ExtensionDirective
+  = ExtendFunctionDirective
+  | ExtendClassDirective
+  | ExtendClassTypeDirective
   deriving (Eq, Show)
 
 -- | Why a @refining@ clause is rejected. A @refining@ clause is
@@ -604,7 +616,7 @@ checkExtendsClosed ::
 checkExtendsClosed funcOpenness mods =
   let declErrs =
         [ noDiag
-            (P.AnnP (ExtendsClosedFunction target) loc (PExpr.Atom ed.name))
+            (P.AnnP (ExtendsClosedFunction target) loc (P.namePExpr ed.name))
         | m <- mods,
           P.Ann d loc <- m.extensionTypes,
           P.ExtendClassTypeDecl ed <- [d],
@@ -844,17 +856,46 @@ buildConstraintUses mods =
 --   * @:- extend_class@ on a @DKFunction@ target
 --   * @:- extend_function@ on a @DKClass@ target
 --
--- Targets unknown to the compiler are already reported by the renamer.
+-- and those whose target is not a function at all (a constraint, a
+-- data constructor or a @host:@ call). Targets unknown to the compiler
+-- are already reported by the renamer.
 checkExtensionKinds ::
   Map QualifiedName FunctionDeclKind ->
   [CollectedModule] ->
   [Diagnostic ResolveError]
 checkExtensionKinds funcKinds mods =
-  classTypeErrs ++ extendFunErrs ++ extendClassErrs
+  notFunctionTypeErrs
+    ++ notFunctionEqnErrs
+    ++ classTypeErrs
+    ++ extendFunErrs
+    ++ extendClassErrs
   where
+    notFunctionTypeErrs =
+      [ noDiag (P.AnnP err loc (P.namePExpr ed.name))
+      | m <- mods,
+        P.Ann d loc <- m.extensionTypes,
+        P.ExtendClassTypeDecl ed <- [d],
+        Just target@(Qualified _ _) <- [ed.target],
+        isNothing (targetKind target),
+        let err = ExtensionTargetNotFunction ExtendClassTypeDirective target
+      ]
+    notFunctionEqnErrs =
+      [ noDiag
+          ( P.AnnP
+              (ExtensionTargetNotFunction dir annEq.node.funName)
+              annEq.sourceLoc
+              annEq.parsed
+          )
+      | m <- mods,
+        (dir, annEq) <-
+          [(ExtendFunctionDirective, e) | e <- m.extensions]
+            ++ [(ExtendClassDirective, e) | e <- m.classExtensions],
+        Qualified _ _ <- [annEq.node.funName],
+        isNothing (targetKind annEq.node.funName)
+      ]
     classTypeErrs =
       [ noDiag
-          (P.AnnP (ExtendClassTypeOnFunction target) loc (PExpr.Atom ed.name))
+          (P.AnnP (ExtendClassTypeOnFunction target) loc (P.namePExpr ed.name))
       | m <- mods,
         P.Ann d loc <- m.extensionTypes,
         P.ExtendClassTypeDecl ed <- [d],
@@ -955,7 +996,7 @@ checkExtendsBounded ::
   Map QualifiedName [BoundSig] -> [CollectedModule] -> [Diagnostic ResolveError]
 checkExtendsBounded funcRequiring mods =
   [ noDiag
-      (P.AnnP (ExtendTypeOnBoundedFunction target) loc (PExpr.Atom ed.name))
+      (P.AnnP (ExtendTypeOnBoundedFunction target) loc (P.namePExpr ed.name))
   | m <- mods,
     P.Ann d loc <- m.extensionTypes,
     P.ExtendClassTypeDecl ed <- [d],

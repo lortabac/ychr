@@ -1,0 +1,6 @@
+:- module(ext, []).
+:- use_module(oc).
+
+:- extend_class_type oc:sz(string) -> int.
+:- extend_class oc:sz(_) -> 0.
+:- extend_function oc:ef(X) | X > 100 -> 0.

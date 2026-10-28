@@ -267,7 +267,7 @@ extendClassType :: Text -> [TypeExpr] -> TypeExpr -> Declaration
 extendClassType name argTypes returnType =
   ExtendClassTypeDecl
     ( ExtendClassTypeDeclBody
-        { name = name,
+        { name = Unqualified name,
           arity = length argTypes,
           argTypes = Just argTypes,
           returnType = Just returnType,

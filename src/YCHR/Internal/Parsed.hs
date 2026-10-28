@@ -33,6 +33,7 @@ module YCHR.Internal.Parsed
     noAnnPAt,
     Site (..),
     siteOf,
+    namePExpr,
     annAt,
 
     -- * Program structure
@@ -125,6 +126,11 @@ data Site = Site
 -- | The site of an annotated node.
 siteOf :: AnnP a -> Site
 siteOf a = Site a.sourceLoc a.parsed
+
+-- | A name as written, for a diagnostic's node line: @n@ or @m:n@.
+namePExpr :: Name -> PExpr
+namePExpr (Unqualified n) = Atom n
+namePExpr (Qualified m n) = Compound ":" [noAnn (Atom m), noAnn (Atom n)]
 
 -- | Annotate a node with a site.
 annAt :: Site -> a -> AnnP a
@@ -228,9 +234,10 @@ data FunctionDeclBody = FunctionDeclBody
 -- module. The renamer fills in @target@ with the class's resolved
 -- qualified name. After the rename phase, @target@ is always
 -- @Just (Qualified _ _)@; @Nothing@ only appears in the freshly-parsed
--- AST, before the renamer has run.
+-- AST, before the renamer has run. @name@ is the target as written,
+-- and may be qualified.
 data ExtendClassTypeDeclBody = ExtendClassTypeDeclBody
-  { name :: Text,
+  { name :: Name,
     arity :: Int,
     argTypes :: Maybe [TypeExpr],
     returnType :: Maybe TypeExpr,

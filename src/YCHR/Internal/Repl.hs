@@ -567,19 +567,23 @@ declarationsText prog = concatMap (++ "\n") declLines
   where
     declLines = dedup entries
     entries =
-      [ (kw, m.name, n, a)
+      [ entry
       | m <- prog.allModules,
         Parsed.Ann d _ <- m.decls,
-        (kw, n, a) <- case d of
+        entry <- case d of
           Parsed.ConstraintDecl
             Parsed.ConstraintDeclBody {name = n, arity = a} ->
-              [("chr_constraint", n, a)]
+              [("chr_constraint", m.name, n, a)]
           Parsed.FunctionDecl
             Parsed.FunctionDeclBody {name = n, arity = a, isOpen = o, kind = k} ->
-              [(declKindKeyword (toDeclKind o k), n, a)]
+              [(declKindKeyword (toDeclKind o k), m.name, n, a)]
+          -- A qualified target is shown with its own module.
           Parsed.ExtendClassTypeDecl
-            Parsed.ExtendClassTypeDeclBody {name = n, arity = a} ->
-              [("extend_class_type", n, a)]
+            Parsed.ExtendClassTypeDeclBody {name = Qualified tm n, arity = a} ->
+              [("extend_class_type", tm, n, a)]
+          Parsed.ExtendClassTypeDecl
+            Parsed.ExtendClassTypeDeclBody {name = Unqualified n, arity = a} ->
+              [("extend_class_type", m.name, n, a)]
           _ -> []
       ]
     dedup = go Set.empty

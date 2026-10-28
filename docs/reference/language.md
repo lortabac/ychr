@@ -112,6 +112,12 @@ Unimported module: `YCHR-20014` (`ModuleNotImported`). Unknown module:
 but whose import list leaves it out: `YCHR-20044`
 (`ExcludedByImportList`).
 
+Only references can be qualified. A definition head (a declaration, a
+type or constructor head, a top-level equation) can't be `m:name`,
+even with the module's own name: `YCHR-15029`
+(`QualifiedDefinitionName`). Extension targets are references, so they
+can be (see [Declaration placement](#declaration-placement)).
+
 `:- use_module(library(M))` names a bundled library: `M` is resolved
 from the standard library map, and an unknown name is rejected
 (`YCHR-10001`). A bare `:- use_module(M)` names a *user module*
@@ -349,9 +355,17 @@ Split declarations: `DiscontiguousFunctionDecls`, YCHR-15004.
 Equations interleaved with unrelated items: `DiscontiguousEquations`,
 YCHR-15001. To extend across modules, use `:- open_function` /
 `:- open_class` with `:- extend_function` / `:- extend_class` /
-`:- extend_class_type`. Extending a closed declaration is YCHR-16005;
-the wrong kind, YCHR-16013/16014/16015; a free-floating equation
-outside the declaring module, YCHR-16006.
+`:- extend_class_type`. The target can be qualified:
+
+```prolog
+:- extend_class_type oc:sz(string) -> int.
+:- extend_class oc:sz(_) -> 0.
+```
+
+Extending a closed declaration is YCHR-16005; the wrong kind,
+YCHR-16013/16014/16015; something that is not a function at all (a
+constraint, a qualified constructor, a `host:` call), YCHR-16027; a
+free-floating equation outside the declaring module, YCHR-16006.
 
 ### Inlining
 

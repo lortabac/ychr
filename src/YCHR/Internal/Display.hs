@@ -82,6 +82,7 @@ import YCHR.Internal.Rename.Macro
   )
 import YCHR.Internal.Resolve
   ( BoundTargetKind (..),
+    ExtensionDirective (..),
     RefiningViolation (..),
     ResolveError (..),
   )
@@ -343,6 +344,7 @@ parseValidationErrorCode (UndeclaredMacroClause _ _) = ErrorCode 15025
 parseValidationErrorCode (DiscontiguousMacroClauses _ _) = ErrorCode 15026
 parseValidationErrorCode (DeclMacroBuiltinDirective _ _) = ErrorCode 15027
 parseValidationErrorCode (MalformedDirective _) = ErrorCode 15028
+parseValidationErrorCode (QualifiedDefinitionName _ _) = ErrorCode 15029
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -375,6 +377,7 @@ resolveErrorCode (InlineUnknownFunction _ _) = ErrorCode 16023
 resolveErrorCode (InlineOpenFunction _ _) = ErrorCode 16024
 resolveErrorCode (ConstraintUseUnknownConstraint _ _) = ErrorCode 16025
 resolveErrorCode (ConstraintUseConflictingDeclaration _ _) = ErrorCode 16026
+resolveErrorCode (ExtensionTargetNotFunction _ _) = ErrorCode 16027
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 is reserved: operators are permitted in import lists
@@ -637,6 +640,19 @@ parseValidationErrorMsg (DeclMacroBuiltinDirective name arity) =
         ++ "(...)' would always mean the built-in one; rename the macro"
         ++ " or give it another arity"
     )
+parseValidationErrorMsg (QualifiedDefinitionName m n) =
+  withHint
+    ( "Definition name '"
+        ++ T.unpack m
+        ++ ":"
+        ++ T.unpack n
+        ++ "' cannot be module-qualified"
+    )
+    ( "a definition always names something in this module; write '"
+        ++ T.unpack n
+        ++ "'. To extend another module's open function, use"
+        ++ " :- extend_function, :- extend_class or :- extend_class_type"
+    )
 parseValidationErrorMsg (MalformedDirective name) =
   withHint
     ("Invalid ':- " ++ T.unpack name ++ "' directive")
@@ -892,6 +908,22 @@ resolveErrorMsg (ConstraintUseUnknownConstraint name arity) =
         ++ "', which this module does not declare with :- chr_constraint"
     )
     "':- constraint_use' can only target a constraint declared in the same module"
+resolveErrorMsg (ExtensionTargetNotFunction dir name) =
+  withHint
+    ( "'"
+        ++ directive
+        ++ "' target '"
+        ++ displayName name
+        ++ "' is not a function"
+    )
+    ( "an extension can only target a function declared with "
+        ++ declaredWith
+    )
+  where
+    (directive, declaredWith) = case dir of
+      ExtendFunctionDirective -> (":- extend_function", ":- open_function")
+      ExtendClassDirective -> (":- extend_class", ":- open_class")
+      ExtendClassTypeDirective -> (":- extend_class_type", ":- open_class")
 resolveErrorMsg (ConstraintUseConflictingDeclaration name arity) =
   withHint
     ( "':- constraint_use' names '"

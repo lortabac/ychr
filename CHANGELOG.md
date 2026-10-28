@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+A definition head written `m:name` (a declaration, a type or
+constructor head, a top-level equation) is now `YCHR-15029`
+(`QualifiedDefinitionName`), even with the module's own name. Some
+forms used to be read silently as a definition of `:/2`; others gave a
+misleading error.
+
+- **Breaking:** `YCHR.Internal.Parser.ParseValidationError` has a new
+  constructor, `QualifiedDefinitionName Text Text`.
+
+`:- extend_function`, `:- extend_class` and `:- extend_class_type` can
+name their target qualified (`:- extend_class oc:sz(_) -> 0.`). It
+used to be `YCHR-20002` (`Unknown name ':/2'`).
+
+- **Breaking:** an extension whose target is not a function (a
+  constraint, a qualified data constructor, a `host:` call) is now
+  `YCHR-16027` (`ExtensionTargetNotFunction`).
+  `:- extend_function c(X) -> 0.` with `c` an imported constraint
+  used to be accepted and ignored.
+- **Breaking:** `YCHR.Internal.Resolve.ResolveError` has a new
+  constructor, `ExtensionTargetNotFunction ExtensionDirective Name`.
+- **Breaking:** `ExtendClassTypeDeclBody.name` is now a `Name` (the
+  target as written) instead of `Text`. `YCHR.DSL.extendClassType`
+  still takes `Text`.
+
 A qualified name `m:x` that `m` exports but your
 `use_module(m, [...])` list leaves out is now `YCHR-20044`
 (`ExcludedByImportList`), not `YCHR-20009`/`YCHR-20010`. Same for

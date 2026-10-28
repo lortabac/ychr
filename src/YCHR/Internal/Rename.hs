@@ -782,7 +782,8 @@ buildMacroDefTable mods =
 declNameArity :: Declaration -> Maybe UnqualifiedIdentifier
 declNameArity (ConstraintDecl cd) = Just (UnqualifiedIdentifier cd.name cd.arity)
 declNameArity (FunctionDecl fd) = Just (UnqualifiedIdentifier fd.name fd.arity)
-declNameArity (ExtendClassTypeDecl ed) = Just (UnqualifiedIdentifier ed.name ed.arity)
+declNameArity (ExtendClassTypeDecl ed) =
+  Just (UnqualifiedIdentifier (unqualifiedText ed.name) ed.arity)
 declNameArity (TypeExportDecl td) = Just (UnqualifiedIdentifier td.name td.arity)
 declNameArity (OperatorDecl {}) = Nothing
 -- Macros are tracked through their own table ('YCHR.Internal.Rename.Macro'),
@@ -1255,7 +1256,8 @@ renameEquation ctx0 eq = do
   let ctx = ctx0 {declChain = eq.expansion}
   -- Equation args don't carry their own SourceLoc; use the guard's as a proxy.
   let site = siteOf eq.guard
-  resolvedFunName <- resolveName ResolveTop ctx site eq.funName (length eq.args)
+  resolvedFunName <-
+    resolveName ResolveTop ctx (nameSite site.loc eq.funName) eq.funName (length eq.args)
   renamedArgs <- traverse (renameTerm ctx site NoResolve) eq.args
   renamedGuard <- traverse (traverse (renameTerm ctx site ResolveAll)) eq.guard
   renamedRhs <-
@@ -2459,8 +2461,7 @@ renameDeclaration ctx loc (FunctionDecl fd) = do
           }
     )
 renameDeclaration ctx loc (ExtendClassTypeDecl ed) = do
-  resolved <-
-    resolveName ResolveTop ctx (Site loc (Atom ed.name)) (Unqualified ed.name) ed.arity
+  resolved <- resolveName ResolveTop ctx (nameSite loc ed.name) ed.name ed.arity
   pure
     ( ExtendClassTypeDecl
         ExtendClassTypeDeclBody
@@ -2495,10 +2496,7 @@ renameBoundSig ctx _ bs = do
         loc = bs.loc
       }
   where
-    -- Display only: keep the qualifier in the diagnostic's node line.
-    site = case bs.name of
-      Unqualified t -> Site bs.loc (Atom t)
-      Qualified m t -> Site bs.loc (Compound ":" [noAnn (Atom m), noAnn (Atom t)])
+    site = nameSite bs.loc bs.name
     resolveBoundName = case bs.name of
       Qualified m n -> do
         validateQualified ctx site m n bs.arity
@@ -2512,6 +2510,11 @@ renameBoundSig ctx _ bs = do
               ms -> do
                 emitErrorIn ctx (annAt site (AmbiguousName n bs.arity ms))
                 pure (Unqualified n)
+
+-- | A diagnostic site for a name. Display only: keeps the qualifier in
+-- the diagnostic's node line.
+nameSite :: SourceLoc -> Name -> Site
+nameSite loc n = Site loc (namePExpr n)
 
 renameTypeExpr :: RenameCtx -> TypeExpr -> TypeExpr
 renameTypeExpr _ (TypeVar v) = TypeVar v

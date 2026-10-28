@@ -6,70 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## The `:` compound reaches constraint and function declarations unparsed
-
-**Documented claim.** `docs/reference/language.md` §Modules defines
-`module:name` as a qualified reference, resolved the same way in
-every position.
-
-**Test.**
-
-    :- module(oc, [fun sz/1]).
-    :- open_class sz(int) -> int.
-    sz(X) -> X.
-
-    :- module(o1, []).
-    :- use_module(oc).
-    :- function oc:foo(int) -> int.
-
-    ychr check oc.chr o1.chr
-
-**Expected.** Either a qualified declaration name is rejected (a
-declaration always targets the current module), or `oc:foo` resolves
-as a genuine qualified reference.
-
-**Actual.** `ychr check` exits 0. `convertFunctionDecl`'s `typedCore`
-(`src/YCHR/Internal/Parser.hs`; `convertConstraintDecl`'s generic arm
-has the same shape, for `:- chr_constraint oc:foo(int).`) matches the
-raw `Compound ":" [Atom "oc", ...]` term, so the declaration is
-silently named `:/2` rather than `foo` in module `oc`. No diagnostic.
-
-**Fix sketch.** Reject a `Compound ":"` declaration head with a
-dedicated parse error before the generic arm can match it.
-
-## `:- extend_class_type`/`:- extend_class` cannot name their target qualified
-
-**Documented claim.** `dev-docs/PROJECT.md` §Closed and Open Functions
-says extension directives "resolve their target through the importing
-module's imports," implying `module:name` is legitimate there too.
-
-**Test.**
-
-    :- module(oc, [fun sz/1]).
-    :- open_class sz(int) -> int.
-    sz(X) -> X.
-
-    :- module(o3, []).
-    :- use_module(oc).
-    :- extend_class_type oc:sz(string) -> int.
-    :- extend_class oc:sz(S) -> 0.
-
-    ychr check oc.chr o3.chr
-
-**Expected.** Either the qualified target resolves (as `sz` with no
-qualifier already does), or a diagnostic names the qualifier.
-
-**Actual.** Both lines report `YCHR-20002 Unknown name ':/2'`. The
-unqualified spelling (`extend_class_type sz(string) -> int.`) works.
-
-**Notes.** Same parser gap as the entry above. `renameDeclaration`'s
-`ExtendClassTypeDecl` case already resolves a qualified `Name` through
-imports, so this is plausibly a real feature once the parser stops
-reading `oc:sz` as `:/2`.
-
-**Fix sketch.** Give the two directives' head-parsing the same
-`Compound ":"` special case `convertConstraint` has.
-
 ## `prettyBoundSig` drops a bound's module qualifier
 
 **Documented claim.** None stated.
@@ -430,3 +366,36 @@ one, and `YCHR-16002` rejects a function there.
 
 **Actual.** No diagnostic, exit 0. `ychr compile -t vm` lists a
 constraint type `(qualified "host" "foo")`, and the rule never fires.
+
+## A DSL `extendClassType` is read as a declaration, not an extension
+
+**Documented claim.** `docs/reference/dsl.md` maps
+`:- extend_class_type (f(int) -> int).` to
+`` `declaring` [extendClassType "f" ...] ``.
+
+**Test.** In a Haskell test, compile with `compileParsedModules`:
+
+    oc  = module' "oc" `exporting` [function "cl" 1]
+            `declaring` [function "cl" 1]
+            `withEquations` [equation "cl" [var "X"] [] (var "X")]
+    ext = module' "ext" `importing` ["oc"]
+            `declaring` [extendClassType "cl" [strT] intT]
+
+and again with `extendClassType "nosuch" ...` in `ext`.
+
+**Expected.** The same as the parsed directive: `YCHR-16005` for the
+closed `cl`, `YCHR-20002` for `nosuch`.
+
+**Actual.** `cl` gives `YCHR-20001 Ambiguous name 'cl/1'` (could be
+`ext`, `oc`), and `nosuch` compiles with no error.
+
+**Notes.** `declaring` appends to `Module.decls`, but the parser puts
+an `ExtendClassTypeDecl` in `Module.extensionTypes`, which is the only
+list Resolve reads extensions from. In `decls` it is counted as a
+declaration by `Rename.declNameArity` (so `ext` seems to declare `cl`
+itself) and is otherwise ignored. The `ExtendClassTypeDecl` arms of
+`declNameArity` and `Repl.declarationsText` are only reached this way.
+
+**Fix sketch.** Give the DSL a modifier that appends to
+`extensionTypes` (like `withExtensions`), or have `declaring` route
+`ExtendClassTypeDecl` there. Then drop the arms above.

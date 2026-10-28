@@ -1,0 +1,11 @@
+% A qualified extension target goes through the same checks as any
+% other qualified name.
+:- module(ext, []).
+:- use_module(oc, []).
+:- use_module(priv).
+
+:- extend_function nomod:nf(X) -> X.
+:- extend_class_type nomod:nc(string) -> int.
+:- extend_function hid:hf(X) -> X.
+:- extend_function priv:pf(X) -> X.
+:- extend_function oc:ef(X) -> X.

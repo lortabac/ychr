@@ -1,0 +1,13 @@
+% Extension directives may name their target as module:name.
+:- module(oc, [fun sz/1, fun ef/1, run_sz/2, run_ef/2]).
+
+:- open_class sz(int) -> int.
+sz(0) -> 10.
+sz(1) -> 11.
+
+:- open_function ef(int) -> int.
+ef(X) | X =< 100 -> X.
+
+:- chr_constraint run_sz/2, run_ef/2.
+run_sz(X, R) <=> R is sz(X).
+run_ef(X, R) <=> R is ef(X).

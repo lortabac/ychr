@@ -1,0 +1,3 @@
+:- module(priv, []).
+:- open_function pf(int) -> int.
+pf(X) -> X.

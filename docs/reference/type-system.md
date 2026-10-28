@@ -2013,7 +2013,8 @@ Multiple comma-separated typed declarations with the same name and
 arity are grouped into a single overloaded class definition. An
 `:- open_class` extends across modules: other modules may add
 signatures via `:- extend_class_type` and equations via
-`:- extend_class`.
+`:- extend_class`. The target may be qualified
+([language.md §Declaration placement](language.md#declaration-placement)).
 
 An untyped declaration (`:- function size/1.`) desugars to the
 all-`any` signature for type checking (§Defaults) but — a deliberate

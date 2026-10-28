@@ -726,8 +726,10 @@ equation). `:- class` / `:- open_class` cannot carry `requiring`
 (rejected as YCHR-15005, `RequiringOnClass`).
 
 Both extension directives resolve their target through the importing
-module's imports. Targeting a closed declaration is rejected
-(YCHR-16005, `ExtendsClosedFunction`). Targeting the wrong kind is
+module's imports, or qualified as `m:name`. Targeting a closed
+declaration is rejected (YCHR-16005, `ExtendsClosedFunction`), and so
+is a target that is not a function at all, such as a constraint
+(YCHR-16027, `ExtensionTargetNotFunction`). Targeting the wrong kind is
 also rejected: `:- extend_class_type` on `:- open_function`
 (YCHR-16013), `:- extend_class` on `:- open_function`
 (YCHR-16014), and `:- extend_function` on `:- open_class`

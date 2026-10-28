@@ -1,0 +1,3 @@
+:- module(hid, [fun hf/1]).
+:- open_function hf(int) -> int.
+hf(X) -> X.

@@ -1,0 +1,16 @@
+% A definition always names something in its own module, so its head
+% cannot be written module:name. Not even with the module's own name.
+:- module(qdn, []).
+
+:- function oc:fn(int) -> int.
+:- open_class oc:cls/1.
+:- chr_constraint oc:con(int).
+:- chr_constraint oc:ucon/1.
+:- inline oc:inl/1.
+:- constraint_use fact(oc:use/1).
+:- chr_type oc:ty ---> a.
+:- chr_type t ---> oc:ctor ; b.
+:- opaque_type oc:opq.
+:- function qdn:own/1.
+oc:eqn(X) -> X.
+:- chr_constraint X:bad(int).
