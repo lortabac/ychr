@@ -31,6 +31,7 @@ module YCHR.Internal.Display
     operatorConflictCode,
     lambdasInLiveQueryCode,
     lambdasInSchemeDriverCode,
+    fileReadErrorCode,
     runtimeErrorCode,
     goalNotAConstraintCode,
   )
@@ -514,6 +515,10 @@ lambdasInLiveQueryCode = ErrorCode 50003
 -- | 5xxxx — `ychr gen-driver` received an anonymous lambda in a goal argument.
 lambdasInSchemeDriverCode :: ErrorCode
 lambdasInSchemeDriverCode = ErrorCode 50004
+
+-- | 5xxxx — a source file could not be read.
+fileReadErrorCode :: ErrorCode
+fileReadErrorCode = ErrorCode 50005
 
 -- | 20013 — @ychr run -g GOAL@ received a goal that is not a single
 -- declared constraint (bare expression, conjunction, function call,
@@ -1947,6 +1952,18 @@ instance Display Warning where
   displayMsg (TypeCheckWarnings ws) = displayErrors (map displayMsg ws)
 
 instance Display Error where
+  displayMsg (FileReadError path reason) =
+    displayMsgWithSrcLoc
+      MsgBlock
+        { code = fileReadErrorCode,
+          severity = SevError,
+          message =
+            "Cannot read file '" ++ path ++ "': " ++ T.unpack reason,
+          loc = P.SourceLoc path 1 1,
+          label = Nothing,
+          node = Nothing,
+          context = []
+        }
   displayMsg (ParseError _ err) = displayParseError err
   displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DeclMacroErrors errs) = displayErrors (map displayMsg errs)

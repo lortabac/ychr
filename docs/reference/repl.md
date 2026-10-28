@@ -74,7 +74,7 @@ the loaded modules, plus the meta-commands at the outer prompt (only
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `:help` | `:h` | Show meta-command help. |
-| `:recompile` | `:r` | Reload the source files from disk. |
+| `:recompile` | `:r` | Reload the source files. On failure the previous program stays loaded. |
 | `:list_files` | | List the loaded files. |
 | `:list_modules` | | List the loaded modules. |
 | `:list_declarations` | | List visible constraint and function declarations. |

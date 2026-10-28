@@ -138,6 +138,7 @@ common warnings
 common deps
     build-depends:    base >=4.18 && <4.23
                     , array >=0.5 && <0.6
+                    , bytestring >=0.11.2 && <0.13
                     , containers >=0.6 && <0.9
                     , filepath >=1.4 && <1.6
                     , text >=2.0 && <2.2
@@ -183,7 +184,8 @@ executable ychr
     hs-source-dirs:   app
     if impl(ghc)
         hs-source-dirs:   embed
-        other-modules:    YCHR.Embedded.StdLib
+        other-modules:    YCHR.Embedded.ReadSource
+                        , YCHR.Embedded.StdLib
                         , YCHR.Embedded.TypeCheck
         build-depends:    template-haskell >=2.20 && <2.25
     if impl(mhs)
@@ -237,6 +239,7 @@ executable stlc-typechecker
                     , Syntax
                     , Parser
                     , YCHR.Embedded
+                    , YCHR.Embedded.ReadSource
                     , YCHR.Embedded.StdLib
                     , YCHR.Embedded.TypeCheck
     build-depends:    ychr
@@ -323,6 +326,7 @@ test-suite ychr-tests
                     , YCHR.VM.SExprTest
                     , YCHR.VM.ClosureTest
                     , YCHR.Embedded
+                    , YCHR.Embedded.ReadSource
                     , YCHR.Embedded.StdLib
                     , YCHR.Embedded.TypeCheck
     hs-source-dirs:   test
@@ -354,6 +358,7 @@ benchmark ychr-bench
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     other-modules:    YCHR.Embedded
+                    , YCHR.Embedded.ReadSource
                     , YCHR.Embedded.StdLib
                     , YCHR.Embedded.TypeCheck
     hs-source-dirs:   bench
@@ -440,6 +445,7 @@ library
                     , YCHR.Internal.Resolve
                     , YCHR.Internal.Resolved
                     , YCHR.Internal.Resources
+                    , YCHR.Internal.SourceFile
                     , YCHR.Internal.VM
                     , YCHR.Internal.VM.Types
                     , YCHR.Internal.VM.SExpr
@@ -463,6 +469,7 @@ library
                     , YCHR.Internal.Runtime.Trace
 
     other-modules:    YCHR.Internal.LineInput
+                    , YCHR.Internal.IOErrorDescription
 
     build-depends:    ansi-terminal >=0.11 && <1.2
                     , directory >=1.3 && <1.4

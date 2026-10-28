@@ -1,7 +1,9 @@
 module Main (main) where
 
-import Control.Exception (SomeException, displayException, fromException, try)
+import Control.Exception (IOException, SomeException, displayException, fromException, try)
 import Control.Monad (unless, when)
+import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Options.Applicative
@@ -9,6 +11,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
+import System.IO.Error (ioeGetFileName)
 import YCHR.Embedded (loadResources)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
@@ -20,6 +23,7 @@ import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..))
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
+import YCHR.Internal.SourceFile (ioExceptionReason)
 import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
   ( Error (..),
@@ -314,6 +318,26 @@ runGoal resources opts files = withCompiled resources files $ \prog warnings -> 
         Nothing -> hPutStr stderr ("Error: " ++ displayException exc ++ "\n")
       exitFailure
 
+-- | Write generated output to a file, creating its directory first.
+-- A failure (bad path, no permission, …) prints "Error: cannot write
+-- <path>: <reason>" and exits 1, instead of an uncaught 'IOException';
+-- success prints the path, as every target already did.
+--
+-- Reports 'ioeGetFileName' when set: mkdir can fail on a parent dir
+-- (@-d file\/sub@).
+writeOutputFile :: FilePath -> Text -> IO ()
+writeOutputFile outPath contents = do
+  result <- try @IOException $ do
+    createDirectoryIfMissing True (takeDirectory outPath)
+    TIO.writeFile outPath contents
+  case result of
+    Left e -> do
+      let path = fromMaybe outPath (ioeGetFileName e)
+          msg = "Error: cannot write " ++ path ++ ": " ++ T.unpack (ioExceptionReason e)
+      hPutStr stderr (msg ++ "\n")
+      exitFailure
+    Right () -> putStrLn outPath
+
 runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
 runCompile resources opts files =
   withCompiled resources files $ \prog warnings -> do
@@ -331,9 +355,7 @@ runCompile resources opts files =
     case opts.target of
       TargetVM -> do
         let outPath = opts.outputDir </> T.unpack name ++ ".vm"
-        createDirectoryIfMissing True (takeDirectory outPath)
-        TIO.writeFile outPath (serialize vmp)
-        putStrLn outPath
+        writeOutputFile outPath (serialize vmp)
       TargetScheme -> do
         unless (isValidSchemeIdentifier name) $ do
           hPutStr
@@ -348,9 +370,7 @@ runCompile resources opts files =
         let libName = [T.pack "ychr", T.pack "generated", name]
             outPath =
               opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
-        createDirectoryIfMissing True (takeDirectory outPath)
-        TIO.writeFile outPath (generateScheme libName prog.symbolTable vmp prog.opTable)
-        putStrLn outPath
+        writeOutputFile outPath (generateScheme libName prog.symbolTable vmp prog.opTable)
         schemeRuntimeNote
 
 runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()

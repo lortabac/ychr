@@ -45,6 +45,7 @@ import YCHR.Internal.Display
     declMacroErrorCode,
     desugarErrorCode,
     exhaustivenessWarningCode,
+    fileReadErrorCode,
     goalNotAConstraintCode,
     lambdasInLiveQueryCode,
     lambdasInSchemeDriverCode,
@@ -204,6 +205,7 @@ standaloneCodes =
     entry "operatorConflictCode" operatorConflictCode,
     entry "lambdasInLiveQueryCode" lambdasInLiveQueryCode,
     entry "lambdasInSchemeDriverCode" lambdasInSchemeDriverCode,
+    entry "fileReadErrorCode" fileReadErrorCode,
     entry "goalNotAConstraintCode" goalNotAConstraintCode,
     entry "runtimeErrorCode" runtimeErrorCode
   ]

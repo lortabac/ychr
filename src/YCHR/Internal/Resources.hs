@@ -45,11 +45,11 @@ import Control.Exception (IOException, try)
 import Data.List (sort)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
 import System.Directory (doesDirectoryExist, listDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath (takeExtension, (</>))
 import YCHR.Internal.Runtime.Session (SessionInput)
+import YCHR.Internal.SourceFile (readUtf8File)
 import YCHR.Internal.StdLib (StdLib, parseStdLib)
 import YCHR.Internal.TypeCheck.Compiled (compileTypeCheckerModules)
 
@@ -100,9 +100,9 @@ readChrDir dir = do
   where
     readOne f = do
       let path = dir </> f
-      contents <- try @IOException (TIO.readFile path)
+      contents <- readUtf8File path
       pure $ case contents of
-        Left err -> Left (unreadable path (T.pack (show err)))
+        Left reason -> Left (unreadable path reason)
         Right text -> Right (path, text)
 
 -- | Load both resources from a source tree root: @root\/libraries@ and

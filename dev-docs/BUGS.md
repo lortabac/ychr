@@ -47,39 +47,6 @@ PROJECT.md already notes the same miss for a query
 `/`: validate it at `farity` and keep the qualified name (then update
 the language.md sentence), or reject it with its own error.
 
-## A missing input file crashes with an uncaught `IOException`
-
-**Documented claim.** None stated; every other compile failure
-(parse, rename, resolve, type errors) goes through the diagnostic
-envelope (`=== error ===`, a YCHR code) and exits 1.
-
-**Test.**
-
-    ychr check missing.chr
-    ychr run -g go missing.chr
-    ychr compile missing.chr
-    ychr gen-driver -g go missing.chr
-    ychr repl missing.chr
-
-**Actual.**
-
-    ychr: Uncaught exception ghc-internal:GHC.Internal.IO.Exception.IOException:
-    missing.chr: openFile: does not exist (No such file or directory)
-
-No YCHR code, no banner. `TIO.readFile` in `compileFiles`
-(`src/YCHR/Internal/Compile/Pipeline.hs`, around line 729) is
-unhandled. The REPL's `:recompile` (`src/YCHR/Internal/Repl.hs`,
-around line 276) hits the same path if a loaded file is deleted
-before the next `:recompile`, killing the session instead of
-reporting the error and keeping the previous program.
-
-**Fix sketch.** A new `FileReadError FilePath Text` constructor on
-the `Error` type (`Compile/Pipeline.hs`, re-exported by `YCHR.Run`),
-returned by `compileFiles` from a `try @IOException` around the
-read, rendered with its own code in `Display.hs`. Add a pytest for
-`ychr check missing.chr` and for `:recompile` after
-deleting a loaded file.
-
 ## `?/1` can be declared, then is silently ignored
 
 **Documented claim.** `docs/reference/macros.md` §Heads and

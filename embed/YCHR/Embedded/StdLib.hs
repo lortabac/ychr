@@ -41,11 +41,11 @@ module YCHR.Embedded.StdLib (embeddedStdLibSources) where
 
 import Data.List (sort, (\\))
 import Data.Text (Text)
-import Data.Text.IO qualified as TIO
 import Language.Haskell.TH (Exp, Q, reportError)
 import Language.Haskell.TH.Syntax (addDependentFile, lift, runIO)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
+import YCHR.Embedded.ReadSource (readSourceTH)
 
 -- | Every bundled library, sorted by filename. Adding or removing a
 -- @libraries\/*.chr@ file means editing this list: it is what the splice
@@ -66,7 +66,8 @@ librarySources =
   ]
 
 -- | Splice yielding @[(FilePath, Text)]@: every library named by
--- 'librarySources', paired with its UTF-8 contents.
+-- 'librarySources', paired with its contents (read with
+-- 'readUtf8File').
 embeddedStdLibSources :: Q Exp
 embeddedStdLibSources = do
   -- Resolved relative to the package root (GHC runs splices with the
@@ -79,7 +80,7 @@ embeddedStdLibSources = do
     readOne dir f = do
       let path = dir </> f
       addDependentFile path
-      contents <- runIO (TIO.readFile path)
+      contents <- readSourceTH path
       pure (path, contents)
 
 -- | Check that the directory and 'librarySources' name the same files.

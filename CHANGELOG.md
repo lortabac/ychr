@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+A missing or unreadable input file is now `YCHR-50005`, reported like
+any other compile error, instead of an uncaught `IOException`.
+`:recompile` keeps the previous program loaded when this happens, and
+an output file `ychr compile` can't write now prints a message and
+exits 1 instead of an uncaught `IOException`.
+
+- **Breaking:** `YCHR.Run.Error` has a new constructor, `FileReadError
+  FilePath Text`. `compileFiles` returns it as a `Left` instead of
+  throwing.
+
+`.chr` sources are read as UTF-8 whatever the locale. A valid UTF-8
+file used to fail under `LC_ALL=C`; invalid bytes are now "Not valid
+UTF-8".
+
 `:info` prints a `requiring` bound from another module qualified
 (`lib:gt(T, T) -> bool`). It used to drop the module.
 

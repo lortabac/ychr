@@ -35,6 +35,7 @@ import YCHR.Run
     PreparedQuery (..),
     Value (..),
     Warning (..),
+    compileFiles,
     compileModules,
     compileParsedModules,
     equal,
@@ -66,7 +67,8 @@ tests =
       arityOverloadTests,
       uncheckedQueryTests,
       reservedModuleNameTests,
-      unknownModuleImportTests
+      unknownModuleImportTests,
+      fileReadTests
     ]
 
 -- | The constraint type of a declared constraint. Errors if absent.
@@ -917,3 +919,28 @@ unknownModuleImportTests =
       Left other ->
         assertFailure $ "expected UnknownModuleImport, got: " ++ displayMsg other
       Right _ -> assertFailure "expected compilation to fail"
+
+-- | 'compileFiles' reports a missing or unreadable input file as a
+-- 'FileReadError' (YCHR-50005).
+fileReadTests :: TestTree
+fileReadTests =
+  testGroup
+    "missing input file"
+    [ testCase "a missing file is reported, not thrown" $ do
+        result <- compileFiles stdlib False ["test/does-not-exist.chr"]
+        case result of
+          Left (FileReadError path _) -> path @?= "test/does-not-exist.chr"
+          Left other -> assertFailure $ "expected FileReadError, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail",
+      testCase "the error displays YCHR-50005" $ do
+        result <- compileFiles stdlib False ["test/does-not-exist.chr"]
+        case result of
+          Left err ->
+            assertBool
+              ("expected YCHR-50005 in: " ++ displayMsg err)
+              ("YCHR-50005" `isInfixOf` displayMsg err)
+          Right _ -> assertFailure "expected compilation to fail",
+      testCase "a directory given as input is also a FileReadError" $ do
+        result <- compileFiles stdlib False ["test"]
+        assertBool "expected compilation to fail" (isLeft result)
+    ]
