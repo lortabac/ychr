@@ -1,0 +1,1 @@
+check(quote(mlib:both(1, 2)), R)

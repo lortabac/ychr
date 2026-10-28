@@ -1,0 +1,9 @@
+% An aggregate form in a query goal's argument is YCHR-20040, like
+% one in a rule body's told constraint. Plain expressions there are
+% still evaluated.
+:- module(aggregates_outside_head_query, [echo/2, k/1]).
+:- use_module(library(aggregates)).
+
+:- chr_constraint echo/2, k/1.
+
+echo(X, R) <=> R = X.

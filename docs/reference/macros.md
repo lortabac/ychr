@@ -266,10 +266,12 @@ only:
 - a goal of a top-level query (`ychr run -g`, the REPL, `runProgramWithGoal`).
 
 Elsewhere a goal macro name is an error (`MacroOutsideGoalPosition`): in a
-guard, inside an argument in an expression position, or as a function
-reference. The exceptions are `quote/1` and rule-head or
-equation-pattern *arguments*: all three are opaque data, so
-`count(a, b)` there is an ordinary compound.
+guard, inside an argument in an expression position (including an
+argument of a told constraint, in a rule body or a query), or as a
+function reference. The exceptions are `quote/1`, rule-head and
+equation-pattern *arguments*, `=` operands and the `is` left-hand
+side: all are opaque data, so `count(a, b)` or `lib:count(a, b)`
+there is an ordinary compound.
 
 Function equations have no goal positions, so macros do not apply
 inside them. A declaration macro's name outside a directive
@@ -815,7 +817,7 @@ Errors:
 | `DiscontiguousMacroClauses` | YCHR-15026 | A macro's clauses don't form one contiguous block. |
 | `DuplicateMacro` | YCHR-20023 | Two definitions of the same `Name/Arity` in one module, of either kind, including further clauses for a macro defined by the one-line form. |
 | `MacroNameCollision` | YCHR-20024 | A goal macro shares `Name/Arity` with a constraint or function of the same module. |
-| `MacroOutsideGoalPosition` | YCHR-20025 | A goal macro name used outside a goal position (and outside `quote/1` and head/equation arguments). |
+| `MacroOutsideGoalPosition` | YCHR-20025 | A goal macro name used outside a goal position (and outside `quote/1`, head/equation arguments, `=` operands and the `is` left-hand side). |
 | `MacroCycle` | YCHR-20026 | A use is reached again while it is being expanded, with the same macro and identical arguments up to renaming of variables (see [Recursion and termination](#recursion-and-termination)). |
 | `MacroBodyNotExported` | YCHR-20027 | A body names `M:x` in the macro's own module `M`, and `M` does not declare and export `x`. |
 | `MacroInvalidInHead` | YCHR-20028 | A head expansion is not a conjunction of constraints (see [Validity](#expanding-a-goal-macro)). |

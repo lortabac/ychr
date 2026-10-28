@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+An aggregate form (`argmin(...)`, `aggregate(...)`, ...) in a told
+constraint's argument (rule body, `tell/N`, query goal) or in an
+aggregate's `Element` is now `YCHR-20040`, and a goal macro name there
+is `YCHR-20025`. They used to pass as undeclared data constructors.
+
+A qualified macro name in a pattern (a head argument like
+`h(lib:both(1, 2))`, an `=` operand, the `is` left-hand side or an
+aggregate's `Result`) is now data, like an unqualified one. It used to
+be `YCHR-20025`.
+
+A `'$call'(...)` in a told constraint's argument no longer warns
+`YCHR-20101`.
+
 The Scheme `(ychr repl)` `tell` now passes the same variable for a
 repeated symbol (`'R 'R`); it used to make two and print `R` twice. A
 bare `'_` still gets a fresh variable each time.

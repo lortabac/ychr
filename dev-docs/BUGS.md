@@ -68,45 +68,35 @@ declaration is dead weight.
 `argmax/2`, `takemin/2` and `takemax/2` now are (`YCHR-20043`,
 `Rename.ReservedAggregateName`).
 
-## An aggregate form inside a constraint argument does not report `YCHR-20040`
+## `:- inline` rewrites the operands of `=`
 
-**Documented claim.** `docs/reference/aggregates.md` §Reserved names:
-`aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2` and `takemax/2`
-outside a rule head are `YCHR-20040` (`AggregateOutsideHead`) unless
-a data constructor with that name and arity is visible — the same
-section already notes "constraint arguments are not checked yet";
-this entry tracks closing that gap.
+**Documented claim.** `dev-docs/PROJECT.md` §Frontend: `=` is pure
+structural unification, neither operand evaluated, so `X = 1 + 1`
+binds `X` to the symbolic `prelude:+(1, 1)`. The same policy applies
+in rule bodies and queries.
 
 **Test.**
 
-    :- use_module(library(aggregates)).
-    :- chr_constraint go/0, r/1, k/1.
-    go <=> r(1 + argmin(1, k(1))).
+    :- chr_constraint h/1.
+    h(R) <=> R = 1 + 2.
 
-    ychr check
-    ychr run -g go
+    ychr run -g 'h(R)' --show-bindings
 
-**Expected.** `YCHR-20040` from `ychr check`.
+and, in `ychr repl`, `X = 1 + 2.`
 
-**Actual.** `ychr check` passes with only `YCHR-20101 Undeclared data
-constructor 'argmin'`. `ychr run -g go` then fails at runtime with
-`YCHR-60001 arithmetic host call: expected 2 numeric arguments of same
-type, got 2`.
+**Expected.** `R = prelude:(1 + 2)` in both.
 
-**Notes.** A constraint (tell) argument is renamed in `NoResolve`
-mode — the same mode a head pattern gets — so `renameTerm`'s
-aggregate-form check, which only fires in `ResolveTop`/`ResolveAll`
-(`isResolving`), never sees it. Fine for head patterns, which are
-data, but a tell argument is evaluated.
+**Actual.** The rule gives `R = host:(1 + 2)`; the REPL gives
+`X = prelude:(1 + 2)`. A non-inlined prelude function is fine:
+`R = max(1, 2)` gives `R = prelude:max(1, 2)`.
 
-The shared mode also makes a qualified visible macro in a head
-argument (`h(mlib:both(1, 2))`) report `YCHR-20025`, though macros.md
-says head arguments are opaque data. Splitting the modes fixes both.
+**Notes.** `Desugar.Inline.rewriteExpr` is applied to both operands
+of `D.BodyUnify` (`src/YCHR/Internal/Desugar/Inline.hs`, the
+`BodyUnify` arm), so the call to the inlined `+` is replaced by its
+body, the `host:+` call. The `=` operand is data, not a call.
 
-**Fix sketch.** Tell arguments need their own `ResolveMode` (or a
-flag on `NoResolve`) distinct from head/equation patterns, so the
-aggregate-form check — and anything else gated on `isResolving` —
-can tell the two apart.
+**Fix sketch.** Don't apply `rewriteExpr` to the `D.BodyUnify`
+operands.
 
 ## NaN and Infinity print with a bogus `.0` suffix
 

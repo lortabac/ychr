@@ -158,7 +158,7 @@ ambiguousTests =
           Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous function used as a body-tell constraint argument" $ do
-        -- The bare 'f(1)' lands in 'NoResolve' (demoted from the
+        -- The bare 'f(1)' lands in 'NoResolveEvaluated' (demoted from the
         -- 'ResolveTop' parent 'c(...)'). The renamer mirrors
         -- 'resolveName''s multi-provider arm, so the user gets the same
         -- YCHR-20001 diagnostic they would in a guard or 'is'-RHS
@@ -226,10 +226,10 @@ ambiguousTests =
         case renameProgram [modA, modB, modC] of
           Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
-      testCase "ambiguous zero-arity atom in 'NoResolve' position" $ do
+      testCase "ambiguous zero-arity atom in a tell-side argument" $ do
         -- Companion to the compound cases for the 'AtomTerm' arm.
         -- A bare 'f' inside a tell-side constraint argument lands in
-        -- 'NoResolve'; if two modules export 'f/0' as a function, the
+        -- 'NoResolveEvaluated'; if two modules export 'f/0' as a function, the
         -- atom arm emits 'AmbiguousName' instead of silently
         -- producing an 'AtomTerm' that 'Resolve.termToExpr' can't
         -- disambiguate.
@@ -845,7 +845,7 @@ warningTests =
         ws @?= [],
       testCase "declared function in tell-side argument position produces no warning" $ do
         -- Regression: a bare compound like 'f(X)' appearing as an argument
-        -- to a tell-side constraint is renamed in 'NoResolve' mode but
+        -- to a tell-side constraint is renamed in 'NoResolveEvaluated' mode but
         -- must not be warned as a data constructor when 'f' is a visible
         -- function -- 'Resolve.termToExpr' will later canonicalize it to
         -- a 'CallExpr' for tell-time evaluation.
@@ -1060,7 +1060,7 @@ warningTests =
         -- Same structural bug as the lambda case, on the @fun name/arity@
         -- arm: a funref is a first-class value, not data, so
         -- 'c(fun f/1)' must not emit 'UndeclaredDataConstructor "fun"'
-        -- under 'NoResolve'.
+        -- under 'NoResolveEvaluated'.
         let m =
               module' "M"
                 `declaring` ["c" // 1, function "f" 1]

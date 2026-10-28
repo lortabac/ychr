@@ -17,3 +17,5 @@ aggregates_outside_head.chr:20:60: YCHR-20040
 Aggregate 'argmax/2' outside a rule head
 argmax(Z, k(Z))
 argmin(V, k(V)) > 0
+r(1 + argmin(1, k(1)))
+e, collect(argmin(X, 1), k(X), S)

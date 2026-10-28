@@ -1,0 +1,8 @@
+% A qualified macro name in a head argument is a pattern, so it is
+% plain data: it matches a quoted term with the same shape.
+:- module(hm, [check/2]).
+:- use_module(mlib).
+:- chr_type res ---> matched ; other.
+:- chr_constraint check/2.
+check(mlib:both(1, 2), R) <=> R = matched.
+check(_, R) <=> R = other.

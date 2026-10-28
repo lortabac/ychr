@@ -2,4 +2,6 @@
 
 A visible goal macro, written qualified where a value is expected (a
 constraint argument, a `requiring` bound), is YCHR-20025 (not
-YCHR-20009, and not YCHR-20044: the import is in full).
+YCHR-20009, and not YCHR-20044: the import is in full). In a head
+argument it is a pattern, so it is data (see
+`qualified_macro_in_head_arg`).

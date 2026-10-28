@@ -1,0 +1,9 @@
+% A goal macro name in a told constraint's argument or in an aggregate
+% element is YCHR-20025: both are evaluated, not goal positions.
+:- module(macro_outside_goal_position_tell_arg).
+:- use_module(library(aggregates)).
+:- chr_constraint go/0, item/1, e/0.
+:- macro both(X, Y) ---> [item(X), item(Y)].
+:- macro zz ---> [item(0)].
+go <=> item(both(1, 2)), item(zz).
+e, collect(both(X, 1), item(X), S) ==> true.

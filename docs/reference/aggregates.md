@@ -67,12 +67,15 @@ User-defined aggregates are ordinary aggregators:
 ### Reserved names
 
 `aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2` and `takemax/2` are
-aggregate forms in every rule head, with no import. Anywhere else (a
-guard, an `is` right-hand side, a function body) they are
-`AggregateOutsideHead` (YCHR-20040), unless a data constructor with
-that name and arity is visible. Then they are data. Constraint
-arguments are not checked yet. Declaring a constraint, function or
-goal macro at one of these keys is `ReservedAggregateName`
+aggregate forms in every rule head, with no import. Anywhere else
+they are evaluated (a guard, an `is` right-hand side, a function body,
+an argument of a told constraint or query goal, an aggregate's
+`Element`), they are `AggregateOutsideHead` (YCHR-20040), unless a
+data constructor with that name and arity is visible. Then they are
+data. In patterns (head and equation arguments, `Result`, `=`
+operands, the `is` left-hand side) and in `quote/1` they are data
+too. Declaring a constraint, function or goal macro at
+one of these keys is `ReservedAggregateName`
 (YCHR-20043). Other arities and declaration macros are fine.
 
 ### Typing

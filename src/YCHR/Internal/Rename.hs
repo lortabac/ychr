@@ -1432,11 +1432,11 @@ renameAggregate ::
   RenameCtx -> Site -> AggregateKind -> AggregateArgs -> Rename Aggregate
 renameAggregate ctx site k args = do
   agg' <- traverse (renameTerm ctx site ResolveAll) args.agg
-  -- The element / selection key is a pattern over each match, so it is
-  -- renamed without resolving names: a bare name in it is a user-written
-  -- atom, and a variable of it that the goal does not bind is reported
-  -- later, by the compiler (YCHR-40002).
-  element' <- traverse (renameTerm ctx site NoResolve) args.element
+  -- The element / selection key is evaluated once per match, like a
+  -- told constraint's argument. A variable of it that the goal does
+  -- not bind is reported later, by the compiler (YCHR-40002).
+  element' <- traverse (renameTerm ctx site NoResolveEvaluated) args.element
+  -- The result is a pattern.
   result' <- traverse (renameTerm ctx site NoResolve) args.result
   goal' <-
     concat
@@ -1612,13 +1612,19 @@ useFailureError qn args f = case f of
 -- | Controls how deeply name resolution is applied to a term, and how
 -- unresolved names are treated.
 --
--- * 'NoResolve' — head arguments and nested data terms. Names are never
+-- * 'NoResolve' — patterns: head and equation arguments, aggregate
+--   result patterns, the @is@ LHS, and @=@ operands. Names are never
 --   looked up because they represent data constructors, not callable
 --   entities.
 --
+-- * 'NoResolveEvaluated' — arguments of a told constraint (rule body,
+--   dynamic @tell@, query goal) and an aggregate's element. Same naming
+--   policy as 'NoResolve', but the terms are evaluated, so the
+--   misplaced-form checks (aggregates, macro names) fire.
+--
 -- * 'ResolveTop' — rule bodies. The outermost functor must be a declared
 --   constraint or function (unknown names are errors). Its arguments are
---   data terms and are renamed with 'NoResolve'.
+--   renamed with 'NoResolveEvaluated' (or 'NoResolve' for @=@).
 --
 -- * 'ResolveAll' — guards and @is@-RHS expressions. Every nesting level
 --   is resolved, but unknown names are /tolerated/ (they may be data
@@ -1632,6 +1638,7 @@ useFailureError qn args f = case f of
 --   opaque (see the language reference §The @quote/1@ quoting form).
 data ResolveMode
   = NoResolve
+  | NoResolveEvaluated
   | NoResolveQuoted
   | ResolveTop
   | ResolveAll
@@ -1644,15 +1651,28 @@ errorOnUnknown :: ResolveMode -> Bool
 errorOnUnknown ResolveTop = True
 errorOnUnknown _ = False
 
--- | Whether the current position evaluates expressions (so the syntactic
--- special cases for @is@, lambdas, and @fun name/arity@ apply). Returns
--- 'False' for both pattern positions ('NoResolve') and quoted bodies
--- ('NoResolveQuoted'), where these forms must remain literal compound
--- terms instead of being interpreted.
+-- | Whether the current position resolves names, so the special case
+-- for @is@ applies. 'False' for patterns, told-constraint arguments and
+-- quoted bodies.
 isResolving :: ResolveMode -> Bool
 isResolving ResolveTop = True
 isResolving ResolveAll = True
 isResolving _ = False
+
+-- | Whether the current position is evaluated, so a misplaced aggregate
+-- form or macro name is an error. 'False' for patterns ('NoResolve')
+-- and quoted bodies ('NoResolveQuoted'), which are data.
+isEvaluating :: ResolveMode -> Bool
+isEvaluating NoResolve = False
+isEvaluating NoResolveQuoted = False
+isEvaluating _ = True
+
+-- | Whether names follow the pattern policy: never looked up, only
+-- checked and canonicalized as data constructors.
+isPatternNaming :: ResolveMode -> Bool
+isPatternNaming NoResolve = True
+isPatternNaming NoResolveEvaluated = True
+isPatternNaming _ = False
 
 -- | Rename a lambda body, walking through any top-level comma sequencer
 -- without treating @,@ itself as a data constructor. Each comma-separated
@@ -1714,7 +1734,7 @@ renameBodyGoal ctx site t = case t of
         renameBodyGoal ctx site (CompoundTerm name (gargs ++ extras))
   CompoundTerm (Unqualified "tell") args ->
     (: []) . CompoundTerm (Unqualified "tell")
-      <$> traverse (renameTerm ctx site NoResolve) args
+      <$> traverse (renameTerm ctx site NoResolveEvaluated) args
   CompoundTerm name args -> case classifyGoalName ctx name (length args) of
     AmbiguousGoalName ms -> do
       let err = AmbiguousName (unqualifiedText name) (length args) ms
@@ -1800,10 +1820,10 @@ renameTerm ctx site mode t = case t of
         pure t
   -- An aggregate form (@aggregate/4@, @argmin/2@, ...) is only valid as a
   -- head conjunct or an aggregate goal conjunct, both handled before we
-  -- get here. In any other resolving position it is misplaced, unless a
+  -- get here. In any other evaluated position it is misplaced, unless a
   -- data constructor with that name and arity is visible.
   CompoundTerm name args
-    | isResolving mode,
+    | isEvaluating mode,
       Just _ <- aggregateForm name args,
       not (isVisibleDataConAt ctx name (length args)) -> do
         let err = AggregateOutsideHead (unqualifiedText name) (length args)
@@ -1916,12 +1936,12 @@ renameTerm ctx site mode t = case t of
   -- as a 0-arity data-constructor use, so we force 'ResolveAll' here
   -- (warn but don't error on undeclared) regardless of the surrounding
   -- 'ResolveTop'. Then fall back to data-constructor canonicalization.
-  -- A bare 0-arity macro name used in an evaluating position: not a
+  -- A bare 0-arity macro name used in an evaluated position: not a
   -- goal position (that is handled upstream, by 'renameBodyGoal'
   -- before it ever calls 'renameTerm' in 'ResolveTop' mode), so this
-  -- can only be reached in 'ResolveAll'.
+  -- is a guard, an expression or a told-constraint argument.
   CompoundTerm (Unqualified n) []
-    | mode == ResolveAll,
+    | isEvaluating mode,
       Just providerMod <- isVisibleMacro ctx (Unqualified n) 0 -> do
         let err = MacroOutsideGoalPosition (QualifiedName providerMod n) 0
         emitErrorIn ctx (annAt site err)
@@ -1930,7 +1950,7 @@ renameTerm ctx site mode t = case t of
     when (mode /= NoResolveQuoted) $
       checkConstructorFunctionAmbiguity ctx site n
     resolved <- case mode of
-      NoResolve -> do
+      _ | isPatternNaming mode -> do
         warnUnknownDataCon ctx site n 0
         case visibleProviders ctx n 0 of
           ms@(_ : _ : _) ->
@@ -1952,9 +1972,9 @@ renameTerm ctx site mode t = case t of
           Just qn -> pure (CompoundTerm qn [])
           Nothing -> pure (CompoundTerm (Unqualified n) [])
   -- Same "elsewhere" check as the 0-arity case above, for a macro
-  -- name used at a nonzero arity in an evaluating position.
+  -- name used at a nonzero arity in an evaluated position.
   CompoundTerm name args
-    | mode == ResolveAll,
+    | isEvaluating mode,
       Just providerMod <- isVisibleMacro ctx name (length args) -> do
         let qn = QualifiedName providerMod (unqualifiedText name)
             err = MacroOutsideGoalPosition qn (length args)
@@ -1963,8 +1983,11 @@ renameTerm ctx site mode t = case t of
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
+          NoResolveEvaluated -> NoResolveEvaluated
           NoResolveQuoted -> NoResolveQuoted
-          ResolveTop -> NoResolve
+          ResolveTop
+            | name == Unqualified "=" -> NoResolve
+            | otherwise -> NoResolveEvaluated
           ResolveAll -> ResolveAll
     -- Which namespace a bare compound head belongs to is decided
     -- below, differently per mode. Ask first whether the name even
@@ -1975,8 +1998,11 @@ renameTerm ctx site mode t = case t of
       _ -> pure ()
     renamedArgs <- traverse (renameTerm ctx site childMode) args
     newName <- case mode of
-      NoResolve -> do
+      _ | isPatternNaming mode -> do
         case name of
+          -- A dynamic call in a told constraint's argument is evaluated,
+          -- not a data constructor.
+          Unqualified "$call" | mode == NoResolveEvaluated -> pure ()
           -- Three legs by what the function/constraint namespace says:
           --   []      — no visible callable; this is a pattern-style
           --             use of an unqualified name. Run the data-
@@ -2007,11 +2033,14 @@ renameTerm ctx site mode t = case t of
               [_] -> pure ()
               ms ->
                 emitErrorIn ctx (annAt site (AmbiguousName n (length args) ms))
-          -- Qualified references in pattern position (head args,
-          -- body-tell args) get the same visibility check as in
-          -- resolving positions; the parser can't tell a constructor,
-          -- a function/constraint, or a type-tag apart at the term
-          -- level, so any of those visibility leg passes.
+          -- A qualified macro name in a pattern is plain data (in
+          -- 'NoResolveEvaluated' the macro arm above already caught
+          -- it). Any other qualified name gets the usual visibility
+          -- check: the parser can't tell a constructor, a
+          -- function/constraint or a type tag apart here, so any
+          -- visible one passes.
+          Qualified _ _
+            | Just _ <- isVisibleMacro ctx name (length args) -> pure ()
           Qualified m n -> validateQualified ctx site m n (length args)
         pure (canonicalizeData ctx name (length args))
       NoResolveQuoted ->
@@ -2609,14 +2638,14 @@ buildQueryRenameEnv mods =
           }
    in QueryRenameEnv (renameCtxFor mods defaultRenameInputs queryMod)
 
--- | Like 'renameQueryGoalsWith' but uses 'NoResolve' mode — appropriate
--- for the argument terms of a single goal constraint, where each
--- term is data (constructors / atoms / variables) rather than a
--- callable. Canonicalizes bare data-constructor references the same
--- way the renamer does for head-pattern arguments.
+-- | Like 'renameQueryGoalsWith' but uses 'NoResolveEvaluated' mode —
+-- the mode of a told constraint's arguments. Canonicalizes bare
+-- data-constructor references the same way the renamer does for
+-- head-pattern arguments, and reports misplaced aggregate forms and
+-- macro names.
 renameQueryArgsWith ::
   QueryRenameEnv -> [Term] -> Either [Diagnostic RenameError] (Renamed [Term])
-renameQueryArgsWith env args = renameQueryTerms env NoResolve args
+renameQueryArgsWith env args = renameQueryTerms env NoResolveEvaluated args
 
 -- | Rename a list of query goal terms using all modules as the visible
 -- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).

@@ -372,7 +372,7 @@ reference per-module: it knows which providers each module imports
 and rewrites bare names to 'Qualified' form. So by the time we reach
 Resolve, those three name classes are already disambiguated.
 
-Functions are different. In @NoResolve@ positions (compound
+Functions are different. In @NoResolveEvaluated@ positions (compound
 arguments of tell-side body constraints and top-level goals) the
 renamer deliberately leaves compound heads unqualified — the
 call-vs-constructor decision is structural and gets made here in
@@ -1696,13 +1696,13 @@ termToExpr vis loc origin = go
       -- this local name is visible to the current module, canonicalize
       -- to a 'CallExpr'; this is how nested function-call arguments
       -- of tell-side body constraints (and top-level goals) get
-      -- evaluated, since the renamer's 'NoResolve' mode leaves
+      -- evaluated, since the renamer's 'NoResolveEvaluated' mode leaves
       -- body-compound children unqualified. Zero matches (the name
       -- is genuinely a data constructor or undefined) and ambiguous
       -- matches both fall through to 'CtorExpr'; the renamer is
       -- responsible for the corresponding diagnostics
       -- (@UnknownName@/@AmbiguousName@ in @ResolveAll@ positions,
-      -- @UndeclaredDataConstructor@ in @NoResolve@).
+      -- @UndeclaredDataConstructor@ in @NoResolveEvaluated@).
       CompoundTerm name@(Unqualified n) args ->
         case Map.lookup (UnqualifiedIdentifier n (length args)) vis of
           Just [qn] -> R.CallExpr qn <$> traverse go args

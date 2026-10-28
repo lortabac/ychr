@@ -1,0 +1,4 @@
+YCHR-20025
+Macro 'macro_outside_goal_position_tell_arg:both/2' used outside a goal position
+Macro 'macro_outside_goal_position_tell_arg:zz/0' used outside a goal position
+e, collect(both(X, 1), item(X), S)
