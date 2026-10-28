@@ -265,6 +265,8 @@ Goal, \+ (Goal', ? X' < X)
 `X` with `Goal`'s fresh variables renamed apart. `X` is compared with
 the prelude's `<`, so it must be an `int`, a `float` or a `string`.
 On ties, the rule fires with the first minimal match in goal order.
+This needs `<` to order the keys totally. A NaN key does not: the
+rule still fires once, on an unspecified match.
 
 The equivalence fixes which match is selected and which variables are
 visible, nothing else. `Goal` is still an aggregate goal:
@@ -460,6 +462,9 @@ need no library.)
 | `\+ G` | holds if `G` has no match (negation as absence) |
 | `forall(G, C)` | holds if every match of `G` extends to a match of `C`; defined as `\+ (G, \+ C)` |
 
+`min` and `max` assume `<` and `>` order the elements totally; with a
+NaN element the result is unspecified.
+
 The integer and float folds are separate macros because an empty fold
 returns its seed (`0`, `1`), and one aggregator cannot return `0` for
 `int` and `0.0` for `float`: YCHR has no dispatch on types.
@@ -613,8 +618,9 @@ lowers an aggregate in the occurrence procedure itself:
   cannot hand a suspension back and the guard must stay read-only. Its
   procedure walks the goal's matches in goal order and keeps the first
   one with the smallest (largest) key, comparing with the host `<`
-  (`>`); the first match is compared with itself, so an unbound key is
-  an instantiation error even when there is only one match. It binds
+  (`>`). A NaN key wins only as the first match. The first match is
+  compared with itself, so an unbound key is an instantiation error
+  even when there is only one match. It binds
   one out-cell per visible goal variable. For `takemin`/`takemax` it
   also binds the match's 1-based position in goal order. When the rule
   fires, before any `Kill`, the firing walks the same goal again with

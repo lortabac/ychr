@@ -451,9 +451,11 @@ the module's rule order, which ωr uses to number occurrences. A nested
 use's clauses take the nested use's place, so the `unary_constraints`
 example declares `red`, `green` and `blue` in list order. Contiguity
 rules apply to the module as spliced. For example, the equations of a
-closed function must be contiguous, so a declaration macro can
-generate a whole function. A user can't add equations to it with
-clauses written around the use.
+closed function must be contiguous. A user equation written right
+after the use joins the generated ones. One written before it is
+rejected (`DiscontiguousEquations`) if the macro also generates the
+`:- function` declaration, since that declaration then sits between
+the equations.
 
 **Variables.** Each generated clause is its own variable scope, as in
 source text. A use-site argument that contains a variable `X` and lands
@@ -509,16 +511,32 @@ comment names the use a run of clauses came from — the outermost use,
 so a nested use's clauses stay under it:
 
 ```prolog
+:- module(counter).
+
+:- macro_decls counter(Name) --->
+    [ (:- chr_constraint Name/1, '$atom'([inc_, Name])/0),
+      ('$compound'(Name, [N]), '$atom'([inc_, Name])
+         <=> M is N + 1, '$compound'(Name, [M])) ].
+:- counter(clicks).
+```
+
+```sh
+ychr check --dump-splices counter.chr
+```
+
+```
 % splices for counter.chr (module counter)
 % counter:counter/1 at counter.chr:7:1
-:- chr_constraint clicks / 1.
-:- chr_constraint inc_clicks / 0.
-clicks(N), inc_clicks <=> M is N + 1, clicks(M).
+:- chr_constraint clicks / 1, inc_clicks / 0.
+clicks(_decl_0_N), inc_clicks <=> _decl_0_M is _decl_0_N + 1, clicks(_decl_0_M).
 ```
 
 Clauses go through the same pretty-printer the diagnostics use, so an
 operator like `/` comes out spaced (`clicks / 1`) even though the
-source writes `clicks/1`.
+source writes `clicks/1`. Each generated directive prints as written
+(one `chr_constraint` line here), and a freshened body variable shows
+its fresh name (`_decl_<n>_<Name>`, see
+[Pipeline placement](#pipeline-placement)).
 
 Clauses the user wrote are not dumped, and neither is anything a goal
 macro produced: goal macros expand later, in the renamer, and are out
@@ -672,14 +690,30 @@ every use site.
 Every diagnostic raised while *expanding* a macro, or while
 *renaming* or *converting* the code an expansion produced,
 carries the chain of macro expansions that produced it. Each entry
-gives the location of the use, innermost first:
+gives the location of the rule head or body that holds the use,
+innermost first. Two uses in one body show the same location. With
+the [`count/2`](#names-and-modules) example's narrowed import:
+
+```prolog
+:- module(graph).
+:- use_module(library(aggregates), [macro(count/2)]).
+:- chr_constraint node/1, indeg/2.
+:- macro in_degree(N, C) ---> [count(node(N), C)].
+node(N), in_degree(N, C) ==> indeg(N, C).
+```
+
+```sh
+ychr check graph.chr
+```
 
 ```
-/path/graph.chr:7:12: YCHR-20009
+=== error ===
+graph.chr:5:1: YCHR-20009
 Module 'aggregates' does not export 'count_spec/0'
   Hint: check the spelling and the export list of 'aggregates'
-  in the expansion of aggregates:count/2, used at /path/graph.chr:7:12
-  in the expansion of graph:in_degree/2, used at /path/graph.chr:7:12
+  in the expansion of aggregates:count/2, used at graph.chr:5:1
+  in the expansion of graph:in_degree/2, used at graph.chr:5:1
+node(N), in_degree(N, C)
 ```
 
 The chain covers:
@@ -704,12 +738,64 @@ location in the using module.
 A recursive expansion can make the chain long. Consecutive entries for
 the same macro are shown on one line, with a count and the innermost
 use. At most ten such lines are shown, innermost first; one more line
-counts the enclosing expansions left out:
+counts the enclosing expansions left out. A macro with no base case
+hits the depth limit, and its chain collapses to one line:
+
+```prolog
+:- module(m).
+:- chr_constraint r/1.
+:- macro grow(X) ---> [grow(s(X))].
+r(X) <=> grow(X).
+```
+
+```sh
+ychr check m.chr
+```
 
 ```
-  in 1000 nested expansions of m:grow/1, innermost used at /path/m.chr:5:10
-  ... and 5 more enclosing expansions
+=== error ===
+m.chr:4:10: YCHR-20033
+Macro 'm:grow/1': nested expansions exceed the depth limit of 1000
+  Hint: check that each recursive use makes progress towards a base case; see the expansion chain
+  in 1000 nested expansions of m:grow/1, innermost used at m.chr:4:10
+grow(X)
 ```
+
+Eleven or more groups add a last line counting the rest:
+
+```prolog
+:- module(c).
+:- chr_constraint r/1.
+:- macro m1(X) ---> [m2(X)].
+:- macro m2(X) ---> [m3(X)].
+...
+:- macro m12(X) ---> [m13(X)].
+:- macro m13(X) ---> [nope(X)].
+r(X) <=> m1(X).
+```
+
+```sh
+ychr check c.chr
+```
+
+```
+=== error ===
+c.chr:16:10: YCHR-20002
+Unknown name 'nope/1'
+  Hint: declare it with :- chr_constraint or :- function, or import it from another module
+  in the expansion of c:m13/1, used at c.chr:16:10
+  in the expansion of c:m12/1, used at c.chr:16:10
+...
+  in the expansion of c:m5/1, used at c.chr:16:10
+  in the expansion of c:m4/1, used at c.chr:16:10
+  ... and 3 more enclosing expansions
+m1(X)
+```
+
+(Trimmed for length: `...` above stands for `m3` through `m11`, each
+one more macro of the same `mN(X) ---> [mN+1(X)]` shape, and for the
+six chain lines they produce — the real run has ten `in the expansion
+of` lines before the count, not two.)
 
 Resolve, Desugar and the optional type checker have no per-goal
 provenance to attach a chain to. A diagnostic from one of those phases

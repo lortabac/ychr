@@ -216,93 +216,39 @@ flag on `NoResolve`) distinct from head/equation patterns, so the
 aggregate-form check — and anything else gated on `isResolving` —
 can tell the two apart.
 
-## `argmin` with NaN keys picks a different match than the spec's definition
+## NaN and Infinity print with a bogus `.0` suffix
 
-**Documented claim.** `docs/reference/aggregates.md` §Selection
-aggregates: the selected matches are those of
-`Goal, \+ (Goal', ? X' < X)`; "On ties, the rule fires with the first
-minimal match in goal order", and "The equivalence fixes which match is
-selected".
+**Documented claim.** None stated.
 
 **Test.**
 
-    :- chr_constraint k/1, p/0, best/1, go/1, ask/1.
-    p, argmin(X, k(X)) ==> best(X).
-    best(X) \ ask(R) <=> R = X.
-    go(R) <=> N is 0.0 / 0.0, k(2.0), k(N), k(1.0), p, ask(R).
+    :- chr_constraint go/1.
+    go(R) <=> R is 0.0 / 0.0.
 
     ychr run -g 'go(R)' --show-bindings
 
-**Expected.** Under the definition, `2.0` is not minimal (`1.0 < 2.0`).
-`NaN` and `1.0` both are, since nothing is `< NaN` and `NaN < 1.0` is
-false. The first in goal order is `NaN`.
-
-**Actual.** `R = 1.0`, on both backends. The implementation keeps a
-running minimum (§Implementation notes), and that only agrees with the
-definition when `<` is a total order.
-
-**Notes.** The Implementation notes mention NaN, but only for the
-take-form re-selection.
-
-**Fix sketch.** Most likely a doc fix: say keys must be totally ordered,
-or that NaN keys give an unspecified pick.
-
-## The `--dump-splices` example in macros.md is not the real output
-
-**Documented claim.** `docs/reference/macros.md` §Dumping the splices
-shows this for the `counter` example:
-
-    :- chr_constraint clicks / 1.
-    :- chr_constraint inc_clicks / 0.
-    clicks(N), inc_clicks <=> M is N + 1, clicks(M).
-
-**Test.** The `counter` module from the same page.
-
-    ychr check --dump-splices counter.chr
+and the same with `R is 1.0 / 0.0` and `R is -1.0 / 0.0`.
 
 **Actual.**
 
-    % splices for counter.chr (module counter)
-    % counter:counter/1 at counter.chr:7:1
-    :- chr_constraint clicks / 1, inc_clicks / 0.
-    clicks(_decl_0_N), inc_clicks <=> _decl_0_M is _decl_0_N + 1, clicks(_decl_0_M).
+    R = NaN.0
+    R = Infinity.0
+    R = (-Infinity.0)
 
-**Notes.** Doc only. The output is right: the macro writes one
-directive, so the dump shows one line, and body variables show their
-fresh names (`_decl_<n>_<Name>`), as §Pipeline placement says. The
-example was not captured from a run.
+**Notes.** `prettyPrec`'s `showFloat` helper
+(`src/YCHR/Internal/PExpr.hs`, around line 754) appends `.0`
+whenever `show` on the `Double` has no `'.'` in it, and `show` gives
+`NaN`/`Infinity`/`-Infinity` with no dot, so all three get the
+suffix tacked on. `printSExpr`'s `SFloat` case
+(`src/YCHR/Internal/SExpr.hs`, around line 63) has the identical
+shape and the same bug; unreachable today (no source literal spells
+NaN/Infinity, and the compiler never constant-folds a division), but
+latent. The backends also disagree: Scheme's own pretty-printer
+(`scheme/ychr/pretty.sls`) defers to the host's `number->string`,
+which prints `+nan.0`/`+inf.0` with no such bug.
 
-**Fix sketch.** Paste the real output, and add that body variables show
-up under their fresh names.
-
-## A user can add equations after a function a declaration macro generated
-
-**Documented claim.** `docs/reference/macros.md` §Expanding a
-declaration macro, "Position matters": "…so a declaration macro can
-generate a whole function. A user can't add equations to it with
-clauses written around the use."
-
-**Test.**
-
-    :- macro_decls fn(F) ---> [(:- function F/1), ('$compound'(F, [0]) -> 1)].
-    :- fn(g).
-    g(_) -> 2.
-
-    ychr check
-
-**Expected.** Rejected (`YCHR-15001`), going by the quoted sentence.
-
-**Actual.** Accepted. The spliced equations are contiguous, so the
-contiguity rule is happy. An equation written *before* the use is
-rejected (`15001`), because the generated declaration sits between the
-two equations.
-
-**Notes.** The paragraph's own rule, "Contiguity rules apply to the
-module as spliced", predicts what happens. The sentence after it says
-more than that.
-
-**Fix sketch.** Doc fix: say the user can't add equations *before* the
-use, or drop the sentence.
+**Fix sketch.** Special-case `isNaN`/`isInfinite` in both spots; use
+Scheme's spelling (`+nan.0`, `+inf.0`, `-inf.0`) on both backends.
 
 ## The arity checker misses a wrong-arity use when a constructor name has several arities
 
