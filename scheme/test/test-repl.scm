@@ -33,12 +33,21 @@
   (%unify s y (+ (deref x) 1))
   (%unify s z (deref y)))
 
+;;; Mock: saves its two args so a test can check if they're the same object.
+(define captured #f)
+(define (tell_qux__capture2 s x y)
+  (set! captured (list x y)))
+
+(define (captured-same?)
+  (eq? (car captured) (cadr captured)))
+
 (define foo:succ/2 tell_foo__succ2)
 (define succ/2 tell_foo__succ2)
 (define baz:double/2 tell_baz__double2)
 (define double/2 tell_baz__double2)
 (define qux:pair/3 tell_qux__pair3)
 (define qux:chain/3 tell_qux__chain3)
+(define qux:capture/2 tell_qux__capture2)
 
 ;;; Capture everything the body writes to (current-output-port).
 ;;; `tell` reports bindings via `display`, so checking that channel is
@@ -135,6 +144,29 @@
                 "R = 11\n"
                 (capture-stdout
                  (lambda () (tell s qux:pair/3 10 'R '_D))))))
+
+;;; --------------------------------------------------------------------------
+;;; tell shares one variable for a symbol repeated in the same call,
+;;; but never shares across two bare `_`.
+;;; --------------------------------------------------------------------------
+
+(test-group "tell shares repeated symbols, but not bare _"
+  (let ((s (open-session mock-program)))
+    (capture-stdout (lambda () (tell s qux:capture/2 'R 'R)))
+    (test-assert "'R 'R is the same variable" (captured-same?)))
+  (let ((s (open-session mock-program)))
+    (capture-stdout (lambda () (tell s qux:capture/2 '_ '_)))
+    (test-assert "'_ '_ is not the same variable" (not (captured-same?))))
+  (let ((s (open-session mock-program)))
+    (capture-stdout (lambda () (tell s qux:capture/2 '_X '_X)))
+    (test-assert "'_X '_X is the same variable" (captured-same?))))
+
+(test-group "tell prints one line for a repeated symbol"
+  (let ((s (open-session mock-program)))
+    (test-equal "chain(10, R, R) prints R once"
+                "R = 11\n"
+                (capture-stdout
+                 (lambda () (tell s qux:chain/3 10 'R 'R))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Raw direct-call form (skipping tell): users who want full control

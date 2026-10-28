@@ -238,35 +238,6 @@ The `(ychr repl)` `tell` helper has the same gap.
 **Fix sketch.** Port the alias-class grouping to the Scheme side, or
 document that it only shows raw unbound-variable output there.
 
-## The Scheme `(ychr repl)` `tell` helper gives `'R 'R` two different variables
-
-**Documented claim.** None stated explicitly, but the same symbol
-twice should be the same variable.
-
-**Test.**
-
-    :- module(al, [al/2]).
-    :- chr_constraint al/2.
-    al(R, S) <=> R = S.
-
-    ; after compiling al.chr to Scheme and importing it:
-    (tell s al:al/2 'R 'R)
-
-**Expected.** One fresh variable `R` passed as both arguments; since
-`al/2` unifies its two arguments, one `R = <value or _>` line prints.
-
-**Actual.** Two lines print:
-
-    R = _
-    R = _
-
-**Notes.** `process-args` calls `make-var` per occurrence with no
-symbol table, so `binds` gets two `R` entries.
-
-**Fix sketch.** Have `process-args` memoize symbol → variable within
-one call, so a repeat reuses the existing variable instead of making
-a new one.
-
 ## `YCHR-16002` ignores arity
 
 **Documented claim.** PROJECT.md: function names "cannot collide with

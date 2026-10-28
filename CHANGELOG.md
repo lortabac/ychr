@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+The Scheme `(ychr repl)` `tell` now passes the same variable for a
+repeated symbol (`'R 'R`); it used to make two and print `R` twice. A
+bare `'_` still gets a fresh variable each time.
+
 A missing or unreadable input file is now `YCHR-50005`, reported like
 any other compile error, instead of an uncaught `IOException`.
 `:recompile` keeps the previous program loaded when this happens, and

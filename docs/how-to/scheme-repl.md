@@ -47,11 +47,14 @@ R = 55
   store. Sessions share nothing.
 - `fib:fib/2` is the tell-procedure alias for constraint `fib:fib/2`,
   resolved at expand time — no per-call lookup.
-- A symbol starting with an uppercase letter or `_` is a fresh logical
-  variable. An uppercase one shows up in the printed bindings; a
-  `_`-prefixed one is bound but not printed. Anything else passes
-  through. For an atom spelled with a capital, pass a non-symbol
-  carrier such as `(string->symbol "Foo")`.
+- A symbol starting with an uppercase letter or `_` is a logical
+  variable. The same symbol twice in one call is one variable; a bare
+  `_` is fresh each time. Uppercase ones are printed, `_`-prefixed
+  ones are not. Anything else passes through as an atom.
+- `(string->symbol "Foo")` is still `'Foo`, so it's still a variable.
+  For a capitalized atom, skip `tell` and call the alias directly:
+  `(fib:fib/2 s 10 r)` with `r` from `make-var`. There a symbol is
+  always an atom.
 
 `s` is one store across tells. (`fib` does not depend on prior state,
 so these two answers are independent.)
