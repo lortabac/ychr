@@ -14,6 +14,7 @@ NO_FLAGS_BEFORE_SUBCOMMAND = [
     ["--quiet", "check"],
     ["--Werror", "run", "-g", "x"],
     ["--dump-splices", "check"],
+    ["--repl-backend=chez", "repl"],
 ]
 
 

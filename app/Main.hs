@@ -71,7 +71,8 @@ data ReplOpts = ReplOpts
   { quiet :: Bool,
     werror :: Bool,
     noCheck :: Bool,
-    dumpSplices :: Bool
+    dumpSplices :: Bool,
+    replBackend :: Repl.ReplBackend
   }
 
 data CheckOpts = CheckOpts
@@ -110,6 +111,14 @@ dumpSplicesFlag =
         <> help "Print clauses spliced in by :- macro_decls to stderr"
     )
 
+replBackendReader :: ReadM Repl.ReplBackend
+replBackendReader = eitherReader $ \t -> case t of
+  "interpreter" -> Right Repl.ReplBackendInterpreter
+  "chez" -> Right Repl.ReplBackendChez
+  _ ->
+    Left
+      ("Unknown REPL backend: " ++ t ++ " (valid backends: interpreter, chez)")
+
 replParser :: Parser Command
 replParser =
   Repl
@@ -118,6 +127,13 @@ replParser =
             <*> werrorFlag
             <*> noCheckFlag
             <*> dumpSplicesFlag
+            <*> option
+              replBackendReader
+              ( long "repl-backend"
+                  <> metavar "BACKEND"
+                  <> help "REPL backend (interpreter, chez)"
+                  <> value Repl.ReplBackendInterpreter
+              )
         )
     <*> filesArg
 
@@ -199,7 +215,13 @@ defaultCommandParser :: Parser Command
 defaultCommandParser = Repl defaultReplOpts <$> filesArg
   where
     defaultReplOpts =
-      ReplOpts {quiet = False, werror = False, noCheck = False, dumpSplices = False}
+      ReplOpts
+        { quiet = False,
+          werror = False,
+          noCheck = False,
+          dumpSplices = False,
+          replBackend = Repl.ReplBackendInterpreter
+        }
 
 commandParser :: Parser Command
 commandParser =
@@ -260,7 +282,8 @@ main = do
             quiet = opts.quiet,
             werror = opts.werror,
             dumpSplices = opts.dumpSplices,
-            files = files
+            files = files,
+            replBackend = opts.replBackend
           }
     Run opts files -> runGoal resources opts files
     Compile opts files -> runCompile resources opts files

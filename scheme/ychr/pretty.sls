@@ -2,7 +2,8 @@
 ;;;;
 ;;;; Matches the output format of prettyTerm in YCHR.Internal.Pretty (Haskell).
 (library (ychr pretty)
-  (export pretty-term pretty-bindings bindings->string decode-mangled-name)
+  (export pretty-term pretty-bindings bindings->string pretty-query-result
+          decode-mangled-name)
   ;; (rnrs unicode) supplies `char-general-category`, which the atom
   ;; quoting predicate needs to mirror Haskell's `isAlphaNum` exactly.
   (import (rnrs) (rnrs unicode) (ychr var) (ychr optable))
@@ -470,6 +471,28 @@
                       (cons (cons id (symbol->string (display-name k names))) acc)
                       acc))))))
 
+  ;; Visible bindings in printing order: `_`-prefixed names are dropped,
+  ;; the rest are sorted by name. Both binding printers share this, and
+  ;; both pass the visible list (not the original one) to `key-aliases`,
+  ;; matching buildAliasClasses in YCHR.Run.
+  (define (visible-sorted bs)
+    (let ((visible (filter (lambda (b) (not (hidden-name? (car b)))) bs)))
+      (list-sort
+       (lambda (a b)
+         (string<? (symbol->string (car a))
+                   (symbol->string (car b))))
+       visible)))
+
+  ;; One `Name = pretty-term` line, without its terminator.
+  (define (binding-text b sorted)
+    (let-values (((port extract) (open-string-output-port)))
+      (put-string port (symbol->string (car b)))
+      (put-string port " = ")
+      (put-string port (render-pexpr max-prec
+                                      (value->pexpr (key-aliases (car b) sorted)
+                                                     (cdr b))))
+      (extract)))
+
   ;; Format an alist of ((symbol . value) ...) bindings as
   ;;   Name = pretty-term\n
   ;; one per line, sorted by symbol name, `_`-prefixed names dropped.
@@ -478,23 +501,32 @@
   ;; unbound print as each other (see `key-aliases`). Returns a
   ;; string.
   (define (bindings->string bs)
-    (let* ((visible (filter (lambda (b) (not (hidden-name? (car b)))) bs))
-           (sorted (list-sort
-                    (lambda (a b)
-                      (string<? (symbol->string (car a))
-                                (symbol->string (car b))))
-                    visible)))
+    (let ((sorted (visible-sorted bs)))
       (let-values (((port extract) (open-string-output-port)))
         (for-each
          (lambda (b)
-           (put-string port (symbol->string (car b)))
-           (put-string port " = ")
-           (put-string port (render-pexpr max-prec
-                                           (value->pexpr (key-aliases (car b) sorted)
-                                                          (cdr b))))
+           (put-string port (binding-text b sorted))
            (put-char port #\newline))
          sorted)
         (extract))))
+
+  ;; Format bindings the way the REPL's query result does:
+  ;;   Name = pretty-term,\n ... Name = pretty-term.\n
+  ;; Hidden names and aliases follow `bindings->string`. Prints, rather
+  ;; than returning a string, so generated query code can call it as the
+  ;; final expression.
+  (define (pretty-query-result bs)
+    (let ((sorted (visible-sorted bs)))
+      (let-values (((port extract) (open-string-output-port)))
+        (let loop ((rest sorted))
+          (unless (null? rest)
+            (let ((b (car rest)))
+              (put-string port (binding-text b sorted))
+              (if (null? (cdr rest))
+                  (put-string port ".\n")
+                  (put-string port ",\n"))
+              (loop (cdr rest)))))
+        (display (extract)))))
 
   ;; Print bindings using `bindings->string`. Side-effect-only wrapper
   ;; for the common case where the formatted output is just displayed.

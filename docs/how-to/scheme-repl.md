@@ -129,4 +129,6 @@ forms with `(only ...)`, or `(rename ...)`:
 ## See also
 
 - [REPL reference](../reference/repl.md) — `ychr repl` takes CHR
-  source directly, no Scheme.
+  source directly, no Scheme. Its `--repl-backend=chez` option runs
+  queries in a Chez process for you, instead of the manual `(ychr)`
+  session described above.

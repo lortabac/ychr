@@ -165,7 +165,8 @@ test-scheme-runtime:
 	cd scheme/test && $(GUILE) -L .. -x .sls run-all.scm
 
 test-repl: build
-	$(PYTEST) $(PYTEST_XDIST) test/repl/ -v
+	YCHR_SCHEME='$(CHEZ)' YCHR_SCHEME_LIB_DIR='$(CURDIR)/scheme' \
+	  $(PYTEST) $(PYTEST_XDIST) test/repl/ -v
 
 test-stlc: build
 	$(PYTEST) test/stlc/ -v

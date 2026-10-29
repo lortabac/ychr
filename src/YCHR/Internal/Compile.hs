@@ -51,6 +51,10 @@ module YCHR.Internal.Compile
     -- * Function compilation
     compileFunctionDef,
 
+    -- * Query compilation
+    compileQueryGoals,
+    queryVarName,
+
     -- * Call dispatch
     buildCallables,
 
@@ -81,6 +85,7 @@ import Data.Text qualified as T
 import YCHR.Internal.Compile.Names
 import YCHR.Internal.Compile.Occurrences (collectOccurrences)
 import YCHR.Internal.Compile.Types
+import YCHR.Internal.Desugar.Vars qualified as Vars
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Loc (SourceLoc)
@@ -2369,6 +2374,51 @@ compileBodyGoals ::
   Writer [Diagnostic CompileError] [Stmt]
 compileBodyGoals varMap si goals =
   evalStateT (concat <$> traverse (compileBodyGoal si) goals) varMap
+
+-- | The Scheme identifier a query variable is bound to. The prefix keeps a
+-- query variable from shadowing a generated procedure name at the call site
+-- of the emitted query code.
+queryVarName :: Text -> Text
+queryVarName v = "%q-" <> v
+
+-- | Compile a prepared query's goals into the VM statements a backend can
+-- execute. Returns the source names of the query variables, sorted, so the
+-- caller can print their bindings.
+--
+-- Every name mentioned in the goals is in scope before compilation starts:
+-- the interpreter allocates a fresh variable on the first reference even in
+-- an evaluated position, so the compiled form must not reject it as unbound.
+compileQueryGoals ::
+  [D.BodyGoal] ->
+  Either [Diagnostic CompileError] ([Text], [Stmt])
+compileQueryGoals goals =
+  let vars = queryVars goals
+      si = SrcInfo (P.SourceLoc "<query>" 1 1) (Atom "<query>") (Just "query")
+      vm = varMapFromList [(v, Var (Name (queryVarName v))) | v <- vars]
+      (stmts, errs) = runWriter (compileBodyGoals vm si goals)
+   in if null errs then Right (vars, stmts) else Left errs
+
+-- | Every variable mentioned anywhere in a query. A superset of the names
+-- the compiler introduces is deliberate: pre-seeding all of them matches
+-- the interpreter's first-reference allocation, including variables that
+-- only appear in evaluated or quoted positions.
+queryVars :: [D.BodyGoal] -> [Text]
+queryVars = Set.toList . Set.unions . map goalVars
+  where
+    goalVars D.BodyTrue = Set.empty
+    goalVars (D.BodyTell _ args) = exprUnion args
+    goalVars (D.BodyUnify l r) = Vars.exprVars l `Set.union` Vars.exprVars r
+    goalVars (D.BodyHostStmt _ args) = exprUnion args
+    goalVars (D.BodyIs v e) = Set.insert v (Vars.exprVars e)
+    goalVars (D.BodyCall _ args) = exprUnion args
+    goalVars (D.BodyApply f args) = Vars.exprVars f `Set.union` exprUnion args
+    goalVars (D.BodyTellDynamic _ g extras) =
+      Vars.exprVars g `Set.union` exprUnion extras
+    -- Queries reject a disjunction before they reach this pass; walking it
+    -- anyway keeps this function total.
+    goalVars (D.BodyOr branches) =
+      Set.unions (map goalVars (concat (NE.toList branches)))
+    exprUnion = Set.unions . map Vars.exprVars
 
 -- | Compiling a sequence of goals: the state is the 'VarMap', which grows
 -- as goals bind variables.

@@ -17,6 +17,8 @@
 module YCHR.Internal.Backend.Scheme
   ( -- * Code generation
     generateScheme,
+    QueryPlan (..),
+    generateQuery,
 
     -- * Helpers shared with the driver generator
     compileSymbol,
@@ -37,11 +39,12 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Numeric (showHex)
-import YCHR.Internal.Compile (tellProcName)
+import YCHR.Internal.Compile (queryVarName, tellProcName)
 import YCHR.Internal.Compile.Names
   ( encodeIdentifier,
     encodeText,
     isIdInitialSafe,
+    reactivateDispatchName,
     runtimeName,
     vmName,
   )
@@ -113,17 +116,26 @@ generateScheme libName symTab vmp ops =
 -- aliases, all @func_*@ procedures (so drivers can evaluate function
 -- calls in goal-argument position — see 'YCHR.Internal.Desugared.BodyTell'),
 -- and the program-info binding.
+--
+-- It also exports the mangled tell procedure of every exported constraint
+-- and @reactivate_dispatch@. The REPL's Chez backend evaluates compiled
+-- query code outside this library, so it can only reach those procedures
+-- through the export list. See 'generateQuery'.
 exportClause :: Text -> VMProgram -> [AliasEntry] -> SExpr
 exportClause infoName vmp aliases =
   let procNames = Set.fromList [n.unName | p <- vmp.program.procedures, let n = p.name]
       aliasNames = concatMap aliasEntryExports aliases
+      tellTargets = nub (map (.target) aliases)
+      reactivateNames =
+        [reactivateDispatchName.unName | Set.member reactivateDispatchName.unName procNames]
       funcNames =
         [ n | n <- Set.toList procNames, "func_" `T.isPrefixOf` n
         ]
+      exportNames = nub (aliasNames ++ tellTargets ++ reactivateNames ++ funcNames)
    in SList
         ( SAtom "export"
             : SAtom infoName
-            : map SAtom (aliasNames ++ funcNames)
+            : map SAtom exportNames
         )
 
 -- | Import clause for the runtime.
@@ -554,29 +566,145 @@ unqualifiedTellableRegistration key resolution =
 compileProcedure :: Procedure -> [SExpr]
 compileProcedure proc =
   [ SList
-      ( SAtom "define"
-          : SList
-            ( SAtom (mangleName proc.name)
-                : SAtom "%s"
-                : map
-                  (SAtom . mangleName)
-                  proc.params
-            )
-          : [bodyExpr]
-      )
+      [ SAtom "define",
+        SList
+          ( SAtom (mangleName proc.name)
+              : SAtom "%s"
+              : procedureParams proc
+          ),
+        procedureBody proc
+      ]
   ]
+
+-- | The body expression of a procedure, shared by the @define@ form above
+-- and the @lambda@ form 'generateQuery' uses for query-time lifted lambdas.
+procedureBody :: Procedure -> SExpr
+procedureBody proc =
+  let body = dropAfterReturn proc.body
+      -- 'compileTailStmts' is only sound when no 'Return' is trapped in a
+      -- nested body; 'needsEscape' is exactly that condition, and the
+      -- node-count guard keeps a pathological 'If' split out of the
+      -- generated code. Either failure falls back to the @call\/cc@ escape
+      -- path.
+      tailExpr = compileTailStmts body
+   in if needsEscape body
+        then wrapReturn (compileStmts body)
+        else
+          if sexprNodes tailExpr <= maxTailExprNodes
+            then tailExpr
+            else wrapReturn (compileStmts body)
+
+procedureParams :: Procedure -> [SExpr]
+procedureParams = map (SAtom . mangleName) . (.params)
+
+-- | A procedure as a @lambda@ expression. The first parameter is always
+-- @%s@, as in 'compileProcedure'.
+compileProcedureLambda :: Procedure -> SExpr
+compileProcedureLambda proc =
+  SList
+    [ SAtom "lambda",
+      SList (SAtom "%s" : procedureParams proc),
+      procedureBody proc
+    ]
+
+-- | Everything the Chez REPL backend needs to run one prepared query
+-- outside the generated library.
+--
+-- 'queryProcedures' are the query's lifted lambdas; 'queryCallables' are
+-- their callable-table entries. The generated code binds the procedures in
+-- a @letrec@ and registers them with the session, so the query can apply
+-- them through the ordinary @$call@ path.
+--
+-- The emitted expression relies on the server ABI: a @%s@ session binding,
+-- @fresh-session@, @start-timer@, @report-timer@ and
+-- @pretty-query-result@. It contains no top-level definitions, because
+-- Chez's @eval@ rejects a @define@ in expression position.
+data QueryPlan = QueryPlan
+  { queryVariables :: [Text],
+    queryStatements :: [Stmt],
+    queryProcedures :: [Procedure],
+    queryCallables :: [(CallableKey, Name)],
+    queryTimed :: Bool,
+    queryFreshSession :: Bool
+  }
+
+-- | Render one query as a single Scheme expression.
+generateQuery :: QueryPlan -> Text
+generateQuery plan =
+  printSExpr $
+    case procedureBindings of
+      [] -> SList (SAtom "begin" : body)
+      _ ->
+        SList
+          [ SAtom "letrec",
+            SList procedureBindings,
+            SList (SAtom "begin" : body)
+          ]
   where
-    body = dropAfterReturn proc.body
-    -- 'compileTailStmts' is only sound when no 'Return' is trapped in a
-    -- nested body; 'needsEscape' is exactly that condition, and the
-    -- node-count guard keeps a pathological 'If' split out of the
-    -- generated code. Either failure falls back to the @call\/cc@ escape
-    -- path.
-    tailExpr = compileTailStmts body
-    bodyExpr
-      | needsEscape body = wrapReturn (compileStmts body)
-      | sexprNodes tailExpr <= maxTailExprNodes = tailExpr
-      | otherwise = wrapReturn (compileStmts body)
+    procedureBindings =
+      [ SList [SAtom (mangleName p.name), compileProcedureLambda p]
+      | p <- plan.queryProcedures
+      ]
+    body =
+      [ SList [SAtom "set!", SAtom "%s", SList [SAtom "fresh-session"]]
+      | plan.queryFreshSession
+      ]
+        ++ map (callableRegistration . uncurry Callable) plan.queryCallables
+        ++ [queryExpr]
+    queryExpr =
+      SList
+        [ SAtom "let*",
+          SList
+            [ SList
+                [ SAtom (queryVarName v),
+                  SList [SAtom "make-var", SAtom "%s"]
+                ]
+            | v <- plan.queryVariables
+            ],
+          queryBody
+        ]
+    queryBody
+      | plan.queryTimed =
+          SList
+            [ SAtom "let",
+              SList
+                [ SList [SAtom "%start", SList [SAtom "start-timer"]]
+                ],
+              SList
+                [ SAtom "begin",
+                  SList
+                    [ SAtom "dynamic-wind",
+                      SList [SAtom "lambda", SList [], SAtom "#f"],
+                      SList [SAtom "lambda", SList [], compileBody plan.queryStatements],
+                      SList
+                        [ SAtom "lambda",
+                          SList [],
+                          SList [SAtom "report-timer", SAtom "%start"]
+                        ]
+                    ],
+                  prettyForm
+                ]
+            ]
+      | otherwise =
+          SList
+            [ SAtom "begin",
+              compileBody plan.queryStatements,
+              prettyForm
+            ]
+    prettyForm =
+      SList
+        [ SAtom "pretty-query-result",
+          SList
+            ( SAtom "list"
+                : [ SList
+                      [ SAtom "cons",
+                        SList [SAtom "quote", SAtom v],
+                        SAtom (queryVarName v)
+                      ]
+                  | v <- plan.queryVariables
+                  ]
+            )
+        ]
 
 -- | Maximum size of a procedure compiled without a @call\/cc@ escape.
 -- The tail compiler duplicates the continuation of an 'If' once per

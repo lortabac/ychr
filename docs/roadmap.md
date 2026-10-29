@@ -87,6 +87,7 @@ what is planned.
 - [x] Live sessions
 - [x] Info queries (`:info`, which reports the declared type)
 - [x] Tracing
+- [x] Chez backend for queries (`--repl-backend=chez`)
 
 ## Web playground
 

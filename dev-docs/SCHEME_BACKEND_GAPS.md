@@ -315,6 +315,29 @@ contracts from the invariant side.
   `pretty-ops` table (`builtin-op-entries` plus the standard arithmetic
   entries), the port of `Pretty.prettyOps`, not the session's `op-table`, so a
   user-declared operator still prints as a compound.
+- **REPL exports.** The generated library also exports the mangled tell
+  procedure of every exported constraint and `reactivate_dispatch`. The
+  REPL's Chez backend evaluates compiled query code outside the library,
+  so it reaches those procedures through the export list. This is the
+  only addition to the export surface.
+- **Chez query ABI.** `scheme/ychr/repl-server.scm` imports the fixed
+  library `(ychr generated repl)` and evaluates one expression per stdin
+  form in `(interaction-environment)`. A generated query is a single
+  expression, not a sequence of top-level definitions, because Chez's
+  `eval` rejects a `define` in expression position; query-time lifted
+  lambdas are `letrec` bindings and are registered with
+  `register-callable!`. The expression uses the server's `%s` session,
+  `fresh-session`, `start-timer`, `report-timer` and `(ychr pretty)`'s
+  `pretty-query-result`. User output and bindings go to stdout (inherited
+  by the REPL); one `YCHR-REPL-OK` or `YCHR-REPL-ERR <escaped>` frame per
+  query goes to stderr.
+- **Query-scope dynamic tell.** `%tell-term` special-cases the compiler's
+  `<query>` scope: it resolves the goal through the program's exports
+  (`resolve-export` + the session's goals table), as the Haskell
+  `tellGoalConstraint` does, instead of using the module-scoped tellables
+  table. Rule-body tells are unchanged. The unbound and not-a-term
+  messages carry the Haskell `CHR runtime error: ` prefix only in that
+  query scope.
 
 
 ## Closed gaps (reference)
