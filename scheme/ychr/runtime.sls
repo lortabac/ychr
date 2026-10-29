@@ -581,6 +581,23 @@
                                         (cons functor n)
                                         '())))
           (cond
+            ;; A query has no enclosing module scope. Resolve the goal
+            ;; against the program's exports, exactly as the Haskell
+            ;; query path's `tellGoalConstraint` does. The query scope
+            ;; is the compiler's `<query>` pseudo-module.
+            ((string=? scope "<query>")
+             (let* ((resolved (resolve-export s "tell" functor n))
+                    (entry (hashtable-ref (session-goals s)
+                                          (cons resolved n)
+                                          #f)))
+               (if entry
+                   (apply (car entry) s all)
+                   (%chr-error
+                    (string-append
+                     "tell: constraint not found: "
+                     (readable-functor resolved)
+                     "/"
+                     (number->string n))))))
             (proc (apply proc s all))
             ;; Only the prelude retries origin-less: its rules are handed
             ;; goals named by their caller, which they cannot name
@@ -613,8 +630,14 @@
          (dispatch (term-functor d) (vector->list (term-args d))))
         ((%unbound? d)
          (%chr-inst-error
-          "tell: goal is not sufficiently instantiated (unbound variable)"))
-        (else (%chr-error "tell: goal is not a constraint term")))))
+          (string-append
+           (if (string=? scope "<query>") "CHR runtime error: " "")
+           "tell: goal is not sufficiently instantiated (unbound variable)")))
+        (else
+         (%chr-error
+          (string-append
+           (if (string=? scope "<query>") "CHR runtime error: " "")
+           "tell: goal is not a constraint term"))))))
 
   ;; The candidate names an ambiguous origin-less lookup reports, joined
   ;; with `, ` in the source spelling the Haskell runtime's ambiguity

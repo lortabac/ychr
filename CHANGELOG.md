@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+`ychr repl` accepts `--repl-backend=interpreter|chez`. The default keeps
+the existing Haskell interpreter. `chez` starts one persistent Chez
+Scheme process with the `scheme` command and runs the queries there:
+Haskell still parses, renames, type-checks and prepares each query, then
+sends one generated Scheme expression. The constraint store, rules,
+functions, search and live-session state stay in Chez. `YCHR_SCHEME`
+overrides the executable name and `YCHR_SCHEME_LIB_DIR` points at a
+checkout's `scheme/` runtime; the installed package does not ship it.
+The backend is GHC-only (MicroHs has no process/pipe support and reports
+that the backend is unavailable). `:trace` is not implemented on Chez,
+`:time` is measured in the Chez process, and `:recompile` restarts it.
+
+The generated Scheme library now also exports each exported constraint's
+mangled `tell_*` procedure and `reactivate_dispatch`, because the REPL's
+query code runs outside the library. `(ychr pretty)` gains
+`pretty-query-result`. The Scheme runtime's `%tell-term` resolves the
+compiler's `<query>` scope through the program's exports, matching the
+Haskell dynamic-tell query path.
+
 An aggregate form (`argmin(...)`, `aggregate(...)`, ...) in a told
 constraint's argument (rule body, `tell/N`, query goal) or in an
 aggregate's `Element` is now `YCHR-20040`, and a goal macro name there

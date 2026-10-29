@@ -113,6 +113,46 @@
                 (bindings->string (list (cons '_A v) (cons 'B v))))))
 
 ;;; --------------------------------------------------------------------------
+;;; pretty-query-result formatting
+;;; --------------------------------------------------------------------------
+
+(test-group "pretty-query-result"
+  (test-equal "single binding ends with a dot"
+              "R = 55.\n"
+              (capture-stdout (lambda () (pretty-query-result (list (cons 'R 55))))))
+  (test-equal "empty alist produces empty output"
+              ""
+              (capture-stdout (lambda () (pretty-query-result '()))))
+  (test-equal "sorted, comma-separated and dotted"
+              "A = 1,\nB = 2,\nC = 3.\n"
+              (capture-stdout
+               (lambda ()
+                 (pretty-query-result
+                  (list (cons 'C 3) (cons 'A 1) (cons 'B 2))))))
+  (let* ((s (%make-session 0))
+         (v (make-var s)))
+    (test-equal "unbound variable renders as _"
+                "X = _.\n"
+                (capture-stdout
+                 (lambda () (pretty-query-result (list (cons 'X v)))))))
+  (let* ((s (%make-session 0))
+         (v (make-var s)))
+    (test-equal "aliased vars print as each other"
+                "A = B,\nB = A.\n"
+                (capture-stdout
+                 (lambda ()
+                   (pretty-query-result
+                    (list (cons 'A v) (cons 'B v)))))))
+  (let* ((s (%make-session 0))
+         (v (make-var s)))
+    (test-equal "a _-prefixed name is dropped"
+                "B = _.\n"
+                (capture-stdout
+                 (lambda ()
+                   (pretty-query-result
+                    (list (cons '_A v) (cons 'B v))))))))
+
+;;; --------------------------------------------------------------------------
 ;;; open-session
 ;;; --------------------------------------------------------------------------
 

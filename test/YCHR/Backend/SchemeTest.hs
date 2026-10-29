@@ -14,10 +14,16 @@ module YCHR.Backend.SchemeTest (tests) where
 import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, testCase)
-import YCHR.Internal.Backend.Scheme (generateScheme)
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
+import YCHR.Internal.Backend.Scheme
+  ( QueryPlan (..),
+    generateQuery,
+    generateScheme,
+  )
+import YCHR.Internal.Compile (compileQueryGoals)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.VM.SExpr (VMProgram (..))
+import YCHR.Run (PreparedQuery (..), prepareQueryUnchecked)
 import YCHR.TestHelpers (compileOrFail, leqSource)
 
 -- | Scheme-backend control-flow codegen: when a 'Return' needs a @call\/cc@ escape.
@@ -67,12 +73,61 @@ tests =
       -- registration can produce (those emit symbols, not strings).
       testCase "the generated library threads the constraint type names" $ do
         code <- schemeFor leqSource
-        assertInfix "(vector \"order__leq\" " code
+        assertInfix "(vector \"order__leq\" " code,
+      -- The REPL's Chez backend evaluates compiled query code outside the
+      -- library, so the tell procedures it calls and the reactivation
+      -- dispatch must be exported.
+      testCase "the export list exposes the query internals" $ do
+        code <- schemeFor leqSource
+        exportLine <-
+          case [ line
+               | line <- T.lines code,
+                 "(export" `T.isPrefixOf` T.stripStart line
+               ] of
+            [] -> assertFailure "no export line in generated library"
+            line : _ -> pure line
+        assertInfix "tell_order__leq2" exportLine
+        assertInfix "reactivate_dispatch" exportLine,
+      testCase "query codegen binds variables, runs and prints results" $ do
+        code <- queryCode False "R is 1 + 1."
+        assertInfix "(make-var %s)" code
+        assertInfix "(cons (quote R) %q-R)" code
+        assertInfix "(pretty-query-result" code
+        assertInfix "(set! %s (fresh-session))" code,
+      testCase "a timed query reports its own time" $ do
+        code <- queryCode True "R is 1 + 1."
+        assertInfix "start-timer" code
+        assertInfix "dynamic-wind" code
+        assertInfix "report-timer" code,
+      testCase "query lambdas are letrec-bound and registered" $ do
+        code <- queryCode False "R is '$call'(fun(X) -> X + 1 end, 1)."
+        assertInfix "(letrec (" code
+        assertInfix "(register-callable! %s" code
     ]
 
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
+
+-- | Compile a source program and render one prepared query as the Chez
+-- backend would.
+queryCode :: Bool -> Text -> IO Text
+queryCode timed query = do
+  cp <- compileOrFail [("prog.chr", leqSource)]
+  prep <- prepareQueryUnchecked cp query
+  case compileQueryGoals prep.liftedGoals of
+    Left _ -> assertFailure ("query did not compile: " ++ show query)
+    Right (vars, stmts) ->
+      pure $
+        generateQuery
+          QueryPlan
+            { queryVariables = vars,
+              queryStatements = stmts,
+              queryProcedures = prep.extraProcs,
+              queryCallables = prep.extraCallables,
+              queryTimed = timed,
+              queryFreshSession = True
+            }
 
 -- | Compile a source program and render its Scheme library.
 schemeFor :: Text -> IO Text

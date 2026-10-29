@@ -1035,7 +1035,18 @@ clauses. `drain-queue!` takes
 `(snapshot, count)` from the runtime. (The binding printer's operator
 table is the fixed `Pretty.prettyOps` — built-ins plus arithmetic — not
 the session's, so a user-declared operator still prints as a compound.)
-One more assumption rides on the
+The generated library also exports the mangled `tell_*` procedure of
+every exported constraint and `reactivate_dispatch`; the REPL's Chez
+backend evaluates compiled query code outside the library and reaches
+those procedures through the export list. That query code is one
+expression (`letrec` for query-time lifted lambdas, never top-level
+`define`s, which Chez's `eval` rejects) and relies on the server's
+`%s`, `fresh-session`, `start-timer`, `report-timer` and
+`pretty-query-result` bindings. The server writes user output to
+stdout and one `YCHR-REPL-OK`/`YCHR-REPL-ERR` frame per query to
+stderr. `%tell-term` also recognizes the compiler's `<query>` scope,
+which resolves through the program's exports like the Haskell
+`tellGoalConstraint`. One more assumption rides on the
 tail compilation: an `If` whose arm contains a `Return` is emitted as
 `(if c ARM-spliced-before-rest ARM-spliced-before-rest)`, so a binder an
 arm introduces lexically scopes over the statements that follow the

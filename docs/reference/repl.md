@@ -3,7 +3,7 @@
 ## Starting the REPL
 
 ```sh
-ychr repl [--quiet] [--no-check] [--Werror] [--dump-splices] [FILES...]
+ychr repl [--repl-backend BACKEND] [--quiet] [--no-check] [--Werror] [--dump-splices] [FILES...]
 ```
 
 `ychr FILES...` (no subcommand) is short for `ychr repl FILES...` with
@@ -58,6 +58,39 @@ macros spliced, to stderr, on startup and on `:recompile`. It is an
 explicit debugging request, so `--quiet` does not suppress it. See
 [macros.md](macros.md#dumping-the-splices).
 
+## REPL backends
+
+`--repl-backend` selects where queries run. The values are `interpreter`
+(the default) and `chez`.
+
+`interpreter` runs everything in the Haskell runtime, as before.
+
+`chez` starts one persistent Chez Scheme process with the `scheme`
+command and runs every query there. Haskell still parses, renames,
+type-checks and prepares the query; it compiles the prepared goals to
+Scheme and sends one expression per query. The constraint store, rule
+execution, user functions, search and live-session state all stay in
+Chez, so a query crosses the process boundary once, not once per
+constraint or function. Set `YCHR_SCHEME` to use a Chez executable with
+another name, and `YCHR_SCHEME_LIB_DIR` to the `scheme/` directory of a
+YCHR source checkout when the REPL is not run from the checkout root
+(the directory must contain `ychr/runtime.sls` and
+`ychr/repl-server.scm`). The installed package does not ship the Scheme
+runtime.
+
+The Chez backend keeps the rest of the REPL unchanged: `--quiet`,
+`--Werror`, `--no-check`, `:info`, `:list_*`, history and tab
+completion are Haskell-side, and live sessions persist their store in
+Chez. `:recompile` starts a new Chez process with the newly compiled
+program. `:trace` is not available with this backend; it reports that
+and does not run the query. `:time` is measured by the Chez process, as
+process CPU time.
+
+Runtime errors use the same `YCHR-60001` envelope as the interpreter.
+Some existing Scheme/Haskell differences remain — for example float
+pretty-printing and the absence of a Haskell call stack on a Scheme
+runtime error — so diagnostics can differ in those details.
+
 ## Prompts
 
 | Prompt | Mode |
@@ -80,7 +113,7 @@ the loaded modules, plus the meta-commands at the outer prompt (only
 | `:list_declarations` | | List visible constraint and function declarations. |
 | `:list_operators` | | List defined operators, one `op/3` term per line. |
 | `:info NAME` | `:i NAME` | Show information about an identifier (see below). |
-| `:trace GOAL` | | Run `GOAL` with refined-operational-semantics tracing (see below). |
+| `:trace GOAL` | | Run `GOAL` with tracing (interpreter backend only; see below). |
 | `:time GOAL` | | Run `GOAL` and print its execution time in seconds, then the bindings (see below). |
 | `:begin` | | Enter a live CHR session. End with `:end`. |
 | `:end` | | Leave the current live session. The session's store is discarded. |
@@ -124,7 +157,8 @@ unknown identifier: foo
 operational semantics (ωr) plus user-function, lambda and host calls,
 indented by nesting. Only the trace is printed; re-run without
 `:trace` for the bindings. Works at the outer prompt and inside a live
-session (the handler lasts one query).
+session (the handler lasts one query). It is available only with the
+default `interpreter` backend.
 
 ```ychr-repl
 ychr> :trace R is 1 + 2.

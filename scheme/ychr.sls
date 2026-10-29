@@ -15,7 +15,7 @@
     ;; --- (ychr repl) -------------------------------------------------
     open-session tell
     ;; --- (ychr pretty) -----------------------------------------------
-    pretty-term pretty-bindings bindings->string
+    pretty-term pretty-bindings bindings->string pretty-query-result
     ;; --- (ychr runtime): vars, terms, unification --------------------
     make-var var? var-id deref unify unifiable? equal?/chr
     make-term term? term-functor term-args

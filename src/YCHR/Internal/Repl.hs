@@ -17,7 +17,8 @@
 -- pane instead of growing a second, drifting implementation; the
 -- terminal REPL is just @putStr@ of them.
 module YCHR.Internal.Repl
-  ( ReplOptions (..),
+  ( ReplBackend (..),
+    ReplOptions (..),
     runRepl,
     modulesText,
     declarationsText,
@@ -29,15 +30,16 @@ import Control.Exception
   ( IOException,
     SomeException,
     displayException,
+    finally,
     fromException,
     try,
   )
-import Control.Monad (unless, when)
+import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Data.Char (isSpace)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (intercalate, sort, stripPrefix)
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -68,6 +70,17 @@ import YCHR.Internal.ProgramCheck
   ( ProgramCheck (..),
     constraintUseErrors,
     typeCheckReport,
+  )
+import YCHR.Internal.Repl.Chez
+  ( Chez,
+    ChezFailure (..),
+    endChezLive,
+    prepareChezCode,
+    restartChez,
+    runChezCode,
+    startChez,
+    startChezLive,
+    stopChez,
   )
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Monad (Chr)
@@ -107,6 +120,12 @@ import YCHR.Run
 -- Entry point
 -- ---------------------------------------------------------------------------
 
+-- | Which backend executes queries.
+data ReplBackend
+  = ReplBackendInterpreter
+  | ReplBackendChez
+  deriving (Eq, Show)
+
 -- | What the REPL runs on, and the CLI flags it honours.
 --
 -- The 'StdLib' and the compiled type-checker are explicit inputs: the
@@ -129,7 +148,9 @@ data ReplOptions = ReplOptions
     -- on load and on @:recompile@.
     dumpSplices :: Bool,
     -- | The files to compile; empty means an empty program.
-    files :: [FilePath]
+    files :: [FilePath],
+    -- | @--repl-backend@: where queries execute.
+    replBackend :: ReplBackend
   }
 
 -- | Run the interactive REPL. Compiles the inputs, prints any warnings
@@ -150,7 +171,18 @@ runRepl opts = do
       unless opts.quiet (printTypeDiagnosticsWhen opts.typeChecker prog)
       let exported = exportedNames prog
       inputs <- mkReplInputs opts.quiet exported
-      outerLoop opts inputs prog
+      backend <- case opts.replBackend of
+        ReplBackendInterpreter -> pure Nothing
+        ReplBackendChez -> do
+          started <- startChez prog
+          case started of
+            Left err -> do
+              hPutStrLn stderr ("Error: " ++ err)
+              exitFailure
+            Right chez -> pure (Just chez)
+      backendRef <- newIORef backend
+      outerLoop opts inputs backendRef prog
+        `finally` (readIORef backendRef >>= maybe (pure ()) stopChez)
 
 -- | The line inputs of the outer loop and of a live session.
 data ReplInputs = ReplInputs
@@ -236,8 +268,13 @@ stripComment = go
 -- Outer REPL loop
 -- ---------------------------------------------------------------------------
 
-outerLoop :: ReplOptions -> ReplInputs -> CompiledProgram -> IO ()
-outerLoop opts inputs = go
+outerLoop ::
+  ReplOptions ->
+  ReplInputs ->
+  IORef (Maybe Chez) ->
+  CompiledProgram ->
+  IO ()
+outerLoop opts inputs backendRef = go
   where
     prompt = if opts.quiet then "" else "ychr> "
     go prog = do
@@ -261,17 +298,25 @@ outerLoop opts inputs = go
       ":trace" -> showTraceUsage *> go prog
       ":time" -> showTimeUsage *> go prog
       ":begin" -> do
-        runLiveSession opts inputs.live prog
+        backend <- readIORef backendRef
+        runLiveSession opts inputs.live backend prog
         go prog
       "" -> go prog
       line
         | Just rest <- stripPrefix ":info " line -> showInfo prog rest *> go prog
         | Just rest <- stripPrefix ":i " line -> showInfo prog rest *> go prog
-        | Just rest <- stripPrefix ":trace " line ->
-            runTracedQuery opts prog rest *> go prog
-        | Just rest <- stripPrefix ":time " line ->
-            runTimedOuterQuery opts prog rest *> go prog
-        | otherwise -> runOuterQuery opts prog line *> go prog
+        | Just rest <- stripPrefix ":trace " line -> do
+            backend <- readIORef backendRef
+            runTracedQuery opts backend prog rest
+            go prog
+        | Just rest <- stripPrefix ":time " line -> do
+            backend <- readIORef backendRef
+            runTimedOuterQuery opts backend prog rest
+            go prog
+        | otherwise -> do
+            backend <- readIORef backendRef
+            runOuterQuery opts backend prog line
+            go prog
     recompile prog = do
       result <- compileFiles opts.stdlib True opts.files
       case result of
@@ -289,7 +334,20 @@ outerLoop opts inputs = go
             else do
               printWarnings warnings
               printTypeDiagnosticsWhen opts.typeChecker prog'
-              go prog'
+              backend <- readIORef backendRef
+              case backend of
+                Nothing -> go prog'
+                Just old -> do
+                  restarted <- restartChez old prog'
+                  case restarted of
+                    Left err -> do
+                      hPutStrLn
+                        stderr
+                        ("Error: cannot restart the Chez backend: " ++ err)
+                      go prog
+                    Right new -> do
+                      writeIORef backendRef (Just new)
+                      go prog'
 
 -- | Run a one-off query in the outer REPL: parse, typecheck, execute
 -- in a fresh CHR session. Distinct exception classes are surfaced
@@ -297,22 +355,28 @@ outerLoop opts inputs = go
 -- @"Error: " ++ displayException@. Under @--Werror@, query-rename
 -- warnings short-circuit before execution; the constraint store is
 -- untouched (one-shot queries get a fresh store anyway).
-runOuterQuery :: ReplOptions -> CompiledProgram -> String -> IO ()
+runOuterQuery :: ReplOptions -> Maybe Chez -> CompiledProgram -> String -> IO ()
 runOuterQuery = runOuterQueryWith False
 
 -- | Like 'runOuterQuery', but as @:time@: print the query's execution
--- time — 'formatElapsed' of the CPU time spent running it — before its
--- result. The span covers execution, including the fresh session a
--- one-shot query builds, and excludes preparation (parse, rename,
--- resolve, desugar, type-check), so a query rejected before execution
--- prints no timing line. A runtime error still prints one, since
--- execution started.
-runTimedOuterQuery :: ReplOptions -> CompiledProgram -> String -> IO ()
+-- time before its result. With the interpreter backend the span is CPU
+-- time spent running it, including the fresh session a one-shot query
+-- builds, and excludes preparation (parse, rename, resolve, desugar,
+-- type-check), so a query rejected before execution prints no timing
+-- line. With the Chez backend the Chez process prints the line itself.
+-- A runtime error still prints one, since execution started.
+runTimedOuterQuery :: ReplOptions -> Maybe Chez -> CompiledProgram -> String -> IO ()
 runTimedOuterQuery = runOuterQueryWith True
 
 -- | 'runOuterQuery' or, when the 'Bool' is set, 'runTimedOuterQuery'.
-runOuterQueryWith :: Bool -> ReplOptions -> CompiledProgram -> String -> IO ()
-runOuterQueryWith timed opts prog line = do
+runOuterQueryWith ::
+  Bool ->
+  ReplOptions ->
+  Maybe Chez ->
+  CompiledProgram ->
+  String ->
+  IO ()
+runOuterQueryWith timed opts backend prog line = do
   prepResult <-
     try @SomeException $
       prepareQueryWith opts.typeChecker prog (T.pack line)
@@ -320,21 +384,42 @@ runOuterQueryWith timed opts prog line = do
     Left exc -> reportQueryException exc
     Right prep -> do
       printWarnings prep.warnings
-      unless (opts.werror && not (null prep.warnings)) $ do
-        start <- getCPUTime
-        execResult <-
-          try @SomeException $
-            withCHRExtra
-              (toSessionInput prog)
-              opts.hostCalls
-              prep.extraProcs
-              prep.extraCallables
-              (executePreparedQuery prep.liftedGoals)
-        end <- getCPUTime
-        when timed (putStrLn (formatElapsed (end - start)))
-        case execResult of
-          Left exc -> reportQueryException exc
-          Right bindings -> putStr (prettyQueryResult bindings)
+      unless (opts.werror && not (null prep.warnings)) $
+        case backend of
+          Nothing -> runInterpreter prep
+          Just chez -> case prepareChezCode True timed prep of
+            Left err -> putStr (displayMsg err)
+            Right code ->
+              runChezCode chez code >>= either reportChezFailure pure
+  where
+    runInterpreter prep = do
+      start <- getCPUTime
+      execResult <-
+        try @SomeException $
+          withCHRExtra
+            (toSessionInput prog)
+            opts.hostCalls
+            prep.extraProcs
+            prep.extraCallables
+            (executePreparedQuery prep.liftedGoals)
+      end <- getCPUTime
+      when timed (putStrLn (formatElapsed (end - start)))
+      case execResult of
+        Left exc -> reportQueryException exc
+        Right bindings -> putStr (prettyQueryResult bindings)
+
+-- | Print a Chez backend failure. A runtime error goes to stdout like
+-- the interpreter's; a transport or startup error is a CLI error.
+reportChezFailure :: ChezFailure -> IO ()
+reportChezFailure (ChezRuntime msg) = putStr (displayMsg (RuntimeError msg []))
+reportChezFailure (ChezBackend msg) = hPutStrLn stderr ("Error: " ++ msg)
+
+-- | Render a backend failure. Runtime errors use the same YCHR-60001
+-- envelope as the interpreter; transport and startup errors are plain
+-- CLI errors.
+chezFailureText :: ChezFailure -> String
+chezFailureText (ChezRuntime msg) = displayMsg (RuntimeError msg [])
+chezFailureText (ChezBackend msg) = "Error: " ++ msg ++ "\n"
 
 -- | Print an outer-loop query failure: an 'Error' through 'displayMsg',
 -- anything else as @"Error: " ++ displayException@.
@@ -357,28 +442,31 @@ formatElapsed ps = "Time: " ++ showFFloat (Just 6) seconds "s"
 -- bindings are intentionally not printed, matching the documented
 -- @:trace@ behaviour. To see bindings, re-run the goal without
 -- @:trace@.
-runTracedQuery :: ReplOptions -> CompiledProgram -> String -> IO ()
-runTracedQuery opts prog line = do
-  prepResult <-
-    try @SomeException $
-      prepareQueryWith opts.typeChecker prog (T.pack line)
-  case prepResult of
-    Left exc -> reportQueryException exc
-    Right prep -> do
-      printWarnings prep.warnings
-      unless (opts.werror && not (null prep.warnings)) $ do
-        execResult <-
-          try @SomeException $
-            withCHRExtraTraced
-              (toSessionInput prog)
-              opts.hostCalls
-              prep.extraProcs
-              prep.extraCallables
-              (defaultTraceHandler stdout)
-              (executePreparedQuery prep.liftedGoals)
-        case execResult of
-          Left exc -> reportQueryException exc
-          Right _ -> pure ()
+runTracedQuery :: ReplOptions -> Maybe Chez -> CompiledProgram -> String -> IO ()
+runTracedQuery opts backend prog line = case backend of
+  Just _ ->
+    hPutStrLn stderr ":trace is not available with --repl-backend=chez"
+  Nothing -> do
+    prepResult <-
+      try @SomeException $
+        prepareQueryWith opts.typeChecker prog (T.pack line)
+    case prepResult of
+      Left exc -> reportQueryException exc
+      Right prep -> do
+        printWarnings prep.warnings
+        unless (opts.werror && not (null prep.warnings)) $ do
+          execResult <-
+            try @SomeException $
+              withCHRExtraTraced
+                (toSessionInput prog)
+                opts.hostCalls
+                prep.extraProcs
+                prep.extraCallables
+                (defaultTraceHandler stdout)
+                (executePreparedQuery prep.liftedGoals)
+          case execResult of
+            Left exc -> reportQueryException exc
+            Right _ -> pure ()
 
 showTraceUsage :: IO ()
 showTraceUsage =
@@ -397,9 +485,15 @@ showTimeUsage =
 -- and reactivation queue persist across queries entered at the
 -- @ychr live>@ prompt. The session ends when the user types @:end@,
 -- hits EOF, or a runtime error aborts execution.
-runLiveSession :: ReplOptions -> LineInput -> CompiledProgram -> IO ()
-runLiveSession opts liveInput cp =
-  withCHR (toSessionInput cp) opts.hostCalls liveLoop
+runLiveSession ::
+  ReplOptions ->
+  LineInput ->
+  Maybe Chez ->
+  CompiledProgram ->
+  IO ()
+runLiveSession opts liveInput backend cp = case backend of
+  Nothing -> withCHR (toSessionInput cp) opts.hostCalls liveLoop
+  Just chez -> runLiveSessionChez opts liveInput chez cp
   where
     prompt = if opts.quiet then "" else "ychr live> "
     liveLoop :: Chr ()
@@ -414,9 +508,9 @@ runLiveSession opts liveInput cp =
       | Just rest <- T.stripPrefix ":trace " stripped = do
           outcome <-
             withTraceHandler (defaultTraceHandler stdout) $
-              handleLiveQuery opts cp rest
+              handleLiveQuery opts cp False rest
           case outcome of
-            QueryOk _ -> liveLoop
+            QueryOk -> liveLoop
             QueryRecoverable msg -> do
               liftIO (hPutStr stderr msg)
               liveLoop
@@ -427,11 +521,9 @@ runLiveSession opts liveInput cp =
           liftIO showTraceUsage
           liveLoop
       | otherwise = do
-          outcome <- handleLiveQuery opts cp (T.pack line')
+          outcome <- handleLiveQuery opts cp True (T.pack line')
           case outcome of
-            QueryOk bindings -> do
-              liftIO (putStr (prettyQueryResult bindings))
-              liveLoop
+            QueryOk -> liveLoop
             QueryRecoverable msg -> do
               liftIO (hPutStr stderr msg)
               liveLoop
@@ -442,10 +534,55 @@ runLiveSession opts liveInput cp =
         line' = stripCommentAndCR line
         stripped = T.strip (T.pack line')
 
+-- | The Chez live-session loop. The store lives in the child process, so
+-- this loop is plain 'IO'; a single generated query runs per prompt line.
+runLiveSessionChez ::
+  ReplOptions ->
+  LineInput ->
+  Chez ->
+  CompiledProgram ->
+  IO ()
+runLiveSessionChez opts liveInput chez cp = do
+  started <- startChezLive chez
+  case started of
+    Left failure -> hPutStr stderr (chezFailureText failure)
+    Right () -> liveLoop `finally` void (endChezLive chez)
+  where
+    prompt = if opts.quiet then "" else "ychr live> "
+    liveLoop = do
+      mline <- liveInput.readLine prompt
+      case mline of
+        Nothing -> pure ()
+        Just line -> dispatch line
+    dispatch line
+      | stripped == ":end" = pure ()
+      | T.null stripped = liveLoop
+      | Just _ <- T.stripPrefix ":trace " stripped = do
+          hPutStrLn stderr unsupportedTrace
+          liveLoop
+      | stripped == ":trace" = do
+          hPutStrLn stderr unsupportedTrace
+          liveLoop
+      | otherwise = do
+          outcome <- handleLiveQueryChez opts cp chez (T.pack line')
+          case outcome of
+            QueryOk -> liveLoop
+            QueryRecoverable msg -> do
+              hPutStr stderr msg
+              liveLoop
+            QueryFatal msg -> do
+              hPutStr stderr msg
+              hPutStrLn stderr "live session aborted due to runtime error."
+      where
+        line' = stripCommentAndCR line
+        stripped = T.strip (T.pack line')
+    unsupportedTrace = ":trace is not available with --repl-backend=chez"
+
 -- | Outcome of executing a single live-session query.
 data QueryOutcome
-  = -- | Query ran to completion. Carries the resulting bindings.
-    QueryOk (Map Text Term)
+  = -- | Query ran to completion. The backend has printed the bindings
+    -- that should be shown.
+    QueryOk
   | -- | A pre-execution problem (parse, type, lambdas-rejected) that
     -- left the constraint store untouched. The session can continue.
     QueryRecoverable String
@@ -453,32 +590,54 @@ data QueryOutcome
     -- and bindings may be inconsistent; the live session must abort.
     QueryFatal String
 
--- | Handle one query inside an existing live session: parse / typecheck
--- in 'IO' (catching 'Error'), reject lifted lambdas (live sessions
--- cannot grow the procedure map), then execute and catch any runtime
--- exception as a fatal outcome. Under @--Werror@, query-rename
--- warnings short-circuit before execution: the warnings are printed
--- to stderr and the query is treated as recoverable, leaving the
--- session's constraint store untouched.
-handleLiveQuery :: ReplOptions -> CompiledProgram -> Text -> Chr QueryOutcome
-handleLiveQuery opts cp src = do
+-- | Classify a live-session exception: an 'Error' was raised before or
+-- during preparation and is recoverable; anything else is fatal.
+classifyLiveException :: SomeException -> QueryOutcome
+classifyLiveException exc = case fromException exc :: Maybe Error of
+  Just err -> QueryRecoverable (displayMsg err)
+  Nothing -> QueryFatal (renderLiveFatal exc)
+
+-- | A fatal exception is most often an 'Error' (e.g. a runtime error
+-- escaping 'executePreparedQuery'); rendering through 'displayMsg'
+-- gives the same nicely-formatted output the outer REPL produces.
+-- Anything else falls back to 'displayException'.
+renderLiveFatal :: SomeException -> String
+renderLiveFatal exc = case fromException exc :: Maybe Error of
+  Just err -> displayMsg err
+  Nothing -> displayException exc ++ "\n"
+
+-- | The diagnostic for a query that introduces a lambda into a live
+-- session. Live sessions cannot grow the procedure map.
+lambdaInLiveQuery :: D.Function -> String
+lambdaInLiveQuery lam =
+  let lamEqs = lam.equations :: [Parsed.AnnP D.Equation]
+      -- One location/origin for the lambda: its first equation's
+      -- annotation.
+      (loc, origin) = case lamEqs of
+        (Parsed.AnnP _ l o : _) -> (l, o)
+        [] -> (Parsed.dummyLoc, P.Atom "")
+   in displayMsg (LambdasInLiveQuery loc origin)
+
+-- | Handle one query inside an existing interpreter live session. The
+-- final 'Bool' says whether visible bindings should be printed; the
+-- @:trace@ form passes 'False'.
+handleLiveQuery ::
+  ReplOptions ->
+  CompiledProgram ->
+  Bool ->
+  Text ->
+  Chr QueryOutcome
+handleLiveQuery opts cp printResult src = do
   prepResult <-
     liftIO (try @SomeException (prepareQueryWith opts.typeChecker cp src))
   case prepResult of
-    Left exc -> pure (classifyAsRecoverable exc)
+    Left exc -> pure (classifyLiveException exc)
     Right prep -> do
       liftIO (printWarnings prep.warnings)
       if opts.werror && not (null prep.warnings)
         then pure (QueryRecoverable "")
         else case prep.queryLambdas of
-          (lam : _) ->
-            let lamEqs = lam.equations :: [Parsed.AnnP D.Equation]
-                -- One location/origin for the lambda: its first
-                -- equation's annotation.
-                (loc, origin) = case lamEqs of
-                  (Parsed.AnnP _ l o : _) -> (l, o)
-                  [] -> (Parsed.dummyLoc, P.Atom "")
-             in pure (QueryRecoverable (displayMsg (LambdasInLiveQuery loc origin)))
+          (lam : _) -> pure (QueryRecoverable (lambdaInLiveQuery lam))
           [] -> do
             env <- ask
             execResult <-
@@ -486,19 +645,41 @@ handleLiveQuery opts cp src = do
                 try @SomeException $
                   runReaderT (executePreparedQuery prep.liftedGoals) env
             case execResult of
-              Left exc -> pure (QueryFatal (renderFatal exc))
-              Right bindings -> pure (QueryOk bindings)
-  where
-    classifyAsRecoverable exc = case fromException exc :: Maybe Error of
-      Just err -> QueryRecoverable (displayMsg err)
-      Nothing -> QueryFatal (renderFatal exc)
-    -- A fatal exception is most often an 'Error' (e.g. a runtime error
-    -- escaping 'executePreparedQuery'); rendering through 'displayMsg'
-    -- gives the same nicely-formatted output the outer REPL produces.
-    -- Anything else falls back to 'displayException'.
-    renderFatal exc = case fromException exc :: Maybe Error of
-      Just err -> displayMsg err
-      Nothing -> displayException exc ++ "\n"
+              Left exc -> pure (QueryFatal (renderLiveFatal exc))
+              Right bindings -> do
+                when
+                  printResult
+                  (liftIO (putStr (prettyQueryResult bindings)))
+                pure QueryOk
+
+-- | 'handleLiveQuery' for a query that runs in the Chez process.
+handleLiveQueryChez ::
+  ReplOptions ->
+  CompiledProgram ->
+  Chez ->
+  Text ->
+  IO QueryOutcome
+handleLiveQueryChez opts cp chez src = do
+  prepResult <-
+    try @SomeException (prepareQueryWith opts.typeChecker cp src)
+  case prepResult of
+    Left exc -> pure (classifyLiveException exc)
+    Right prep -> do
+      printWarnings prep.warnings
+      if opts.werror && not (null prep.warnings)
+        then pure (QueryRecoverable "")
+        else case prep.queryLambdas of
+          (lam : _) -> pure (QueryRecoverable (lambdaInLiveQuery lam))
+          [] -> case prepareChezCode False False prep of
+            Left err -> pure (QueryRecoverable (displayMsg err))
+            Right code -> do
+              result <- runChezCode chez code
+              pure $ case result of
+                Right () -> QueryOk
+                Left (ChezRuntime msg) ->
+                  QueryFatal (displayMsg (RuntimeError msg []))
+                Left (ChezBackend msg) ->
+                  QueryFatal ("Error: " ++ msg ++ "\n")
 
 -- ---------------------------------------------------------------------------
 -- Commands
@@ -521,7 +702,7 @@ commands =
     Command [":list_declarations"] "List visible declarations",
     Command [":list_operators"] "List defined operators",
     Command [":info", ":i"] "Show information about an identifier",
-    Command [":trace"] "Run a goal with refined-operational-semantics tracing",
+    Command [":trace"] "Run a goal with tracing (interpreter backend only)",
     Command [":time"] "Run a goal and print its execution time",
     Command [":begin"] "Start a live CHR session (end with :end)",
     Command [":quit", ":q"] "Exit the REPL"
