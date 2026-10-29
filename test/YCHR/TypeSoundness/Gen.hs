@@ -731,7 +731,9 @@ genRule univ adts cls sigList ix = do
   nBinds <- Gen.int (Range.constant 0 2)
   binds <- foldM genBind (Binds [] ctx0) [0 .. nBinds - 1]
   let ctx1 = binds.ctx
-  gate <- genGatedBind ctx1
+  -- ctx0, not ctx1: the gate's guard runs before the body, where a
+  -- tainted W is not bound yet.
+  gate <- genGatedBind ctx0
   tellItems <-
     genTells ctx1 sigList (minimum (fmap (.headSig.stratum) heads_))
   pure
@@ -743,7 +745,7 @@ genRule univ adts cls sigList ix = do
         body = binds.items ++ gate.items ++ tellItems,
         ruleTaintedHead = tainted,
         -- What is *still* possibly-unbound after the mode guards ran.
-        ruleTainted = taintedAll ctx1 ctx1.ctxTainted binds.items,
+        ruleTainted = ctx1.ctxTainted,
         ruleSkHead = skHead,
         ruleSk = ctx1.ctxSk
       }
@@ -1360,6 +1362,9 @@ data Binds = Binds {items :: [BodyItem], ctx :: Ctx}
 
 -- | One body binding: @W is E@ or @W = T@. Both bind a /fresh/
 -- variable, which is what keeps @=@ unfailable and the store ground.
+--
+-- A @W = T@ whose @T@ mentions a tainted variable taints @W@ too, so
+-- later items don't evaluate it.
 genBind :: Binds -> Int -> Gen Binds
 genBind (Binds acc ctx) i = do
   t <- pickTarget ctx
@@ -1369,7 +1374,14 @@ genBind (Binds acc ctx) i = do
       [ BIs w t <$> genExprRoot ctx t,
         BUnify w t <$> genSTermAt ctx 2 t
       ]
-  pure (Binds (acc ++ [item]) ctx {ctxScope = Map.insert w t ctx.ctxScope})
+  pure
+    ( Binds
+        (acc ++ [item])
+        ctx
+          { ctxScope = Map.insert w t ctx.ctxScope,
+            ctxTainted = taintedAll ctx ctx.ctxTainted [item]
+          }
+    )
 
 -- | A rule that exists only to bind a store-resident variable.
 --
