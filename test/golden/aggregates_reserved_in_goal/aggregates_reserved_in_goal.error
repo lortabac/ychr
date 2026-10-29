@@ -1,2 +1,2 @@
-YCHR-20002
-Unknown name 'tell/1'
+YCHR-20041
+'tell/1' in an aggregate goal is a built-in form, not a constraint

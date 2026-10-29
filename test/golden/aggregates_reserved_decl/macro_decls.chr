@@ -1,0 +1,6 @@
+% The :- macro_decls name isn't reserved; the :- chr_constraint it
+% generates is.
+:- module(aggregates_reserved_decl_macro_decls, []).
+:- macro_decls gen_reserved/0.
+gen_reserved ---> [(:- chr_constraint takemax/2)].
+:- gen_reserved.

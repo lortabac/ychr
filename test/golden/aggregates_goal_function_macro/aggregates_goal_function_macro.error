@@ -1,0 +1,5 @@
+YCHR-20041
+'prelude:==/2' in an aggregate goal is a function
+in the expansion of aggregates:exists/1
+'prelude:</2' in an aggregate goal is a function
+in the expansion of aggregates_goal_function_macro:mycount/2

@@ -3,7 +3,7 @@
 module YCHR.GoldenTest (tests) where
 
 import Control.Exception (SomeException, fromException, try)
-import Control.Monad (filterM)
+import Control.Monad (filterM, join)
 import Data.Char (isSpace)
 import Data.Foldable (traverse_)
 import Data.List (isInfixOf, partition, sort, sortOn)
@@ -317,9 +317,10 @@ runPositive spec c = do
   bindings <- runGoal
   prettyBindings bindings @?= expected
 
--- | Compile + program-typecheck must succeed; running the goal must throw
--- an 'Error' whose displayed message contains every non-empty line of
--- the '.error' file (each line is an independent substring assertion).
+-- | Compile + program-typecheck must succeed; preparing or running the
+-- goal must throw an 'Error' whose displayed message contains every
+-- non-empty line of the '.error' file (each line is an independent
+-- substring assertion).
 -- The first line is conventionally the @YCHR-NNNNN@ code, but the code
 -- alone is often too generic — @YCHR-60001@ covers every runtime error,
 -- so a typo could satisfy the assertion accidentally. Subsequent lines
@@ -328,9 +329,8 @@ runPositive spec c = do
 -- exception, missing substring) fails the test.
 runGoalNegative :: TestSpec -> GoalNegativeCase -> IO ()
 runGoalNegative spec c = do
-  runGoal <- prepareCaseGoal spec c.goalFile
   expectedSubstrings <- nonEmptyLines <$> readFile c.errorFile
-  outcome <- try @SomeException runGoal
+  outcome <- try @SomeException (join (prepareCaseGoal spec c.goalFile))
   case outcome of
     Right _ ->
       assertFailure

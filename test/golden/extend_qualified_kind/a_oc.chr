@@ -1,0 +1,9 @@
+:- module(oc, [fun cl/1, fun of/1, fun ocl/1, c/1, type(t/0)]).
+:- function cl(int) -> int.
+cl(X) -> X.
+:- open_function of(int) -> int.
+of(X) -> X.
+:- open_class ocl(int) -> int.
+ocl(X) -> X.
+:- chr_constraint c(int).
+:- chr_type t ---> mk(int).

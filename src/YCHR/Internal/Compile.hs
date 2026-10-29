@@ -2826,7 +2826,7 @@ function or operator names.
 The effect is visible in three places:
 
   1. /Renamer/ ('YCHR.Internal.Rename.renameTerm'): inside @quote(...)@,
-     the argument is renamed in 'NoResolve' mode, so functor names stay
+     the argument is renamed in 'NoResolveQuoted' mode, so functor names stay
      unqualified.  This means @quote(1 + 1)@ preserves the
      surface-level @+(1, 1)@ rather than producing the internal
      @prelude:+(1, 1)@ representation.  Variables are still tracked

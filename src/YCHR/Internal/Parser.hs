@@ -13,7 +13,7 @@
 -- % Line comments
 --
 -- :- module(order, [leq\/2]). -- Export list specifies visible constraints.
--- :- use_module(stdlib).
+-- :- use_module(library(lists)).
 --
 -- :- chr_constraint leq\/2.
 -- :- chr_constraint fib\/2, upto\/1.
@@ -89,7 +89,7 @@ import YCHR.Internal.PExpr
   )
 import YCHR.Internal.PExpr qualified as P
 import YCHR.Internal.Parsed
-import YCHR.Internal.Types (UnqualifiedIdentifier (..))
+import YCHR.Internal.Types (UnqualifiedIdentifier (..), flattenName)
 
 -- * Operator tables
 
@@ -399,8 +399,8 @@ collectModuleHeader sourceName src = do
 --     @op(...)@ entries inside the item list.
 --
 -- Operators of unknown source modules (e.g. @use_module(missing_lib)@)
--- contribute nothing here; the resulting unknown-library or unknown-import
--- error is reported elsewhere.
+-- contribute nothing here; the resulting unknown-library, unknown-module,
+-- or unknown-import error is reported elsewhere.
 buildModuleOpTable ::
   -- | Built-in operators
   OpTable ->
@@ -465,8 +465,51 @@ The qualified-name forms @module:name@ and @module:name(args)@ are
 intercepted before the generic 'Compound' fallback. Without this, the parser
 would emit a 2-ary @':'@ constructor with two unrelated children, and the
 renamer would have to undo that downstream. The same handling is mirrored in
-'convertConstraint' and 'convertTypeExpr'.
+'convertConstraint', 'convertTypeExpr', and 'convertBoundSig'.
+
+A reference may be qualified, a definition may not. Anything that
+defines a name in the current module (a declaration, a type or
+constructor head, a top-level equation) rejects a @m:name@ head with
+'QualifiedDefinitionName', even when @m@ is the current module.
+Extension targets (@:- extend_function@, @:- extend_class@,
+@:- extend_class_type@) name a function elsewhere, so they may be
+qualified. See 'definitionHeadError'.
 -}
+
+-- | Whether an equation head may be qualified. See
+-- Note [Qualified name handling].
+data HeadQualifier
+  = -- | An extension equation: @m:f(...)@ names its target.
+    AllowQualified
+  | -- | A top-level equation: it defines @f@ here.
+    RejectQualified
+
+-- | The error for a @:@ compound in a definition head, or 'Nothing'
+-- if the head is not a @:@ compound. @m:name@ and @m:name(...)@ give
+-- 'QualifiedDefinitionName'; any other @:@ compound gives the
+-- caller's @malformed@ error. So does @m:(f\/1)@: the @\/@ is not a
+-- name.
+--
+-- See Note [Qualified name handling].
+definitionHeadError ::
+  ParseValidationError -> SourceLoc -> PExpr -> PExpr -> Maybe (AnnP ParseValidationError)
+definitionHeadError malformed loc ctx h = case h of
+  Compound ":" [Ann m _, Ann n _] -> Just $ case (m, n) of
+    (Atom mt, Atom nt) -> AnnP (QualifiedDefinitionName mt nt) loc ctx
+    (Atom mt, Compound nt _)
+      | nt /= "/" -> AnnP (QualifiedDefinitionName mt nt) loc ctx
+    _ -> AnnP malformed loc ctx
+  _ -> Nothing
+
+-- | The name part of a declaration: drops a @requiring@ or @refining@
+-- clause, a return type, and an @\/arity@ suffix.
+declHead :: PExpr -> PExpr
+declHead e = case e of
+  Compound "requiring" [s, _] -> declHead s.node
+  Compound "refining" [s, _] -> declHead s.node
+  Compound "->" [h, _] -> h.node
+  Compound "/" [h, Ann (P.Int _) _] -> h.node
+  _ -> e
 
 -- | Convert a 'PExpr' to a 'Term'.
 --
@@ -729,6 +772,10 @@ data ParseValidationError
   | -- | A built-in directive with arguments of the wrong shape, e.g.
     -- @:- module(42).@ Carries the directive's name.
     MalformedDirective Text
+  | -- | A definition head written @m:name@. Carries the module and
+    -- the name. The item is dropped. See Note [Qualified name
+    -- handling].
+    QualifiedDefinitionName Text Text
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
@@ -1095,7 +1142,7 @@ convertModuleItem expr = case expr.node of
   -- 'groupMacroClauses'.
   Compound "--->" [_, _] -> fmap ItemMacroClause <$> convertMacroClause expr
   -- Function equation (contains -> at top level)
-  Compound "->" _ -> fmap ItemEquation <$> convertFunctionEquation expr
+  Compound "->" _ -> fmap ItemEquation <$> convertFunctionEquation RejectQualified expr
   -- Anything else at top level is malformed.
   _ -> failWith (AnnP MalformedTopLevel expr.sourceLoc expr.node)
   where
@@ -1153,10 +1200,10 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
     DirExtendClassTypeDecl <$> collectDecls convertExtendClassTypeDecl decls
   -- :- extend_function name(args) [| guards] -> body.
   Compound "extend_function" [eqn] ->
-    maybe DirOther DirExtendFunctionEqn <$> convertFunctionEquation eqn
+    maybe DirOther DirExtendFunctionEqn <$> convertFunctionEquation AllowQualified eqn
   -- :- extend_class name(args) [| guards] -> body.
   Compound "extend_class" [eqn] ->
-    maybe DirOther DirExtendClassEqn <$> convertFunctionEquation eqn
+    maybe DirOther DirExtendClassEqn <$> convertFunctionEquation AllowQualified eqn
   -- :- chr_type name ---> con1 ; con2 ; ...
   -- Parsed as prefix op: Compound "chr_type" [Compound "--->" [head, alts]]
   Compound "chr_type" [typeBody] ->
@@ -1331,6 +1378,9 @@ convertExportItem (Ann pexpr loc) = case pexpr of
 -- a 'MalformedDeclaration' (or 'MalformedTypeExpr' / 'MalformedBoundSig'
 -- from sub-conversions) error if the declaration cannot be converted.
 convertConstraintDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
+convertConstraintDecl (Ann pexpr loc)
+  | Just err <- definitionHeadError MalformedDeclaration loc pexpr (declHead pexpr) =
+      failWith err
 convertConstraintDecl (Ann pexpr loc) = case pexpr of
   -- @sig requiring bound, ...@
   Compound "requiring" [sig, bounds] -> case sig.node of
@@ -1367,6 +1417,9 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
 
 -- | Convert one @name\/arity@ entry of an @:- inline@ directive.
 convertInlineDecl :: Ann PExpr -> Conv (Maybe (Ann InlineDecl))
+convertInlineDecl (Ann pexpr loc)
+  | Just err <- definitionHeadError MalformedDeclaration loc pexpr (declHead pexpr) =
+      failWith err
 convertInlineDecl (Ann pexpr loc) = case pexpr of
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
     pure (Just (Ann (InlineDecl name (fromInteger arity)) loc))
@@ -1376,6 +1429,10 @@ convertInlineDecl (Ann pexpr loc) = case pexpr of
 -- directive. The tag must be one of the four modes, applied to exactly
 -- one @name\/arity@.
 convertConstraintUseDecl :: Ann PExpr -> Conv (Maybe (Ann ConstraintUseDecl))
+convertConstraintUseDecl (Ann pexpr loc)
+  | Compound _ [Ann inner _] <- pexpr,
+    Just err <- definitionHeadError MalformedDeclaration loc pexpr (declHead inner) =
+      failWith err
 convertConstraintUseDecl (Ann pexpr loc) = case pexpr of
   Compound tag [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _]
     | Just use <- constraintUseTag tag ->
@@ -1420,32 +1477,39 @@ convertExtendClassTypeDecl (Ann pexpr loc) = case pexpr of
   -- @requiring@ is Xfx, so the inner @sig@ is never another @requiring@.
   Compound "requiring" [sig, _] -> do
     let targetName = case sig.node of
-          Compound "->" [Ann (Compound n _) _, _] -> n
+          Compound "->" [Ann h _, _] | Just (n, _) <- extendTarget h -> flattenName n
           _ -> "<unknown>"
     tell [AnnP (RequiringOnExtendClassType targetName) loc pexpr]
     convertSig sig
   _ -> convertSig (Ann pexpr loc)
   where
+    -- The target and its argument types. The target may be qualified.
+    extendTarget h = case h of
+      Compound ":" [Ann (Atom m) _, Ann (Compound n args) _] -> Just (Qualified m n, args)
+      Compound ":" _ -> Nothing
+      Compound n args -> Just (Unqualified n, args)
+      _ -> Nothing
     convertSig (Ann e l) = case e of
-      Compound "->" [Ann (Compound name args) _, ret] ->
-        case (partitionEithers (map convertTypeExpr args), convertTypeExpr ret) of
-          (([], argTypes), Right retType) ->
-            pure
-              ( Just
-                  ( Ann
-                      ( ExtendClassTypeDecl
-                          ( ExtendClassTypeDeclBody
-                              name
-                              (length args)
-                              (Just argTypes)
-                              (Just retType)
-                              Nothing
+      Compound "->" [Ann h _, ret]
+        | Just (name, args) <- extendTarget h ->
+            case (partitionEithers (map convertTypeExpr args), convertTypeExpr ret) of
+              (([], argTypes), Right retType) ->
+                pure
+                  ( Just
+                      ( Ann
+                          ( ExtendClassTypeDecl
+                              ( ExtendClassTypeDeclBody
+                                  name
+                                  (length args)
+                                  (Just argTypes)
+                                  (Just retType)
+                                  Nothing
+                              )
                           )
+                          l
                       )
-                      l
                   )
-              )
-          ((argErrs, _), retE) -> failWithAll (argErrs ++ leftToList retE)
+              ((argErrs, _), retE) -> failWithAll (argErrs ++ leftToList retE)
       _ -> failWith (AnnP MalformedDeclaration l e)
 
 -- | Shared implementation of 'convertFunctionDecl',
@@ -1458,6 +1522,9 @@ convertFunctionDeclWith ::
   FunctionDeclKind ->
   Ann PExpr ->
   Conv (Maybe (Ann Declaration))
+convertFunctionDeclWith _ _ (Ann pexpr loc)
+  | Just err <- definitionHeadError MalformedDeclaration loc pexpr (declHead pexpr) =
+      failWith err
 convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
   -- @name(types) -> ret requiring bound, ...@
   Compound "requiring" [sig, bounds] ->
@@ -1526,33 +1593,27 @@ leftToList = either pure (const [])
 
 -- | Convert a single bound signature inside a @requiring@ clause. The
 -- expected shape is @name(τ₁, ..., τₙ) -> τᵣ@; a bare @name -> τᵣ@ is
--- treated as a zero-arity bound. A malformed shape (or a malformed type
--- inside) is returned as 'Left'; the enclosing declaration is then
--- dropped.
+-- treated as a zero-arity bound. The name may be module-qualified
+-- (@module:name(...) -> τᵣ@), same as any other reference. A malformed
+-- shape (or a malformed type inside) is returned as 'Left'; the
+-- enclosing declaration is then dropped.
+--
+-- See Note [Qualified name handling].
 convertBoundSig :: Ann PExpr -> Either (AnnP ParseValidationError) BoundSig
 convertBoundSig (Ann pexpr loc) = case pexpr of
-  Compound "->" [Ann (Compound name args) _, ret] -> do
-    argTypes <- traverse convertTypeExpr args
-    returnType <- convertTypeExpr ret
-    Right
-      BoundSig
-        { name = Unqualified name,
-          arity = length args,
-          argTypes,
-          returnType,
-          loc
-        }
-  Compound "->" [Ann (Atom name) _, ret] -> do
-    returnType <- convertTypeExpr ret
-    Right
-      BoundSig
-        { name = Unqualified name,
-          arity = 0,
-          argTypes = [],
-          returnType,
-          loc
-        }
+  Compound "->" [Ann (Compound ":" [Ann (Atom m) _, Ann (Compound n args) _]) _, ret] ->
+    build (Qualified m n) args ret
+  Compound "->" [Ann (Compound ":" [Ann (Atom m) _, Ann (Atom n) _]) _, ret] ->
+    build (Qualified m n) [] ret
+  Compound "->" [Ann (Compound ":" _) _, _] -> Left (AnnP MalformedBoundSig loc pexpr)
+  Compound "->" [Ann (Compound name args) _, ret] -> build (Unqualified name) args ret
+  Compound "->" [Ann (Atom name) _, ret] -> build (Unqualified name) [] ret
   _ -> Left (AnnP MalformedBoundSig loc pexpr)
+  where
+    build name args ret = do
+      argTypes <- traverse convertTypeExpr args
+      returnType <- convertTypeExpr ret
+      Right BoundSig {name, arity = length args, argTypes, returnType, loc}
 
 -- | Convert a PExpr to a 'TypeExpr'.
 --
@@ -1581,6 +1642,10 @@ convertTypeExpr (Ann pexpr loc) = case pexpr of
 -- 'MalformedTypeExpr' from sub-conversions) error if the definition
 -- cannot be converted.
 convertTypeDefinition :: Ann PExpr -> Conv (Maybe (Ann TypeDefinition))
+convertTypeDefinition (Ann pexpr loc)
+  | Compound "--->" [typeHead, _] <- pexpr,
+    Just err <- definitionHeadError MalformedTypeDefinition loc pexpr typeHead.node =
+      failWith err
 convertTypeDefinition (Ann pexpr loc) = case pexpr of
   -- name(Vars) ---> con1 ; con2 ; ...
   Compound "--->" [typeHead, alts] -> case compoundView typeHead.node of
@@ -1635,6 +1700,9 @@ validateTypeParams params = case go Set.empty params of
 convertOpaqueTypeDefinition :: Ann PExpr -> Conv (Maybe (Ann TypeDefinition))
 convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
   Compound "--->" _ -> failWith (AnnP OpaqueTypeHasConstructors loc pexpr)
+  _
+    | Just err <- definitionHeadError MalformedOpaqueTypeDefinition loc pexpr pexpr ->
+        failWith err
   Atom n -> pure (Just (mk n []))
   Compound n vars -> case validateTypeParams vars of
     Left errs -> failWithAll errs
@@ -1709,6 +1777,9 @@ convertDataConstructor (Ann pexpr loc) = case pexpr of
   -- [T|list(T)] — list constructor sugar
   Compound "." args ->
     DataConstructor (Unqualified ".") <$> traverse convertTypeExpr args
+  _
+    | Just err <- definitionHeadError MalformedDataConstructor loc pexpr pexpr ->
+        Left err
   Compound name args ->
     DataConstructor (Unqualified name) <$> traverse convertTypeExpr args
   _ -> Left (AnnP MalformedDataConstructor loc pexpr)
@@ -1785,8 +1856,9 @@ goalList x = AnnP (map convertTerm (flattenComma x)) x.sourceLoc x.node
 -- | Convert a top-level PExpr to a 'FunctionEquation'. Returns 'Nothing'
 -- and a 'MalformedFunctionEquation' error when the input is not of the
 -- expected @lhs [| guard] -> rhs@ shape.
-convertFunctionEquation :: Ann PExpr -> Conv (Maybe (AnnP FunctionEquation))
-convertFunctionEquation (Ann pexpr loc) = case pexpr of
+convertFunctionEquation ::
+  HeadQualifier -> Ann PExpr -> Conv (Maybe (AnnP FunctionEquation))
+convertFunctionEquation hq (Ann pexpr loc) = case pexpr of
   Compound "->" [lhs, rhs] -> case lhs.node of
     -- Guarded: lhs_pattern | guard -> rhs
     Compound "|" [p, guard_] -> equation p (goalList guard_) rhs
@@ -1794,12 +1866,14 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
     _ -> equation lhs (noAnnPAt lhs.sourceLoc []) rhs
   _ -> failWith (AnnP MalformedFunctionEquation loc pexpr)
   where
-    equation pat guardAnn rhs = case equationHead pat of
-      Just c ->
+    equation pat guardAnn rhs = case (hq, equationHead pat) of
+      (RejectQualified, Just EquationHead {name = Qualified m n}) ->
+        failWith (AnnP (QualifiedDefinitionName m n) loc pexpr)
+      (_, Just c) ->
         let rhsAnn = AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node
-            eqn = FunctionEquation (Unqualified c.name) c.args guardAnn rhsAnn []
+            eqn = FunctionEquation c.name c.args guardAnn rhsAnn []
          in pure (Just (AnnP eqn loc pexpr))
-      Nothing -> failWith (AnnP MalformedFunctionEquation loc pexpr)
+      (_, Nothing) -> failWith (AnnP MalformedFunctionEquation loc pexpr)
 
 -- | Flatten a function-equation RHS (or lambda body) on the top-level
 -- comma operator. Non-empty by construction.
@@ -1808,19 +1882,27 @@ convertRhsSequence = fmap convertTerm . flattenComma1
 
 -- | The function name and argument patterns of an equation LHS.
 data EquationHead = EquationHead
-  { name :: Text,
+  { name :: Name,
     args :: [Term]
   }
 
 -- | Read an equation LHS.
 --
 -- Handles prefix notation @name(args)@ and operator notation @X op Y@
--- (which parses as @Compound op [X, Y]@). Returns 'Nothing' if the LHS
--- is a literal, variable, wildcard, or string.
+-- (which parses as @Compound op [X, Y]@), each optionally qualified
+-- (@m:name(args)@). Returns 'Nothing' if the LHS is a literal, variable,
+-- wildcard, or string, or a @:@ whose module part is not an atom.
+--
+-- See Note [Qualified name handling].
 equationHead :: Ann PExpr -> Maybe EquationHead
 equationHead (Ann pexpr _) = case pexpr of
+  Compound ":" [Ann (Atom m) _, Ann (Compound name args) _] ->
+    Just (EquationHead (Qualified m name) (map convertTerm args))
+  Compound ":" [Ann (Atom m) _, Ann (Atom name) _] ->
+    Just (EquationHead (Qualified m name) [])
+  Compound ":" _ -> Nothing
   -- Prefix: name(arg1, arg2, ...) — also covers operator notation.
-  Compound name args -> Just (EquationHead name (map convertTerm args))
+  Compound name args -> Just (EquationHead (Unqualified name) (map convertTerm args))
   -- Bare atom (zero-arity function)
-  Atom name -> Just (EquationHead name [])
+  Atom name -> Just (EquationHead (Unqualified name) [])
   _ -> Nothing

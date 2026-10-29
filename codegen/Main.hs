@@ -15,8 +15,10 @@
 -- disk, so a stale @generated\/@ can be detected without rewriting it.
 module Main (main) where
 
+import Data.ByteString qualified as BS
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
@@ -127,15 +129,21 @@ failWith message = do
 -- Writing and checking
 -- ---------------------------------------------------------------------------
 
--- | Read a file and force its contents.
+-- | Read a file's raw bytes and force them.
 --
 -- A lazy 'readFile' would leave the handle open when a comparison
 -- short-circuits on the first difference, and rewriting the same path
--- then fails with @resource busy (file is locked)@.
-readStrict :: FilePath -> IO String
+-- then fails with @resource busy (file is locked)@. Bytes, so output
+-- doesn't depend on the locale (generated modules carry non-ASCII
+-- text).
+readStrict :: FilePath -> IO BS.ByteString
 readStrict path = do
-  contents <- readFile path
-  length contents `seq` pure contents
+  contents <- BS.readFile path
+  BS.length contents `seq` pure contents
+
+-- | A module's source, encoded as UTF-8 bytes.
+sourceBytes :: GeneratedModule -> BS.ByteString
+sourceBytes m = TE.encodeUtf8 (T.pack m.source)
 
 -- | Write each module, touching a file only when its contents actually
 -- change: @mcabal@ rebuilds a component whose source file it sees
@@ -146,16 +154,17 @@ writeModules opts = mapM_ writeOne
   where
     writeOne m = do
       let path = opts.out </> m.path
+          bytes = sourceBytes m
       createDirectoryIfMissing True (takeDirectory path)
       exists <- doesFileExist path
       same <-
         if exists
-          then (== m.source) <$> readStrict path
+          then (== bytes) <$> readStrict path
           else pure False
       if same
         then putStrLn ("unchanged " ++ path)
         else do
-          writeFile path m.source
+          BS.writeFile path bytes
           putStrLn ("wrote " ++ path)
 
 -- | Report every module whose file is missing or differs from what the
@@ -177,7 +186,7 @@ checkModules opts modules = do
         then pure ["missing: " ++ path]
         else do
           current <- readStrict path
-          pure ["stale: " ++ path | current /= m.source]
+          pure ["stale: " ++ path | current /= sourceBytes m]
 
 -- ---------------------------------------------------------------------------
 -- Command line

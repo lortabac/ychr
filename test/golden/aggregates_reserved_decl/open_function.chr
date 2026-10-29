@@ -1,0 +1,4 @@
+% :- open_function at a reserved key.
+:- module(aggregates_reserved_decl_open_function, []).
+:- open_function takemin/2.
+takemin(X, Y) -> X.

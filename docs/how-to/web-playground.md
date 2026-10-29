@@ -92,7 +92,7 @@ same code. What a terminal-only REPL has and the page does not is
 does nothing, since there is nothing to exit.
 
 Type checking is deliberately *not* automatic. `Reload` and goals behave
-like `ychr --no-check`; only the **Typecheck** button runs the checker,
+like `ychr repl --no-check`; only the **Typecheck** button runs the checker,
 and it reloads first so that what it checks is what the editor says — a
 reload that does not compile ends the action, since the check would
 otherwise describe the program still loaded from before.
@@ -190,8 +190,9 @@ should be verified with locally.
 
 ## Limits
 
-- One program at a time, compiled from a single buffer; `:- use_module`
-  of the bundled libraries works, importing files from disk does not.
+- One program at a time, compiled from a single buffer;
+  `:- use_module(library(...))` of the bundled libraries works,
+  importing files from disk does not.
 - One-shot queries only. A live session (the terminal REPL's `:begin`)
   would need the session environment to be held across calls, which the
   bridge does not do yet.

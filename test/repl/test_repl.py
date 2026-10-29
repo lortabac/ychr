@@ -7,6 +7,7 @@ few drive other modes and check stderr. To add a new test, append a
 
 import os
 import re
+import select
 import subprocess
 
 import pytest
@@ -506,6 +507,34 @@ def test_repl_dynamic_tell(ychr_bin, tmp_path):
     )
 
 
+def test_info_qualified_bound(ychr_bin, tmp_path):
+    """A `requiring` bound from another module prints qualified:
+    `main:pick` bounds on `lib:gt`."""
+    (tmp_path / "lib.chr").write_text(
+        ":- module(lib, [fun gt/2]).\n\n"
+        ":- function gt(int, int) -> bool.\n"
+        "gt(X, Y) -> X > Y.\n"
+    )
+    (tmp_path / "main.chr").write_text(
+        ":- module(main, [fun pick/2]).\n"
+        ":- use_module(lib).\n\n"
+        ":- function pick(T, T) -> T requiring gt(T, T) -> bool.\n"
+        "pick(X, Y) | gt(X, Y) -> X.\n"
+        "pick(X, Y) -> Y.\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(tmp_path / "lib.chr"), str(tmp_path / "main.chr")],
+        input=":info main:pick\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stdout == (
+        "main:pick\n"
+        ":- function pick(T, T) -> T requiring lib:gt(T, T) -> bool.\n"
+    )
+
+
 def test_info_cross_module_ambiguity(ychr_bin, tmp_path):
     """Two modules exporting the same `(name, arity)` make `:info NAME`
     refuse to guess. The user's documented choice is to error and list
@@ -650,6 +679,69 @@ def test_repl_time_failure(ychr_bin):
     assert prep.returncode == 0, f"repl failed:\n{prep.stdout}\n{prep.stderr}"
     assert "YCHR-30001" in prep.stdout, prep.stdout
     assert "Time:" not in prep.stdout, prep.stdout
+
+
+def _read_until(proc, marker, timeout=60.0):
+    """Read from `proc.stdout` until `marker` appears, or time out."""
+    buf = ""
+    while marker not in buf:
+        ready, _, _ = select.select([proc.stdout], [], [], timeout)
+        if not ready:
+            raise TimeoutError(f"timed out waiting for {marker!r}; got so far: {buf!r}")
+        chunk = os.read(proc.stdout.fileno(), 4096)
+        if not chunk:
+            raise TimeoutError(f"EOF waiting for {marker!r}; got so far: {buf!r}")
+        buf += chunk.decode(errors="replace")
+    return buf
+
+
+def test_recompile_after_deleting_loaded_file_keeps_previous_program(ychr_bin, tmp_path):
+    """`:recompile` on a file deleted since load must report YCHR-50005
+    and keep the previous program running, not kill the session with an
+    uncaught `IOException`.
+
+    `--no-check` so startup doesn't also compile the type checker.
+    Lowercase compare: MicroHs prints 'uncaught exception'."""
+    program = tmp_path / "recompile_missing.chr"
+    program.write_text(
+        ":- module(recompile_missing).\n"
+        ":- chr_constraint go/1.\n"
+        "go(R) <=> R = ok.\n"
+    )
+    proc = subprocess.Popen(
+        [ychr_bin, "repl", "--no-check", str(program)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=0,
+    )
+    try:
+        buf = _read_until(proc, "ychr> ")
+
+        program.unlink()
+        proc.stdin.write(b":recompile\n")
+        proc.stdin.flush()
+        buf = _read_until(proc, "ychr> ")
+        assert "YCHR-50005" in buf, buf
+        assert str(program) in buf, buf
+        assert "uncaught exception" not in buf.lower(), buf
+
+        # The previous program is still loaded and still answers queries.
+        proc.stdin.write(b"go(R).\n")
+        proc.stdin.flush()
+        buf = _read_until(proc, "ychr> ")
+        assert "R = ok." in buf, buf
+        assert "uncaught exception" not in buf.lower(), buf
+
+        proc.stdin.write(b":quit\n")
+        proc.stdin.flush()
+        out, _ = proc.communicate(timeout=60)
+        assert "uncaught exception" not in out.decode(errors="replace").lower()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+    assert proc.returncode == 0
 
 
 def test_compile_vm_creates_output_dirs(ychr_bin, tmp_path):

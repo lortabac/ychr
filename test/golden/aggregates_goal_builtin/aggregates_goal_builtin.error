@@ -1,0 +1,8 @@
+YCHR-20041
+'=/2' in an aggregate goal is a built-in form, not a constraint
+';/2' in an aggregate goal is a built-in form
+'true/0' in an aggregate goal is a built-in form
+'quote/1' in an aggregate goal is a built-in form
+A number in an aggregate goal is not a constraint
+A string in an aggregate goal is not a constraint
+A variable in an aggregate goal is not a constraint

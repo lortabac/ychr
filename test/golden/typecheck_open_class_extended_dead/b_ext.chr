@@ -1,0 +1,9 @@
+:- module(ext, []).
+:- use_module(library(prelude)).
+:- use_module(owner, [classify/1]).
+
+% Adding a second signature switches `classify` to the multi-signature
+% class discipline: the equation's contradicting guard now fails that
+% candidate instead of marking it dead, and the equation matches no
+% signature at all (YCHR-60006).
+:- extend_class_type (classify(string) -> string).

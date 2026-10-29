@@ -1,0 +1,5 @@
+:- module(notimported, [bar/2]).
+
+% 'lib' exists in the program but this module never imports it.
+:- chr_constraint bar(T, T) requiring lib:gt(T, T) -> bool.
+bar(X, Y) <=> true.

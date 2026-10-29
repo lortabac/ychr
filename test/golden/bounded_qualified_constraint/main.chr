@@ -1,0 +1,6 @@
+:- module(main, [foo/2]).
+:- use_module(lib).
+
+% 'lib:cnt/1' is a constraint, not a function.
+:- chr_constraint foo(T, T) requiring lib:cnt(T) -> bool.
+foo(X, Y) <=> true.

@@ -1,0 +1,4 @@
+:- module(vbound, [baz/2]).
+:- use_module(vmlib).
+:- chr_constraint baz(T, T) requiring vmlib:same(T, T) -> bool.
+baz(X, Y) <=> true.

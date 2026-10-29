@@ -1,0 +1,13 @@
+% A qualified extension target must be an open function of the right
+% kind.
+:- module(ext, []).
+:- use_module(oc).
+
+:- extend_function oc:cl(X) -> X.
+:- extend_function host:hf(X) -> X.
+:- extend_function oc:c(X) -> X.
+:- extend_class oc:mk(X) -> X.
+:- extend_class_type oc:c(string) -> int.
+:- extend_class_type oc:of(string) -> int.
+:- extend_class oc:of(X) -> X.
+:- extend_function oc:ocl(X) -> X.

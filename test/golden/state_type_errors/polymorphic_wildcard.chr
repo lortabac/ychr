@@ -1,0 +1,9 @@
+:- module(polymorphic_wildcard).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k.
+
+% A `_` is shared by the macro's copies, so it is a type variable like
+% the `T` in polymorphic_key, and fails the type checker the same way.
+:- state(k, _).

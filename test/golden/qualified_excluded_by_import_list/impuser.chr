@@ -1,0 +1,4 @@
+:- module(impuser, [bar/2]).
+:- use_module(implib, [other/1]).   % leaves out gt/2
+:- chr_constraint bar(int, int).
+bar(X, Y) <=> implib:gt(X, Y) | true.

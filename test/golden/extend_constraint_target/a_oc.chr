@@ -1,0 +1,2 @@
+:- module(oc, [c/1]).
+:- chr_constraint c(int).

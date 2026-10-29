@@ -32,7 +32,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Internal.Collect (CollectError (..))
+import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.ConstraintUse (ConstraintUseError (..), OccurrenceRole (..))
 import YCHR.Internal.DeclMacro (DeclMacroError (..))
@@ -45,6 +45,7 @@ import YCHR.Internal.Display
     declMacroErrorCode,
     desugarErrorCode,
     exhaustivenessWarningCode,
+    fileReadErrorCode,
     goalNotAConstraintCode,
     lambdasInLiveQueryCode,
     lambdasInSchemeDriverCode,
@@ -60,9 +61,20 @@ import YCHR.Internal.Display
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
 import YCHR.Internal.Parsed (MacroKind (..))
 import YCHR.Internal.Parser (ParseValidationError (..))
-import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..))
+import YCHR.Internal.Rename
+  ( BadConjunct (..),
+    HeadPart (..),
+    NonGoalKind (..),
+    RenameError (..),
+    RenameWarning (..),
+  )
 import YCHR.Internal.Rename.Macro (PrimitiveOperand (..))
-import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
+import YCHR.Internal.Resolve
+  ( BoundTargetKind (..),
+    ExtensionDirective (..),
+    RefiningViolation (..),
+    ResolveError (..),
+  )
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (ConstructorDecl (..), TypeCheckError (..))
 import YCHR.Internal.Types (ConstraintUse (..), Name, QualifiedName, Term)
@@ -97,13 +109,23 @@ instance Data QualifiedName where
 
 deriving instance Data CollectError
 
+deriving instance Data BareImportHint
+
 deriving instance Data ParseValidationError
 
 deriving instance Data ResolveError
 
 deriving instance Data RefiningViolation
 
+deriving instance Data BoundTargetKind
+
+deriving instance Data ExtensionDirective
+
 deriving instance Data HeadPart
+
+deriving instance Data BadConjunct
+
+deriving instance Data NonGoalKind
 
 deriving instance Data PrimitiveOperand
 
@@ -183,6 +205,7 @@ standaloneCodes =
     entry "operatorConflictCode" operatorConflictCode,
     entry "lambdasInLiveQueryCode" lambdasInLiveQueryCode,
     entry "lambdasInSchemeDriverCode" lambdasInSchemeDriverCode,
+    entry "fileReadErrorCode" fileReadErrorCode,
     entry "goalNotAConstraintCode" goalNotAConstraintCode,
     entry "runtimeErrorCode" runtimeErrorCode
   ]

@@ -2,6 +2,7 @@
 
 module YCHR.RenameTest (tests) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
@@ -157,7 +158,7 @@ ambiguousTests =
           Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous function used as a body-tell constraint argument" $ do
-        -- The bare 'f(1)' lands in 'NoResolve' (demoted from the
+        -- The bare 'f(1)' lands in 'NoResolveEvaluated' (demoted from the
         -- 'ResolveTop' parent 'c(...)'). The renamer mirrors
         -- 'resolveName''s multi-provider arm, so the user gets the same
         -- YCHR-20001 diagnostic they would in a guard or 'is'-RHS
@@ -225,10 +226,10 @@ ambiguousTests =
         case renameProgram [modA, modB, modC] of
           Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
-      testCase "ambiguous zero-arity atom in 'NoResolve' position" $ do
+      testCase "ambiguous zero-arity atom in a tell-side argument" $ do
         -- Companion to the compound cases for the 'AtomTerm' arm.
         -- A bare 'f' inside a tell-side constraint argument lands in
-        -- 'NoResolve'; if two modules export 'f/0' as a function, the
+        -- 'NoResolveEvaluated'; if two modules export 'f/0' as a function, the
         -- atom arm emits 'AmbiguousName' instead of silently
         -- producing an 'AtomTerm' that 'Resolve.termToExpr' can't
         -- disambiguate.
@@ -844,7 +845,7 @@ warningTests =
         ws @?= [],
       testCase "declared function in tell-side argument position produces no warning" $ do
         -- Regression: a bare compound like 'f(X)' appearing as an argument
-        -- to a tell-side constraint is renamed in 'NoResolve' mode but
+        -- to a tell-side constraint is renamed in 'NoResolveEvaluated' mode but
         -- must not be warned as a data constructor when 'f' is a visible
         -- function -- 'Resolve.termToExpr' will later canonicalize it to
         -- a 'CallExpr' for tell-time evaluation.
@@ -882,7 +883,77 @@ warningTests =
                     ]
                 }
         ws <- warningsOf [m]
-        ws @?= [noDiag (AnnP (DataConstructorArityMismatch "foo" 2) dummyLoc (Atom ""))],
+        ws
+          @?= [ noDiag
+                  (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [])) dummyLoc (Atom ""))
+              ],
+      testCase "data constructor arity mismatch names every declared arity" $ do
+        -- 'foo' is visible at two arities here, one per imported module
+        -- (A declares foo/1, B declares foo/3). The warning must name
+        -- both, not just one of them.
+        let fooModule name arity =
+              (module' name)
+                { typeDecls =
+                    [ noAnn
+                        ( algebraicTD
+                            (Unqualified ("t" <> name))
+                            []
+                            [ DataConstructor
+                                (Unqualified "foo")
+                                (replicate arity (TypeCon (Unqualified "int") []))
+                            ]
+                            dummyLoc
+                        )
+                    ]
+                }
+            modA = fooModule "A" 1
+            modB = fooModule "B" 3
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [atom "true"]
+                               |- [term "foo" [var "X", var "Y"]]
+                           ]
+        ws <- warningsOf [modA, modB, modC]
+        ws
+          @?= [ noDiag
+                  (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [3])) dummyLoc (Atom ""))
+              ],
+      testCase "data constructor arity mismatch deduplicates repeated arities" $ do
+        -- 'foo' is visible at arity 1 from two modules (A and B both
+        -- declare it). The warning must list that arity once, not twice.
+        let fooModule name arity =
+              (module' name)
+                { typeDecls =
+                    [ noAnn
+                        ( algebraicTD
+                            (Unqualified ("t" <> name))
+                            []
+                            [ DataConstructor
+                                (Unqualified "foo")
+                                (replicate arity (TypeCon (Unqualified "int") []))
+                            ]
+                            dummyLoc
+                        )
+                    ]
+                }
+            modA = fooModule "A" 1
+            modB = fooModule "B" 1
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [atom "true"]
+                               |- [term "foo" [var "X", var "Y"]]
+                           ]
+        ws <- warningsOf [modA, modB, modC]
+        ws
+          @?= [ noDiag
+                  (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [])) dummyLoc (Atom ""))
+              ],
       testCase "no warning for reserved symbols" $ do
         let m =
               module' "M"
@@ -989,7 +1060,7 @@ warningTests =
         -- Same structural bug as the lambda case, on the @fun name/arity@
         -- arm: a funref is a first-class value, not data, so
         -- 'c(fun f/1)' must not emit 'UndeclaredDataConstructor "fun"'
-        -- under 'NoResolve'.
+        -- under 'NoResolveEvaluated'.
         let m =
               module' "M"
                 `declaring` ["c" // 1, function "f" 1]
@@ -1217,6 +1288,33 @@ importListTests =
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modOrder, modLogic]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
+      testCase "qualified name left out by the import list" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2, "geq" // 2]
+                `exporting` ["leq" // 2, "geq" // 2]
+            modLogic =
+              (module' "Logic")
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Order"
+                            ( Just
+                                [ ConstraintDecl
+                                    ( ConstraintDeclBody
+                                        "geq"
+                                        2
+                                        Nothing
+                                        Nothing
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                }
+                `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        renameProgram [modOrder, modLogic]
+          @?= Left [noDiag (AnnP (ExcludedByImportList "Order" "leq" 2) dummyLoc (Atom ""))],
       testCase "error for import list item not exported" $ do
         let modOrder =
               module' "Order"

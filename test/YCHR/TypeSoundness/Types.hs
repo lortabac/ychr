@@ -576,10 +576,11 @@ data Boundness = Ground | MayBeUnbound
 
 -- | A list with at least two elements.
 --
--- Not a convenience: a single-signature @:- class@ is partitioned by
--- signature /count/ rather than by declaration kind and is checked as
--- if it were a @:- function@ (@dev-docs\/BUGS.md@), so the generator
--- must never emit one. Making it unrepresentable is cheaper than
+-- Not a convenience: a single-signature @:- class@ checks exactly like
+-- a @:- function@ with that signature (by design, see
+-- @docs\/reference\/type-system.md@ §Signature Overloading), so it
+-- would not exercise the multi-signature overload search this
+-- generator is for. Making it unrepresentable is cheaper than
 -- remembering not to.
 data TwoOrMore a = TwoOrMore a a [a]
   deriving (Eq, Show)

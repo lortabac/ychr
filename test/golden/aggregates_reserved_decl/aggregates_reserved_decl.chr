@@ -1,0 +1,16 @@
+% A constraint, function or goal macro at an aggregate-form key is
+% YCHR-20043. The body goal below still reads as the aggregate form
+% (YCHR-20040).
+:- module(aggregates_reserved_decl, []).
+
+:- chr_constraint argmin/2, go/0.
+
+:- function aggregate/4.
+aggregate(A, _, _, _) -> A.
+
+:- macro takemax(X, Y) ---> [go].
+
+:- macro argmax/2.
+argmax(X, Y) ---> [go].
+
+go <=> argmin(1, 2).

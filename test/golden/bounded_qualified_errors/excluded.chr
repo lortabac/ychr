@@ -1,0 +1,6 @@
+:- module(excluded, [baz/2]).
+:- use_module(lib, []).
+
+% lib exports gt/2, but the import list leaves it out.
+:- chr_constraint baz(T, T) requiring lib:gt(T, T) -> bool.
+baz(X, Y) <=> true.

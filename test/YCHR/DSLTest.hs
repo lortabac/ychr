@@ -218,7 +218,7 @@ functionDeclarationTests =
          in extendClassType "add" [intCon, intCon] intCon
               @?= ExtendClassTypeDecl
                 ExtendClassTypeDeclBody
-                  { name = "add",
+                  { name = Unqualified "add",
                     arity = 2,
                     argTypes = Just [intCon, intCon],
                     returnType = Just intCon,
@@ -229,7 +229,7 @@ functionDeclarationTests =
          in extendClassType "zero" [] intCon
               @?= ExtendClassTypeDecl
                 ExtendClassTypeDeclBody
-                  { name = "zero",
+                  { name = Unqualified "zero",
                     arity = 0,
                     argTypes = Just [],
                     returnType = Just intCon,

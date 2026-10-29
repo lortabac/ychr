@@ -1,0 +1,5 @@
+:- module(lib, [gt/2]).
+:- use_module(library(prelude)).
+
+:- class (gt(int, int) -> bool), (gt(float, float) -> bool).
+gt(X, Y) -> X > Y.

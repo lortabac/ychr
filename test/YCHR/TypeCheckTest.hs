@@ -321,6 +321,49 @@ tests =
             )
         errs @?= ["NoMatchingOverload \"m:g\""]
         ws @?= [],
+      testCase "a single-signature class checks like a function" $ do
+        -- One signature, so no overload search: a contradicting guard
+        -- is dead code (YCHR-20104), as for a `:- function`.
+        (errs, ws) <-
+          checkModule
+            ( mod_
+                [ ":- class (sz(int) -> int).",
+                  "sz(N) | boolean(N) -> 0.",
+                  "sz(N) -> N."
+                ]
+            )
+        errs @?= []
+        ws @?= [InaccessibleBranch "prelude:bool" "int"],
+      testCase "a single-signature class use site unifies, not resolves" $ do
+        -- Calling it with a mismatched argument reports InconsistentTypes
+        -- (unification), not NoMatchingOverload (overload resolution) —
+        -- there is only one signature to unify against.
+        (errs, ws) <-
+          checkModule
+            ( mod_
+                [ ":- class (sz(int) -> int).",
+                  "sz(N) -> N.",
+                  "wrong @ other(_, R) <=> R is sz(true)."
+                ]
+            )
+        case errs of
+          [e] | "InconsistentTypes" `T.isInfixOf` T.pack e -> pure ()
+          _ -> assertFailure ("expected one InconsistentTypes error, got: " ++ show errs)
+        ws @?= [],
+      testCase "a one-signature open_class checks like a function so far" $ do
+        -- Same as above, for `:- open_class`.
+        -- typecheck_open_class_extended_dead covers the switch to
+        -- YCHR-60006 once a second signature is added.
+        (errs, ws) <-
+          checkModule
+            ( mod_
+                [ ":- open_class (sz(int) -> int).",
+                  "sz(N) | boolean(N) -> 0.",
+                  "sz(N) -> N."
+                ]
+            )
+        errs @?= []
+        ws @?= [InaccessibleBranch "prelude:bool" "int"],
       testCase "a Haskell-side error does not suppress another unit" $ do
         -- The same, across units: one rule's constructor-arity error
         -- must not take a different rule's warning with it.

@@ -1,0 +1,3 @@
+:- module(prelude, [foo/1]).
+:- chr_constraint foo/1.
+foo(X) <=> X = 1.

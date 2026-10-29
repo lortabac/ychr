@@ -1,0 +1,5 @@
+% Extending an imported constraint is an error.
+:- module(ext, []).
+:- use_module(oc).
+
+:- extend_function c(X) -> X.

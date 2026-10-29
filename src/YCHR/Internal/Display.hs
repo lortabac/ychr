@@ -31,12 +31,15 @@ module YCHR.Internal.Display
     operatorConflictCode,
     lambdasInLiveQueryCode,
     lambdasInSchemeDriverCode,
+    fileReadErrorCode,
     runtimeErrorCode,
     goalNotAConstraintCode,
   )
 where
 
 import Data.List (intercalate)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import System.Console.ANSI
   ( Color (..),
@@ -48,7 +51,7 @@ import System.Console.ANSI
   )
 import Text.Parsec.Error qualified as PE
 import Text.Parsec.Pos (SourcePos, sourceColumn, sourceLine, sourceName)
-import YCHR.Internal.Collect (CollectError (..))
+import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.Compile.Pipeline
   ( Error (..),
@@ -65,14 +68,25 @@ import YCHR.Internal.Parsed (AnnP (..), ExpansionStep (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Parser (ParseValidationError (..), SourceItem (..))
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTermSrc)
-import YCHR.Internal.Rename (HeadPart (..), RenameError (..), RenameWarning (..))
+import YCHR.Internal.Rename
+  ( BadConjunct (..),
+    HeadPart (..),
+    NonGoalKind (..),
+    RenameError (..),
+    RenameWarning (..),
+  )
 import YCHR.Internal.Rename.Macro
   ( PrimitiveOperand (..),
     macroDepthLimit,
     macroExpansionBudget,
     primitiveOfOperand,
   )
-import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
+import YCHR.Internal.Resolve
+  ( BoundTargetKind (..),
+    ExtensionDirective (..),
+    RefiningViolation (..),
+    ResolveError (..),
+  )
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck
   ( ConstructorDecl (..),
@@ -276,6 +290,12 @@ withHint msg hint = msg ++ "\n  Hint: " ++ hint
 displayQualifiedName :: Types.QualifiedName -> String
 displayQualifiedName qn = T.unpack (Types.flattenName (Types.qualifiedToName qn))
 
+-- | Render arities as "2", "1 or 3", "1, 2 or 3".
+displayArityList :: NonEmpty Int -> String
+displayArityList (n :| []) = show n
+displayArityList ns =
+  intercalate ", " (map show (NE.init ns)) ++ " or " ++ show (NE.last ns)
+
 -- | Convert a parsec 'Text.Parsec.Pos.SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
 sourceLocFromPos sp =
@@ -295,6 +315,7 @@ collectErrorCode (UnknownLibrary _) = ErrorCode 10001
 collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 collectErrorCode (SelfNamedLibraryImport _) = ErrorCode 10003
 collectErrorCode (DuplicateModuleName _ _) = ErrorCode 10004
+collectErrorCode (UnknownModuleImport _ _) = ErrorCode 10005
 
 -- | 15xxx — parse validation phase
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
@@ -324,6 +345,7 @@ parseValidationErrorCode (UndeclaredMacroClause _ _) = ErrorCode 15025
 parseValidationErrorCode (DiscontiguousMacroClauses _ _) = ErrorCode 15026
 parseValidationErrorCode (DeclMacroBuiltinDirective _ _) = ErrorCode 15027
 parseValidationErrorCode (MalformedDirective _) = ErrorCode 15028
+parseValidationErrorCode (QualifiedDefinitionName _ _) = ErrorCode 15029
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -339,7 +361,7 @@ resolveErrorCode (OrphanFunctionEquation _ _) = ErrorCode 16006
 -- and extend-on-bounded checks all live in the resolve phase.
 resolveErrorCode (ExtendTypeOnBoundedFunction _) = ErrorCode 16007
 resolveErrorCode (UnboundBoundVariable _ _) = ErrorCode 16008
-resolveErrorCode (UnknownBoundFunction _ _ _) = ErrorCode 16009
+resolveErrorCode (UnknownBoundFunction _ _ _ _) = ErrorCode 16009
 resolveErrorCode (BoundCycle _) = ErrorCode 16010
 resolveErrorCode (MultiSigOnFunction _) = ErrorCode 16011
 resolveErrorCode (MixedDeclKinds _) = ErrorCode 16012
@@ -356,6 +378,7 @@ resolveErrorCode (InlineUnknownFunction _ _) = ErrorCode 16023
 resolveErrorCode (InlineOpenFunction _ _) = ErrorCode 16024
 resolveErrorCode (ConstraintUseUnknownConstraint _ _) = ErrorCode 16025
 resolveErrorCode (ConstraintUseConflictingDeclaration _ _) = ErrorCode 16026
+resolveErrorCode (ExtensionTargetNotFunction _ _) = ErrorCode 16027
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 is reserved: operators are permitted in import lists
@@ -399,8 +422,10 @@ renameErrorCode (MacroPrimitiveOutsideMacro _ _) = ErrorCode 20037
 renameErrorCode (MacroExpansionTooLarge _ _) = ErrorCode 20038
 renameErrorCode AggregateOnlyHead = ErrorCode 20039
 renameErrorCode (AggregateOutsideHead _ _) = ErrorCode 20040
-renameErrorCode (MalformedAggregateGoal _ _ _) = ErrorCode 20041
+renameErrorCode (MalformedAggregateGoal _) = ErrorCode 20041
 renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
+renameErrorCode (ReservedAggregateName _ _) = ErrorCode 20043
+renameErrorCode (ExcludedByImportList _ _ _) = ErrorCode 20044
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -415,7 +440,7 @@ declMacroErrorCode (DeclMacroParseError e) = parseValidationErrorCode e
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
 renameWarningCode (UndeclaredDataConstructor _) = ErrorCode 20101
-renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
+renameWarningCode (DataConstructorArityMismatch _ _ _) = ErrorCode 20102
 renameWarningCode (UnusedMacroParameter _ _) = ErrorCode 20105
 
 -- | 2x1xx — exhaustiveness warnings (a pattern-matching warning, in the
@@ -490,6 +515,10 @@ lambdasInLiveQueryCode = ErrorCode 50003
 -- | 5xxxx — `ychr gen-driver` received an anonymous lambda in a goal argument.
 lambdasInSchemeDriverCode :: ErrorCode
 lambdasInSchemeDriverCode = ErrorCode 50004
+
+-- | 5xxxx — a source file could not be read.
+fileReadErrorCode :: ErrorCode
+fileReadErrorCode = ErrorCode 50005
 
 -- | 20013 — @ychr run -g GOAL@ received a goal that is not a single
 -- declared constraint (bare expression, conjunction, function call,
@@ -616,6 +645,19 @@ parseValidationErrorMsg (DeclMacroBuiltinDirective name arity) =
         ++ "(...)' would always mean the built-in one; rename the macro"
         ++ " or give it another arity"
     )
+parseValidationErrorMsg (QualifiedDefinitionName m n) =
+  withHint
+    ( "Definition name '"
+        ++ T.unpack m
+        ++ ":"
+        ++ T.unpack n
+        ++ "' cannot be module-qualified"
+    )
+    ( "a definition always names something in this module; write '"
+        ++ T.unpack n
+        ++ "'. To extend another module's open function, use"
+        ++ " :- extend_function, :- extend_class or :- extend_class_type"
+    )
 parseValidationErrorMsg (MalformedDirective name) =
   withHint
     ("Invalid ':- " ++ T.unpack name ++ "' directive")
@@ -655,7 +697,9 @@ parseValidationErrorMsg MalformedOpaqueTypeDefinition =
 parseValidationErrorMsg MalformedBoundSig =
   withHint
     "Invalid bound signature"
-    "expected 'name(t1, ..., tn) -> tret' (or 'name -> tret' for arity zero)"
+    ( "expected 'name(t1, ..., tn) -> tret' or 'module:name(t1, ..., tn)"
+        ++ " -> tret' (arity zero: 'name -> tret' / 'module:name -> tret')"
+    )
 parseValidationErrorMsg MalformedFunctionEquation =
   withHint
     "Invalid function equation"
@@ -704,7 +748,14 @@ resolveErrorMsg (ReservedName name) =
 resolveErrorMsg (ReservedModuleName name) =
   withHint
     ("'" ++ T.unpack name ++ "' is a reserved name and cannot be used as a module name")
-    "'host' is the wired-in host-call qualifier; rename the module"
+    -- One hint per name in 'reservedModuleNames', plus a fallback.
+    ( case name of
+        "host" -> "'host' is the wired-in host-call qualifier; rename the module"
+        "prelude" ->
+          "'prelude' is the bundled prelude, imported implicitly by every "
+            ++ "module; rename the module"
+        _ -> "rename the module"
+    )
 resolveErrorMsg (UnqualifiedConstraintName name) =
   withHint
     ( "Internal error: unqualified constraint name reached the resolve phase ('"
@@ -763,21 +814,10 @@ resolveErrorMsg (InvalidRefining declName violation) =
         ++ " be a base type or a type constructor applied to distinct type"
         ++ " variables"
     )
-resolveErrorMsg (UnknownBoundFunction declName boundName arity) =
+resolveErrorMsg (UnknownBoundFunction declName boundName arity kind) =
   withHint
-    ( "'"
-        ++ T.unpack declName
-        ++ "' requires '"
-        ++ T.unpack boundName
-        ++ "/"
-        ++ show arity
-        ++ "' but no such function is declared"
-    )
-    "declare ':- function "
-    ++ T.unpack boundName
-    ++ "/"
-    ++ show arity
-    ++ ".' (or import a module that does)"
+    (unknownBoundFunctionSentence declName boundName arity kind)
+    (unknownBoundFunctionHint boundName arity kind)
 resolveErrorMsg (BoundCycle names) =
   withHint
     ( "Cyclic 'requiring' clause: "
@@ -873,6 +913,22 @@ resolveErrorMsg (ConstraintUseUnknownConstraint name arity) =
         ++ "', which this module does not declare with :- chr_constraint"
     )
     "':- constraint_use' can only target a constraint declared in the same module"
+resolveErrorMsg (ExtensionTargetNotFunction dir name) =
+  withHint
+    ( "'"
+        ++ directive
+        ++ "' target '"
+        ++ displayName name
+        ++ "' is not a function"
+    )
+    ( "an extension can only target a function declared with "
+        ++ declaredWith
+    )
+  where
+    (directive, declaredWith) = case dir of
+      ExtendFunctionDirective -> (":- extend_function", ":- open_function")
+      ExtendClassDirective -> (":- extend_class", ":- open_class")
+      ExtendClassTypeDirective -> (":- extend_class_type", ":- open_class")
 resolveErrorMsg (ConstraintUseConflictingDeclaration name arity) =
   withHint
     ( "':- constraint_use' names '"
@@ -900,6 +956,56 @@ resolveErrorMsg (ConstructorFunctionCollision name) =
     ( "qualifying cannot tell them apart inside one module; rename one of"
         ++ " them (arity does not separate them either)"
     )
+
+-- | Headline for 'UnknownBoundFunction'.
+unknownBoundFunctionSentence :: T.Text -> Types.Name -> Int -> BoundTargetKind -> String
+unknownBoundFunctionSentence declName boundName arity BoundTargetMissing =
+  "'"
+    ++ T.unpack declName
+    ++ "' requires "
+    ++ boundNameSlashArity boundName arity
+    ++ " but no such function is declared"
+unknownBoundFunctionSentence _ boundName arity BoundTargetConstraint =
+  boundNameSlashArity boundName arity ++ " is a constraint, not a function"
+unknownBoundFunctionSentence _ boundName arity BoundTargetConstructor =
+  boundNameSlashArity boundName arity ++ " is a data constructor, not a function"
+
+boundNameSlashArity :: Types.Name -> Int -> String
+boundNameSlashArity boundName arity =
+  "'" ++ T.unpack (Types.flattenName boundName) ++ "/" ++ show arity ++ "'"
+
+-- | Hint for 'UnknownBoundFunction'. Only a missing user name can be
+-- fixed by declaring it; a @host:@ name, a constraint or a
+-- constructor gets 'requiringNamesAFunction'.
+unknownBoundFunctionHint :: Types.Name -> Int -> BoundTargetKind -> String
+unknownBoundFunctionHint _ _ BoundTargetConstraint = requiringNamesAFunction
+unknownBoundFunctionHint _ _ BoundTargetConstructor = requiringNamesAFunction
+unknownBoundFunctionHint (Types.Unqualified n) arity BoundTargetMissing =
+  "declare ':- function "
+    ++ T.unpack n
+    ++ "/"
+    ++ show arity
+    ++ ".' (or import a module that does)"
+unknownBoundFunctionHint (Types.Qualified "host" n) arity BoundTargetMissing =
+  "'host:"
+    ++ T.unpack n
+    ++ "/"
+    ++ show arity
+    ++ "' is a host call, not a declared function; "
+    ++ requiringNamesAFunction
+unknownBoundFunctionHint (Types.Qualified m n) arity BoundTargetMissing =
+  "declare ':- function "
+    ++ T.unpack n
+    ++ "/"
+    ++ show arity
+    ++ ".' in module '"
+    ++ T.unpack m
+    ++ "'"
+
+requiringNamesAFunction :: String
+requiringNamesAFunction =
+  "'requiring' can only name a declared function (':- function',"
+    ++ " ':- open_function', ':- class', or ':- open_class')"
 
 -- | The specific problem with a 'refining' clause, as a sentence
 -- fragment following the declaration's name.
@@ -964,6 +1070,30 @@ collectErrorMsg (DuplicateModuleName name paths) =
         ++ intercalate ", " paths
     )
     "a module name may be declared in exactly one input; give the modules distinct names"
+collectErrorMsg (UnknownModuleImport name hint) =
+  withHint
+    ("Unknown module '" ++ T.unpack name ++ "'")
+    (bareImportHintText name hint)
+
+-- | The hint text for 'UnknownModuleImport', picked by 'BareImportHint'.
+bareImportHintText :: T.Text -> BareImportHint -> String
+bareImportHintText name BundledLibraryName =
+  "'"
+    ++ T.unpack name
+    ++ "' is a bundled library; import it with ':- use_module(library("
+    ++ T.unpack name
+    ++ ")).'"
+bareImportHintText _ HostQualifier =
+  "'host:' is a built-in qualifier and needs no import"
+bareImportHintText name HeaderlessModule =
+  "a file without a ':- module' header is named '<"
+    ++ T.unpack name
+    ++ ">'; give it a ':- module("
+    ++ T.unpack name
+    ++ ")' header"
+bareImportHintText _ NoBareImportHint =
+  "a bare use_module names a module supplied to the compiler;"
+    ++ " check the name, or pass the module's file"
 
 instance Display (Diagnostic DeclMacroError) where
   displayMsg = displayDiagnostic SevError declMacroErrorCode declMacroErrorMsg
@@ -991,6 +1121,12 @@ declMacroErrorMsg (DeclMacroParseError e) = parseValidationErrorMsg e
 
 instance Display (Diagnostic RenameError) where
   displayMsg = displayDiagnostic SevError renameErrorCode renameErrorMsg
+
+-- | Hint for a bad aggregate goal conjunct.
+aggregateConjunctHint :: String
+aggregateConjunctHint =
+  "an aggregate goal conjunct must be a constraint, a nested aggregate"
+    ++ " or a '?' guard"
 
 renameErrorMsg :: RenameError -> String
 renameErrorMsg (AmbiguousName name arity candidates) =
@@ -1053,7 +1189,9 @@ renameErrorMsg (ModuleNotImported modName name arity) =
     )
     ( "add ':- use_module("
         ++ T.unpack modName
-        ++ ").' to import it"
+        ++ ").' (or ':- use_module(library("
+        ++ T.unpack modName
+        ++ ")).' for a bundled library)"
     )
 renameErrorMsg (UnknownModule modName) =
   withHint
@@ -1275,21 +1413,68 @@ renameErrorMsg (AggregateOutsideHead name arity) =
   withHint
     ("Aggregate '" ++ T.unpack name ++ "/" ++ show arity ++ "' outside a rule head")
     ( "an aggregate decides whether a rule applies, so it is a head"
-        ++ " conjunct; it cannot appear in a body, a query or a guard"
+        ++ " conjunct; it cannot appear anywhere else"
     )
-renameErrorMsg (MalformedAggregateGoal name required actual) =
+renameErrorMsg (MalformedAggregateGoal (ConjunctIsFunction name arity)) =
   withHint
-    ("Invalid aggregate '" ++ T.unpack name ++ "/" ++ show actual ++ "'")
-    ( "expected "
-        ++ show required
-        ++ " arguments, and each goal conjunct"
-        ++ " to be a constraint, a nested aggregate or a '?' guard"
+    ( "'"
+        ++ displayName name
+        ++ "/"
+        ++ show arity
+        ++ "' in an aggregate goal is a function, not a constraint"
     )
+    "a test on each match is a guard conjunct: write '? Guard'"
+renameErrorMsg (MalformedAggregateGoal (ConjunctIsBuiltin name arity)) =
+  withHint
+    ( "'"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' in an aggregate goal is a built-in form, not a constraint"
+    )
+    aggregateConjunctHint
+renameErrorMsg (MalformedAggregateGoal (ConjunctNotAGoal kind)) =
+  withHint
+    (what kind ++ " in an aggregate goal is not a constraint")
+    aggregateConjunctHint
+  where
+    what NonGoalNumber = "A number"
+    what NonGoalString = "A string"
+    what NonGoalVariable = "A variable"
 renameErrorMsg GuardOutsideAggregateGoal =
   withHint
     "'?' guard outside an aggregate goal"
     ( "a '? Guard' conjunct is recognized inside an aggregate's goal;"
         ++ " write a rule guard with '|' and a body goal directly"
+    )
+renameErrorMsg (ReservedAggregateName name arity) =
+  withHint
+    ( "'"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' is an aggregate form and cannot be declared as a"
+        ++ " constraint, function or macro"
+    )
+    ( "aggregate/4, argmin/2, argmax/2, takemin/2 and takemax/2 are"
+        ++ " recognized in every rule head without an import; choose"
+        ++ " another name or arity"
+    )
+renameErrorMsg (ExcludedByImportList modName name arity) =
+  withHint
+    ( "Module '"
+        ++ T.unpack modName
+        ++ "' exports '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "', but the import list for '"
+        ++ T.unpack modName
+        ++ "' leaves it out"
+    )
+    ( "add it to the import list, or import '"
+        ++ T.unpack modName
+        ++ "' in full"
     )
 renameErrorMsg (MacroBodyNotExported macroName macroArity refName refArity) =
   withHint
@@ -1435,12 +1620,13 @@ renameWarningMsg (UndeclaredDataConstructor name) =
   withHint
     ("Undeclared data constructor '" ++ T.unpack name ++ "'")
     "declare it with :- chr_type, or check the spelling"
-renameWarningMsg (DataConstructorArityMismatch name arity) =
+renameWarningMsg (DataConstructorArityMismatch name arity declared) =
   "Data constructor '"
     ++ T.unpack name
     ++ "' used with "
     ++ show arity
-    ++ " argument(s) but declared with a different arity"
+    ++ " argument(s) but declared with "
+    ++ displayArityList declared
 renameWarningMsg (UnusedMacroParameter qn param) =
   withHint
     ( "Macro parameter '"
@@ -1766,6 +1952,18 @@ instance Display Warning where
   displayMsg (TypeCheckWarnings ws) = displayErrors (map displayMsg ws)
 
 instance Display Error where
+  displayMsg (FileReadError path reason) =
+    displayMsgWithSrcLoc
+      MsgBlock
+        { code = fileReadErrorCode,
+          severity = SevError,
+          message =
+            "Cannot read file '" ++ path ++ "': " ++ T.unpack reason,
+          loc = P.SourceLoc path 1 1,
+          label = Nothing,
+          node = Nothing,
+          context = []
+        }
   displayMsg (ParseError _ err) = displayParseError err
   displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DeclMacroErrors errs) = displayErrors (map displayMsg errs)

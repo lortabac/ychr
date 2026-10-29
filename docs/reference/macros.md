@@ -124,6 +124,13 @@ A declaration with no clauses is allowed; every use of it is
   `extend_function/1`, `extend_class/1`, `extend_class_type/1`,
   `inline/1`, `constraint_use/1`, `macro/1` and `macro_decls/1`.
   Other arities of those names are allowed.
+- A goal macro also may not have the name and arity of one of the five
+  aggregate forms — `aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2`,
+  `takemax/2` (it would always read as the aggregate form):
+  `ReservedAggregateName`; see
+  [aggregates.md](aggregates.md#reserved-names). A declaration macro
+  is a directive, not a goal, so it is exempt, and other arities of
+  these names are allowed.
 - A head variable that occurs only once in its clause, in the head and
   not in the body, is a warning (`UnusedMacroParameter`): the
   corresponding argument is dropped. Write `_`, or a variable whose
@@ -169,7 +176,8 @@ site:
   variable, and binds to it. A variable repeated in one head matches
   only arguments that are *identical* terms: the same structure, the
   same atoms, the same variables. An argument that contains `_` is
-  never identical to anything, since each `_` is a distinct variable.
+  never identical to anything: matching sees each `_` as a distinct
+  variable.
 - `_` matches any argument and binds nothing.
 - Any other pattern matches an argument with the same principal
   functor and arity, and with each argument matching recursively.
@@ -258,10 +266,12 @@ only:
 - a goal of a top-level query (`ychr run -g`, the REPL, `runProgramWithGoal`).
 
 Elsewhere a goal macro name is an error (`MacroOutsideGoalPosition`): in a
-guard, inside an argument in an expression position, or as a function
-reference. The exceptions are `quote/1` and rule-head or
-equation-pattern *arguments*: all three are opaque data, so
-`count(a, b)` there is an ordinary compound.
+guard, inside an argument in an expression position (including an
+argument of a told constraint, in a rule body or a query), or as a
+function reference. The exceptions are `quote/1`, rule-head and
+equation-pattern *arguments*, `=` operands and the `is` left-hand
+side: all are opaque data, so `count(a, b)` or `lib:count(a, b)`
+there is an ordinary compound.
 
 Function equations have no goal positions, so macros do not apply
 inside them. A declaration macro's name outside a directive
@@ -282,12 +292,13 @@ Expanding the use `Name(A1, ..., An)` of a goal macro:
    (see [Patterns](#patterns)).
 2. Take a copy of the clause body in which every variable not bound
    by the match is replaced by a fresh variable. Fresh variables
-   cannot clash with any variable of the use site. Each `_` stays a
-   distinct anonymous variable.
+   cannot clash with any variable of the use site. Each `_` written in
+   the body stays a distinct anonymous variable.
 3. Replace each head variable with the argument term it was bound to,
    and evaluate the
    [construction primitives](#construction-primitives) written in the
-   body.
+   body. Every `_` in an argument becomes a fresh named variable,
+   shared by every copy of that argument.
 4. Splice the resulting goals into the enclosing conjunction, in list
    order, at the position of the use: kept head, removed head, or
    body. An element that is itself a conjunction is flattened into it.
@@ -309,6 +320,11 @@ that many times:
 
 r <=> twice(f(1)).   % calls f(1) twice: r <=> p(f(1)), p(f(1)).
 ```
+
+A `_` argument is shared too: with
+`:- macro both(X) ---> [k(X), j(X)].`, `both(_)` is `k(V), j(V)`, so
+`count(both(_), N)` counts the pairs with equal arguments. Distinct
+`_`s stay distinct: `both(f(_, _))` is `k(f(V1, V2)), j(f(V1, V2))`.
 
 **Validity.** An expansion must be valid where it lands. A head
 expansion that contains anything other than a conjunction of
@@ -437,9 +453,11 @@ the module's rule order, which ωr uses to number occurrences. A nested
 use's clauses take the nested use's place, so the `unary_constraints`
 example declares `red`, `green` and `blue` in list order. Contiguity
 rules apply to the module as spliced. For example, the equations of a
-closed function must be contiguous, so a declaration macro can
-generate a whole function. A user can't add equations to it with
-clauses written around the use.
+closed function must be contiguous. A user equation written right
+after the use joins the generated ones. One written before it is
+rejected (`DiscontiguousEquations`) if the macro also generates the
+`:- function` declaration, since that declaration then sits between
+the equations.
 
 **Variables.** Each generated clause is its own variable scope, as in
 source text. A use-site argument that contains a variable `X` and lands
@@ -447,7 +465,11 @@ in two clauses becomes two unrelated clause variables named `X`, one in
 each. Freshening (step 2) guarantees that a body variable never
 captures a variable of the arguments. A freshened variable, such as `N`
 or `M` in the `counter` example, appears in diagnostics under its fresh
-name.
+name. A `_` in an argument works like a named variable (step 3):
+`:- mk(_).` with `mk(X) ---> [(a(X), b(X) ==> c)]` gives
+`a(_decl_0_1), b(_decl_0_1) ==> c.` In a type position it is a type
+variable: `:- state(k, _).` means `:- state(k, T).`, which fails the
+type checker ([state.md](state.md)).
 
 **Generated names.** Generated declarations belong to the using
 module. A generated `:- chr_constraint clicks/1` declares
@@ -491,16 +513,32 @@ comment names the use a run of clauses came from — the outermost use,
 so a nested use's clauses stay under it:
 
 ```prolog
+:- module(counter).
+
+:- macro_decls counter(Name) --->
+    [ (:- chr_constraint Name/1, '$atom'([inc_, Name])/0),
+      ('$compound'(Name, [N]), '$atom'([inc_, Name])
+         <=> M is N + 1, '$compound'(Name, [M])) ].
+:- counter(clicks).
+```
+
+```sh
+ychr check --dump-splices counter.chr
+```
+
+```
 % splices for counter.chr (module counter)
 % counter:counter/1 at counter.chr:7:1
-:- chr_constraint clicks / 1.
-:- chr_constraint inc_clicks / 0.
-clicks(N), inc_clicks <=> M is N + 1, clicks(M).
+:- chr_constraint clicks / 1, inc_clicks / 0.
+clicks(_decl_0_N), inc_clicks <=> _decl_0_M is _decl_0_N + 1, clicks(_decl_0_M).
 ```
 
 Clauses go through the same pretty-printer the diagnostics use, so an
 operator like `/` comes out spaced (`clicks / 1`) even though the
-source writes `clicks/1`.
+source writes `clicks/1`. Each generated directive prints as written
+(one `chr_constraint` line here), and a freshened body variable shows
+its fresh name (`_decl_<n>_<Name>`, see
+[Pipeline placement](#pipeline-placement)).
 
 Clauses the user wrote are not dumped, and neither is anything a goal
 macro produced: goal macros expand later, in the renamer, and are out
@@ -634,7 +672,7 @@ Two consequences follow:
 A user who imports `library(aggregates)` in full can use `count/2`.
 With `:- use_module(library(aggregates), [macro(count/2)])` the
 expansion's reference to `aggregates:count_spec` fails
-(YCHR-20009), and the diagnostic says that the reference came from
+(YCHR-20044), and the diagnostic says that the reference came from
 `count/2` and suggests widening the import list.
 
 **Definition-time check.** A qualified name `M:x` in a macro body,
@@ -654,23 +692,40 @@ every use site.
 Every diagnostic raised while *expanding* a macro, or while
 *renaming* or *converting* the code an expansion produced,
 carries the chain of macro expansions that produced it. Each entry
-gives the location of the use, innermost first:
+gives the location of the rule head or body that holds the use,
+innermost first. Two uses in one body show the same location. With
+the [`count/2`](#names-and-modules) example's narrowed import:
+
+```prolog
+:- module(graph).
+:- use_module(library(aggregates), [macro(count/2)]).
+:- chr_constraint node/1, indeg/2.
+:- macro in_degree(N, C) ---> [count(node(N), C)].
+node(N), in_degree(N, C) ==> indeg(N, C).
+```
+
+```sh
+ychr check graph.chr
+```
 
 ```
-/path/graph.chr:7:12: YCHR-20009
-Module 'aggregates' does not export 'count_spec/0'
-  Hint: check the spelling and the export list of 'aggregates'
-  in the expansion of aggregates:count/2, used at /path/graph.chr:7:12
-  in the expansion of graph:in_degree/2, used at /path/graph.chr:7:12
+=== error ===
+graph.chr:5:1: YCHR-20044
+Module 'aggregates' exports 'count_spec/0', but the import list for 'aggregates' leaves it out
+  Hint: add it to the import list, or import 'aggregates' in full
+  in the expansion of aggregates:count/2, used at graph.chr:5:1
+  in the expansion of graph:in_degree/2, used at graph.chr:5:1
+node(N), in_degree(N, C)
 ```
 
 The chain covers:
 
 - expansion-time errors (the ones below);
 - renaming errors and warnings (`YCHR-20001`–`YCHR-20022`,
-  `YCHR-20101`, `YCHR-20102`) reached while renaming expanded code: a
-  goal-macro expansion, or a rule or equation a declaration macro
-  generated (goal macros first, then declaration macros);
+  `YCHR-20044`, `YCHR-20101`, `YCHR-20102`) reached while renaming
+  expanded code: a goal-macro expansion, or a rule or equation a
+  declaration macro generated (goal macros first, then declaration
+  macros);
 - errors in clauses a declaration macro generated (15xxx
   parse-validation errors, with that clause's chain).
 
@@ -686,12 +741,64 @@ location in the using module.
 A recursive expansion can make the chain long. Consecutive entries for
 the same macro are shown on one line, with a count and the innermost
 use. At most ten such lines are shown, innermost first; one more line
-counts the enclosing expansions left out:
+counts the enclosing expansions left out. A macro with no base case
+hits the depth limit, and its chain collapses to one line:
+
+```prolog
+:- module(m).
+:- chr_constraint r/1.
+:- macro grow(X) ---> [grow(s(X))].
+r(X) <=> grow(X).
+```
+
+```sh
+ychr check m.chr
+```
 
 ```
-  in 1000 nested expansions of m:grow/1, innermost used at /path/m.chr:5:10
-  ... and 5 more enclosing expansions
+=== error ===
+m.chr:4:10: YCHR-20033
+Macro 'm:grow/1': nested expansions exceed the depth limit of 1000
+  Hint: check that each recursive use makes progress towards a base case; see the expansion chain
+  in 1000 nested expansions of m:grow/1, innermost used at m.chr:4:10
+grow(X)
 ```
+
+Eleven or more groups add a last line counting the rest:
+
+```prolog
+:- module(c).
+:- chr_constraint r/1.
+:- macro m1(X) ---> [m2(X)].
+:- macro m2(X) ---> [m3(X)].
+...
+:- macro m12(X) ---> [m13(X)].
+:- macro m13(X) ---> [nope(X)].
+r(X) <=> m1(X).
+```
+
+```sh
+ychr check c.chr
+```
+
+```
+=== error ===
+c.chr:16:10: YCHR-20002
+Unknown name 'nope/1'
+  Hint: declare it with :- chr_constraint or :- function, or import it from another module
+  in the expansion of c:m13/1, used at c.chr:16:10
+  in the expansion of c:m12/1, used at c.chr:16:10
+...
+  in the expansion of c:m5/1, used at c.chr:16:10
+  in the expansion of c:m4/1, used at c.chr:16:10
+  ... and 3 more enclosing expansions
+m1(X)
+```
+
+(Trimmed for length: `...` above stands for `m3` through `m11`, each
+one more macro of the same `mN(X) ---> [mN+1(X)]` shape, and for the
+six chain lines they produce — the real run has ten `in the expansion
+of` lines before the count, not two.)
 
 Resolve, Desugar and the optional type checker have no per-goal
 provenance to attach a chain to. A diagnostic from one of those phases
@@ -710,7 +817,7 @@ Errors:
 | `DiscontiguousMacroClauses` | YCHR-15026 | A macro's clauses don't form one contiguous block. |
 | `DuplicateMacro` | YCHR-20023 | Two definitions of the same `Name/Arity` in one module, of either kind, including further clauses for a macro defined by the one-line form. |
 | `MacroNameCollision` | YCHR-20024 | A goal macro shares `Name/Arity` with a constraint or function of the same module. |
-| `MacroOutsideGoalPosition` | YCHR-20025 | A goal macro name used outside a goal position (and outside `quote/1` and head/equation arguments). |
+| `MacroOutsideGoalPosition` | YCHR-20025 | A goal macro name used outside a goal position (and outside `quote/1`, head/equation arguments, `=` operands and the `is` left-hand side). |
 | `MacroCycle` | YCHR-20026 | A use is reached again while it is being expanded, with the same macro and identical arguments up to renaming of variables (see [Recursion and termination](#recursion-and-termination)). |
 | `MacroBodyNotExported` | YCHR-20027 | A body names `M:x` in the macro's own module `M`, and `M` does not declare and export `x`. |
 | `MacroInvalidInHead` | YCHR-20028 | A head expansion is not a conjunction of constraints (see [Validity](#expanding-a-goal-macro)). |
@@ -720,6 +827,7 @@ Errors:
 | `MacroExpansionTooLarge` | YCHR-20038 | A use written in a rule, a query or a top-level directive causes more than 100000 expansions (see [Recursion and termination](#recursion-and-termination)). |
 | `MalformedMacroPrimitive` | YCHR-20036 | An operand of `'$compound'` or `'$atom'` breaks the rules under [Construction primitives](#construction-primitives). |
 | `MacroPrimitiveOutsideMacro` | YCHR-20037 | A primitive remains after expansion: it was not written in a macro body. |
+| `ReservedAggregateName` | YCHR-20043 | A goal macro is declared at one of the five aggregate-form keys (see [Heads](#heads)). |
 
 Declaration-macro errors. All 15xxx codes come before conversion:
 `MacroDeclsForbiddenClause` and `UnknownDirective` from expansion (see
@@ -784,9 +892,10 @@ Each module is first scanned for its name, imports, exports and
 macros (clauses may come before their declaration; the declaration
 sets the kind). Then expansion runs once per module, with that module's
 visibility. Generated clauses get the location of the outermost use
-directive. Fresh variables are named `_decl_<n>_<Name>` (goal macros
-use `_macro_<n>_<Name>`), so a goal macro inside a generated rule
-can't capture them. Generated rules and equations remember the macro
+directive. Fresh variables are named `_decl_<n>_<Name>`, and an
+argument's `_`s `_decl_<n>_1`, `_decl_<n>_2`, … (goal macros use
+`_macro_` instead), so a goal macro inside a generated rule can't
+capture them. Generated rules and equations remember the macro
 chain, and renaming errors on them show it after any goal-macro chain.
 Everything after conversion only sees the generated clauses; goal
 macros in them are expanded by the renamer as usual.

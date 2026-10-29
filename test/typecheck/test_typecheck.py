@@ -274,17 +274,24 @@ def test_werror_at_run(ychr_bin, project_root):
     assert "YCHR-20104" in werror.stdout + werror.stderr
 
 
-# Every library in one invocation, `prelude` included. Each library is
-# then present twice -- once as the source file on the command line, once
-# as the embedded copy another library's `use_module(library(...))` pulls
-# into the closure -- so this also pins the module deduplication in
+# Every library but `prelude` in one invocation. A file on the command
+# line is a user module, and a user module can't be named `prelude`
+# (YCHR-16019); the embedded prelude is in the closure anyway. Each
+# other library is then present twice -- once as the source file on
+# the command line, once as the embedded copy another library's
+# `use_module(library(...))` pulls into the closure -- so this also
+# pins the module deduplication in
 # YCHR.Internal.Compile.Pipeline.finalizeCompilation. Without it every
 # reference to a library's own exports is ambiguous (YCHR-20012).
 def test_typecheck_stdlib(ychr_bin, project_root):
     import subprocess
 
     libraries = os.path.join(project_root, "libraries")
-    files = sorted(glob.glob(os.path.join(libraries, "*.chr")))
+    files = sorted(
+        f
+        for f in glob.glob(os.path.join(libraries, "*.chr"))
+        if os.path.basename(f) != "prelude.chr"
+    )
     assert files, "no stdlib sources found"
     result = subprocess.run(
         [ychr_bin, "check", "--Werror", *files],
@@ -362,18 +369,55 @@ def test_no_check_skips_program_check(ychr_bin, project_root, tmp_path):
     assert checked_driver.stdout.strip(), "expected a generated driver on stdout"
 
 
+def test_constructor_arity_mismatch_cofires(ychr_bin, project_root):
+    """A wrong-arity constructor use draws both YCHR-20102 and YCHR-60008.
+
+    `typecheck_constructor_arity` applies `some/1` at arity 2. The
+    renamer's warning (YCHR-20102) and the checker's error (YCHR-60008)
+    are deliberately redundant (see docs/reference/type-system.md
+    'Known constructors'). Pins that both fire exactly once and that
+    the warning names the declared arity.
+    """
+    program = os.path.join(
+        project_root,
+        "test",
+        "golden",
+        "typecheck_constructor_arity",
+        "typecheck_constructor_arity.chr",
+    )
+    result = _run(ychr_bin, project_root, "check", program)
+    assert result.returncode != 0, "expected the wrong-arity use to fail"
+    output = result.stdout + result.stderr
+    assert output.count("YCHR-20102") == 1, output
+    assert output.count("YCHR-60008") == 1, output
+    # Pin the 20102 wording specifically (not just "declared with 1",
+    # which the 60008 message next to it also says).
+    assert "Data constructor 'some' used with 2 argument(s) but declared with 1" in output, output
+
+
+# The fourth column lists extra strings that must still appear once the
+# checker is skipped. `typecheck_goal_ctor_arity`'s renamer warning
+# (YCHR-20102) runs on every goal regardless of `--no-check`, so it is
+# still there even though `--no-check` drops the checker's YCHR-60008.
 GOAL_CHECK_CASES = [
-    ("typecheck_goal_arg_type", "tg:paint(42)", "YCHR-60001"),
-    ("typecheck_goal_ctor_arity", "tgc:store(pair(1, 2, 3))", "YCHR-60008"),
+    ("typecheck_goal_arg_type", "tg:paint(42)", "YCHR-60001", []),
+    (
+        "typecheck_goal_ctor_arity",
+        "tgc:store(pair(1, 2, 3))",
+        "YCHR-60008",
+        ["YCHR-20102", "declared with 2"],
+    ),
 ]
 
 
-@pytest.mark.parametrize("test_dir,goal,code", GOAL_CHECK_CASES)
-def test_no_check_skips_goal_check(ychr_bin, project_root, test_dir, goal, code):
+@pytest.mark.parametrize("test_dir,goal,code,extra_warnings", GOAL_CHECK_CASES)
+def test_no_check_skips_goal_check(ychr_bin, project_root, test_dir, goal, code, extra_warnings):
     """`--no-check` runs a goal the goal-level check would reject.
 
     Both programs are well-typed; only the goal is not. The rule behind
-    it fires, so with the goal check skipped the run succeeds.
+    it fires, so with the goal check skipped the run succeeds. The
+    checker is what `--no-check` skips, not the renamer, so a renamer
+    warning on the same goal (`extra_warnings`) still shows up.
     """
     program = os.path.join(project_root, "test", "golden", test_dir, f"{test_dir}.chr")
 
@@ -383,7 +427,10 @@ def test_no_check_skips_goal_check(ychr_bin, project_root, test_dir, goal, code)
 
     unchecked = _run(ychr_bin, project_root, "run", "--no-check", "-g", goal, program)
     assert unchecked.returncode == 0, unchecked.stdout + unchecked.stderr
-    assert code not in unchecked.stdout + unchecked.stderr
+    output = unchecked.stdout + unchecked.stderr
+    assert code not in output
+    for warning in extra_warnings:
+        assert warning in output, output
 
 
 def test_no_check_drops_type_warnings(ychr_bin, project_root):

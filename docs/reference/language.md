@@ -20,6 +20,9 @@ static type checker is specified in [type-system.md](type-system.md).
   `_` alone is the anonymous variable; each occurrence is distinct. In a
   rule head or equation pattern it is the wildcard: it matches anything
   and binds nothing. Everywhere else it is an ordinary fresh variable.
+  A `_` passed to a macro becomes a fresh named variable, shared by
+  every copy of that argument
+  ([macros.md](macros.md#expanding-a-goal-macro)).
 - Integers: decimal digits, optional `-`, arbitrary precision. No `_`
   separators, no hex/octal/binary.
 - Floats: `digits.digits`, optional `-`. No exponent.
@@ -102,21 +105,32 @@ name and arity, an unqualified use is rejected (`YCHR-20001`;
 with the prelude, rename yours.
 
 Qualifying does not bypass imports: `m:name` is valid only if the
-current module imports `m` and `m` exports `name`. Unimported module:
-`YCHR-20014` (`ModuleNotImported`). Unknown module: `YCHR-20015`
-(`UnknownModule`). Imported module without that export: `YCHR-20009`
-(`NotExportedByModule`).
+current module imports `m` and the import makes `name` visible.
+Unimported module: `YCHR-20014` (`ModuleNotImported`). Unknown module:
+`YCHR-20015` (`UnknownModule`). Imported module without that export:
+`YCHR-20009` (`NotExportedByModule`). Imported module that exports it,
+but whose import list leaves it out: `YCHR-20044`
+(`ExcludedByImportList`).
+
+Only references can be qualified. A definition head (a declaration, a
+type or constructor head, a top-level equation) can't be `m:name`,
+even with the module's own name: `YCHR-15029`
+(`QualifiedDefinitionName`). Extension targets are references, so they
+can be (see [Declaration placement](#declaration-placement)).
 
 `:- use_module(library(M))` names a bundled library: `M` is resolved
 from the standard library map, and an unknown name is rejected
 (`YCHR-10001`). A bare `:- use_module(M)` names a *user module*
-supplied to the compiler; it is not looked up on any search path.
-`:- use_module` directives come before everything else in the file
-(`YCHR-20007`). The bundled libraries `lists`, `maybe`, `pairs`,
-`strings`, `meta`, `search`, `state` and `chr`
-([`libraries/`](../../libraries/)) need an explicit import outside the
-REPL. The prelude is always imported, in full; an import list on it is
-rejected (`YCHR-20019`).
+supplied to the compiler, or `prelude`. It is not looked up on any
+search path. Any other name, including a bundled library or `host`,
+is rejected (`YCHR-10005`). `:- use_module` directives
+come before everything else in the file (`YCHR-20007`). The bundled
+libraries `aggregates`, `chr`, `lists`, `maybe`, `meta`, `pairs`,
+`search`, `state` and `strings`
+([`libraries/`](../../libraries/)) need an explicit `library(...)`
+import outside the REPL. The prelude is always imported, in full; an
+import list on it is rejected (`YCHR-20019`). `host` and `prelude` are
+reserved and cannot name a user module (`YCHR-16019`).
 
 `chr` is an empty compatibility module: it declares and exports
 nothing. It exists so that a Prolog module carrying
@@ -157,7 +171,9 @@ A constructor named in either list but not declared on the type:
 but excluded by the exporter's allowlist: `YCHR-20011` ("declared but
 not visible", distinct from "unknown"). A qualified reference
 `palette:green` to a constructor outside `palette`'s allowlist:
-`YCHR-20010`. Bare and qualified syntax see the same view of the module.
+`YCHR-20010`; to one `palette` exports but your import list leaves
+out: `YCHR-20044`. Bare and qualified syntax see the same view of the
+module.
 
 ### Opaque types
 
@@ -175,8 +191,8 @@ constraint or a function, exported and imported with
 `macro(Name/Arity)`:
 
 ```prolog
-:- module(aggregates, [macro(count/2)]).
-:- use_module(aggregates, [macro(count/2)]).
+:- module(shapes, [macro(count/2)]).
+:- use_module(shapes, [macro(count/2)]).
 ```
 
 A module with no export list exports every macro it defines, same as
@@ -315,7 +331,8 @@ overloads a name across several signatures; the equations still form
 one top-to-bottom set. `:- open_function` / `:- open_class` are the
 cross-module counterparts. `requiring` is allowed on `:- function`,
 `:- open_function` and `:- chr_constraint`, never on a class form
-(YCHR-15005). Overloading rules:
+(YCHR-15005). A one-signature `:- class` checks like the matching
+`:- function`. Overloading rules:
 [type-system.md](type-system.md#signature-overloading).
 
 ### Refinement predicates
@@ -338,9 +355,17 @@ Split declarations: `DiscontiguousFunctionDecls`, YCHR-15004.
 Equations interleaved with unrelated items: `DiscontiguousEquations`,
 YCHR-15001. To extend across modules, use `:- open_function` /
 `:- open_class` with `:- extend_function` / `:- extend_class` /
-`:- extend_class_type`. Extending a closed declaration is YCHR-16005;
-the wrong kind, YCHR-16013/16014/16015; a free-floating equation
-outside the declaring module, YCHR-16006.
+`:- extend_class_type`. The target can be qualified:
+
+```prolog
+:- extend_class_type oc:sz(string) -> int.
+:- extend_class oc:sz(_) -> 0.
+```
+
+Extending a closed declaration is YCHR-16005; the wrong kind,
+YCHR-16013/16014/16015; something that is not a function at all (a
+constraint, a qualified constructor, a `host:` call), YCHR-16027; a
+free-floating equation outside the declaring module, YCHR-16006.
 
 ### Inlining
 

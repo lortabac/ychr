@@ -1,0 +1,14 @@
+:- module(macro_decls_wildcard).
+
+% A `_` passed to a declaration macro is one variable shared by every
+% copy of that argument: the generated rule joins a and b.
+:- chr_type answer ---> yes ; no.
+:- chr_constraint a/1, b/1, hit/0, ask/1.
+:- macro_decls mk(X) ---> [(a(X), b(X) ==> hit)].
+:- mk(_).
+
+hit \ ask(R) <=> R = yes.
+ask(R) <=> R = no.
+
+:- chr_constraint test/2.
+test(X, R) <=> a(1), b(X), ask(R).

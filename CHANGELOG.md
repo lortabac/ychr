@@ -2,6 +2,171 @@
 
 ## Unreleased
 
+An aggregate form (`argmin(...)`, `aggregate(...)`, ...) in a told
+constraint's argument (rule body, `tell/N`, query goal) or in an
+aggregate's `Element` is now `YCHR-20040`, and a goal macro name there
+is `YCHR-20025`. They used to pass as undeclared data constructors.
+
+A qualified macro name in a pattern (a head argument like
+`h(lib:both(1, 2))`, an `=` operand, the `is` left-hand side or an
+aggregate's `Result`) is now data, like an unqualified one. It used to
+be `YCHR-20025`.
+
+A `'$call'(...)` in a told constraint's argument no longer warns
+`YCHR-20101`.
+
+The Scheme `(ychr repl)` `tell` now passes the same variable for a
+repeated symbol (`'R 'R`); it used to make two and print `R` twice. A
+bare `'_` still gets a fresh variable each time.
+
+The Scheme `gen-driver` driver and `(ychr repl)` `tell` now print query
+variables that are unified together but still unbound as each other
+(`A = B`, `B = A`), as `ychr run --show-bindings` does. They used to
+print `_`.
+
+A missing or unreadable input file is now `YCHR-50005`, reported like
+any other compile error, instead of an uncaught `IOException`.
+`:recompile` keeps the previous program loaded when this happens, and
+an output file `ychr compile` can't write now prints a message and
+exits 1 instead of an uncaught `IOException`.
+
+- **Breaking:** `YCHR.Run.Error` has a new constructor, `FileReadError
+  FilePath Text`. `compileFiles` returns it as a `Left` instead of
+  throwing.
+
+`.chr` sources are read as UTF-8 whatever the locale. A valid UTF-8
+file used to fail under `LC_ALL=C`; invalid bytes are now "Not valid
+UTF-8".
+
+`:info` prints a `requiring` bound from another module qualified
+(`lib:gt(T, T) -> bool`). It used to drop the module.
+
+`:info` prints each bound of a multi-bound `requiring` clause in
+parens (`requiring (g(T) -> T), (k(U) -> U)`), so the output parses
+back.
+
+A definition head written `m:name` (a declaration, a type or
+constructor head, a top-level equation) is now `YCHR-15029`
+(`QualifiedDefinitionName`), even with the module's own name. Some
+forms used to be read silently as a definition of `:/2`; others gave a
+misleading error.
+
+- **Breaking:** `YCHR.Internal.Parser.ParseValidationError` has a new
+  constructor, `QualifiedDefinitionName Text Text`.
+
+`:- extend_function`, `:- extend_class` and `:- extend_class_type` can
+name their target qualified (`:- extend_class oc:sz(_) -> 0.`). It
+used to be `YCHR-20002` (`Unknown name ':/2'`).
+
+- **Breaking:** an extension whose target is not a function (a
+  constraint, a qualified data constructor, a `host:` call) is now
+  `YCHR-16027` (`ExtensionTargetNotFunction`).
+  `:- extend_function c(X) -> 0.` with `c` an imported constraint
+  used to be accepted and ignored.
+- **Breaking:** `YCHR.Internal.Resolve.ResolveError` has a new
+  constructor, `ExtensionTargetNotFunction ExtensionDirective Name`.
+- **Breaking:** `ExtendClassTypeDeclBody.name` is now a `Name` (the
+  target as written) instead of `Text`. `YCHR.DSL.extendClassType`
+  still takes `Text`.
+
+A qualified name `m:x` that `m` exports but your
+`use_module(m, [...])` list leaves out is now `YCHR-20044`
+(`ExcludedByImportList`), not `YCHR-20009`/`YCHR-20010`. Same for
+constraints, functions, macros and data constructors.
+
+A visible goal macro written qualified where a value goes
+(`item(m:mac(1))`, a `requiring` bound) is now `YCHR-20025`, not
+`YCHR-20009`.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameError` has a new
+  constructor, `ExcludedByImportList Text Text Int`.
+
+An aggregate form (`aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2`,
+`takemax/2`) in a guard, an `is` right-hand side, a function or lambda
+body, or nested in another expression is now `YCHR-20040`
+(`AggregateOutsideHead`), not `YCHR-30002` or a `YCHR-20101` warning.
+A visible data constructor of the same name and arity is still read
+as data. Constraint arguments are not checked yet.
+
+A constraint, function or goal macro declared at `aggregate/4`,
+`argmin/2`, `argmax/2`, `takemin/2` or `takemax/2` is now
+`YCHR-20043` (`ReservedAggregateName`), not silently accepted and
+then ignored. Other arities, data constructors, and declaration
+macros still work.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameError` has a new
+  constructor, `ReservedAggregateName Text Int`.
+
+A `?` guard in a rule head (kept or removed part, or from a macro) is
+now `YCHR-20042` (`GuardOutsideAggregateGoal`), not `YCHR-20002`.
+
+- **Breaking:** a `_` passed to a macro is now one variable, shared by
+  every copy of that argument. With `both(X) ---> [k(X), j(X)]`,
+  `count(both(_), N)` now counts the pairs with equal arguments, like
+  `both(Z)`. Same for declaration macros: `:- state(k, _).` is a type
+  variable and fails like `:- state(k, T).` (`YCHR-60001`, was
+  `YCHR-15009`).
+
+A function call or a built-in form (`=`, `;`, `true`, …) in an
+aggregate goal is now `YCHR-20041`. A test missing its `?`
+(`count((k(Y), X == Y), N)`) used to count nothing, silently.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameError`'s
+  `MalformedAggregateGoal` carries a new `BadConjunct` (with
+  `NonGoalKind`) instead of the aggregate's name and arities.
+
+`ychr FILES...` (no subcommand) no longer takes flags.
+
+- **Breaking:** put flags after the subcommand:
+  `ychr repl --quiet FILES...`. `ychr --quiet repl` used to read
+  `repl` as a file and crash; it's now a usage error.
+
+A `requiring` bound can name a qualified function (`m:name(...) ->
+τ`). The YCHR-16009 message says when the name is a constraint or a
+data constructor.
+
+- **Breaking:** `YCHR.Internal.Resolve.ResolveError`'s
+  `UnknownBoundFunction` carries the bound's `Name` (instead of its
+  already-flattened `Text`) plus a new `BoundTargetKind` saying what
+  the name resolves to instead of a function.
+
+`run --show-bindings`, a `gen-driver` driver, and the Scheme `tell`
+helper now hide `_`-prefixed variables, like the REPL already did.
+
+- **Breaking:** `YCHR.Internal.Pretty.prettyBindings` drops
+  `_`-prefixed names too (new `isHiddenBindingName`), so
+  `--show-bindings` output changes. `YCHR.Run` result maps still hold
+  every variable.
+
+An unknown bare `use_module(M)` is now an error.
+
+- **Breaking:** a bare `:- use_module(M)` must name a module passed to
+  the same compile call, or `prelude`. Anything else is now
+  `YCHR-10005` (`CollectError`'s new `UnknownModuleImport`, with a
+  `BareImportHint`). A typo or `host` used to be ignored; a bundled
+  library name like `lists` worked only when the library was already
+  loaded (always true in the REPL and DSL). Import bundled libraries
+  with `use_module(library(M))`; in the DSL, `importing ["lists"]`
+  becomes `` `library` "lists" ``.
+
+A user module can no longer be named `prelude`.
+
+- **Breaking:** `prelude` is now a reserved module name (`YCHR-16019`,
+  alongside `host`). A user module named `prelude` used to compile and
+  silently replace the bundled prelude, with a `use_module` import list
+  on it misreported as `YCHR-20019` (a hint meant for the real prelude).
+  Other bundled library names can still be shadowed. `ychr check
+  libraries/prelude.chr` now fails too, since a file on the command
+  line is a user module.
+
+The constructor-arity warning now names every declared arity.
+
+- **Breaking:** `YCHR.Internal.Rename.RenameWarning`'s
+  `DataConstructorArityMismatch` has a third field, the declared
+  arities (`NonEmpty Int`, sorted, no duplicates). The YCHR-20102
+  message names them ("declared with 1 or 3") instead of "a different
+  arity".
+
 Internal record fields drop their type prefixes.
 
 - **Breaking:** in `YCHR.Internal.Compile.Types`, `AggregatePlan`'s

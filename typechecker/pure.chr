@@ -292,6 +292,7 @@ funs_arity_errors(Env, [F|Fs], Unit) ->
     append(fun_arity_errors(Env, F, Unit),
            funs_arity_errors(Env, Fs, Unit + fun_unit_count(F))).
 
+% Same count-based split as walk.chr's walk_funs_class/walk_funs_plain.
 :- function fun_unit_count(fun_def) -> int.
 fun_unit_count(fun_def(_, _, Sigs, _, _)) | length(Sigs) > 1 -> 0.
 fun_unit_count(fun_def(_, _, _, _, Eqs)) -> length(Eqs).

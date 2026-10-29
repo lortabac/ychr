@@ -41,7 +41,7 @@ is a fresh logical variable, one per occurrence.
 | `:- extend_function f(X) -> X.` | `\`withExtensions\` [equation "f" [var "X"] [] (var "X")]` |
 | `:- extend_class f(X) -> X.` | `\`withClassExtensions\` [equation "f" [var "X"] [] (var "X")]` |
 | `:- chr_type color ---> red ; green.` | `\`chrType\` tyDef "color" [] [dataCtor "red" [], dataCtor "green" []]` |
-| `:- use_module(other).` | `\`importing\` ["other"]` |
+| `:- use_module(other).` | `\`importing\` ["other"]` (a module in the same compile call; bundled libraries use `library`) |
 | `:- use_module(library(lists)).` | `\`library\` "lists"` |
 | `name @ leq(X, Y), leq(Y, X) <=> X = Y.` | `"name" @: [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "X"]] <=> [var "X" .=. var "Y"]` |
 | `kept \ removed <=> body.` | `[kept] \\ [removed] <=> [body]` |

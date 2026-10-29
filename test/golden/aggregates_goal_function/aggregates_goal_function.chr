@@ -1,0 +1,14 @@
+% A function call as an aggregate goal conjunct is YCHR-20041. Most
+% often it is a test missing its '?'.
+:- module(aggregates_goal_function, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, k/1, res/1.
+:- function f/1.
+f(X) -> X.
+
+p(X), count((k(Y), X == Y), N) ==> res(N).
+p(_), count((k(Y), Y > 1), N) ==> res(N).
+p(_), count(1 + 1, N) ==> res(N).
+p(_), count((k(Y), f(Y)), N) ==> res(N).
+p(_), count((k(Y), host:g(Y)), N) ==> res(N).

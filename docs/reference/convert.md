@@ -158,7 +158,10 @@ does); decoding failures come back as `Left`.
 source text) or `compileParsedModules` (DSL modules), then run
 `runQueryCompiled` on the `CompiledProgram`. Each call is an
 independent run with a fresh store, and none of the four type-checks a
-goal, so no type-checker input is needed.
+goal, so no type-checker input is needed. `compileFiles` returns an
+unreadable file as `Left FileReadError`, never thrown. Under MicroHs
+the reason text is often less specific, and a directory given as
+input reads back empty; see `dev-docs/MICROHS_GAPS.md` gap 11.
 
 ```haskell
 runQueryCompiled

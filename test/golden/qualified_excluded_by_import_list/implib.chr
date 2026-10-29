@@ -1,0 +1,4 @@
+:- module(implib, [gt/2, other/1]).
+:- function gt(int, int) -> bool.
+gt(X, Y) -> X > Y.
+:- chr_constraint other/1.

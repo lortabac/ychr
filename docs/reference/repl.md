@@ -6,6 +6,10 @@
 ychr repl [--quiet] [--no-check] [--Werror] [--dump-splices] [FILES...]
 ```
 
+`ychr FILES...` (no subcommand) is short for `ychr repl FILES...` with
+default flags. Flags go after the subcommand: `ychr --quiet repl` is
+a usage error.
+
 Loads the files (or none), prints warnings and type-check messages,
 shows the `ychr> ` prompt. The full standard library is auto-loaded;
 no `:- use_module(library(...))` is needed for prelude, meta, search or
@@ -70,7 +74,7 @@ the loaded modules, plus the meta-commands at the outer prompt (only
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `:help` | `:h` | Show meta-command help. |
-| `:recompile` | `:r` | Reload the source files from disk. |
+| `:recompile` | `:r` | Reload the source files. On failure the previous program stays loaded. |
 | `:list_files` | | List the loaded files. |
 | `:list_modules` | | List the loaded modules. |
 | `:list_declarations` | | List visible constraint and function declarations. |
@@ -91,6 +95,9 @@ declaration. Built-in types (`int`, `float`, `string`, `any`) print
 (`call/2`), qualified (`prelude:max`), or any combination. A bare name
 matching several arities prints all of them; a bare `name/arity`
 exported by more than one module is reported as ambiguous — qualify it.
+A `requiring` bound prints qualified (`lib:gt`) unless it names
+something in `NAME`'s own module; two or more bounds each print in
+parens, so the output parses back.
 
 ```ychr-repl
 ychr> :info int
@@ -217,12 +224,15 @@ a query.
 Outside a live session each input is a goal run against a fresh
 store, discarded when the query returns. Bindings are printed, except
 for variables whose name starts with `_` (`_X`) — Prolog convention;
-they are still bound, only the output is filtered.
+they are still bound, only the output is filtered. This holds for
+every binding printer, the Scheme `tell` helper included (see
+[scheme-repl.md](../how-to/scheme-repl.md)).
 
 `ychr run -g GOAL` takes exactly one declared constraint (`cake`,
 `compute(5, R)`, `bakery:egg`); a bare expression, an `is`/`=` form, a
 conjunction or a function call is `YCHR-20013`. `--show-bindings`
-prints the bindings one per line, sorted. The REPL accepts any goal:
+prints the visible bindings one per line, sorted, as `K = V` with no
+trailing dot. The REPL accepts any goal:
 `1 + 1.`, `X = 2.`, `X is 1 + 1.`, conjunctions, constraint calls.
 
 A query that adds a constraint and fires nothing succeeds silently;

@@ -1,0 +1,5 @@
+% An import list on a user module named prelude is YCHR-16019, not YCHR-20019.
+:- module(main, [go/1]).
+:- use_module(prelude, [foo/1]).
+:- chr_constraint go/1.
+go(X) <=> foo(X).

@@ -1,0 +1,4 @@
+:- module(vtell, [go/0]).
+:- use_module(vmlib).
+:- chr_constraint go/0.
+go <=> item(vmlib:both(1, 2)).

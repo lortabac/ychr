@@ -1,0 +1,3 @@
+A = alias_print:f(B)
+B = C
+C = B

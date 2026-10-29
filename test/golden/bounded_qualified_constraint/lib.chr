@@ -1,0 +1,4 @@
+:- module(lib, [gt/2, cnt/1]).
+:- function gt(int, int) -> bool.
+gt(X, Y) -> X > Y.
+:- chr_constraint cnt(int).

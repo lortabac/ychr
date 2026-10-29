@@ -12,7 +12,7 @@ module YCHR.Internal.Backend.SchemeDriver
   )
 where
 
-import Data.List (nub, sort)
+import Data.List (nub)
 import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -60,10 +60,12 @@ generateDriver moduleName qn args =
         -- name into a well-formed Scheme identifier.
         tellAlias = qualifiedAliasIdentifier (Types.qualifiedToName qn) arity
         varNames = nub (concatMap exprVars args)
-        sortedVars = sort varNames
         argExprs = map exprToScheme args
         tellCall = "(" <> tellAlias <> " %s " <> T.intercalate " " argExprs <> ")"
-        bindingsCall = case sortedVars of
+        -- Pass every var, hidden ones too: bindings->string hides
+        -- `_`-prefixed names and needs all of them to build alias
+        -- classes.
+        bindingsCall = case varNames of
           [] -> []
           vs ->
             [ "(pretty-bindings (list "

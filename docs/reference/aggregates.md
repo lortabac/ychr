@@ -64,6 +64,20 @@ User-defined aggregates are ordinary aggregators:
                    E, G, R) ].
 ```
 
+### Reserved names
+
+`aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2` and `takemax/2` are
+aggregate forms in every rule head, with no import. Anywhere else
+they are evaluated (a guard, an `is` right-hand side, a function body,
+an argument of a told constraint or query goal, an aggregate's
+`Element`), they are `AggregateOutsideHead` (YCHR-20040), unless a
+data constructor with that name and arity is visible. Then they are
+data. In patterns (head and equation arguments, `Result`, `=`
+operands, the `is` left-hand side) and in `quote/1` they are data
+too. Declaring a constraint, function or goal macro at
+one of these keys is `ReservedAggregateName`
+(YCHR-20043). Other arities and declaration macros are fine.
+
 ### Typing
 
 `library(aggregates)` declares the aggregator type, over elements of
@@ -97,6 +111,11 @@ A guard conjunct is checked in place, left to right, so it can test
 variables bound by the conjuncts before it and filter matches before
 the conjuncts after it are searched. Like a rule guard, it is an
 ask-only boolean expression.
+
+Anything else is `YCHR-20041`: a function call, a built-in form like
+`=`, `;` or `true`, a number, a string or a variable. A test without its
+`?` is a function call, so `count((k(Y), X == Y), N)` is an error;
+write `count((k(Y), ? X == Y), N)`.
 
 `?/1` is recognized structurally inside an aggregate goal, as `,` is;
 outside one it has no meaning. `library(aggregates)` exports the
@@ -249,6 +268,8 @@ Goal, \+ (Goal', ? X' < X)
 `X` with `Goal`'s fresh variables renamed apart. `X` is compared with
 the prelude's `<`, so it must be an `int`, a `float` or a `string`.
 On ties, the rule fires with the first minimal match in goal order.
+This needs `<` to order the keys totally. A NaN key does not: the
+rule still fires once, on an unspecified match.
 
 The equivalence fixes which match is selected and which variables are
 visible, nothing else. `Goal` is still an aggregate goal:
@@ -444,6 +465,9 @@ need no library.)
 | `\+ G` | holds if `G` has no match (negation as absence) |
 | `forall(G, C)` | holds if every match of `G` extends to a match of `C`; defined as `\+ (G, \+ C)` |
 
+`min` and `max` assume `<` and `>` order the elements totally; with a
+NaN element the result is unspecified.
+
 The integer and float folds are separate macros because an empty fold
 returns its seed (`0`, `1`), and one aggregator cannot return `0` for
 `int` and `0.0` for `float`: YCHR has no dispatch on types.
@@ -597,8 +621,9 @@ lowers an aggregate in the occurrence procedure itself:
   cannot hand a suspension back and the guard must stay read-only. Its
   procedure walks the goal's matches in goal order and keeps the first
   one with the smallest (largest) key, comparing with the host `<`
-  (`>`); the first match is compared with itself, so an unbound key is
-  an instantiation error even when there is only one match. It binds
+  (`>`). A NaN key wins only as the first match. The first match is
+  compared with itself, so an unbound key is an instantiation error
+  even when there is only one match. It binds
   one out-cell per visible goal variable. For `takemin`/`takemax` it
   also binds the match's 1-based position in goal order. When the rule
   fires, before any `Kill`, the firing walks the same goal again with
@@ -620,9 +645,10 @@ lowers an aggregate in the occurrence procedure itself:
 | Code | Name | Condition |
 |---|---|---|
 | YCHR-20039 | `AggregateOnlyHead` | A rule head consists of aggregates only. |
-| YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
-| YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard. |
-| YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal. |
+| YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head (see [Reserved names](#reserved-names)). |
+| YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard (see [Aggregate goals](#aggregate-goals)). |
+| YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal, including a rule head. |
+| YCHR-20043 | `ReservedAggregateName` | A constraint, function or goal macro declared at one of the five aggregate-form keys (see [Reserved names](#reserved-names)). |
 | YCHR-40002 | `UnboundVariable` | An `Element` variable the match cannot supply. |
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
 | YCHR-40004 | `AggregateNestedTake` | A `takemin`/`takemax` inside an aggregate goal. |

@@ -29,11 +29,11 @@ where
 
 import Data.List (sort)
 import Data.Text (Text)
-import Data.Text.IO qualified as TIO
 import Language.Haskell.TH (Exp, Q)
 import Language.Haskell.TH.Syntax (addDependentFile, lift, runIO)
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
+import YCHR.Embedded.ReadSource (readSourceTH)
 
 -- | The directory holding the type-checker's modules, relative to the
 -- package root (GHC runs splices with the cabal package directory as
@@ -43,9 +43,9 @@ typeCheckerDir :: FilePath
 typeCheckerDir = "typechecker"
 
 -- | Splice yielding @[(FilePath, Text)]@: every
--- @typechecker\/*.chr@ file paired with its UTF-8 contents, in
--- filename order so the compiled program does not depend on directory
--- listing order.
+-- @typechecker\/*.chr@ file paired with its contents (read with
+-- 'readUtf8File'), in filename order so the compiled program does not
+-- depend on directory listing order.
 embeddedTypeCheckerSources :: Q Exp
 embeddedTypeCheckerSources = do
   files <-
@@ -57,5 +57,5 @@ embeddedTypeCheckerSources = do
     readOne f = do
       let path = typeCheckerDir </> f
       addDependentFile path
-      contents <- runIO (TIO.readFile path)
+      contents <- readSourceTH path
       pure (path, contents)

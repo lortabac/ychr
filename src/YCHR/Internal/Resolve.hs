@@ -9,10 +9,15 @@ module YCHR.Internal.Resolve
   ( -- * Errors
     ResolveError (..),
     RefiningViolation (..),
+    BoundTargetKind (..),
+    ExtensionDirective (..),
 
     -- * Resolution
     resolveProgram,
     termToExpr,
+
+    -- * Checks
+    checkReservedModuleNames,
 
     -- * Visibility
     FunVisibility,
@@ -35,7 +40,7 @@ import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, fromMaybe, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -83,8 +88,7 @@ data ResolveError
     FunctionInRuleHead Name
   | -- | A name collides with a reserved built-in.
     ReservedName Name
-  | -- | A user module is declared with a reserved name (currently
-    -- only @host@, which is wired in as the host-call qualifier).
+  | -- | A user module has a reserved name (@host@ or @prelude@).
     ReservedModuleName Text
   | -- | A constraint name reached the resolve phase without being
     -- module-qualified by the renamer. Indicates a renamer bug rather
@@ -108,11 +112,10 @@ data ResolveError
     -- the enclosing declaration's flattened name and the offending
     -- variable name.
     UnboundBoundVariable Text Text
-  | -- | A @requiring@ clause names a function that is not declared in
-    -- the program (or is declared at a different arity). Carries the
-    -- enclosing declaration's flattened name, the bound function's
-    -- flattened name, and the bound's arity.
-    UnknownBoundFunction Text Text Int
+  | -- | A @requiring@ bound names no function at that arity. Carries
+    -- the declaration's flattened name, the bound's 'Name', its
+    -- arity, and what the name is instead.
+    UnknownBoundFunction Text Name Int BoundTargetKind
   | -- | The bound graph contains a cycle. Carries the flattened names
     -- of the declarations on the cycle in source order.
     BoundCycle [Text]
@@ -201,6 +204,17 @@ data ResolveError
     -- different one. Reported on every entry after the first. Carries
     -- the local name and arity as written.
     ConstraintUseConflictingDeclaration Text Int
+  | -- | An extension directive targets something that is not a
+    -- function: a constraint, a data constructor or a @host:@ call.
+    -- Carries the directive and the resolved target.
+    ExtensionTargetNotFunction ExtensionDirective Name
+  deriving (Eq, Show)
+
+-- | The three extension directives.
+data ExtensionDirective
+  = ExtendFunctionDirective
+  | ExtendClassDirective
+  | ExtendClassTypeDirective
   deriving (Eq, Show)
 
 -- | Why a @refining@ clause is rejected. A @refining@ clause is
@@ -237,6 +251,16 @@ data RefiningViolation
     RefiningRepeatedParameter Text
   deriving (Eq, Show)
 
+-- | What a bound's name is, when it isn't a function.
+data BoundTargetKind
+  = -- | Nothing by this name/arity is declared anywhere in scope.
+    BoundTargetMissing
+  | -- | The name resolves to a constraint, not a function.
+    BoundTargetConstraint
+  | -- | The name resolves to a data constructor, not a function.
+    BoundTargetConstructor
+  deriving (Eq, Show)
+
 -- | Flatten modules into a single resolved program: collect the
 -- constraint and function declarations, group equations under their
 -- function declarations, translate guards and bodies to 'R.Expr', and
@@ -246,6 +270,7 @@ resolveProgram :: [CollectedModule] -> Either [Diagnostic ResolveError] R.Progra
 resolveProgram mods =
   let constraintNames = buildConstraintNames mods
       functionNames = buildFunctionNames mods
+      dataConNames = buildDataConNames mods
       conTypes = collectConstraintTypes mods
       conBounds = collectConstraintBounds mods
       typeDefs = [td.node | m <- mods, td <- m.typeDecls]
@@ -255,11 +280,11 @@ resolveProgram mods =
       eqErrors = checkEquations constraintNames mods
       headErrors = checkRuleHeads (Set.map qualifiedToName functionNames) mods
       reservedErrors = checkReservedNames mods
-      reservedModuleErrors = checkReservedModuleNames mods
       orphanEqErrors = checkOrphanEquations functionNames mods
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
       extendsBoundedErrors = checkExtendsBounded funcRequiring mods
-      boundedDeclErrors = checkBoundedDeclarations functionNames mods
+      boundedDeclErrors =
+        checkBoundedDeclarations functionNames constraintNames dataConNames mods
       refiningDeclErrors = checkRefiningDeclarations mods
       multiSigErrors = checkMultiSigOnFunction mods
       mixedKindErrors = checkMixedDeclKinds mods
@@ -277,7 +302,6 @@ resolveProgram mods =
         eqErrors
           ++ headErrors
           ++ reservedErrors
-          ++ reservedModuleErrors
           ++ orphanEqErrors
           ++ extendsClosedErrors
           ++ extendsBoundedErrors
@@ -320,6 +344,18 @@ buildConstraintNames mods =
       P.ConstraintDecl cd <- [d]
     ]
 
+-- | Every data constructor declared by any module, as (declaring
+-- module, constructor name) pairs. No arity: data constructors are
+-- name-only in the type system (see 'ConstructorFunctionCollision').
+buildDataConNames :: [CollectedModule] -> Set QualifiedName
+buildDataConNames mods =
+  Set.fromList
+    [ QualifiedName m.name (unqualifiedText dc.conName)
+    | m <- mods,
+      P.Ann td _ <- m.typeDecls,
+      dc <- typeConstructors td
+    ]
+
 buildFunctionNames :: [CollectedModule] -> Set QualifiedName
 buildFunctionNames mods =
   Set.fromList
@@ -336,7 +372,7 @@ reference per-module: it knows which providers each module imports
 and rewrites bare names to 'Qualified' form. So by the time we reach
 Resolve, those three name classes are already disambiguated.
 
-Functions are different. In @NoResolve@ positions (compound
+Functions are different. In @NoResolveEvaluated@ positions (compound
 arguments of tell-side body constraints and top-level goals) the
 renamer deliberately leaves compound heads unqualified — the
 call-vs-constructor decision is structural and gets made here in
@@ -580,7 +616,7 @@ checkExtendsClosed ::
 checkExtendsClosed funcOpenness mods =
   let declErrs =
         [ noDiag
-            (P.AnnP (ExtendsClosedFunction target) loc (PExpr.Atom ed.name))
+            (P.AnnP (ExtendsClosedFunction target) loc (P.namePExpr ed.name))
         | m <- mods,
           P.Ann d loc <- m.extensionTypes,
           P.ExtendClassTypeDecl ed <- [d],
@@ -820,17 +856,46 @@ buildConstraintUses mods =
 --   * @:- extend_class@ on a @DKFunction@ target
 --   * @:- extend_function@ on a @DKClass@ target
 --
--- Targets unknown to the compiler are already reported by the renamer.
+-- and those whose target is not a function at all (a constraint, a
+-- data constructor or a @host:@ call). Targets unknown to the compiler
+-- are already reported by the renamer.
 checkExtensionKinds ::
   Map QualifiedName FunctionDeclKind ->
   [CollectedModule] ->
   [Diagnostic ResolveError]
 checkExtensionKinds funcKinds mods =
-  classTypeErrs ++ extendFunErrs ++ extendClassErrs
+  notFunctionTypeErrs
+    ++ notFunctionEqnErrs
+    ++ classTypeErrs
+    ++ extendFunErrs
+    ++ extendClassErrs
   where
+    notFunctionTypeErrs =
+      [ noDiag (P.AnnP err loc (P.namePExpr ed.name))
+      | m <- mods,
+        P.Ann d loc <- m.extensionTypes,
+        P.ExtendClassTypeDecl ed <- [d],
+        Just target@(Qualified _ _) <- [ed.target],
+        isNothing (targetKind target),
+        let err = ExtensionTargetNotFunction ExtendClassTypeDirective target
+      ]
+    notFunctionEqnErrs =
+      [ noDiag
+          ( P.AnnP
+              (ExtensionTargetNotFunction dir annEq.node.funName)
+              annEq.sourceLoc
+              annEq.parsed
+          )
+      | m <- mods,
+        (dir, annEq) <-
+          [(ExtendFunctionDirective, e) | e <- m.extensions]
+            ++ [(ExtendClassDirective, e) | e <- m.classExtensions],
+        Qualified _ _ <- [annEq.node.funName],
+        isNothing (targetKind annEq.node.funName)
+      ]
     classTypeErrs =
       [ noDiag
-          (P.AnnP (ExtendClassTypeOnFunction target) loc (PExpr.Atom ed.name))
+          (P.AnnP (ExtendClassTypeOnFunction target) loc (P.namePExpr ed.name))
       | m <- mods,
         P.Ann d loc <- m.extensionTypes,
         P.ExtendClassTypeDecl ed <- [d],
@@ -931,7 +996,7 @@ checkExtendsBounded ::
   Map QualifiedName [BoundSig] -> [CollectedModule] -> [Diagnostic ResolveError]
 checkExtendsBounded funcRequiring mods =
   [ noDiag
-      (P.AnnP (ExtendTypeOnBoundedFunction target) loc (PExpr.Atom ed.name))
+      (P.AnnP (ExtendTypeOnBoundedFunction target) loc (P.namePExpr ed.name))
   | m <- mods,
     P.Ann d loc <- m.extensionTypes,
     P.ExtendClassTypeDecl ed <- [d],
@@ -950,8 +1015,10 @@ checkExtendsBounded funcRequiring mods =
 --   * 'UnboundBoundVariable' — a type variable in the @requiring@
 --     clause has no occurrence in the enclosing declaration's primary
 --     signature.
---   * 'UnknownBoundFunction' — the bound's named function (with that
---     exact arity) is not declared anywhere in the program.
+--   * 'UnknownBoundFunction' — the bound's name (with that exact
+--     arity) is not declared as a function anywhere in the program;
+--     carries a 'BoundTargetKind' saying what it resolves to instead
+--     (a constraint, a data constructor, or nothing at all).
 --   * 'BoundCycle' — the bound graph (with vertices for every function
 --     and bounded constraint, and edges from each declaration to the
 --     functions named in its @requiring@ clause) contains a cycle.
@@ -959,8 +1026,12 @@ checkExtendsBounded funcRequiring mods =
 -- All three checks run together so the user sees every shape of bound
 -- error in a single pass.
 checkBoundedDeclarations ::
-  Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
-checkBoundedDeclarations functionNames mods =
+  Set QualifiedName ->
+  Set QualifiedIdentifier ->
+  Set QualifiedName ->
+  [CollectedModule] ->
+  [Diagnostic ResolveError]
+checkBoundedDeclarations functionNames constraintNames dataConNames mods =
   let funcBounds =
         [ BoundedDecl
             { name = QualifiedName m.name fd.name,
@@ -1006,28 +1077,40 @@ checkBoundedDeclarations functionNames mods =
       unknownErrs =
         [ noDiag
             ( P.AnnP
-                (UnknownBoundFunction declText (flattenName bs.name) bs.arity)
+                (UnknownBoundFunction declText bs.name bs.arity kind)
                 bs.loc
                 bd.origin
             )
         | bd <- allBounded,
           let declText = qualifiedToLooseText bd.name,
           bs <- bd.bounds,
-          not (boundResolvesToFunction bs)
+          Just kind <- [boundTargetProblem bs]
         ]
       cycleErrs = detectBoundCycles allBounded
    in varErrs ++ unknownErrs ++ cycleErrs
   where
     qualifiedToLooseText qn = flattenName (qualifiedToName qn)
-    boundResolvesToFunction bs = case bs.name of
-      Qualified m n -> Set.member (QualifiedName m n) functionNames
-      Unqualified _ ->
-        -- If the renamer left the name 'Unqualified', no visible
-        -- provider exposes a function (or anything else) at this
-        -- name/arity, so the dedicated 'UnknownBoundFunction'
-        -- diagnostic is ours to emit; the renamer does not report
-        -- this case as the generic YCHR-20002.
-        False
+    -- 'Nothing' means the bound resolves to a function, so there's no
+    -- error; 'Just' names what it resolves to instead.
+    boundTargetProblem bs = case bs.name of
+      Qualified m n
+        | Set.member (QualifiedName m n) functionNames -> Nothing
+        | Set.member (QualifiedIdentifier m n bs.arity) constraintNames ->
+            Just BoundTargetConstraint
+        | Set.member (QualifiedName m n) dataConNames ->
+            Just BoundTargetConstructor
+        | otherwise -> Just BoundTargetMissing
+      Unqualified n
+        -- Left 'Unqualified' by the renamer: no visible function at
+        -- this name/arity. Look for a constraint or constructor of
+        -- that name in any module.
+        | any
+            (\qi -> qi.localName == n && qi.arity == bs.arity)
+            (Set.toList constraintNames) ->
+            Just BoundTargetConstraint
+        | any (\qn -> qn.baseName == n) (Set.toList dataConNames) ->
+            Just BoundTargetConstructor
+        | otherwise -> Just BoundTargetMissing
     -- Takes the declaration's name rather than the declaration record:
     -- a helper that projected @.name@ off its argument would be inferred
     -- as 'HasField'-polymorphic, which MicroHs does not generalize, so
@@ -1251,15 +1334,15 @@ checkReservedNames mods =
     declNames (P.FunctionDecl fd) = [fd.name]
     declNames _ = []
 
--- | Reserved names that cannot be used as user module names. Currently
--- just @host@, which is wired in as the host-call qualifier in
--- @Resolve.termToExpr@; allowing it as a user module name would shadow
--- the user's own functions at their definition site.
+-- | Names a user module can't take: @host@ (the host-call qualifier in
+-- 'termToExpr') and @prelude@ (a user module would replace the
+-- bundled one).
 reservedModuleNames :: Set Text
-reservedModuleNames = Set.fromList ["host"]
+reservedModuleNames = Set.fromList ["host", "prelude"]
 
--- | Check that no module uses a reserved name.
-checkReservedModuleNames :: [CollectedModule] -> [Diagnostic ResolveError]
+-- | Reject user modules with a reserved name. Pass user modules only:
+-- the bundled prelude is named @prelude@ too.
+checkReservedModuleNames :: [P.Module] -> [Diagnostic ResolveError]
 checkReservedModuleNames mods =
   [ noDiag (P.AnnP (ReservedModuleName m.name) m.nameLoc (PExpr.Atom ""))
   | m <- mods,
@@ -1613,13 +1696,13 @@ termToExpr vis loc origin = go
       -- this local name is visible to the current module, canonicalize
       -- to a 'CallExpr'; this is how nested function-call arguments
       -- of tell-side body constraints (and top-level goals) get
-      -- evaluated, since the renamer's 'NoResolve' mode leaves
+      -- evaluated, since the renamer's 'NoResolveEvaluated' mode leaves
       -- body-compound children unqualified. Zero matches (the name
       -- is genuinely a data constructor or undefined) and ambiguous
       -- matches both fall through to 'CtorExpr'; the renamer is
       -- responsible for the corresponding diagnostics
       -- (@UnknownName@/@AmbiguousName@ in @ResolveAll@ positions,
-      -- @UndeclaredDataConstructor@ in @NoResolve@).
+      -- @UndeclaredDataConstructor@ in @NoResolveEvaluated@).
       CompoundTerm name@(Unqualified n) args ->
         case Map.lookup (UnqualifiedIdentifier n (length args)) vis of
           Just [qn] -> R.CallExpr qn <$> traverse go args

@@ -1,0 +1,4 @@
+:- module(mlib, [macro(both/2), macro(one/1), item/1]).
+:- chr_constraint item/1.
+:- macro both(X, Y) ---> [item(X), item(Y)].
+:- macro one(X) ---> [item(X)].

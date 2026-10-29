@@ -33,14 +33,15 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
 import Text.Parsec (ParseError)
 import YCHR.Internal.Collect
   ( CollectError (..),
+    ModuleImportScope (..),
     addLibraryPrelude,
     resolveLibraryClosure,
     rewriteImports,
     selfNamedLibraryImports,
+    unknownModuleImports,
   )
 import YCHR.Internal.Collected (CollectedModule)
 import YCHR.Internal.Compile (CompileError, compile)
@@ -103,8 +104,10 @@ import YCHR.Internal.Resolve
   ( FunVisibility,
     ResolveError,
     buildQueryFunctionVisibility,
+    checkReservedModuleNames,
     resolveProgram,
   )
+import YCHR.Internal.SourceFile (readUtf8File)
 import YCHR.Internal.StdLib (StdLib (..))
 import YCHR.Internal.TypeCheck.Error (TypeCheckError, TypeCheckWarning)
 import YCHR.Internal.Types (SymbolTable)
@@ -131,7 +134,12 @@ import YCHR.Internal.VM.Index (indexablePositions)
 -- you may match on, plus a value you render — not a structure to
 -- destructure.
 data Error
-  = -- | A file failed to parse.
+  = -- | A source file could not be read: missing, a directory,
+    -- unreadable, or not valid UTF-8. Carries the path and a reason
+    -- (see 'YCHR.Internal.SourceFile.readUtf8File'). Returned by
+    -- 'compileFiles' as a 'Left'.
+    FileReadError FilePath Text
+  | -- | A file failed to parse.
     ParseError FilePath ParseError
   | -- | Parsed terms that are not valid CHR items.
     ParseValidationErrors [AnnP ParseValidationError]
@@ -340,8 +348,8 @@ data ExportResolution
 -- (@embed\/YCHR\/Embedded.hs@) does exactly that.
 --
 -- The 'Bool' is @includeStdlib@: pass 'True' to make the bundled
--- libraries (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@,
--- @search@, @chr@) available for
+-- libraries (@prelude@, @aggregates@, @chr@, @lists@, @maybe@, @meta@,
+-- @pairs@, @search@, @state@, @strings@) available for
 -- @:- use_module(library(…))@, which is what you almost always want —
 -- the prelude supplies arithmetic and comparison. 'False' compiles
 -- against nothing but the given modules; the CLI uses it so that a
@@ -410,6 +418,8 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
         [scopeFromModule m | m <- libraryMods, Set.notMember m.name userModNames]
       macroEnv = buildDeclMacroEnv (userScopes ++ libScopes)
   checkDuplicateModules (map fst inputs) scanned
+  checkReservedModules scanned
+  checkModuleImports stdlib scanned
   let expanded =
         [ expandAndConvert macroEnv scope ts
         | (scope, ts) <- zip userScopes userTerms
@@ -481,6 +491,11 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
+  -- Same checks, same order, as 'compileModules', so both report the
+  -- same code.
+  checkDuplicateModules [] parsed
+  checkReservedModules parsed
+  checkModuleImports stdlib parsed
   finalizeCompilation libraryMods opExports noSourceInfo parsed
 
 -- | What compiling from source text knows about the user modules beyond
@@ -524,6 +539,9 @@ finalizeCompilation ::
   Either Error (CompiledProgram, [Warning])
 finalizeCompilation libraryMods opExports sources parsed = do
   checkDuplicateModules sources.inputPaths parsed
+  -- For the DSL path ('compileParsedModules'). 'compileModules' already
+  -- checked 'scanned'.
+  checkReservedModules parsed
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
   -- providers for every name the library exports and make each use
@@ -532,7 +550,8 @@ finalizeCompilation libraryMods opExports sources parsed = do
   -- @pairs@ pulls the embedded @maybe@ into the closure alongside the
   -- one given on the command line. The explicitly supplied module wins;
   -- 'compileModules' and 'compileParsedModules' bias the operator-export
-  -- map the same way.
+  -- map the same way. (A user module can't be named @prelude@, so the
+  -- prelude is never dropped.)
   --
   -- This deduplicates across the two /sources/ of modules. Two user
   -- modules that declare the same name still collide, which is a genuine
@@ -670,6 +689,26 @@ checkDuplicateModules inputPaths parsed = do
     [] -> pure ()
     _ -> Left (CollectErrors duplicateModuleDiags)
 
+-- | 'checkReservedModuleNames' over user modules, as a 'ResolveErrors'.
+checkReservedModules :: [Module] -> Either Error ()
+checkReservedModules mods = case checkReservedModuleNames mods of
+  [] -> pure ()
+  errs -> Left (ResolveErrors errs)
+
+-- | 'unknownModuleImports' over user modules, as a 'CollectErrors'. The
+-- importable set is every name in @mods@ plus @prelude@; @stdlib@ names
+-- the bundled libraries, for the hint only.
+checkModuleImports :: Map Text Module -> [Module] -> Either Error ()
+checkModuleImports stdlib mods = case unknownModuleImports scope mods of
+  [] -> pure ()
+  errs -> Left (CollectErrors errs)
+  where
+    scope =
+      ModuleImportScope
+        { importable = Set.insert "prelude" (Set.fromList (map (.name) mods)),
+          bundledLibraries = Map.keysSet stdlib
+        }
+
 -- | Prepend a synthetic @use_module(library(prelude))@ to a user module so
 -- the renamer treats prelude exports as visible.
 --
@@ -679,29 +718,27 @@ checkDuplicateModules inputPaths parsed = do
 -- equivalent import entry; one that writes a /narrowed/ prelude import is
 -- rejected by 'YCHR.Internal.Rename.validateImportLists' (YCHR-20019)
 -- rather than silently getting the full prelude anyway.
---
--- A user module /named/ @prelude@ is the one exception, mirroring
--- 'YCHR.Internal.Collect.addLibraryPrelude': it supplies the prelude
--- rather than importing it, and a self-import would give its own
--- declarations a second, imported provider — enough to make @bool@ and
--- @list@ resolve inconsistently against the built-ins.
 addPreludeImport :: Module -> Module
-addPreludeImport m
-  | m.name == "prelude" = m
-  | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
+addPreludeImport m =
+  m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
 -- | 'compileModules', reading each module's source from disk.
 --
 -- The 'StdLib' and the 'Bool' have the same meaning as in
 -- 'compileModules'. All files are compiled together as one program.
+--
+-- An unreadable file is a 'Left' 'FileReadError' (first failing
+-- path). Files are read with 'readUtf8File'.
 compileFiles ::
   StdLib ->
   Bool ->
   [FilePath] ->
   IO (Either Error (CompiledProgram, [Warning]))
 compileFiles stdlib includeStdlib paths = do
-  contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
-  pure (compileModules stdlib includeStdlib contents)
+  result <- traverse readSource paths
+  pure (sequence result >>= compileModules stdlib includeStdlib)
+  where
+    readSource fp = first (FileReadError fp) . fmap (fp,) <$> readUtf8File fp
 
 -- | Check if a name is a lambda (generated by lambda lifting).
 isLambdaName :: Types.Name -> Bool

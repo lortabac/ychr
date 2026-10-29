@@ -1,1 +1,3 @@
 YCHR-16009
+'bounded_constraint_unknown_function:cmp/2' is a constraint, not a function
+Hint: 'requiring' can only name a declared function

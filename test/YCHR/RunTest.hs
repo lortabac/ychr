@@ -9,9 +9,14 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.DSL (importing, module')
 import YCHR.Embedded (stdlib, typeCheckerProgram)
+import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
+import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Display (displayMsg)
+import YCHR.Internal.Parsed (AnnP (..))
+import YCHR.Internal.Resolve (ResolveError (..))
 import YCHR.Internal.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Internal.Types
   ( Constraint (..),
@@ -30,7 +35,9 @@ import YCHR.Run
     PreparedQuery (..),
     Value (..),
     Warning (..),
+    compileFiles,
     compileModules,
+    compileParsedModules,
     equal,
     newVar,
     prepareQuery,
@@ -58,7 +65,10 @@ tests =
       goalWarningTests,
       guardErrorTests,
       arityOverloadTests,
-      uncheckedQueryTests
+      uncheckedQueryTests,
+      reservedModuleNameTests,
+      unknownModuleImportTests,
+      fileReadTests
     ]
 
 -- | The constraint type of a declared constraint. Errors if absent.
@@ -825,4 +835,112 @@ uncheckedQueryTests =
               (not (null prepared.liftedGoals))
             assertBool "expected no type-check warnings" $
               null [() | TypeCheckWarnings _ <- prepared.warnings]
+    ]
+
+-- | A user module named @prelude@ or @host@ is YCHR-16019, also on the
+-- DSL path. An ordinary name still compiles.
+reservedModuleNameTests :: TestTree
+reservedModuleNameTests =
+  testGroup
+    "Reserved module names"
+    [ testCase "a user module named prelude is rejected as ReservedModuleName" $
+        case compileParsedModules stdlib True [module' "prelude"] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "prelude") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail for a module named prelude",
+      testCase "a user module named host is rejected as ReservedModuleName" $
+        case compileParsedModules stdlib True [module' "host"] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "host") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail for a module named host",
+      testCase "an ordinary module name still compiles" $
+        case compileParsedModules stdlib True [module' "ordinary"] of
+          Right _ -> pure ()
+          Left err -> assertFailure $ "expected success, got: " ++ displayMsg err
+    ]
+
+-- | A bare @use_module(M)@ naming anything but a supplied module or
+-- @prelude@ is 'UnknownModuleImport' (YCHR-10005), on both
+-- 'compileModules' (so the REPL and CLI see it) and 'compileParsedModules'
+-- (the DSL path).
+unknownModuleImportTests :: TestTree
+unknownModuleImportTests =
+  testGroup
+    "Unknown module imports"
+    [ testCase "bare use_module of a bundled library is rejected (REPL/CLI path)" $
+        expectUnknownModuleImport
+          "lists"
+          BundledLibraryName
+          (compileModules stdlib True [("m.chr", ":- module(m).\n:- use_module(lists).\n")]),
+      testCase "DSL importing of a bundled library is rejected" $
+        expectUnknownModuleImport
+          "lists"
+          BundledLibraryName
+          (compileParsedModules stdlib True [module' "m" `importing` ["lists"]]),
+      testCase "DSL importing of an unknown name is rejected" $
+        expectUnknownModuleImport
+          "nosuch"
+          NoBareImportHint
+          (compileParsedModules stdlib True [module' "m" `importing` ["nosuch"]]),
+      testCase "DSL importing of a supplied module compiles" $
+        case compileParsedModules stdlib True [module' "a", module' "b" `importing` ["a"]] of
+          Right _ -> pure ()
+          Left err -> assertFailure $ "expected success, got: " ++ displayMsg err,
+      -- A module named "host" is both a reserved name (YCHR-16019) and,
+      -- with this bad import, a candidate for YCHR-10005. Both entry
+      -- points must agree on which fires first.
+      testCase "a reserved module name with a bad import is ReservedModuleName (text path)" $
+        case compileModules
+          stdlib
+          True
+          [("m.chr", ":- module(host).\n:- use_module(nosuch).\n")] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "host") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail",
+      testCase "a reserved module name with a bad import is ReservedModuleName (DSL path)" $
+        case compileParsedModules stdlib True [(module' "host") `importing` ["nosuch"]] of
+          Left (ResolveErrors [Diagnostic _ (AnnP (ReservedModuleName "host") _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected ReservedModuleName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail"
+    ]
+  where
+    expectUnknownModuleImport name hint result = case result of
+      Left (CollectErrors [Diagnostic _ (AnnP (UnknownModuleImport n h) _ _) _])
+        | n == name && h == hint ->
+            pure ()
+      Left other ->
+        assertFailure $ "expected UnknownModuleImport, got: " ++ displayMsg other
+      Right _ -> assertFailure "expected compilation to fail"
+
+-- | 'compileFiles' reports a missing or unreadable input file as a
+-- 'FileReadError' (YCHR-50005).
+fileReadTests :: TestTree
+fileReadTests =
+  testGroup
+    "missing input file"
+    [ testCase "a missing file is reported, not thrown" $ do
+        result <- compileFiles stdlib False ["test/does-not-exist.chr"]
+        case result of
+          Left (FileReadError path _) -> path @?= "test/does-not-exist.chr"
+          Left other -> assertFailure $ "expected FileReadError, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail",
+      testCase "the error displays YCHR-50005" $ do
+        result <- compileFiles stdlib False ["test/does-not-exist.chr"]
+        case result of
+          Left err ->
+            assertBool
+              ("expected YCHR-50005 in: " ++ displayMsg err)
+              ("YCHR-50005" `isInfixOf` displayMsg err)
+          Right _ -> assertFailure "expected compilation to fail",
+      testCase "a directory given as input is also a FileReadError" $ do
+        result <- compileFiles stdlib False ["test"]
+        assertBool "expected compilation to fail" (isLeft result)
     ]

@@ -1,0 +1,14 @@
+% A '?' guard in a rule head is YCHR-20042, not an unknown name:
+% in the kept part, the removed part, or through a macro.
+:- module(aggregates_guard_in_head, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, q/1, r/1, s/0.
+:- macro guarded(X) ---> [? X > 5].
+
+% kept part
+? X > 5 \ p(X) <=> true.
+% removed part
+q(X) \ ? X > 5 <=> s.
+% through a macro
+r(X), guarded(X) <=> s.

@@ -20,7 +20,7 @@ terse, fix-shaped, removable when closed.
 
 Re-verified against MicroHs `f65d3c65` (the checkout's HEAD, which
 includes `0a1c3095`, the `try` fix) and its `base` package rebuilt from
-it. Ten gaps are recorded; two have closed and been removed from this
+it. Eleven gaps are recorded; two have closed and been removed from this
 document. The local workarounds for gaps 1, 3, 4, 5, 6, 7, 8 and 10 are
 applied (gap 4 also touches the importers, tests included; gap 5 is the
 resources provider described below, which since
@@ -29,7 +29,8 @@ build time rather than at run time; gaps 7 and 8 are one pair of
 parentheses and one no-op modifier respectively; gap 10 is one helper
 taking its argument as `Text` rather than as a record). Gap 9 has no
 YCHR-side workaround: it breaks the MicroHs-built executable's help
-screens only.
+screens only. Gap 11 likewise has none: it is a difference in how
+coarsely file I/O errors are reported, not a crash.
 No Template Haskell remains in `library ychr`, and the `ychr` executable
 has a MicroHs twin of the compile-time embedder, so `mcabal build` now
 completes: it builds `library ychr` and `exe:ychr`, and the binary runs
@@ -59,6 +60,7 @@ below.
 | 8 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
 | 9 | `Data.Text.replicate` rejects a zero multiplier | open upstream — no YCHR-side workaround; the MicroHs `ychr` cannot render help (see below) |
 | 10 | A local binding inferred as `HasField`-polymorphic is not generalized | open — workaround applied to `src/YCHR/Internal/Resolve.hs` (see below) |
+| 11 | File-opening errors carry no description, and `createDirectoryIfMissing` swallows mkdir failures | open upstream — no YCHR-side workaround (see below) |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
@@ -1044,6 +1046,59 @@ type is monomorphic. In `Resolve.checkBoundedDeclarations`:
 originForDecl m n = PExpr.Atom (m.name <> ":" <> n)
 -- used as originForDecl m fd.name and originForDecl m cd.name
 ```
+
+
+## 11. File-open errors carry no description, and `createDirectoryIfMissing` swallows mkdir failures
+
+> **New; found while fixing `YCHR-50005` (a missing or unreadable
+> input file used to crash with an uncaught `IOException`).**
+
+MicroHs's `openFile`/`openBinaryFile` collapse every failure to
+`NoSuchThing` with an empty description (`System/IO/Base.hs`:
+`Nothing -> ioErr NoSuchThing "openFile" fn`, and `ioErr` always
+passes `""` there — unlike `ioErrH`, which does set one for
+handle-level ops like `hGetChar`). So a permission error reads like a
+missing file:
+
+```
+$ chmod 000 noperm.chr
+$ dist-mcabal/bin/mhs/ychr check noperm.chr
+Cannot read file 'noperm.chr': Does not exist
+# GHC: Cannot read file 'noperm.chr': Permission denied
+```
+
+A directory given as input reads back empty instead of failing, at
+the C runtime's `getb`/`readb` primitives, below any Haskell-level
+API choice.
+
+`System/Directory.hs`'s `createDirectoryIfMissing True d` (~164–172)
+splits `d` into prefixes and discards each `mkdir`'s result (`_ <- …;
+return ()`), so it never raises even when one fails — the write then
+fails later, at the `.chr`/`.vm`/`.sls` file itself rather than the
+directory that was actually missing:
+
+```
+$ dist-mcabal/bin/mhs/ychr compile -d blocker/sub prog.chr
+Error: cannot write blocker/sub/program.vm: openFile: Does not exist
+# GHC: Error: cannot write blocker/sub: Not a directory
+```
+
+### Upstream fix sketch
+
+Have `openFile`/`openBinaryFile` build the right `IOErrorType` from
+`errno`, with the OS's `strerror` text in `ioe_description`, the way
+GHC's `errnoToIOError` does. Have `createDirectoryIfMissing True`
+check each prefix's `mkdir` result instead of discarding it.
+
+### Local workaround
+
+None. Only the reason text differs; YCHR-50005 and the write error
+still fire with exit 1. Reason-text asserts are GHC-only.
+
+Verified:
+
+- The two reproducers above, each paired with the GHC build's output
+  on the same input.
 
 
 ## Out of scope (not gaps, just noted)

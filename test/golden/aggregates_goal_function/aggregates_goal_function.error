@@ -1,0 +1,7 @@
+YCHR-20041
+'prelude:==/2' in an aggregate goal is a function, not a constraint
+'prelude:>/2' in an aggregate goal is a function
+'prelude:+/2' in an aggregate goal is a function
+'aggregates_goal_function:f/1' in an aggregate goal is a function
+'host:g/1' in an aggregate goal is a function
+write '? Guard'

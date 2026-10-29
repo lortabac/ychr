@@ -2,6 +2,7 @@
 
 module YCHR.ParserTest (tests) where
 
+import Control.Monad (forM_)
 import Data.Either (isLeft)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -79,6 +80,19 @@ stripModLoc m =
       equations = map (noAnnP . (.node)) m.equations,
       exports = fmap (noAnnP . (.node)) m.exports
     }
+
+-- | Parse a module and return the first declaration's @requiring@
+-- bounds, each with its location stripped for structural comparison.
+firstRequiring :: Text -> Either ParseError (Maybe [BoundSig])
+firstRequiring src = do
+  m <- p src
+  pure $ case map (.node) m.decls of
+    (FunctionDecl fd : _) -> fmap (map stripBoundSigLoc) fd.requiring
+    (ConstraintDecl cd : _) -> fmap (map stripBoundSigLoc) cd.requiring
+    _ -> Nothing
+  where
+    stripBoundSigLoc :: BoundSig -> BoundSig
+    stripBoundSigLoc (BoundSig n a at rt _) = BoundSig n a at rt dummyLoc
 
 -- ---------------------------------------------------------------------------
 -- Directives
@@ -290,6 +304,85 @@ directiveTests =
                     Nothing
                 )
             ],
+      testCase "requiring bound with a qualified name" $
+        firstRequiring
+          ":- function pick(T, T) -> T requiring lib:gt(T, T) -> bool."
+          @?= Right
+            ( Just
+                [ BoundSig
+                    (Qualified "lib" "gt")
+                    2
+                    [TypeVar "T", TypeVar "T"]
+                    (TypeCon (Unqualified "bool") [])
+                    dummyLoc
+                ]
+            ),
+      testCase "requiring bound with a qualified, zero-arity name" $
+        firstRequiring ":- function pick(T) -> T requiring lib:k -> int."
+          @?= Right
+            ( Just
+                [ BoundSig
+                    (Qualified "lib" "k")
+                    0
+                    []
+                    (TypeCon (Unqualified "int") [])
+                    dummyLoc
+                ]
+            ),
+      testCase "requiring bound with a variable qualifier is malformed" $ do
+        -- A variable module part isn't a qualified name.
+        (map (.node) . (.decls))
+          <$> p ":- function pick(T, T) -> T requiring X:gt(T, T) -> bool."
+          @?= Right []
+        pErrs ":- function pick(T, T) -> T requiring X:gt(T, T) -> bool."
+          @?= Right [MalformedBoundSig],
+      testCase "a qualified definition name is rejected" $ do
+        let qualified = Right [QualifiedDefinitionName "oc" "foo"]
+            sources =
+              [ ":- function oc:foo(int) -> int.",
+                ":- function oc:foo/1.",
+                ":- open_function oc:foo(T) -> T requiring gt(T, T) -> bool.",
+                ":- class oc:foo(int) -> int.",
+                ":- function oc:foo(any) -> bool refining int.",
+                ":- chr_constraint oc:foo(int).",
+                ":- chr_constraint oc:foo/1.",
+                ":- chr_constraint oc:foo.",
+                ":- chr_constraint oc:foo(T) requiring gt(T, T) -> bool.",
+                ":- inline oc:foo/1.",
+                ":- constraint_use fact(oc:foo/1).",
+                ":- chr_type oc:foo ---> a.",
+                ":- chr_type oc:foo(T) ---> a(T).",
+                ":- chr_type t ---> oc:foo ; b.",
+                ":- chr_type t ---> oc:foo(int).",
+                ":- opaque_type oc:foo.",
+                ":- opaque_type oc:foo(T).",
+                "oc:foo(X) -> X.",
+                "oc:foo(X) | g(X) -> X.",
+                "oc:foo -> 1."
+              ]
+        forM_ sources $ \src -> (src, pErrs src) @?= (src, qualified),
+      testCase "a definition name qualified by a variable is malformed" $ do
+        pErrs ":- chr_constraint X:foo(int)." @?= Right [MalformedDeclaration]
+        pErrs ":- function X:foo/1." @?= Right [MalformedDeclaration]
+        pErrs ":- function oc:(foo/1)." @?= Right [MalformedDeclaration],
+      testCase "extension equations may name their target qualified" $ do
+        let funNames m = map (.node.funName) (m.extensions ++ m.classExtensions)
+        funNames <$> p ":- extend_function oc:f(X) -> 0."
+          @?= Right [Qualified "oc" "f"]
+        funNames <$> p ":- extend_class oc:f(X) | g(X) -> 0."
+          @?= Right [Qualified "oc" "f"]
+        funNames <$> p ":- extend_function oc:k -> 1."
+          @?= Right [Qualified "oc" "k"]
+        funNames <$> p ":- extend_function f(X) -> 0."
+          @?= Right [Unqualified "f"],
+      testCase "extend_class_type may name its target qualified" $ do
+        let targets m = [ed.name | Ann (ExtendClassTypeDecl ed) _ <- m.extensionTypes]
+        targets <$> p ":- extend_class_type oc:sz(string) -> int."
+          @?= Right [Qualified "oc" "sz"]
+        pErrs ":- extend_class_type X:sz(string) -> int."
+          @?= Right [MalformedDeclaration]
+        pErrs ":- extend_class_type oc:sz(T) -> int requiring gt(T, T) -> bool."
+          @?= Right [RequiringOnExtendClassType "oc:sz"],
       testCase "macro nullary head, single goal body" $
         macroShapes <$> p ":- macro foo ---> [bar]."
           @?= Right [("foo", 0, [([], [atom "bar"])])],

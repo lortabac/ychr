@@ -25,7 +25,8 @@ ychr --help
 
 `make install` puts `ychr` on your `$PATH` (usually `~/.cabal/bin` or
 `~/.local/bin`). `--help` lists the subcommands: `repl`, `run`,
-`compile`, `gen-driver`, `check`.
+`compile`, `gen-driver`, `check`. `ychr FILE` with no subcommand is
+shorthand for `ychr repl FILE`.
 
 ## 3. The example program
 
@@ -95,7 +96,8 @@ constraint. Nothing is printed on success:
 ychr run -g cake examples/bakery.chr
 ```
 
-`--show-bindings` prints the goal's variables, one per line:
+`--show-bindings` prints the goal's variables, one per line
+(a `_`-prefixed variable is bound but not printed):
 
 ```sh
 ychr run -g 'compute(10, R)' --show-bindings examples/fib.chr

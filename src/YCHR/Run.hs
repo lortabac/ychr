@@ -579,6 +579,9 @@ executePreparedQuery lifted =
       (Map.empty :: Map Text Value)
 
 -- | Group user-visible query variables (not @_@-prefixed) by 'VarId'.
+--
+-- Ported to the Scheme side as @key-aliases@ in @scheme/ychr/pretty.sls@
+-- (together with 'perKeyAliases'); keep the two in sync.
 buildAliasClasses :: Map Text Value -> Chr (Map VarId (NonEmpty Text))
 buildAliasClasses varMap = do
   pairs <- traverse vidOf (Map.toAscList varMap)

@@ -1,0 +1,11 @@
+:- module(macro_decls_wildcard_type).
+
+% A `_` that a declaration macro puts in a type position is a type
+% variable, as if a named variable were written there: p is polymorphic.
+:- macro_decls d1(T) ---> [(:- chr_constraint p(T))].
+:- d1(_).
+
+:- chr_constraint test/1, go_int/1, go_str/1.
+p(X) \ test(R) <=> R = X.
+go_int(R) <=> p(1), test(R).
+go_str(R) <=> p("a"), test(R).

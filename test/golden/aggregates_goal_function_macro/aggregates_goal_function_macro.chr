@@ -1,0 +1,9 @@
+% A function call reached through a macro is YCHR-20041 too.
+:- module(aggregates_goal_function_macro, []).
+:- use_module(library(aggregates)).
+
+:- chr_constraint p/1, k/1, res/1, q/0.
+:- macro mycount(G, N) ---> [count(G, N)].
+
+p(X), exists(X == 1) ==> q.
+p(X), mycount((k(Y), X < Y), N) ==> res(N).

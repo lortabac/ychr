@@ -24,10 +24,6 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 # Test directories whose tests exercise Haskell-only meta-programming
 # primitives and therefore cannot run on the Scheme backend.
 HASKELL_ONLY = {
-    # Variable-alias printing (A = B, B = A) is implemented in the
-    # Haskell runtime only; the Scheme runtime still renders aliased
-    # logical variables as `_`.
-    "alias_print",
     # `host:'-'(3)` is a host call at an arity no primitive provides.
     # The Haskell registry is keyed by name alone, so it reaches the
     # binary primitive and reports that primitive's arity error; the

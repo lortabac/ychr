@@ -1,0 +1,1 @@
+show(argmax(1, 2))

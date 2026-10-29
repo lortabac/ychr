@@ -1,0 +1,10 @@
+:- module(main, [foo1/2, foo2/2]).
+:- use_module(lib).
+
+% lib is imported but does not export (or declare) 'hidden/2'.
+:- chr_constraint foo1(T, T) requiring lib:hidden(T, T) -> bool.
+foo1(X, Y) <=> true.
+
+% 'nomod' is not a module in this program at all.
+:- chr_constraint foo2(T, T) requiring nomod:gt(T, T) -> bool.
+foo2(X, Y) <=> true.

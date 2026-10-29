@@ -1,0 +1,3 @@
+:- module(lib, [gt/2]).
+:- function gt(int, int) -> bool.
+gt(X, Y) -> X > Y.

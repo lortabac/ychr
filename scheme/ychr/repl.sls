@@ -20,6 +20,8 @@
 ;;;; Arguments that are uppercase-or-underscore-initial symbols (`'R`,
 ;;;; `'_X`) become fresh logical variables and are reported in the
 ;;;; printed bindings; other arguments are passed through unchanged.
+;;;; `_`-prefixed ones are not printed. The same symbol twice in one
+;;;; call is one variable (`'R 'R`); a bare `'_` is fresh each time.
 (library (ychr repl)
   (export open-session tell)
   (import (rnrs) (ychr runtime) (ychr pretty))
@@ -37,23 +39,31 @@
                   (or (char=? c #\_)
                       (and (char<=? #\A c) (char<=? c #\Z))))))))
 
-  ;; Walk the user-supplied argument list, replacing variable-name
-  ;; symbols with fresh logical variables. Returns two values: the
-  ;; argument list to pass on, and an alist of (sym . var) pairs to
-  ;; print after the call.
+  ;; Replace variable-name symbols with logical variables. A repeated
+  ;; symbol reuses its variable; a bare `_` is always fresh. Returns
+  ;; the new argument list and an alist of (sym . var) to print.
   (define (process-args session args)
     (let loop ((args args) (out '()) (binds '()))
       (cond
         ((null? args) (values (reverse out) (reverse binds)))
-        ((var-name? (car args))
+        ((not (var-name? (car args)))
+         (loop (cdr args) (cons (car args) out) binds))
+        ((eq? (car args) '_)
          (let ((v (make-var session)))
-           (loop (cdr args)
-                 (cons v out)
-                 (cons (cons (car args) v) binds))))
-        (else (loop (cdr args) (cons (car args) out) binds)))))
+           (loop (cdr args) (cons v out) (cons (cons (car args) v) binds))))
+        (else
+         (let ((found (assq (car args) binds)))
+           (if found
+               (loop (cdr args) (cons (cdr found) out) binds)
+               (let ((v (make-var session)))
+                 (loop (cdr args)
+                       (cons v out)
+                       (cons (cons (car args) v) binds)))))))))
 
   (define (tell session proc . args)
     (let-values (((processed binds) (process-args session args)))
       (apply proc session processed)
+      ;; bindings->string hides _-names and handles aliases, so pass
+      ;; BINDS as is.
       (pretty-bindings binds)))
 )

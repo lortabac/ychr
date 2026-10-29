@@ -1,0 +1,3 @@
+:- module(oc, [fun ef/1]).
+:- open_function ef(int) -> int.
+ef(X) -> X.

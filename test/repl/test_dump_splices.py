@@ -5,7 +5,9 @@ files, to stderr, on every command that compiles files. Goal macros expand
 later, in the renamer, and are never in the dump. See docs/reference/macros.md.
 """
 
+import re
 import subprocess
+from pathlib import Path
 
 PROGRAM = (
     ":- module(m).\n"
@@ -176,3 +178,35 @@ def test_repl_recompile_dumps_again(ychr_bin, tmp_path):
     )
     assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
     assert result.stderr.count("% splices for") == 2
+
+
+def doc_dump_splices_example(project_root):
+    """Pull the program, command and output out of macros.md's §Dumping
+    the splices."""
+    doc_path = Path(project_root) / "docs" / "reference" / "macros.md"
+    text = doc_path.read_text()
+    start = text.index("### Dumping the splices")
+    end = text.index("\n## ", start)
+    section = text[start:end]
+    blocks = re.findall(r"```(\w*)\n(.*?)\n```", section, re.DOTALL)
+    program = next(body for lang, body in blocks if lang == "prolog")
+    sh_index = next(i for i, (lang, _) in enumerate(blocks) if lang == "sh")
+    command = blocks[sh_index][1]
+    output = blocks[sh_index + 1][1]
+    return program, command, output
+
+
+def test_doc_example_matches_real_output(ychr_bin, project_root, tmp_path):
+    """The doc's `counter` example matches a real run."""
+    program, command, expected_output = doc_dump_splices_example(project_root)
+    argv = command.split()
+    assert argv[:3] == ["ychr", "check", "--dump-splices"]
+    write(tmp_path, program + "\n", argv[-1])
+    result = subprocess.run(
+        [ychr_bin] + argv[1:],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, f"check failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stderr == expected_output + "\n"
