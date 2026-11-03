@@ -83,8 +83,9 @@ type Candidates = Map QualifiedName Candidate
 -- statement-position call can appear (rule guards and bodies, and
 -- every function's guards, prelude, and return expression — including
 -- another candidate's own, so a chain of inline calls collapses to one
--- level). A program with no @:- inline@-marked function comes back
--- unchanged.
+-- level). The exceptions are the places nothing is evaluated: the
+-- operands of @=@ and the inside of @quote/1@. A program with no
+-- @:- inline@-marked function comes back unchanged.
 --
 -- Fails when a candidate's declared shape is ineligible, or two or
 -- more candidates call each other; the diagnostics describe why.
@@ -264,6 +265,9 @@ rewriteExpr cands = go
       R.TextExpr _ -> e
       R.WildcardExpr -> e
       R.FunRefExpr _ _ -> e
+      -- 'compileExpr' does not evaluate under 'quote', so a call in
+      -- there is data. Lambda lifting puts one in every closure term.
+      R.CtorExpr (Unqualified "quote") [_] -> e
       R.CtorExpr n args -> R.CtorExpr n (map go args)
       R.HostExpr n args -> R.HostExpr n (map go args)
       R.ApplyExpr f args -> R.ApplyExpr (go f) (map go args)
@@ -494,7 +498,9 @@ rewriteBodyGoal :: Candidates -> D.BodyGoal -> D.BodyGoal
 rewriteBodyGoal cands g = case g of
   D.BodyTrue -> D.BodyTrue
   D.BodyTell qn args -> D.BodyTell qn (map (rewriteExpr cands) args)
-  D.BodyUnify a b -> D.BodyUnify (rewriteExpr cands a) (rewriteExpr cands b)
+  -- '=' does not evaluate its operands: they are data, so a call to an
+  -- inline function in there is a term to build, not a call to replace.
+  D.BodyUnify a b -> D.BodyUnify a b
   D.BodyHostStmt f args -> D.BodyHostStmt f (map (rewriteExpr cands) args)
   D.BodyIs v e -> D.BodyIs v (rewriteIsRhs cands e)
   D.BodyCall qn args -> case rewriteStmtCall cands qn args of

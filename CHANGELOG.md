@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+`:- inline` no longer rewrites the operands of `=`. In a rule body,
+`R = 1 + 2` gave `R = host:(1 + 2)`, because the inlined `+` was
+replaced by its `host:+` body. It now gives `R = prelude:(1 + 2)`, the
+same as in a query: `=` does not evaluate its operands. The same holds
+inside `quote/1`, which also covers a lambda's printed body:
+`F is id(fun(X) -> X + 1 end)` with an inline `id` gave
+`fun(X) -> host:(X + 1) end`.
+
 The MicroHs pin moves to upstream `d756fa92` (`mhs` 0.16.12.0). Its
 `Data.Text` now has `breakOn`, `breakOnEnd`, `concatMap` and `last`, so
 the `Data.Text.Shim` module and its test are gone and the code uses

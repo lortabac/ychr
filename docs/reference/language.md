@@ -401,6 +401,8 @@ argument — in the same left-to-right order the call wrote them in.
 Otherwise that one call site keeps calling the function; this is
 silent, not a diagnostic, and it is what makes `:- inline` safe to
 write on a function even when some of its callers cannot benefit.
+`=` and `quote/1` do not evaluate their operands, so an inline call
+there is left as is.
 The function's own procedure is always compiled too, since `fun
 name/arity`, `'$call'`, and `is`'s evaluables table still need it.
 

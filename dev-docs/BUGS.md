@@ -11,37 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `:- inline` rewrites the operands of `=`
-
-**Documented claim.** `dev-docs/PROJECT.md` §Frontend: `=` is pure
-structural unification, neither operand evaluated, so `X = 1 + 1`
-binds `X` to the symbolic `prelude:+(1, 1)`. The same policy applies
-in rule bodies and queries.
-
-**Test.**
-
-    :- chr_constraint h/1.
-    h(R) <=> R = 1 + 2.
-
-    ychr run -g 'h(R)' --show-bindings
-
-and, in `ychr repl`, `X = 1 + 2.`
-
-**Expected.** `R = prelude:(1 + 2)` in both.
-
-**Actual.** The rule gives `R = host:(1 + 2)`; the REPL gives
-`X = prelude:(1 + 2)`. A non-inlined prelude function is fine:
-`R = max(1, 2)` gives `R = prelude:max(1, 2)`.
-
-**Notes.** `Desugar.Inline.rewriteExpr` is applied to both operands
-of `D.BodyUnify` (`src/YCHR/Internal/Desugar/Inline.hs`, the
-`BodyUnify` arm), so the call to the inlined `+` is replaced by its
-body, the `host:+` call. The `=` operand is data, not a call.
-
-**Fix sketch.** Owner decision: do NOT fix this session. Leave as is.
-When picked up: don't apply `rewriteExpr` to the `D.BodyUnify`
-operands.
-
 ## NaN and Infinity print with a bogus `.0` suffix
 
 **Documented claim.** None stated.

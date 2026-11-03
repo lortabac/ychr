@@ -49,6 +49,12 @@ HASKELL_ONLY_CASES = {
     # and passes on both backends. Remove this entry once the Scheme
     # runtime's unify does the same transfer.
     ("reactivation_through_binding", "through_binding"),
+    # The binding is a closure. The Haskell printer shows it as
+    # `fun(X) -> ... end`; the Scheme one prints the raw
+    # `'__closure'(...)` term. The `+` inside is `prelude:` on both,
+    # which is what the case checks. Remove once the Scheme printer
+    # renders closures the same way.
+    ("inline_basic", "lambda_body"),
 }
 
 # Test directories where the .chr program or goal deliberately uses
