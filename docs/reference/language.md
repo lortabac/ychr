@@ -275,16 +275,20 @@ semantics: no binding, comma-separated booleans, any function in scope:
 ```prolog
 :- function factorial/1.
 
-factorial(0)              -> 1.
-factorial(N) when N > 0   -> N * factorial(N - 1).
+factorial(0)            -> 1.
+factorial(N) when N > 0 -> N * factorial(N - 1).
 ```
 
-Unlike Erlang, a guard is not limited to a set of guard BIFs: it is an
-ordinary rule guard. The same goes for `:- extend_function` and
-`:- extend_class` equations.
+Guards are ordinary rule guards, not Erlang's restricted guard set.
+`:- extend_function` and `:- extend_class` equations use `when` too.
+
+`when` is a built-in `xfy` operator at priority 1105: looser than `,`
+and `;`, tighter than `->`. Outside an equation head it is just an
+operator, so a name `when` still works in functional notation
+(`when(A, B)`) but must be quoted as a bare atom (`'when'`).
 
 Rule guards keep `|` (`H <=> G | B`). The old equation syntax,
-`f(X) | X > 0 -> ...`, is `BarInFunctionGuard`, YCHR-15030, with a hint
+`f(X) | X > 0 -> ...`, is `BarInFunctionGuard`, YCHR-15031, with a hint
 to use `when`.
 
 Functions are callable in every evaluating position

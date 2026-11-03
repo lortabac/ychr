@@ -2105,7 +2105,7 @@ rather than counting as one more signature that did not fit.
     (size(string) -> int).
 
 size(N) when integer(N) -> N.
-size(S) when string(S) -> string_length(S).
+size(S) when string(S)  -> string_length(S).
 
 :- chr_constraint foo(color).
 foo(X) <=> R is size(X).   %% Error: no matching overload
