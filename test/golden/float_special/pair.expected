@@ -1,0 +1,1 @@
+R = float_special:p(+nan.0, (-inf.0))

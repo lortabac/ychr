@@ -75,6 +75,12 @@ basicTests =
         prettyTerm (IntTerm (-2)) @?= "(-2)",
       testCase "negative float is parenthesized" $
         prettyTerm (FloatTerm (-1.5)) @?= "(-1.5)",
+      testCase "NaN renders as +nan.0" $
+        prettyTerm (FloatTerm (0 / 0)) @?= "+nan.0",
+      testCase "infinity renders as +inf.0" $
+        prettyTerm (FloatTerm (1 / 0)) @?= "+inf.0",
+      testCase "negative infinity is parenthesized" $
+        prettyTerm (FloatTerm (-1 / 0)) @?= "(-inf.0)",
       testCase "TextTerm renders with surrounding quotes" $
         prettyTerm (TextTerm "hello") @?= "\"hello\"",
       testCase "TextTerm escapes embedded quotes/backslashes/newlines" $

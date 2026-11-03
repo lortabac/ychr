@@ -1119,6 +1119,9 @@ tab — the escapes the reader decodes — so `hello world` prints as
 `'hello world'`, `is`
 as `'is'`, and the unit atom as `'()'`. Flonums are the one rendering
 exception, each backend using its host language's float format; the
-divergence is recorded in `dev-docs/SCHEME_BACKEND_GAPS.md`.
+divergence is recorded in `dev-docs/SCHEME_BACKEND_GAPS.md`. NaN and
+the infinities print the same on both, in Scheme's spelling: `+nan.0`,
+`+inf.0` and `(-inf.0)`. They have no source syntax and
+`read_term_from_string` does not read them back.
 Both backends implement `run_chr_session/1` and
 all of `library(search)`.

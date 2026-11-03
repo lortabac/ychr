@@ -1,0 +1,17 @@
+% NaN and the infinities print in Scheme's spelling on both backends
+% (`+nan.0`, `+inf.0`, `(-inf.0)`). They have no source syntax, so the
+% rules make them by dividing by zero.
+:- module(float_special, [nan/1, inf/1, ninf/1, negzero/1, pair/1, write_nan/1]).
+:- use_module(library(meta)).
+
+:- chr_type pr ---> p(float, float).
+
+:- chr_constraint nan(float), inf(float), ninf(float), negzero(float),
+                  pair(pr), write_nan(string).
+
+nan(R) <=> R is 0.0 / 0.0.
+inf(R) <=> R is 1.0 / 0.0.
+ninf(R) <=> R is -1.0 / 0.0.
+negzero(R) <=> R is 0.0 * -1.0.
+pair(R) <=> X is 0.0 / 0.0, Y is -1.0 / 0.0, R = p(X, Y).
+write_nan(R) <=> X is 0.0 / 0.0, R is write_term_to_string(X).

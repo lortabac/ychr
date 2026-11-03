@@ -67,7 +67,7 @@ The grammar:
 sexpr  = atom | int | float | string | list
 atom   = [a-zA-Z_][a-zA-Z0-9_-]*
 int    = [-]?[0-9]+
-float  = [-]?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)?
+float  = [-]?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)? | +nan.0 | +inf.0 | -inf.0
 string = '"' (escape | [^"\\])* '"'
 list   = '(' sexpr* ')'
 ```

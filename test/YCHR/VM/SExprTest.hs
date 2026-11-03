@@ -14,6 +14,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Internal.Loc (SourceLoc (..))
+import YCHR.Internal.SExpr (SExpr (..), parseSExpr, printSExpr)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize, vmVersion)
@@ -144,6 +145,26 @@ roundtripTests =
                 )
             ]
         ),
+    testCase "infinite float literals" $
+      roundtrip
+        ( mkProg
+            [ LetVal "a" (Lit (FloatLit (1 / 0))),
+              LetVal "b" (Lit (FloatLit (-1 / 0)))
+            ]
+        ),
+    testCase "NaN float survives print/parse" $
+      case parseSExpr (printSExpr (SFloat (0 / 0))) of
+        Right (SFloat x) -> assertBool "expected NaN" (isNaN x)
+        other -> assertBool ("unexpected: " <> show other) False,
+    testCase "negative zero survives print/parse" $
+      case parseSExpr (printSExpr (SFloat (-0.0))) of
+        Right (SFloat x) -> assertBool "expected -0.0" (isNegativeZero x)
+        other -> assertBool ("unexpected: " <> show other) False,
+    testCase "special floats print in Scheme spelling" $
+      map (printSExpr . SFloat) [0 / 0, 1 / 0, -1 / 0]
+        @?= ["+nan.0", "+inf.0", "-inf.0"],
+    testCase "-inf as an atom prefix stays an atom" $
+      parseSExpr "-inf.0x" @?= Right (SAtom "-inf.0x"),
     testCase "all expression types" $
       roundtrip
         ( mkProg
