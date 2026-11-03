@@ -52,9 +52,7 @@ import Data.IORef (IORef, modifyIORef')
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Text (Text)
--- MicroHs's 'Data.Text' lacks 'breakOnEnd'; the shim supplies it
--- (dev-docs/MICROHS_GAPS.md, gap 4).
-import Data.Text.Shim qualified as T
+import Data.Text qualified as T
 import YCHR.Convert (hostFnValues, withDefaultHostFunctions)
 import YCHR.Internal.Runtime.Monad (Chr, HostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..), VarId (..))

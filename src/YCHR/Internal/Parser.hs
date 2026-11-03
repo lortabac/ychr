@@ -76,9 +76,7 @@ import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
--- MicroHs's 'Data.Text' lacks 'last'; the shim supplies it
--- (dev-docs/MICROHS_GAPS.md, gap 4).
-import Data.Text.Shim qualified as Text
+import Data.Text qualified as Text
 import System.FilePath (takeBaseName)
 import Text.Parsec (ParseError)
 import YCHR.Internal.PExpr

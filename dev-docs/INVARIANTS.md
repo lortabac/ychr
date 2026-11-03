@@ -401,11 +401,6 @@ or parse failure now raises `runtimeErrorS` rather than `error`, so it
 is a structured runtime error rather than a plain `ErrorCall` that
 `invokeHostCall`'s `try @SomeException` happens to catch.
 
-Deliberately partial, and not to be "fixed": `Data.Text.Shim.breakOn`
-and `Data.Text.Shim.last` (`src/Data/Text/Shim.hs:39,71`) raise exactly
-where `Data.Text` raises, so the shim stays a drop-in replacement.
-Totalising them would silently diverge from the API they stand in for.
-
 ### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:757`, `src/YCHR/Internal/Compile.hs:806`, `src/YCHR/Internal/Backend/SchemeDriver.hs:190`
 
 ```haskell

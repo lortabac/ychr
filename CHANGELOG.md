@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+The MicroHs pin moves to upstream `d756fa92` (`mhs` 0.16.12.0). Its
+`Data.Text` now has `breakOn`, `breakOnEnd`, `concatMap` and `last`, so
+the `Data.Text.Shim` module and its test are gone and the code uses
+`Data.Text` directly. `Data.Text.replicate 0` returns `""` there now,
+so the MicroHs-built `ychr` renders `--help` and usage errors.
+
 `ychr repl` accepts `--repl-backend=interpreter|chez`. The default keeps
 the existing Haskell interpreter. `chez` starts one persistent Chez
 Scheme process with the `scheme` command and runs the queries there:
@@ -1171,9 +1177,9 @@ the variable is unset or empty, so a MicroHs-built `ychr` must run from a
 YCHR source tree or be pointed at one. The CLI loads its resources once,
 after parsing its command line (so `--help` needs no source tree), and
 threads them through its subcommands; the GHC binary still consults no
-directory at run time. Under MicroHs the commands work, but help and
-usage screens still trip an unrelated MicroHs bug in
-`Data.Text.replicate` (dev-docs/MICROHS_GAPS.md, gap 9). See
+directory at run time. Under MicroHs the commands work. (Help and
+usage screens used to trip a MicroHs bug in `Data.Text.replicate`; fixed
+upstream, see the MicroHs pin bump above.) See
 [the embedding guide](docs/how-to/embed-a-chr-module.md#5-supplying-the-resources).
 
 Fix: a build with `profiling: true` in `cabal.project.local` now links.

@@ -30,7 +30,6 @@ import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
 import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
-import YCHR.TextShimTest qualified
 import YCHR.TypeCheckTest qualified
 import YCHR.TypeSoundnessTest qualified
 import YCHR.VM.ClosureTest qualified
@@ -78,7 +77,6 @@ main = do
           YCHR.RenameTest.tests,
           YCHR.Rename.MacroTest.tests,
           YCHR.ResourcesTest.tests,
-          YCHR.TextShimTest.tests,
           YCHR.TypeCheckTest.tests,
           YCHR.TypeSoundnessTest.tests,
           YCHR.Runtime.VarTest.tests,

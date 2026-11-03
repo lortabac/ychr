@@ -307,7 +307,6 @@ test-suite ychr-tests
                     , YCHR.ResourcesTest
                     , YCHR.RoundtripTest
                     , YCHR.TestHelpers
-                    , YCHR.TextShimTest
                     , YCHR.TypeCheckTest
                     , YCHR.TypeSoundnessTest
                     , YCHR.TypeSoundness.Gen
@@ -386,11 +385,6 @@ library
                     , YCHR.Convert
                     , YCHR.Run
                     , YCHR.Types
-
-    -- Provisional MicroHs shim. "Data.Text.Shim" supplies the "Data.Text"
-    -- functions gap 4 lists. Exposed (like the YCHR.Internal modules) so the
-    -- CLI and the tests can import it. Delete it with its source file.
-    exposed-modules:  Data.Text.Shim
 
     -- Internal. These are implementation details: they carry no
     -- compatibility guarantee and are not covered by the package version
