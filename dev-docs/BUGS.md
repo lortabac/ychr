@@ -11,41 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `?/1` can be declared, then is silently ignored
-
-**Documented claim.** `docs/reference/macros.md` §Heads and
-§Diagnostics list the reserved symbols a macro head may not use
-(`,`, `;`, …, `tell`, `$compound`, `$atom`). `?` is not in the list.
-
-**Test.**
-
-    :- chr_constraint '?'/1.
-    :- macro '?'(X) ---> [go].
-
-**Expected.** Rejected, like the aggregate keys.
-
-**Actual.** Both are accepted with no warning, but every use — head,
-body, or through the macro — reports `YCHR-20042` regardless, so the
-declaration is dead weight.
-
-**Fix sketch.** Owner decision: reserve `?/1` the same way the
-aggregate keys are, under the existing `YCHR-20043`
-(`ReservedAggregateName`) — no new code.
-
-- `src/YCHR/Internal/Rename.hs`: add
-  `isReservedAggregateKey n a = isAggregateFormKey n a || isGuardFunctor (Unqualified n) a`
-  and use it everywhere `isAggregateFormKey` alone currently gates a
-  reservation check (the `ReservedAggregateName` call sites, ~1196 and
-  ~1208; `isGuardFunctor` already lives at ~1541-1542, pinned to
-  `"?"`/arity 1).
-- Generalize the `YCHR-20043` message text from naming the aggregate
-  forms to something like "reserved for aggregates" (covers `?` too
-  without listing it by name).
-- `?` stays legal at other arities, and stays legal as a declaration-macro
-  head (`:- macro_decls` isn't a goal position, so it's unaffected).
-- Data constructor `'?'/1` is a separate, already-listed entry below
-  (3b) — don't fold it into this fix.
-
 ## `:- inline` rewrites the operands of `=`
 
 **Documented claim.** `dev-docs/PROJECT.md` §Frontend: `=` is pure
@@ -581,8 +546,9 @@ pick later):
 - (a) Reject the *declaration* instead: `'?'/1` as a data constructor
   name is reserved, the same way the aggregate keys are reserved for
   constraints/functions/macros. Simple, consistent with "`?` is
-  reserved for aggregates" (see the `?/1` macro entry above after its
-  fix), but makes `?` unavailable as a constructor name forever.
+  reserved for aggregates" (`?/1` is already reserved for
+  constraints, functions and goal macros, YCHR-20043), but makes
+  `?` unavailable as a constructor name forever.
 - (b) Let data/quoted positions win: `isGuardFunctor`'s callers already
   know whether they're in a position where the guard-form
   interpretation even applies (data argument, pattern, `quote(...)`);

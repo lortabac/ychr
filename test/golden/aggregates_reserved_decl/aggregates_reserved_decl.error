@@ -1,8 +1,12 @@
 YCHR-20043
-'argmin/2' is an aggregate form
-'aggregate/4' is an aggregate form
-'takemax/2' is an aggregate form
-'argmax/2' is an aggregate form
-'takemin/2' is an aggregate form
+'argmin/2' is reserved for aggregates
+'aggregate/4' is reserved for aggregates
+'takemax/2' is reserved for aggregates
+'argmax/2' is reserved for aggregates
+'takemin/2' is reserved for aggregates
+'?/1' is reserved for aggregates
+guard.chr:4:19: YCHR-20043
+guard.chr:6:13: YCHR-20043
+guard.chr:9:10: YCHR-20043
 YCHR-20040
 Aggregate 'argmin/2' outside a rule head

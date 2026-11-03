@@ -1454,12 +1454,11 @@ renameErrorMsg (ReservedAggregateName name arity) =
         ++ T.unpack name
         ++ "/"
         ++ show arity
-        ++ "' is an aggregate form and cannot be declared as a"
-        ++ " constraint, function or macro"
+        ++ "' is reserved for aggregates and cannot be declared as a"
+        ++ " constraint, function or goal macro"
     )
-    ( "aggregate/4, argmin/2, argmax/2, takemin/2 and takemax/2 are"
-        ++ " recognized in every rule head without an import; choose"
-        ++ " another name or arity"
+    ( "aggregate/4, argmin/2, argmax/2, takemin/2, takemax/2 and ?/1 are"
+        ++ " recognized without an import; choose another name or arity"
     )
 renameErrorMsg (FunRefNotFunction name arity) =
   withHint
