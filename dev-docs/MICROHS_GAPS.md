@@ -18,19 +18,19 @@ terse, fix-shaped, removable when closed.
 
 ## Status
 
-Re-verified against MicroHs `f65d3c65` (the checkout's HEAD, which
-includes `0a1c3095`, the `try` fix) and its `base` package rebuilt from
-it. Eleven gaps are recorded; two have closed and been removed from this
-document. The local workarounds for gaps 1, 3, 4, 5, 6, 7, 8 and 10 are
-applied (gap 4 also touches the importers, tests included; gap 5 is the
-resources provider described below, which since
-`dev-docs/MICROHS_PERFORMANCE.md` option B decodes its two resources at
-build time rather than at run time; gaps 7 and 8 are one pair of
-parentheses and one no-op modifier respectively; gap 10 is one helper
-taking its argument as `Text` rather than as a record). Gap 9 has no
-YCHR-side workaround: it breaks the MicroHs-built executable's help
-screens only. Gap 11 likewise has none: it is a difference in how
-coarsely file I/O errors are reported, not a crash.
+Re-verified against upstream MicroHs `d756fa92` (2026-10-30,
+`mhs` 0.16.12.0). Nine gaps are open; four have closed and been removed
+from this document (see below the table). The local workarounds for
+gaps 1, 3, 5, 6, 7, 8 and 10 are applied (gap 5 is the resources
+provider described below, which since `dev-docs/MICROHS_PERFORMANCE.md`
+option B decodes its two resources at build time rather than at run
+time; gaps 7 and 8 are one pair of parentheses and one no-op modifier;
+gap 10 is one helper taking its argument as `Text` rather than as a
+record). Gap 11 has no YCHR-side workaround: it is a difference in how
+coarsely file I/O errors are reported, not a crash. Every open gap's
+reproducer was rerun at `d756fa92` and still fails. At that revision
+a type error reads `type mismatch` / `expected:` / `actual:` rather than
+the `Cannot satisfy constraint: X ~ Y` quoted in the older entries.
 No Template Haskell remains in `library ychr`, and the `ychr` executable
 has a MicroHs twin of the compile-time embedder, so `mcabal build` now
 completes: it builds `library ychr` and `exe:ychr`, and the binary runs
@@ -42,10 +42,10 @@ suite, the benchmark or the `stlc` example (they need
 the `examples` flag defaults off), so those remain GHC-only. CI compiles
 the MicroHs target on every push and pull request — the `microhs` job,
 which runs no tests — from the environment `make mhs-install` installs:
-MicroHs `f65d3c65`, the prettyprinter and optparse-applicative commits
+MicroHs `d756fa92`, the prettyprinter and optparse-applicative commits
 pinned in `tools/mhs-install.sh`, and the package versions in
 `tools/mhs-packages.txt`. Keep those pins in sync with this paragraph.
-Gaps 7, 8 and 9 were found on the way to that point and are recorded
+Gaps 7 and 8 were found on the way to that point and are recorded
 below.
 
 | # | Gap | State |
@@ -53,12 +53,10 @@ below.
 | 1 | `OverloadedRecordDot` rejects an already-bound field name | open — workaround applied to `src/` (see below) |
 | 2 | `NoFieldSelectors` silently ignored | open |
 | 3 | Record update on a record-dot expression doesn't parse | open — workaround applied to `src/` (see below) |
-| 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
 | 5 | No `TemplateHaskell` support | open upstream — workaround applied: no TH in `library ychr`; the MicroHs `ychr` compiles resources decoded at build time by `make resources` (see below) |
 | 6 | `mapAccumL` is list-only | open — no site left in `src/` (see below) |
 | 7 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
 | 8 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
-| 9 | `Data.Text.replicate` rejects a zero multiplier | open upstream — no YCHR-side workaround; the MicroHs `ychr` cannot render help (see below) |
 | 10 | A local binding inferred as `HasField`-polymorphic is not generalized | open — workaround applied to `src/YCHR/Internal/Resolve.hs` (see below) |
 | 11 | File-opening errors carry no description, and `createDirectoryIfMissing` swallows mkdir failures | open upstream — no YCHR-side workaround (see below) |
 
@@ -70,6 +68,18 @@ MicroHs (`lib/Data/Either.hs:51`) and used directly by
 the way `base` does (`MicroHs/lib/Control/Exception.hs:106`, upstream
 `0a1c3095`); `Control.Exception.Shim` is deleted and its importers
 reverted.
+
+The missing `Data.Text` functions (formerly gap 4) are in MicroHs since
+`d3566ca6` ("Make Data.Text more complete"): `breakOn`, `breakOnEnd`,
+`concatMap`, `last`, and also `splitAt`, `span` and `break`, all
+matching `text` on the cases the old shim test pinned. `Data.Text.Shim`
+and `YCHR.TextShimTest` are deleted, the importers use `Data.Text`
+again, and `VM.SExpr.qualifiedNameOfTellProc` uses `T.breakOn` instead
+of a hand-written split over `String`.
+
+`Data.Text.replicate` with a zero count (formerly gap 9) returns `""`
+now (`lib/Data/Text.hs:214`), so the MicroHs `ychr` renders `--help`
+and usage-error screens.
 
 Each entry below opens with a **Re-verified** note recording what
 changed, if anything, since it was written.
@@ -434,129 +444,6 @@ Cheap and rare. Comfortable to keep even if MicroHs never grows the
 parser fix.
 
 
-## 4. Missing `Data.Text` functions
-
-> **Re-verified, contents changed since this entry was written.**
-> MicroHs's `Data.Text` has since gained `all`, `any` and `strip`, and
-> YCHR has dropped the `unpack`-threading workarounds and now calls them
-> directly. The remaining gaps are a *different* set: `breakOn`,
-> `concatMap`, `breakOnEnd` and `last`.
->
-> The shim workaround below is applied to `src/` and to one test module;
-> what remains open is the MicroHs side.
-
-`MicroHs/lib/Data/Text.hs` is still missing several functions exported
-by the `text` package on Hackage. YCHR uses each of these in the listed
-locations (line numbers current as of this revision):
-
-| Missing  | YCHR call sites |
-|----------|------------------|
-| `breakOn`    | `src/YCHR/Internal/Runtime/Trace.hs:233`, `src/YCHR/Internal/Runtime/Interpreter.hs:1234`, `src/YCHR/Internal/Resolve.hs:1421`, `src/YCHR/Internal/Meta.hs:92` |
-| `concatMap`  | `src/YCHR/Internal/Compile/Names.hs:111`, `src/YCHR/Internal/Compile/Names.hs:136`, `src/YCHR/Internal/SExpr.hs:71` |
-| `breakOnEnd` | `test/YCHR/TypeSoundness/Observe.hs:180,183` |
-| `last`       | `src/YCHR/Internal/Parser.hs:258` |
-
-`splitAt`, `span` and `break` are missing too. Nothing in YCHR calls
-them today, so they cost nothing until a new call site appears — which
-is exactly how a new one lands as an `undefined value: T.splitAt` in
-`mcabal build` after a GHC-only test run. The safe surface for a new
-text-splitting helper is `stripPrefix` / `take` / `drop` / `length`
-plus `unpack`, with the split itself done over `Data.List`; that is what
-`YCHR.Internal.VM.SExpr.qualifiedNameOfTellProc` does.
-
-The first failure such a build used to hit was `Text.last`
-(`Parser.hs:258`, `Text.last trimmed`), reported as
-`undefined value: Text.last`. `last` and `breakOnEnd` were not in the
-original list; `all`, `any` and `strip` no longer belong in it.
-
-MicroHs's `Data.Text` exports `head` but not its dual, and has
-`breakOn`-adjacent machinery only through `splitOn`.
-
-### Upstream fix sketch
-
-Add these to the export list of `MicroHs/lib/Data/Text.hs` (and
-implement them via `unpack` + `Data.List` if a streaming
-implementation isn't worth it for `Data.Text`'s strict
-`ByteString`-backed representation).
-
-### Local workaround
-
-Each call site rewrites to a `Data.List` equivalent threaded through
-`T.unpack`, plus a re-pack on the way out where applicable:
-
-- `T.concatMap f t`   → `T.concat (map f (T.unpack t))`
-- `T.last t`          → `last (T.unpack t)`
-- `T.breakOn sep t`   → `T.splitOn`, or a local `breakOnT` helper
-- `T.breakOnEnd sep t`→ `breakOn (reverse sep) (reverse t)`, reversing
-  both components back — reversing only the haystack is wrong, see below
-
-Two points learned the hard way while applying these:
-
-- `trailing`-style helpers must be **eta-expanded**. Writing
-  `encodeText = T.concat (map encodeChar . T.unpack)` fails under `mhs`
-  with a spurious `Text ~ [Text]`; `encodeText t = T.concat (map
-  encodeChar (T.unpack t))` is accepted.
-- The `concatMap` rewrite's result type depends on what `f` returns.
-  `T.concatMap f` with `f :: Char -> Text` is `\t -> T.concat (map f
-  (T.unpack t))`, not `T.singleton . f`.
-
-These all evaluate equivalently on the input ranges YCHR actually
-hits, and the perf hit is negligible at compiler-frontend scale.
-
-### Local workaround (applied)
-
-Applied as one shim module rather than a per-call-site rewrite:
-`src/Data/Text/Shim.hs` (module `Data.Text.Shim`) offers the whole
-`Data.Text` surface plus the four missing functions, implemented over
-`Data.List`. Each importer treats it as a drop-in for `Data.Text`:
-
-| edit | sites |
-|---|---|
-| `import Data.Text.Shim qualified as …` | `Compile/Names.hs`, `SExpr.hs`, `Parser.hs`, `Resolve.hs`, `Meta.hs`, `Runtime/Trace.hs`, `Runtime/Interpreter.hs`, `test/YCHR/TypeSoundness/Observe.hs` |
-
-The shim deliberately replaces the native implementations under GHC too:
-one implementation then serves both compilers, and the GHC test suite
-(`YCHR.TextShimTest`) pins the shim to `Data.Text` over an exhaustive
-small corpus, so it exercises the code `mhs` will run. Points learned
-while writing it:
-
-- `breakOnEnd` reverses the **pattern as well as the haystack**. A first
-  cut that reversed only the haystack agreed with `Data.Text` on every
-  single-character pattern and failed on `breakOnEnd "a:b" "a:b:c"`.
-- The not-found results are asymmetric, as in `Data.Text`: `breakOn`
-  gives `(src, "")`, `breakOnEnd` gives `("", src)`.
-- The partial cases keep `Data.Text`'s behaviour, including *when* they
-  throw: `breakOn` rejects an empty pattern at the tuple, while
-  `breakOnEnd` rejects it only once a component is forced, hence the
-  lazy pattern binding there. `last` rejects an empty text.
-- Eta-expansion still applies: `reverseText` and `concatMap` are written
-  with explicit arguments.
-- Under GHC the module needs `import Prelude hiding (concatMap, last)`,
-  or its export-list entries are ambiguous with `Prelude`'s. MicroHs
-  silently ignores hidden names it does not export, so the same source
-  works on both compilers.
-
-Verified with `mhs -fno-code -isrc`: `Data.Text.Shim` itself plus
-`SExpr.hs`, `Compile/Names.hs`, `Parser.hs`, `Resolve.hs`,
-`Runtime/Trace.hs` and `Runtime/Interpreter.hs` compile (`No code
-generated`); before the shim, each stopped on `undefined value:
-T.concatMap` / `Text.last` / `T.breakOn`.
-`Meta.hs` and `Compile.Pipeline` now get past gaps 3 and 4 as well.
-There was still no end-to-end check at the time: the library stopped on
-gap 7 in `Display.hs` (the `try` gap, since closed, had been worked
-around by then), and gap 5's resources provider was missing for the
-CLI. Since closed:
-`mcabal build` now builds both the library and the executable (see the
-Status section).
-
-Deleting `src/Data/Text/Shim.hs`, the importers' `Data.Text.Shim` import
-lines, `test/YCHR/TextShimTest.hs` and its wiring (the shim's
-`exposed-modules` entry and the test's `other-modules` entry in
-`ychr.cabal`, plus the import and group entry in `test/Main.hs`)
-restores plain `Data.Text` imports; that is the intended cleanup once
-MicroHs exports the four functions.
-
-
 ## 5. No `TemplateHaskell` support
 
 > **Re-verified, and now closed on the YCHR side.** Still open upstream —
@@ -665,8 +552,9 @@ Verified on this revision:
   test/golden/leq/leq.chr` prints `X = _`, from the repo root and from any
   other directory, with or without `YCHR_LIB_DIR` set: the variable no
   longer has any effect. `repl`, `compile`, `gen-driver` and `check` work
-  too; `--help` and usage-error screens trip gap 9, which is unrelated to
-  the resources.
+  too. (`--help` and usage-error screens used to trip the
+  `Data.Text.replicate` gap, since closed; it was unrelated to the
+  resources.)
 - GHC is unchanged: `cabal build all` (`-Werror`) and `make test` are
   green. `YCHR.ResourcesTest` still compares the modules the run-time
   loader parses with the ones the Template Haskell embedder baked in, and
@@ -944,73 +832,12 @@ Verified:
   dropped no-op changed no behaviour.
 
 
-## 9. `Data.Text.replicate` rejects a zero multiplier
-
-> **New; found while smoke-testing the first working MicroHs-built
-> `ychr`.** No YCHR-side workaround: it breaks help rendering only.
-
-The MicroHs-built `ychr` runs `repl`, `run`, `compile`, `gen-driver` and
-`check`, but every help or usage screen dies after its first line:
-
-```
-$ YCHR_LIB_DIR=$PWD dist-mcabal/bin/mhs/ychr --help
-Usage: dist-mcabal/bin/mhs/ychr [COMMAND | [--quiet] [--Werror] [--no-check] [FILES...]]
-
-dist-mcabal/bin/mhs/ychr: uncaught exception: error: "./Data/Monoid/Internal.hs",260:19:
-  stimes: positive multiplier expected
-```
-
-MicroHs defines `Data.Text.replicate` as `stimes`
-(`MicroHs/lib/Data/Text.hs:134`), and its `Semigroup Text` instance
-(`:83`) keeps the class default, which rejects a non-positive multiplier
-(`lib/Data/Monoid/Internal.hs:259-260`). GHC's `Data.Text.replicate`
-returns `""` for `n <= 0` instead. optparse-applicative renders help
-through prettyprinter-ansi-terminal, whose terminal renderer indents
-every line with `T.replicate i " "`
-(`prettyprinter-ansi-terminal/src/Prettyprinter/Render/Terminal/Internal.hs:151,207`),
-and an unindented line has `i = 0` — so the first unindented line after
-the usage header throws. `ychr --bogus` fails the same way while
-rendering the error screen.
-
-Reproducer:
-
-```haskell
-import Data.Text qualified as T
-
-main = print (T.replicate 0 (T.pack "ab"), T.replicate 2 (T.pack "ab"))
--- mhs: uncaught exception: error: stimes: positive multiplier expected
--- GHC: ("","abab")
-```
-
-### Upstream fix sketch
-
-Make `replicate n t` return `empty` for `n <= 0`, as GHC's `text` does,
-or give `Semigroup Text` a `stimes` that handles a zero multiplier —
-`stimesMonoid`, already used elsewhere in `Data/Monoid/Internal.hs:239`,
-has the `EQ -> mempty` case. `Data.Text.Lazy` has the same shape
-(`lib/Data/Text/Lazy.hs:146-147`) but only errors for a negative count,
-so the strict `Text` is the one to fix.
-
-### Local workaround
-
-None. The call is inside optparse-applicative's help renderer, which YCHR
-cannot reach or replace, and shadowing mhs's `Data.Text` from the package
-would be worse than the bug. The commands themselves do not render help,
-so the CLI is usable; only `--help` (top-level or per-subcommand) and
-usage-error screens are affected.
-
-Verified:
-
-- Reproducer above; the same module prints `("","abab")` under GHC.
-- `YCHR_LIB_DIR=$PWD dist-mcabal/bin/mhs/ychr run --show-bindings -g
-  'order:leq(X, X)' test/golden/leq/leq.chr` prints `X = _`, and
-  `repl --quiet` on EOF exits 0; neither renders help.
-
-
 ## 10. A local binding inferred as `HasField`-polymorphic is not generalized
 
-> **New; found while fixing the `originForDecl` helper in
-> `src/YCHR/Internal/Resolve.hs`, which had broken the MicroHs build.**
+> **Re-verified against `d756fa92`.** Still open. The reproducer used to
+> show a *top-level* `origin`; that one compiles under MicroHs (also at
+> `f65d3c65`). Only a local binding fails, which is the shape the
+> `Resolve.hs` site has, so the reproducer below now uses `where`.
 
 Under `OverloadedRecordDot`, a local helper that reads a field off its
 argument is inferred with a `HasField "field" r a` constraint. GHC
@@ -1024,18 +851,20 @@ fails to unify:
 data A = A { name :: String }
 data B = B { name :: String }
 
-origin m x = m ++ ":" ++ x.name
-
-f :: A -> B -> [String]
-f a b = [origin "m" a, origin "m" b]
--- mhs: uncaught exception: error: ... Cannot satisfy constraint: A ~ B
+main :: IO ()
+main = print (f (A "a") (B "b"))
+  where
+    origin m x = m ++ ":" ++ x.name
+    f :: A -> B -> [String]
+    f a b = [origin "m" a, origin "m" b]
+-- mhs: type mismatch, expected: A, actual: B (at the second use)
 -- GHC: compiles
 ```
 
 ### Upstream fix sketch
 
 Generalize `where`/`let`-bound bindings over their inferred type-class
-constraints, as GHC does.
+constraints, as top-level bindings already are.
 
 ### Local workaround
 

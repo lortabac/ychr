@@ -32,7 +32,7 @@
 
 set -eu
 
-MICROHS_REV=${MICROHS_REV:-f65d3c65cb1c31f6ab3e33d409ac3af60369eaef}
+MICROHS_REV=${MICROHS_REV:-d756fa92137ea685c23779cce62cdb5492be498b}
 MICROHS_GIT=${MICROHS_GIT:-https://github.com/augustss/MicroHs.git}
 PRETTYPRINTER_REV=${PRETTYPRINTER_REV:-37d2d263cfbc4839fa51e205a4be066916a24c49}
 PRETTYPRINTER_GIT=${PRETTYPRINTER_GIT:-https://github.com/haskell-prettyprinter/prettyprinter.git}

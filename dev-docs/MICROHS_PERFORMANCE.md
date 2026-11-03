@@ -1158,8 +1158,10 @@ pass before it can be judged.
 Secondary, but cheap. `SExpr.printSExpr` builds its output through
 `T.intercalate` and `Data.Text.Shim.concatMap`, and the shim's `concatMap` is
 `T.concat (map f (T.unpack t))` — an `unpack`/`pack` round trip per element.
-Implement the shim's hot conversions without the list round trip, or avoid
-`concatMap` in the serializer. This is the serializer, so it shortens `compile
+Avoid `T.concatMap` in the serializer, or give it a version without the list
+round trip. (The shim is gone since MicroHs `d756fa92`, but MicroHs's own
+`Data.Text.concatMap` is the same `concat [f c | c <- unpack t]`, so the
+cost is the same.) This is the serializer, so it shortens `compile
 -t vm/scheme`, not `check`.
 
 One half of this is now measured rather than hypothesised, because it is also

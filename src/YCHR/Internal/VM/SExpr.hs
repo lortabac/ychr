@@ -737,28 +737,14 @@ tellableUnqualifiedEntryFromSExpr s =
 -- @__@ in a source name, so the first one is the module separator. The
 -- spelling is left encoded: decoding it back would need the @%u@
 -- escapes of the *term* encoding, which @tellProcName@ does not use.
---
--- The split itself is 'Data.List'-based (hence the packed round trip):
--- the reader has to build under both compilers, and splitting a text is
--- one of the places MicroHs's @Data.Text@ is thinnest
--- (@dev-docs\/MICROHS_GAPS.md@, gap 4).
 qualifiedNameOfTellProc :: Int -> Name -> Types.QualifiedName
 qualifiedNameOfTellProc arity (Name t) =
   case T.stripPrefix "tell_" t of
     Nothing -> Types.QualifiedName "" t
     Just mangle ->
       let body = T.take (T.length mangle - length (show arity)) mangle
-       in case breakOnSeparator [] (T.unpack body) of
-            (modName, rest)
-              | null modName -> Types.QualifiedName "" (T.pack rest)
-              | otherwise -> Types.QualifiedName (T.pack modName) (T.pack rest)
-  where
-    -- The characters before the first @__@, and those after it. Recursive
-    -- rather than 'Data.List.break' so the element type is pinned by the
-    -- pattern, with no predicate to infer.
-    breakOnSeparator acc ('_' : '_' : rest) = (reverse acc, rest)
-    breakOnSeparator acc (c : rest) = breakOnSeparator (c : acc) rest
-    breakOnSeparator acc [] = (reverse acc, [])
+          (modName, rest) = T.breakOn "__" body
+       in Types.QualifiedName modName (T.drop 2 rest)
 
 textFromSExpr :: SExpr -> Err Text
 textFromSExpr (SString t) = pure t

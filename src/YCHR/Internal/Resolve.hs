@@ -44,9 +44,7 @@ import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
--- MicroHs's 'Data.Text' lacks 'breakOn'; the shim supplies it
--- (dev-docs/MICROHS_GAPS.md, gap 4).
-import Data.Text.Shim qualified as T
+import Data.Text qualified as T
 import YCHR.Internal.Collected (CollectedImport (..), CollectedModule (..))
 import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
 import YCHR.Internal.PExpr qualified as PExpr
