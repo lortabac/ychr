@@ -93,6 +93,7 @@ import Text.Parsec.Pos (sourceColumn, sourceLine, sourceName)
 import Text.Parsec.Text ()
 import YCHR.Internal.Loc
 import YCHR.Internal.Parsing.Lexer qualified as L
+import YCHR.Internal.SExpr (showFloat)
 
 -- ---------------------------------------------------------------------------
 -- Terms
@@ -750,10 +751,6 @@ prettyPrec _ _ (Int n)
 prettyPrec _ _ (Float n)
   | n < 0 = "(" ++ showFloat n ++ ")"
   | otherwise = showFloat n
-  where
-    showFloat x =
-      let s = show x
-       in if '.' `elem` s then s else s ++ ".0"
 prettyPrec _ _ (Atom "[]") = "[]"
 prettyPrec table _ (Atom a) = renderAtom table.wordOpSet a
 prettyPrec _ _ (Str s) = renderString s

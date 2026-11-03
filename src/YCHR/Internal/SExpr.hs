@@ -8,7 +8,7 @@
 -- sexpr  = atom | int | float | string | list
 -- atom   = (alnum | [_.-])+   (any token that is not a number)
 -- int    = [-]?[0-9]+
--- float  = [-]?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)?
+-- float  = [-]?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)? | +nan.0 | +inf.0 | -inf.0
 -- string = '"' (escape | [^"\\])* '"'
 -- list   = '(' sexpr* ')'
 -- @
@@ -18,6 +18,7 @@ module YCHR.Internal.SExpr
   ( SExpr (..),
     printSExpr,
     parseSExpr,
+    showFloat,
   )
 where
 
@@ -58,11 +59,18 @@ data SExpr
 printSExpr :: SExpr -> Text
 printSExpr (SAtom t) = t
 printSExpr (SInt n) = T.pack (show n)
-printSExpr (SFloat n) =
-  let s = show n
-   in T.pack (if '.' `elem` s then s else s ++ ".0")
+printSExpr (SFloat n) = T.pack (showFloat n)
 printSExpr (SString t) = "\"" <> escapeString t <> "\""
 printSExpr (SList xs) = "(" <> T.intercalate " " (map printSExpr xs) <> ")"
+
+-- | Print a float. NaN and infinities use Scheme's spelling
+-- (@+nan.0@, @+inf.0@, @-inf.0@); everything else is 'show', which
+-- always has a @.@ for a finite 'Double'.
+showFloat :: Double -> String
+showFloat x
+  | isNaN x = "+nan.0"
+  | isInfinite x = if x > 0 then "+inf.0" else "-inf.0"
+  | otherwise = show x
 
 escapeString :: Text -> Text
 escapeString = T.concatMap esc
@@ -87,7 +95,19 @@ parseSExpr input = case parse (sc *> pSExpr <* eof) "<sexpr>" input of
 
 -- | Parse a single s-expression, consuming trailing whitespace.
 pSExpr :: Parser SExpr
-pSExpr = choice [pList, pString, pAtomOrInt] <* sc
+pSExpr = choice [pList, pString, pSpecialFloat, pAtomOrInt] <* sc
+
+-- | @+nan.0@, @+inf.0@ and @-inf.0@. Tried before 'pAtomOrInt' since
+-- @-inf.0@ would otherwise read as an atom.
+pSpecialFloat :: Parser SExpr
+pSpecialFloat =
+  choice
+    [ try (P.string "+nan.0" *> notAtomChar) >> pure (SFloat (0 / 0)),
+      try (P.string "+inf.0" *> notAtomChar) >> pure (SFloat (1 / 0)),
+      try (P.string "-inf.0" *> notAtomChar) >> pure (SFloat (-1 / 0))
+    ]
+  where
+    notAtomChar = P.notFollowedBy (satisfy isAtomChar)
 
 pList :: Parser SExpr
 pList = SList <$> between (char '(' *> sc) (char ')') (many pSExpr)

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+NaN and the infinities now print as `+nan.0`, `+inf.0` and `(-inf.0)`
+on both backends. The interpreter printed `NaN.0`, `Infinity.0` and
+`(-Infinity.0)`. The VM s-expression format writes and reads the same
+three spellings; it used to write `Infinity.0`, which it could not read.
+
 `:- inline` no longer rewrites the operands of `=`. In a rule body,
 `R = 1 + 2` gave `R = host:(1 + 2)`, because the inlined `+` was
 replaced by its `host:+` body. It now gives `R = prelude:(1 + 2)`, the
