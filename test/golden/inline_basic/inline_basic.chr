@@ -1,13 +1,15 @@
 :- module(
        inline_basic,
        [arith_guard/2, arith_is/2, chain/2, chain_in_body/2, nonlinear/3,
-        is_identity/2, wildcard_side_effect/1, side_effect/2]
+        is_identity/2, wildcard_side_effect/1, side_effect/2,
+        unify_operand/2, unify_prelude/1, lambda_body/1]
    ).
 :- use_module(library(prelude)).
 
 :- chr_constraint
        arith_guard/2, arith_is/2, chain/2, chain_in_body/2, nonlinear/3,
-       is_identity/2, wildcard_side_effect/1, side_effect/2.
+       is_identity/2, wildcard_side_effect/1, side_effect/2,
+       unify_operand/2, unify_prelude/1, lambda_body/1.
 
 :- function inc/1.
 :- function double/1.
@@ -74,3 +76,15 @@ wildcard_side_effect(R) <=> R is first(1, 10 div 0).
 % is itself a host call: this is the one shape a statement-position
 % substitution can produce.
 side_effect(X, R) <=> noisy(X), R = 1.
+
+% '=' does not evaluate its operands, so a call to an inline function
+% there stays a term: R gets 'inc(X)', not 'X + 1'.
+unify_operand(X, R) <=> R = inc(X).
+
+% Same for an inline prelude operator: R gets 'prelude:(1 + 2)', not
+% the 'host:+' call that '+' inlines to.
+unify_prelude(R) <=> R = 1 + 2.
+
+% A closure term is a 'quote', so the '+' in the lambda's body must
+% not be inlined into it: F prints with 'prelude:+', not 'host:+'.
+lambda_body(F) <=> F is myid(fun(X) -> X + 1 end).

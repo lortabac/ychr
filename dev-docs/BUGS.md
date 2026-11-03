@@ -11,37 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `:- inline` rewrites the operands of `=`
-
-**Documented claim.** `dev-docs/PROJECT.md` §Frontend: `=` is pure
-structural unification, neither operand evaluated, so `X = 1 + 1`
-binds `X` to the symbolic `prelude:+(1, 1)`. The same policy applies
-in rule bodies and queries.
-
-**Test.**
-
-    :- chr_constraint h/1.
-    h(R) <=> R = 1 + 2.
-
-    ychr run -g 'h(R)' --show-bindings
-
-and, in `ychr repl`, `X = 1 + 2.`
-
-**Expected.** `R = prelude:(1 + 2)` in both.
-
-**Actual.** The rule gives `R = host:(1 + 2)`; the REPL gives
-`X = prelude:(1 + 2)`. A non-inlined prelude function is fine:
-`R = max(1, 2)` gives `R = prelude:max(1, 2)`.
-
-**Notes.** `Desugar.Inline.rewriteExpr` is applied to both operands
-of `D.BodyUnify` (`src/YCHR/Internal/Desugar/Inline.hs`, the
-`BodyUnify` arm), so the call to the inlined `+` is replaced by its
-body, the `host:+` call. The `=` operand is data, not a call.
-
-**Fix sketch.** Owner decision: do NOT fix this session. Leave as is.
-When picked up: don't apply `rewriteExpr` to the `D.BodyUnify`
-operands.
-
 ## NaN and Infinity print with a bogus `.0` suffix
 
 **Documented claim.** None stated.
@@ -595,3 +564,52 @@ position rather than a new code. Needs a look at how other reserved
 names (`tell`, the aggregate forms) are rejected as *type* names, if
 at all, to reuse the same mechanism rather than inventing one just
 for `,`.
+
+## A lambda bound with `=` keeps a `quote(...)` wrapper
+
+**Documented claim.** `docs/reference/language.md` §Lambdas: a lambda
+is a first-class value. Nothing says it looks different depending on
+how it was bound.
+
+**Test.**
+
+    :- chr_constraint k/1, j/1.
+    k(F) <=> F = fun(X) -> X + 1 end.
+    j(F) <=> F is fun(X) -> X + 1 end.
+
+    ychr run k.chr -g 'k:k(F)' --show-bindings
+    ychr run k.chr -g 'k:j(F)' --show-bindings
+
+and, in `ychr repl`, `F = fun(X) -> X + 1 end.`
+
+**Expected.** `F = fun(X) -> prelude:(X + 1) end` in all three.
+
+**Actual.**
+
+    F = quote(fun(X) -> prelude:(X + 1) end)    % k, and the REPL
+    F = fun(X) -> prelude:(X + 1) end           % j
+
+The Scheme backend prints the same difference on the raw term:
+`'__closure'(k:'__lambda_0', quote(fun('X') -> ...))` for `k`, without
+the `quote` for `j`. Calling the closure works either way
+(`F = fun(X) -> X + 1 end, R is '$call'(F, 1)` gives `R = 2`). What differs
+is the term itself: printing shows it, and so would code that compares
+or takes apart two closures.
+
+**Notes.** Lambda lifting (`Desugar.hs`, ~line 782) builds the closure
+as `__closure(Id, quote(Source), Captures...)`. The `quote` is there so
+`compileExpr` builds `Source` as data (its `quote/1` arm calls
+`compileTerm`, `Compile.hs` ~line 1958), and the wrapper itself
+disappears. But `=` lowers its operands with `compileTerm .
+exprToTerm` (`Compile.hs` ~line 2572), and there `quote/1` is just a
+compound, so it stays in the term. That's the spec for a user-written
+`quote` under `=`, so the fix can't be "strip `quote` under `=`".
+
+**Fix sketch.** Not decided. One option: drop the `quote` from the
+closure, and give `compileExpr` a `__closure` arm that builds the
+source slot with `compileTerm`. Then both paths build the same term.
+If so, `Desugar/Inline.hs`'s `rewriteExpr` needs a matching
+`__closure` arm. It skips `quote` today, and that's the only thing
+keeping it from inlining calls in the lambda's printed body
+(`inline_basic/lambda_body` pins that). Add a golden with the `k` and `j`
+cases above.
