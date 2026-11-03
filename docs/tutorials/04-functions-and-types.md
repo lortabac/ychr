@@ -13,7 +13,7 @@ from the right-hand side of `is`, and in body position.
 :- chr_constraint compute(int, int).
 :- function factorial(int) -> int.
 
-factorial(0)         -> 1.
+factorial(0)            -> 1.
 factorial(N) when N > 0 -> N * factorial(N - 1).
 
 compute(N, R) <=> R is factorial(N).

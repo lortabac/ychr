@@ -285,7 +285,9 @@ Guards are ordinary rule guards, not Erlang's restricted guard set.
 `when` is a built-in `xfy` operator at priority 1105: looser than `,`
 and `;`, tighter than `->`. Outside an equation head it is just an
 operator: `when(A, B)` and a bare `when` atom still work, and the
-printer writes the atom as `'when'`.
+printer writes the atom as `'when'`. The one exception is an equation
+head: `when(A, B) -> ...` is the same term as `A when B -> ...`, so a
+function `when/2` cannot be defined (likewise `'|'/2`).
 
 Rule guards keep `|` (`H <=> G | B`). The old equation syntax,
 `f(X) | X > 0 -> ...`, is `BarInFunctionGuard`, YCHR-15031, with a hint
