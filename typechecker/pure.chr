@@ -73,7 +73,7 @@ validate_fields(Td, Dc, Ts, All) ->
 
 :- function validate_field(type_def, data_con, ty_expr, list(type_def)) -> list(error).
 % A type variable must be one of the enclosing declaration's parameters.
-validate_field(Td, _, tvar(V), _) | member(V, type_def_vars(Td)) -> [].
+validate_field(Td, _, tvar(V), _) when member(V, type_def_vars(Td)) -> [].
 validate_field(Td, Dc, tvar(V), _) ->
     [decl_error(Td, unbound_type_var,
                 unbound_type_var_d(type_def_name(Td), con_name(Dc), V))].
@@ -92,12 +92,12 @@ validate_field(Td, Dc, tconx(N, Args), All) ->
 :- function type_ref_errors(type_def, data_con, any, list(ty_expr), list(type_def))
     -> list(error).
 % Declared at exactly this arity: well-formed.
-type_ref_errors(_, _, N, Args, All) | has_type_def(N, length(Args), All) -> [].
+type_ref_errors(_, _, N, Args, All) when has_type_def(N, length(Args), All) -> [].
 % A base type takes no arguments, so any application of one is an
 % arity mismatch against a declared arity of zero.
-type_ref_errors(Td, Dc, N, Args, _) | is_base_type(N), length(Args) > 0 ->
+type_ref_errors(Td, Dc, N, Args, _) when is_base_type(N), length(Args) > 0 ->
     [arity_ref_error(Td, Dc, N, length(Args), 0)].
-type_ref_errors(_, _, N, _, _) | is_base_type(N) -> [].
+type_ref_errors(_, _, N, _, _) when is_base_type(N) -> [].
 % The renamer resolves type names by (name, arity), so a reference that
 % missed the table never matches and never gets qualified. When the base
 % name is declared at exactly one arity, hand off to `sole_arity_error`
@@ -111,7 +111,7 @@ type_ref_errors(Td, Dc, N, Args, All) ->
 % A base name found at the *same* arity means the reference is
 % invisible/undefined here (the renamer left it unqualified), not an
 % arity mismatch, so fall through to the undefined-type diagnosis.
-sole_arity_error(Td, Dc, N, Args, [Declared]) | not(Declared == length(Args)) ->
+sole_arity_error(Td, Dc, N, Args, [Declared]) when not(Declared == length(Args)) ->
     [arity_ref_error(Td, Dc, N, length(Args), Declared)].
 sole_arity_error(Td, Dc, N, _, _) ->
     [decl_error(Td, undefined_type,
@@ -209,13 +209,13 @@ decl_pair(con_decl(TName, A, _)) -> kv(TName, A).
 % `<` on two strings is lexicographic by code point.
 :- function decl_before(con_decl, con_decl) -> bool.
 decl_before(con_decl(_, _, loc(F1, _, _)), con_decl(_, _, loc(F2, _, _)))
-  | F1 < F2 -> true.
+  when F1 < F2 -> true.
 decl_before(con_decl(_, _, loc(F1, _, _)), con_decl(_, _, loc(F2, _, _)))
-  | F1 > F2 -> false.
+  when F1 > F2 -> false.
 decl_before(con_decl(_, _, loc(_, L1, _)), con_decl(_, _, loc(_, L2, _)))
-  | L1 < L2 -> true.
+  when L1 < L2 -> true.
 decl_before(con_decl(_, _, loc(_, L1, C1)), con_decl(_, _, loc(_, L2, C2)))
-  | L1 == L2, C1 < C2 -> true.
+  when L1 == L2, C1 < C2 -> true.
 decl_before(_, _) -> false.
 
 % ---------------------------------------------------------------------
@@ -294,11 +294,11 @@ funs_arity_errors(Env, [F|Fs], Unit) ->
 
 % Same count-based split as walk.chr's walk_funs_class/walk_funs_plain.
 :- function fun_unit_count(fun_def) -> int.
-fun_unit_count(fun_def(_, _, Sigs, _, _)) | length(Sigs) > 1 -> 0.
+fun_unit_count(fun_def(_, _, Sigs, _, _)) when length(Sigs) > 1 -> 0.
 fun_unit_count(fun_def(_, _, _, _, Eqs)) -> length(Eqs).
 
 :- function fun_arity_errors(con_env, fun_def, int) -> list(error).
-fun_arity_errors(Env, fun_def(FName, _, Sigs, _, Eqs), _) | length(Sigs) > 1 ->
+fun_arity_errors(Env, fun_def(FName, _, Sigs, _, Eqs), _) when length(Sigs) > 1 ->
     eqs_arity_errors(Env, FName, Eqs, no_unit).
 fun_arity_errors(Env, fun_def(FName, _, _, _, Eqs), Unit) ->
     eqs_arity_errors(Env, FName, Eqs, unit(Unit)).
@@ -424,6 +424,6 @@ check_canonical(Env, N, UseArity) -> arity_use_of(N, UseArity, lookup_con(Env, N
 
 :- function arity_use_of(any, int, maybe(con_info)) -> list(arity_use).
 arity_use_of(_, _, nothing) -> [].
-arity_use_of(N, UseArity, just(Info)) | not(con_arity(Info) == UseArity) ->
+arity_use_of(N, UseArity, just(Info)) when not(con_arity(Info) == UseArity) ->
     [arity_use(N, UseArity, con_arity(Info))].
 arity_use_of(_, _, just(_)) -> [].

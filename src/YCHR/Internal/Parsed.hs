@@ -362,7 +362,7 @@ data Declaration
   | MacroExportDecl MacroExportDeclBody
   deriving (Show, Eq)
 
--- | A function equation: @lhs [| guard] -> rhs@.
+-- | A function equation: @lhs [when guard] -> rhs@.
 data FunctionEquation = FunctionEquation
   { funName :: Name,
     args :: [Term],

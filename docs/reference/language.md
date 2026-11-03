@@ -269,15 +269,29 @@ head-normal-form machinery): repeated variables become equality
 guards, literal and compound patterns become match-and-extract steps.
 `0` matches only the integer 0; `[X | Xs]` only a non-empty cons cell.
 
-Equation guards follow `|` and have rule-guard ask semantics: no
-binding, comma-separated booleans, any function in scope:
+Equation guards follow `when`, as in Erlang, and have rule-guard ask
+semantics: no binding, comma-separated booleans, any function in scope:
 
 ```prolog
 :- function factorial/1.
 
-factorial(0)              -> 1.
-factorial(N) | N > 0      -> N * factorial(N - 1).
+factorial(0)            -> 1.
+factorial(N) when N > 0 -> N * factorial(N - 1).
 ```
+
+Guards are ordinary rule guards, not Erlang's restricted guard set.
+`:- extend_function` and `:- extend_class` equations use `when` too.
+
+`when` is a built-in `xfy` operator at priority 1105: looser than `,`
+and `;`, tighter than `->`. Outside an equation head it is just an
+operator: `when(A, B)` and a bare `when` atom still work, and the
+printer writes the atom as `'when'`. The one exception is an equation
+head: `when(A, B) -> ...` is the same term as `A when B -> ...`, so a
+function `when/2` cannot be defined (likewise `'|'/2`).
+
+Rule guards keep `|` (`H <=> G | B`). The old equation syntax,
+`f(X) | X > 0 -> ...`, is `BarInFunctionGuard`, YCHR-15031, with a hint
+to use `when`.
 
 Functions are callable in every evaluating position
 ([Tell-side evaluation](#tell-side-evaluation)). No matching equation
@@ -291,8 +305,8 @@ earlier items run strictly left-to-right, for effect or to bind:
 ```prolog
 :- function factorial/1.
 
-factorial(0)         -> 1.
-factorial(N) | N > 0 ->
+factorial(0)            -> 1.
+factorial(N) when N > 0 ->
     host:print(N),
     Prev is factorial(N - 1),
     N * Prev.
@@ -919,7 +933,7 @@ B = true.
 ```
 
 The operator table is a built-in core (the directive keywords, `=`,
-`is`, the rule operators, `requiring`, `refining`, …) plus the
+`is`, the rule operators, `when`, `requiring`, `refining`, …) plus the
 prelude's `op/3` exports. `:list_operators` in the REPL prints it.
 
 A REPL *query* is parsed with a wider table than a module: the union of
@@ -970,7 +984,7 @@ put a term in the message, render it with `library(meta)`'s
 `write_term_to_string/1`.
 
 ```prolog
-nonneg(X) | X >= 0 -> X.
+nonneg(X) when X >= 0 -> X.
 nonneg(_) -> panic("nonneg: negative argument").
 ```
 

@@ -1107,8 +1107,8 @@ of `out(T, T)` allows.
 ```prolog
 :- function int_to_string(int) -> string.
 :- function show(T) -> string.
-show(X) | integer(X) -> int_to_string(X).
-show(X) | string(X)  -> X.
+show(X) when integer(X) -> int_to_string(X).
+show(X) when string(X)  -> X.
 ```
 
 `T` is rigid in each equation. The first equation's guard contributes
@@ -2085,7 +2085,7 @@ During a per-signature attempt, a guard's evidence fact that
 contradicts the candidate signature's types counts as failure under
 that signature, and no inaccessible-branch warning is emitted for the
 attempt (§Guard-Derived Type Evidence). This is how a
-refinement-predicate guard selects its signature: below, `size(N) | integer(N) -> N`
+refinement-predicate guard selects its signature: below, `size(N) when integer(N) -> N`
 fails under `size(string) -> int` and checks under `size(int) -> int`.
 An equation whose guards contradict *every* signature checks under
 none — the `NoMatchingOverload` error, not a warning.
@@ -2104,8 +2104,8 @@ rather than counting as one more signature that did not fit.
     (size(int) -> int),
     (size(string) -> int).
 
-size(N) | integer(N) -> N.
-size(S) | string(S) -> string_length(S).
+size(N) when integer(N) -> N.
+size(S) when string(S)  -> string_length(S).
 
 :- chr_constraint foo(color).
 foo(X) <=> R is size(X).   %% Error: no matching overload
@@ -2525,8 +2525,8 @@ existing ones), and the constraint case shares the function case's.
 :- class ('>'(int, int) -> bool), ('>'(float, float) -> bool).
 :- function max(T, T) -> T requiring '>'(T, T) -> bool.
 
-max(X, Y) | X > Y -> X.
-max(_, Y)         -> Y.
+max(X, Y) when X > Y -> X.
+max(_, Y)            -> Y.
 ```
 
 Equation checking: `T` is rigid; `X : T`, `Y : T`. The guard `X > Y`
@@ -2558,9 +2558,9 @@ non-numeric, that makes a bound unsatisfiable.)
 :- function lookup(K, list(pair(K, V))) -> option(V) requiring
     eq(K, K) -> bool.
 
-lookup(_, [])                             -> none.
-lookup(K, [pair(K2, V) | _]) | eq(K, K2)  -> some(V).
-lookup(K, [_ | Rest])                     -> lookup(K, Rest).
+lookup(_, [])                                -> none.
+lookup(K, [pair(K2, V) | _]) when eq(K, K2)  -> some(V).
+lookup(K, [_ | Rest])                        -> lookup(K, Rest).
 ```
 
 (The bound function is a fresh `eq/2` rather than the prelude's

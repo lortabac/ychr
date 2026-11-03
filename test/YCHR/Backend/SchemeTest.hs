@@ -172,7 +172,7 @@ sumSource =
   \:- function sum(int) -> int.\n\
   \\n\
   \sum(0) -> 0.\n\
-  \sum(N) | N > 0 -> N + sum(N - 1).\n\
+  \sum(N) when N > 0 -> N + sum(N - 1).\n\
   \\n\
   \compute(N, R) <=> R is sum(N).\n"
 

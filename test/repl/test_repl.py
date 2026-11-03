@@ -519,7 +519,7 @@ def test_info_qualified_bound(ychr_bin, tmp_path):
         ":- module(main, [fun pick/2]).\n"
         ":- use_module(lib).\n\n"
         ":- function pick(T, T) -> T requiring gt(T, T) -> bool.\n"
-        "pick(X, Y) | gt(X, Y) -> X.\n"
+        "pick(X, Y) when gt(X, Y) -> X.\n"
         "pick(X, Y) -> Y.\n"
     )
     result = subprocess.run(

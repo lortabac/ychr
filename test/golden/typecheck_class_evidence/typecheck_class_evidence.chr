@@ -10,8 +10,8 @@
 % Overloading §Equation checking). A contradiction counts as failure
 % of that candidate and emits nothing, so the program checks clean.
 :- class (conv(int) -> string), (conv(string) -> int).
-conv(X) | integer(X) -> "i".
-conv(X) | string(X) -> 0.
+conv(X) when integer(X) -> "i".
+conv(X) when string(X) -> 0.
 
 :- chr_constraint run(int, string).
 

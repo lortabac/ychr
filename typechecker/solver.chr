@@ -354,8 +354,8 @@ filter_consistent_full(Cands, ArgTypes, RetType) ->
 match_ty(_, _, match_failed) -> match_failed.
 % §Type variables and instantiation, ahead of the structural rules: a
 % variable on either side is resolved through the substitution.
-match_ty(D, A, match_ok(S)) | var(D) -> match_var(D, A, assoc_get(D, S), S).
-match_ty(D, A, match_ok(S)) | var(A) -> match_var(A, D, assoc_get(A, S), S).
+match_ty(D, A, match_ok(S)) when var(D) -> match_var(D, A, assoc_get(D, S), S).
+match_ty(D, A, match_ok(S)) when var(A) -> match_var(A, D, assoc_get(A, S), S).
 % [C-Any-L] / [C-Any-R].
 match_ty(ty_any, _, S) -> S.
 match_ty(_, ty_any, S) -> S.
@@ -366,8 +366,8 @@ match_ty(ty_string, ty_string, S) -> S.
 % A rigid tvar is consistent with itself; a pinned one is consistent
 % with whatever its cell holds.
 match_ty(rigid(C, N, _), rigid(C, N, _), S) -> S.
-match_ty(rigid(C, _, _), A, S) | nonvar(C) -> match_ty(C, A, S).
-match_ty(D, rigid(C, _, _), S) | nonvar(C) -> match_ty(D, C, S).
+match_ty(rigid(C, _, _), A, S) when nonvar(C) -> match_ty(C, A, S).
+match_ty(D, rigid(C, _, _), S) when nonvar(C) -> match_ty(D, C, S).
 % [C-Con] and [C-Fun].
 match_ty(tcon(C, A1), tcon(C, A2), S) -> match_ty_list(A1, A2, S).
 match_ty(fun(A1, R1), fun(A2, R2), S) -> match_ty(R1, R2, match_ty_list(A1, A2, S)).
@@ -386,7 +386,7 @@ match_ty_list(Xs, Ys, S) ->
                 zip_exact(Xs, Ys)).
 
 match_var(V, T, nothing, S) -> match_ok([kv(V, T) | S]).
-match_var(_, T, just(T0), S) | ty_consistent(T0, T) -> match_ok(S).
+match_var(_, T, just(T0), S) when ty_consistent(T0, T) -> match_ok(S).
 match_var(_, _, _, _) -> match_failed.
 
 is_match_ok(match_ok(_)) -> true.
@@ -411,8 +411,8 @@ is_match_ok(match_failed) -> false.
     (sig_consistent(fun_sig_t, list(ty), ty) -> bool),
     (any_sig_consistent(list(fun_sig_t), list(ty), ty) -> bool).
 
-ty_consistent(T, _) | var(T) -> true.
-ty_consistent(_, T) | var(T) -> true.
+ty_consistent(T, _) when var(T) -> true.
+ty_consistent(_, T) when var(T) -> true.
 ty_consistent(ty_any, _) -> true.
 ty_consistent(_, ty_any) -> true.
 ty_consistent(ty_int, ty_int) -> true.
@@ -426,11 +426,11 @@ ty_consistent(ty_string, ty_string) -> true.
 % rigid (evidence bound its cell) is consistent with whatever its cell
 % holds.
 ty_consistent(rigid(C, N, _), rigid(C, N, _)) -> true.
-ty_consistent(rigid(C, _, _), T) | nonvar(C) -> ty_consistent(C, T).
-ty_consistent(T, rigid(C, _, _)) | nonvar(C) -> ty_consistent(T, C).
+ty_consistent(rigid(C, _, _), T) when nonvar(C) -> ty_consistent(C, T).
+ty_consistent(T, rigid(C, _, _)) when nonvar(C) -> ty_consistent(T, C).
 ty_consistent(tcon(C, A1), tcon(C, A2)) -> all2(fun ty_consistent/2, A1, A2).
 ty_consistent(fun(A1, R1), fun(A2, R2))
-    | all2(fun ty_consistent/2, A1, A2) -> ty_consistent(R1, R2).
+    when all2(fun ty_consistent/2, A1, A2) -> ty_consistent(R1, R2).
 ty_consistent(_, _) -> false.
 
 % A single declared signature is consistent with the substituted
@@ -477,7 +477,7 @@ any_sig_stable_witness(Sigs, SubArgs, SubRet) ->
     any(fun(Sig) -> sig_stable_witness(Sig, SubArgs, SubRet) end, Sigs).
 
 sig_stable_witness(Sig, SubArgs, SubRet)
-    | sig_ground(Sig) -> sig_consistent(Sig, SubArgs, SubRet).
+    when sig_ground(Sig) -> sig_consistent(Sig, SubArgs, SubRet).
 sig_stable_witness(_, _, _) -> false.
 
 % A signature is ground exactly when its own argument list and return
@@ -498,16 +498,16 @@ sig_ground(_) -> false.
     (sub_ground(list(ty), ty) -> bool),
     (ty_concrete(ty) -> bool).
 
-sub_ground(Args, Ret) | all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
+sub_ground(Args, Ret) when all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
 sub_ground(_, _) -> false.
 
-ty_concrete(T) | var(T) -> false.
+ty_concrete(T) when var(T) -> false.
 ty_concrete(ty_any) -> true.
 ty_concrete(ty_int) -> true.
 ty_concrete(ty_float) -> true.
 ty_concrete(ty_string) -> true.
 ty_concrete(tcon(_, Args)) -> all(fun ty_concrete/1, Args).
-ty_concrete(fun(Args, Ret)) | all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
+ty_concrete(fun(Args, Ret)) when all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
 % A rigid tvar is treated as concrete for the purpose of
 % `sub_ground`. It is structurally ground (a fully-specified term)
 % even though it stands for an abstract type — the gradual guarantee
@@ -515,7 +515,7 @@ ty_concrete(fun(Args, Ret)) | all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
 % this, `check_bound` at a rigid σ would stay residual forever and
 % its ambient-candidate discharge would never fire. A pinned rigid is
 % as concrete as the type its cell holds.
-ty_concrete(rigid(C, _, _)) | nonvar(C) -> ty_concrete(C).
+ty_concrete(rigid(C, _, _)) when nonvar(C) -> ty_concrete(C).
 ty_concrete(rigid(_, _, _)) -> true.
 ty_concrete(_) -> false.
 
@@ -930,7 +930,7 @@ tcon_args(_) -> [].
 % A function's skolem pins to any parent; a constraint's only to a
 % non-parametric one here (a determining one is `guard_match_rigid_determining`).
 :- function rigid_may_pin(ctx, ty) -> bool.
-rigid_may_pin(Ctx, _) | ctx_in_function(Ctx) -> true.
+rigid_may_pin(Ctx, _) when ctx_in_function(Ctx) -> true.
 rigid_may_pin(_, tcon(_, [])) -> true.
 rigid_may_pin(_, _) -> false.
 
@@ -1050,13 +1050,13 @@ unknown_guard_getarg @
 
 :- function (ty_occurs(ty, ty) -> bool).
 
-ty_occurs(C, T) | var(T), C == T -> true.
-ty_occurs(_, T) | var(T) -> false.
-ty_occurs(C, rigid(C2, _, _)) | C == C2 -> true.
-ty_occurs(C, rigid(C2, _, _)) | nonvar(C2) -> ty_occurs(C, C2).
+ty_occurs(C, T) when var(T), C == T -> true.
+ty_occurs(_, T) when var(T) -> false.
+ty_occurs(C, rigid(C2, _, _)) when C == C2 -> true.
+ty_occurs(C, rigid(C2, _, _)) when nonvar(C2) -> ty_occurs(C, C2).
 ty_occurs(_, rigid(_, _, _)) -> false.
 ty_occurs(C, tcon(_, Args)) -> any(fun(T) -> ty_occurs(C, T) end, Args).
-ty_occurs(C, fun(Args, _)) | any(fun(T) -> ty_occurs(C, T) end, Args) -> true.
+ty_occurs(C, fun(Args, _)) when any(fun(T) -> ty_occurs(C, T) end, Args) -> true.
 ty_occurs(C, fun(_, Ret)) -> ty_occurs(C, Ret).
 ty_occurs(_, _) -> false.
 
@@ -1151,7 +1151,7 @@ tc_unify_fun_arity @
 % A *pinned* rigid — one whose cell guard-derived evidence has bound
 % — is not opaque any more: the ordinary meet sees the type the cell
 % holds. This is how an evidence guard enables an operation the
-% skolem would otherwise reject (`show(X) | integer(X) -> ...`).
+% skolem would otherwise reject (`show(X) when integer(X) -> ...`).
 % Pinning is the only sanctioned exception to the meet table's rigid
 % rows and only `ev_unify` performs it.
 
@@ -1744,8 +1744,8 @@ link_unify_list_cons @
 
 % A type with its pinned and merged skolems followed.
 :- function ty_deref(ty) -> ty.
-ty_deref(T) | var(T) -> T.
-ty_deref(rigid(C, _, _)) | nonvar(C) -> ty_deref(C).
+ty_deref(T) when var(T) -> T.
+ty_deref(rigid(C, _, _)) when nonvar(C) -> ty_deref(C).
 ty_deref(T) -> T.
 
 % Whether linking the (dereferenced) outer type to the inner one ties a
@@ -1753,16 +1753,16 @@ ty_deref(T) -> T.
 % the goal's level that is already merged, and it and the outer side end
 % at two different unpinned skolems of levels enclosing the goal.
 :- function link_conflicts(ty, ty, list(int)) -> bool.
-link_conflicts(_, I, _) | var(I) -> false.
-link_conflicts(O, rigid(C, _, L), K) | L == K, nonvar(C) ->
+link_conflicts(_, I, _) when var(I) -> false.
+link_conflicts(O, rigid(C, _, L), K) when L == K, nonvar(C) ->
     distinct_outer_rigids(O, ty_deref(C), K).
 link_conflicts(_, _, _) -> false.
 
 :- function distinct_outer_rigids(ty, ty, list(int)) -> bool.
-distinct_outer_rigids(A, _, _) | var(A) -> false.
-distinct_outer_rigids(_, B, _) | var(B) -> false.
+distinct_outer_rigids(A, _, _) when var(A) -> false.
+distinct_outer_rigids(_, B, _) when var(B) -> false.
 distinct_outer_rigids(rigid(C1, N1, L1), rigid(C2, N2, L2), K)
-    | var(C1), var(C2), level_inside(L1, K), level_inside(L2, K) -> not(N1 == N2).
+    when var(C1), var(C2), level_inside(L1, K), level_inside(L2, K) -> not(N1 == N2).
 distinct_outer_rigids(_, _, _) -> false.
 
 % ==========================================================================
@@ -1790,11 +1790,11 @@ first_ty([T|_]) -> T.
 first_ty([]) -> ty_any.
 
 :- function ty_escapes(list(int), ty) -> bool.
-ty_escapes(_, T) | var(T) -> false.
-ty_escapes(L, rigid(C, _, _)) | nonvar(C) -> ty_escapes(L, C).
+ty_escapes(_, T) when var(T) -> false.
+ty_escapes(L, rigid(C, _, _)) when nonvar(C) -> ty_escapes(L, C).
 ty_escapes(L, rigid(_, _, Lr)) -> level_inside(L, Lr).
 ty_escapes(L, tcon(_, Args)) -> any(fun(A) -> ty_escapes(L, A) end, Args).
-ty_escapes(L, fun(Args, _)) | any(fun(A) -> ty_escapes(L, A) end, Args) -> true.
+ty_escapes(L, fun(Args, _)) when any(fun(A) -> ty_escapes(L, A) end, Args) -> true.
 ty_escapes(L, fun(_, Ret)) -> ty_escapes(L, Ret).
 ty_escapes(_, _) -> false.
 

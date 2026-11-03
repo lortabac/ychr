@@ -2,7 +2,7 @@
 :- chr_constraint classify/2.
 :- function sign/1.
 
-sign(N) | N >= 1 -> quote(positive).
+sign(N) when N >= 1 -> quote(positive).
 sign(0) -> quote(zero).
 sign(_) -> quote(negative).
 

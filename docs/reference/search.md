@@ -293,7 +293,7 @@ library rule over a small internal step function:
 ```prolog
 between(Low, High, X) <=> alt(between_alts(Low, High, X)).
 
-between_alts(Low, High, _) | Low > High -> [].
+between_alts(Low, High, _) when Low > High -> [].
 between_alts(Low, High, X) ->
     Next is Low + 1,
     [quote(try_unify(X, Low)), quote(between(Next, High, X))].

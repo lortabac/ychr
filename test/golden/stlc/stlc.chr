@@ -184,9 +184,9 @@ collect_es @ collect(Out), errors(Es) <=> Out = Es.
 % ever called on pre-`number_vars` types, whose leaves are `tint` or
 % unbound variables, so the `arrow` recursion covers every compound case.
 :- function occurs/2.
-occurs(V, T) | V == T -> true.
-occurs(_, T) | var(T) -> false.
-occurs(V, arrow(A, B)) | occurs(V, A) -> true.
+occurs(V, T) when V == T -> true.
+occurs(_, T) when var(T) -> false.
+occurs(V, arrow(A, B)) when occurs(V, A) -> true.
 occurs(V, arrow(A, B)) -> occurs(V, B).
 occurs(_, _) -> false.
 

@@ -334,6 +334,7 @@ parseValidationErrorCode OpaqueTypeHasConstructors = ErrorCode 15016
 parseValidationErrorCode MalformedOpaqueTypeDefinition = ErrorCode 15017
 parseValidationErrorCode MalformedBoundSig = ErrorCode 15012
 parseValidationErrorCode MalformedFunctionEquation = ErrorCode 15013
+parseValidationErrorCode BarInFunctionGuard = ErrorCode 15031
 parseValidationErrorCode MalformedTopLevel = ErrorCode 15014
 parseValidationErrorCode (DuplicateModuleHeader _) = ErrorCode 15015
 parseValidationErrorCode InvalidTypeParameter = ErrorCode 15018
@@ -704,7 +705,13 @@ parseValidationErrorMsg MalformedBoundSig =
 parseValidationErrorMsg MalformedFunctionEquation =
   withHint
     "Invalid function equation"
-    "expected 'lhs [| guard] -> rhs'"
+    "expected 'lhs [when guard] -> rhs'"
+parseValidationErrorMsg BarInFunctionGuard =
+  withHint
+    "Function guard written with '|'"
+    ( "function guards are written with 'when', e.g. 'f(X) when X > 0 -> ...';"
+        ++ " '|' is for rule guards"
+    )
 parseValidationErrorMsg MalformedTopLevel =
   withHint
     "Invalid top-level term"

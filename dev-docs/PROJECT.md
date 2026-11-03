@@ -694,7 +694,7 @@ The language supports user-defined functions: pattern-matching, top-to-bottom ev
 ```
 :- function factorial/1.
 factorial(0) -> 1.
-factorial(N) | N > 0 -> N * factorial(N - 1).
+factorial(N) when N > 0 -> N * factorial(N - 1).
 ```
 
 Functions are callable in guards, `is` RHS expressions, and rule body position (discarding the result). They compile to ordinary VM procedures via `CallExpr` — no new VM instructions are needed.
@@ -713,7 +713,7 @@ equations must live in one module — the declaring module — and the
 declarations must form a contiguous block of module items. A function
 declared with `:- open_function ...` is *open*: the same constraints
 apply to its primary declarations, but other modules may extend it
-with equations via `:- extend_function name(P1, ..., Pn) [| Guards] -> Body.`.
+with equations via `:- extend_function name(P1, ..., Pn) [when Guards] -> Body.`.
 `:- function` / `:- open_function` accept only a single signature
 (multi-sig groups are rejected as YCHR-16011, `MultiSigOnFunction`),
 and may carry a `requiring` clause for bounded polymorphism.
@@ -721,7 +721,7 @@ and may carry a `requiring` clause for bounded polymorphism.
 Multi-signature overloading uses the parallel pair `:- class` /
 `:- open_class`. `:- open_class` is extended cross-module via
 `:- extend_class_type (name(T1, ..., Tn) -> Tret).` (new signature)
-and `:- extend_class name(P1, ..., Pn) [| Guards] -> Body.` (new
+and `:- extend_class name(P1, ..., Pn) [when Guards] -> Body.` (new
 equation). `:- class` / `:- open_class` cannot carry `requiring`
 (rejected as YCHR-15005, `RequiringOnClass`).
 

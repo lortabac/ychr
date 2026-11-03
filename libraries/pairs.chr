@@ -60,12 +60,12 @@ zip_exact(_, _) -> nothing.
 % matches an entry keyed on that same variable and nothing else, so
 % `assoc_put` with an unbound key appends instead of replacing.
 assoc_get(_, []) -> nothing.
-assoc_get(K, [kv(K2, V)|_]) | K == K2 -> just(V).
+assoc_get(K, [kv(K2, V)|_]) when K == K2 -> just(V).
 assoc_get(K, [_|Rest]) -> assoc_get(K, Rest).
 
 % Replaces the first entry for `K` if there is one, appends otherwise.
 assoc_put(K, V, []) -> [kv(K, V)].
-assoc_put(K, V, [kv(K2, _)|Rest]) | K == K2 -> [kv(K, V)|Rest].
+assoc_put(K, V, [kv(K2, _)|Rest]) when K == K2 -> [kv(K, V)|Rest].
 assoc_put(K, V, [P|Rest]) -> [P|assoc_put(K, V, Rest)].
 
 % Like `assoc_put`, except that an existing entry's value is combined
@@ -76,22 +76,22 @@ assoc_put(K, V, [P|Rest]) -> [P|assoc_put(K, V, Rest)].
 % `assoc_put_with(fun(New, Old) -> append(Old, New) end, ...)` appends
 % it.
 assoc_put_with(_, K, V, []) -> [kv(K, V)].
-assoc_put_with(F, K, V, [kv(K2, Old)|Rest]) | K == K2 -> [kv(K2, call(F, V, Old))|Rest].
+assoc_put_with(F, K, V, [kv(K2, Old)|Rest]) when K == K2 -> [kv(K2, call(F, V, Old))|Rest].
 assoc_put_with(F, K, V, [P|Rest]) -> [P|assoc_put_with(F, K, V, Rest)].
 
 % Applies a function to the value of the first entry for `K`. A list
 % with no entry for `K` is returned unchanged.
 assoc_update(_, _, []) -> [].
-assoc_update(K, F, [kv(K2, V)|Rest]) | K == K2 -> [kv(K2, call(F, V))|Rest].
+assoc_update(K, F, [kv(K2, V)|Rest]) when K == K2 -> [kv(K2, call(F, V))|Rest].
 assoc_update(K, F, [P|Rest]) -> [P|assoc_update(K, F, Rest)].
 
 % Removes the first entry for `K`, if any.
 assoc_delete(_, []) -> [].
-assoc_delete(K, [kv(K2, _)|Rest]) | K == K2 -> Rest.
+assoc_delete(K, [kv(K2, _)|Rest]) when K == K2 -> Rest.
 assoc_delete(K, [P|Rest]) -> [P|assoc_delete(K, Rest)].
 
 assoc_member(_, []) -> false.
-assoc_member(K, [kv(K2, _)|_]) | K == K2 -> true.
+assoc_member(K, [kv(K2, _)|_]) when K == K2 -> true.
 assoc_member(K, [_|Rest]) -> assoc_member(K, Rest).
 
 assoc_keys([]) -> [].

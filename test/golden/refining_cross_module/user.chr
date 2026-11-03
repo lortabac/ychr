@@ -10,7 +10,7 @@
 % name avoids `library(lists)`'s own `is_list/1`, which is imported
 % here too and would otherwise be ambiguous.
 :- function size(T) -> int.
-size(X) | is_seq(X) -> length(X).
+size(X) when is_seq(X) -> length(X).
 size(_) -> 1.
 
 :- chr_constraint run(any, int).

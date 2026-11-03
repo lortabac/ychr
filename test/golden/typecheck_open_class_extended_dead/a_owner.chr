@@ -5,5 +5,5 @@
 % the only signature, so the equation is dead (YCHR-20104). b_ext.chr
 % changes that (docs/reference/type-system.md §Signature Overloading).
 :- open_class (classify(int) -> int).
-classify(X) | boolean(X) -> 0.
+classify(X) when boolean(X) -> 0.
 classify(X) -> X.

@@ -12,6 +12,6 @@
 % signature.
 :- class (unwrap(boxed(A)) -> A), (unwrap(string) -> string).
 unwrap(box(X)) -> X.
-unwrap(S) | string(S) -> S.
+unwrap(S) when string(S) -> S.
 
 go(R) <=> A is unwrap(box(1)), B is unwrap(box("xy")), R is string_length(B) + A.

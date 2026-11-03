@@ -89,7 +89,7 @@ between(Low, High, X) <=> alt(between_alts(Low, High, X)).
 % leave the constraint in the store, and a goal that quiesces with no
 % choice point is a *solution*, so the bound would silently succeed
 % with X unbound instead of being reported.
-between_alts(Low, High, _) | Low > High -> [].
+between_alts(Low, High, _) when Low > High -> [].
 between_alts(Low, High, X) ->
     Next is Low + 1,
     [quote(try_unify(X, Low)), quote(between(Next, High, X))].
@@ -166,7 +166,7 @@ forall_step(false) -> stop(false).
 %
 % The fold ends with `stop`, so everything is unwound: like findall,
 % the copies are all that survives.
-find_n(N, _, _) | N =< 0 -> [].
+find_n(N, _, _) when N =< 0 -> [].
 find_n(N, Template, G) ->
     reverse(fold_solutions(Template, G,
                            fun(C, Acc) -> find_n_step(N, [C|Acc]) end,
@@ -176,7 +176,7 @@ find_n(N, Template, G) ->
 % which is O(N) per solution. N is the bound the caller asked for and
 % is small, so this stays cheaper to read than carrying a length
 % alongside the list.
-find_n_step(N, Acc) | length(Acc) >= N -> stop(Acc).
+find_n_step(N, Acc) when length(Acc) >= N -> stop(Acc).
 find_n_step(_, Acc) -> continue(Acc).
 
 % Prolog's `=`: unify, or fail the branch. YCHR's own `=` raises a

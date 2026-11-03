@@ -11,9 +11,9 @@ not(aggregate(aggregates:count_spec, 1, k(_), 0))
 R is 1 + aggregate(aggregates:count_spec, 1, k(_), 0), q
 aggregate(argmin(Y, k(Y)), E, k(E), N) > 0
 p(X), aggregate(aggregates:count_spec, 1, (k(Y), '?'(aggregate(aggregates:count_spec, 1, k(_), 0))), N)
-aggregates_outside_head.chr:20:8: YCHR-20040
+aggregates_outside_head.chr:20:11: YCHR-20040
 aggregate(aggregates:count_spec, 1, k(_), 0) > 0
-aggregates_outside_head.chr:20:60: YCHR-20040
+aggregates_outside_head.chr:20:63: YCHR-20040
 Aggregate 'argmax/2' outside a rule head
 argmax(Z, k(Z))
 argmin(V, k(V)) > 0

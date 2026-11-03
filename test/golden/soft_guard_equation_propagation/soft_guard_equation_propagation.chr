@@ -26,7 +26,7 @@
 %             equation 2 is correct, `f(0)` is `b`, and the rule fires.
 
 :- function f/1.
-f(N) | N > 0 -> a.
+f(N) when N > 0 -> a.
 f(_) -> b.
 
 start_delayed @ delayed(R) <=> c(N), later(N, 5), gather(R).

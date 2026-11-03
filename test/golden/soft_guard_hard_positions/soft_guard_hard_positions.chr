@@ -37,7 +37,7 @@
 % and would not test the runtime at all.
 
 :- function f/1.
-f(N) | N > 0 -> 1.
+f(N) when N > 0 -> 1.
 f(_) -> 0.
 
 body_hard @ in_body(_) <=> do_body(_).

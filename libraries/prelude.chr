@@ -237,10 +237,10 @@ not(false) -> true.
 % `X \== Y`.
 X \== Y -> not(X == Y).
 
-max(X, Y) | X >= Y -> X.
+max(X, Y) when X >= Y -> X.
 max(_, Y) -> Y.
 
-min(X, Y) | X =< Y -> X.
+min(X, Y) when X =< Y -> X.
 min(_, Y) -> Y.
 
 % Type predicates take `any` and never raise on an unbound argument.

@@ -6,14 +6,14 @@
 % A 'requiring' bound naming a function in another user module.
 :- chr_constraint pick_user(int).
 :- function pick_max_user(T, T) -> T requiring lib:gt(T, T) -> bool.
-pick_max_user(X, Y) | lib:gt(X, Y) -> X.
+pick_max_user(X, Y) when lib:gt(X, Y) -> X.
 pick_max_user(_, Y) -> Y.
 pick_user(R) <=> R is pick_max_user(3, 4).
 
 % A 'requiring' bound naming a prelude function.
 :- chr_constraint pick_prelude(int).
 :- function pick_max_prelude(T, T) -> T requiring prelude:'>'(T, T) -> bool.
-pick_max_prelude(X, Y) | prelude:'>'(X, Y) -> X.
+pick_max_prelude(X, Y) when prelude:'>'(X, Y) -> X.
 pick_max_prelude(_, Y) -> Y.
 pick_prelude(R) <=> R is pick_max_prelude(5, 2).
 

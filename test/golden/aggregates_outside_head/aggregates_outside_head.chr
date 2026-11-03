@@ -17,7 +17,7 @@ p(X) ==> true | R is 1 + aggregate(aggregates:count_spec, 1, k(_), 0), q.
 p(X) ==> aggregate(argmin(Y, k(Y)), E, k(E), N) > 0 | q.
 
 :- function f/1.
-f(X) | aggregate(aggregates:count_spec, 1, k(_), 0) > 0 -> argmax(Z, k(Z)).
+f(X) when aggregate(aggregates:count_spec, 1, k(_), 0) > 0 -> argmax(Z, k(Z)).
 
 p(X), aggregate(aggregates:count_spec, 1, (k(Y), ? aggregate(aggregates:count_spec, 1, k(_), 0)), N) ==> q.
 
