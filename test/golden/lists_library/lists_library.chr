@@ -62,7 +62,7 @@
 % to a list. An unbound argument takes the second equation, because
 % `is_list/1` answers `false` rather than raising on one.
 :- function size(T) -> int.
-size(X) | is_list(X) -> length(X).
+size(X) when is_list(X) -> length(X).
 size(_) -> 1.
 
 mapped(R) <=> R is maplist(fun(X) -> X * 2 end, [1, 2, 3]).

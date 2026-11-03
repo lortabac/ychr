@@ -1,0 +1,5 @@
+:- module(function_guard_bar, [pos/1]).
+
+:- function pos/1.
+pos(N) | N > 0 -> true.
+pos(_) -> false.

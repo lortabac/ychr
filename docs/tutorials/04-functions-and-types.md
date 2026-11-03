@@ -14,7 +14,7 @@ from the right-hand side of `is`, and in body position.
 :- function factorial(int) -> int.
 
 factorial(0)         -> 1.
-factorial(N) | N > 0 -> N * factorial(N - 1).
+factorial(N) when N > 0 -> N * factorial(N - 1).
 
 compute(N, R) <=> R is factorial(N).
 ```
@@ -30,7 +30,8 @@ compute(N, R) <=> R is factorial(N).
 - `:- chr_constraint compute(int, int).` types the constraint's
   arguments.
 - The `factorial(...) -> ...` lines are *equations*, tried
-  top-to-bottom. `| N > 0` is a guard, the same `|` as in rules.
+  top-to-bottom. `when N > 0` is a guard. Equations use `when`;
+  rules use `|`.
 - `R is factorial(N)` evaluates the right-hand side and unifies the
   result with `R`.
 

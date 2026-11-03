@@ -5,7 +5,7 @@
 % An ordering usable at two element types: numeric for ints, by
 % length for strings.
 :- class (lt(int, int) -> bool), (lt(string, string) -> bool).
-lt(X, Y) | integer(X) -> X < Y.
+lt(X, Y) when integer(X) -> X < Y.
 lt(X, Y) -> string_length(X) < string_length(Y).
 
 :- chr_constraint sorted(list(T)) requiring lt(T, T) -> bool.

@@ -1,0 +1,4 @@
+:- module(a, [f/1]).
+
+:- open_function f/1.
+f(0) -> 0.

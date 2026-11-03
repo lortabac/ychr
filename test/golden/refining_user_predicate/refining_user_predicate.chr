@@ -18,7 +18,7 @@ is_seq(_) -> false.
 % without the guard's fact — which pins `T` to `list(B)` at a fresh
 % flexible `B`, exactly as the prelude's `integer/1` pins `int`.
 :- function size(T) -> int.
-size(X) | is_seq(X) -> length(X).
+size(X) when is_seq(X) -> length(X).
 size(_) -> 1.
 
 :- chr_constraint run(any, int).

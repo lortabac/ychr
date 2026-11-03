@@ -246,7 +246,7 @@ tests =
           checkModule
             ( mod_
                 [ ":- function f(T) -> int.",
-                  "f(X) | integer(X), string(X) -> 0.",
+                  "f(X) when integer(X), string(X) -> 0.",
                   "f(_) -> 1."
                 ]
             )
@@ -328,7 +328,7 @@ tests =
           checkModule
             ( mod_
                 [ ":- class (sz(int) -> int).",
-                  "sz(N) | boolean(N) -> 0.",
+                  "sz(N) when boolean(N) -> 0.",
                   "sz(N) -> N."
                 ]
             )
@@ -358,7 +358,7 @@ tests =
           checkModule
             ( mod_
                 [ ":- open_class (sz(int) -> int).",
-                  "sz(N) | boolean(N) -> 0.",
+                  "sz(N) when boolean(N) -> 0.",
                   "sz(N) -> N."
                 ]
             )

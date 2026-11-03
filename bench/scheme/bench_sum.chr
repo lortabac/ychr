@@ -17,6 +17,6 @@
 :- function sum(int) -> int.
 
 sum(0) -> 0.
-sum(N) | N > 0 -> N + sum(N - 1).
+sum(N) when N > 0 -> N + sum(N - 1).
 
 go(N, R) <=> R is sum(N).

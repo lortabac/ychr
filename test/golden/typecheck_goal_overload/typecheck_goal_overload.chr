@@ -19,7 +19,7 @@
     (size(int) -> int),
     (size(string) -> int).
 
-size(N) | integer(N) -> N.
-size(S) | string(S) -> string_length(S).
+size(N) when integer(N) -> N.
+size(S) when string(S) -> string_length(S).
 
 measured @ measure(X, R) <=> R = X.

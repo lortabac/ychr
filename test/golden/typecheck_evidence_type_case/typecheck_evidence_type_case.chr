@@ -11,8 +11,8 @@
 % equation alone. The second equation checks at `T := string` the same
 % way.
 :- function describe(T) -> int.
-describe(X) | integer(X) -> X + 1.
-describe(X) | string(X) -> 0.
+describe(X) when integer(X) -> X + 1.
+describe(X) when string(X) -> 0.
 
 :- chr_constraint run(any, int).
 

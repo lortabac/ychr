@@ -58,9 +58,9 @@ tests =
         ws <-
           exhWarnings $
             mod_
-              [ "rank(red) | true -> 1.",
-                "rank(green) | true -> 2.",
-                "rank(blue) | true -> 3."
+              [ "rank(red) when true -> 1.",
+                "rank(green) when true -> 2.",
+                "rank(blue) when true -> 3."
               ]
         ws @?= [("m:rank/1", "m:rank(m:red)")],
       testCase "fully guarded function over a non-algebraic type never warns" $ do
@@ -73,8 +73,8 @@ tests =
               [ ":- module(m, [c/1]).",
                 ":- chr_constraint c/1.",
                 ":- function myabs(int) -> int.",
-                "myabs(X) | X >= 0 -> X.",
-                "myabs(X) | X < 0 -> 0 - X.",
+                "myabs(X) when X >= 0 -> X.",
+                "myabs(X) when X < 0 -> 0 - X.",
                 "c(R) <=> R is myabs(5)."
               ]
         ws @?= [],

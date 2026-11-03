@@ -44,7 +44,7 @@ same(X, X) -> 1.
 % A user-written guard, not a pattern test. Failing it is a decision,
 % not an inconclusive result, even when the argument is unbound.
 :- function pos/1.
-pos(N) | N > 0 -> N.
+pos(N) when N > 0 -> N.
 
 % Nested destructuring: the blocking test is on a value extracted from
 % argument 2, not on argument 2 itself, so the reported index has to be
@@ -66,7 +66,7 @@ over(1, 2) -> 3.
 % definite mismatch.
 :- function shadow/1.
 shadow([__chr_inconclusive, __chr_blocked_arg|_])
-    | __chr_inconclusive > 100 -> __chr_blocked_arg.
+    when __chr_inconclusive > 100 -> __chr_blocked_arg.
 shadow(0) -> 0.
 
 go(_) <=> true.

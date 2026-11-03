@@ -29,7 +29,7 @@
 % argument takes the second equation, because `is_maybe/1` answers
 % `false` rather than raising on one.
 :- function present(T) -> bool.
-present(X) | is_maybe(X) -> is_just(X).
+present(X) when is_maybe(X) -> is_just(X).
 present(_) -> false.
 
 mapped(A, B) <=>

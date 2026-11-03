@@ -92,7 +92,7 @@
 % arguments. A qualified `m:int` mangles to `m__int` and so is
 % correctly not the built-in, which is why the whole name is compared.
 :- function is_any_ty(ty_expr) -> bool.
-is_any_ty(tconx(N, [])) | N == quote(any) -> true.
+is_any_ty(tconx(N, [])) when N == quote(any) -> true.
 is_any_ty(_) -> false.
 
 % True when `any` appears anywhere in a type expression, at any depth.
@@ -101,10 +101,10 @@ is_any_ty(_) -> false.
 % `tfunx`, the encoder's one-level spelling of what source writes as
 % `'->'(fun(...), Ret)`.
 :- function mentions_any(ty_expr) -> bool.
-mentions_any(T) | is_any_ty(T) -> true.
+mentions_any(T) when is_any_ty(T) -> true.
 mentions_any(tvar(_)) -> false.
 mentions_any(tconx(_, Args)) -> any(fun mentions_any/1, Args).
-mentions_any(tfunx(Args, _)) | any(fun mentions_any/1, Args) -> true.
+mentions_any(tfunx(Args, _)) when any(fun mentions_any/1, Args) -> true.
 mentions_any(tfunx(_, Ret)) -> mentions_any(Ret).
 
 % ---------------------------------------------------------------------
@@ -120,8 +120,8 @@ mentions_any(tfunx(_, Ret)) -> mentions_any(Ret).
 
 :- function skeleton_of(list(ty_expr)) -> type_skeleton.
 skeleton_of([]) -> sk_open.
-skeleton_of(Ts) | all(fun is_any_ty/1, Ts) -> sk_any.
-skeleton_of(Ts) | not(any(fun mentions_any/1, Ts)) -> sk_open.
+skeleton_of(Ts) when all(fun is_any_ty/1, Ts) -> sk_any.
+skeleton_of(Ts) when not(any(fun mentions_any/1, Ts)) -> sk_open.
 skeleton_of(Ts) -> skeleton_fun(Ts, same_fun_shape(Ts)).
 
 :- function skeleton_fun(list(ty_expr), maybe(fun_shapes)) -> type_skeleton.
@@ -144,13 +144,13 @@ skeleton_con(nothing) -> sk_open.
 % Every source is a function type, and they all take the same number of
 % arguments. An empty source list is not a shape.
 :- function same_fun_shape(list(ty_expr)) -> maybe(fun_shapes).
-same_fun_shape([tfunx(As, R)|Ts]) | all_fun_arity(length(As), Ts) ->
+same_fun_shape([tfunx(As, R)|Ts]) when all_fun_arity(length(As), Ts) ->
     just(fun_shapes([As|fun_argss(Ts)], [R|fun_rets(Ts)])).
 same_fun_shape(_) -> nothing.
 
 :- function all_fun_arity(int, list(ty_expr)) -> bool.
 all_fun_arity(_, []) -> true.
-all_fun_arity(N, [tfunx(As, _)|Ts]) | length(As) == N -> all_fun_arity(N, Ts).
+all_fun_arity(N, [tfunx(As, _)|Ts]) when length(As) == N -> all_fun_arity(N, Ts).
 all_fun_arity(_, _) -> false.
 
 :- function fun_argss(list(ty_expr)) -> list(list(ty_expr)).
@@ -166,13 +166,13 @@ fun_rets(_) -> [].
 % their own constructor (`tfunx`), so they never look like a `tconx`
 % application.
 :- function same_con_shape(list(ty_expr)) -> maybe(con_shapes).
-same_con_shape([tconx(N, [A|As])|Ts]) | all_con_shape(N, 1 + length(As), Ts) ->
+same_con_shape([tconx(N, [A|As])|Ts]) when all_con_shape(N, 1 + length(As), Ts) ->
     just(con_shapes(N, [[A|As] | con_argss(Ts)])).
 same_con_shape(_) -> nothing.
 
 :- function all_con_shape(any, int, list(ty_expr)) -> bool.
 all_con_shape(_, _, []) -> true.
-all_con_shape(N, Ar, [tconx(N2, As)|Ts]) | N2 == N, length(As) == Ar ->
+all_con_shape(N, Ar, [tconx(N2, As)|Ts]) when N2 == N, length(As) == Ar ->
     all_con_shape(N, Ar, Ts).
 all_con_shape(_, _, _) -> false.
 
@@ -228,7 +228,7 @@ all_linked_vars(Occs, Links) ->
 % has a declaration source or appears in a link.
 :- function components(list(any), list(pair(any, any)), list(any)) -> list(list(any)).
 components([], _, _) -> [].
-components([V|Vs], Links, Seen) | member(V, Seen) -> components(Vs, Links, Seen).
+components([V|Vs], Links, Seen) when member(V, Seen) -> components(Vs, Links, Seen).
 components([V|Vs], Links, Seen) -> emit_comp(reach(Links, [V], [V]), Vs, Links, Seen).
 
 % The component is passed on rather than recomputed: there is no `let`,
@@ -247,15 +247,15 @@ reach_step(Links, Acc, Xs, New) -> reach(Links, append(Acc, New), append(New, Xs
 
 :- function neighbors(list(pair(any, any)), any) -> list(any).
 neighbors([], _) -> [].
-neighbors([kv(A, B)|Rest], X) | A == X -> [B|neighbors(Rest, X)].
-neighbors([kv(A, B)|Rest], X) | B == X -> [A|neighbors(Rest, X)].
+neighbors([kv(A, B)|Rest], X) when A == X -> [B|neighbors(Rest, X)].
+neighbors([kv(A, B)|Rest], X) when B == X -> [A|neighbors(Rest, X)].
 neighbors([_|Rest], X) -> neighbors(Rest, X).
 
 % The neighbours not already reached, each counted once. Dropping the
 % duplicates is what makes `reach` terminate.
 :- function fresh_neighbors(list(any), list(any)) -> list(any).
 fresh_neighbors([], _) -> [].
-fresh_neighbors([N|Ns], Acc) | member(N, Acc) -> fresh_neighbors(Ns, Acc).
+fresh_neighbors([N|Ns], Acc) when member(N, Acc) -> fresh_neighbors(Ns, Acc).
 fresh_neighbors([N|Ns], Acc) -> [N|fresh_neighbors(Ns, [N|Acc])].
 
 :- function comps_skeletons(list(list(any)), list(pair(any, ty_expr)))
@@ -388,7 +388,7 @@ arg_occs([head_wild|As], [_|Ts]) -> arg_occs(As, Ts).
 % types stamps nothing.
 :- function param_var_skeletons(tc_env, list(head_arg), list(ty_expr), list(guard))
     -> list(pair(any, type_skeleton)).
-param_var_skeletons(_, Params, DeclTys, _) | not(length(Params) == length(DeclTys)) -> [].
+param_var_skeletons(_, Params, DeclTys, _) when not(length(Params) == length(DeclTys)) -> [].
 param_var_skeletons(Env, Params, DeclTys, Guards) ->
     var_skeletons(append(arg_occs(Params, DeclTys),
                          guard_field_occs(env_cons(Env), Guards)),

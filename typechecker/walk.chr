@@ -134,10 +134,10 @@ scope_ambient(scope(_, _, Amb, _), Key) -> from_maybe([], assoc_get(Key, Amb)).
 
 :- function encode_ty(list(pair(string, ty)), ty_expr) -> ty.
 encode_ty(TVars, tvar(V)) -> from_maybe(ty_any, assoc_get(V, TVars)).
-encode_ty(_, tconx(N, [])) | N == quote(int) -> ty_int.
-encode_ty(_, tconx(N, [])) | N == quote(float) -> ty_float.
-encode_ty(_, tconx(N, [])) | N == quote(string) -> ty_string.
-encode_ty(_, tconx(N, [])) | N == quote(any) -> ty_any.
+encode_ty(_, tconx(N, [])) when N == quote(int) -> ty_int.
+encode_ty(_, tconx(N, [])) when N == quote(float) -> ty_float.
+encode_ty(_, tconx(N, [])) when N == quote(string) -> ty_string.
+encode_ty(_, tconx(N, [])) when N == quote(any) -> ty_any.
 encode_ty(TVars, tconx(N, Args)) -> tcon(N, encode_tys(TVars, Args)).
 encode_ty(TVars, tfunx(Args, Ret)) ->
     fun(encode_tys(TVars, Args), encode_ty(TVars, Ret)).
@@ -780,7 +780,7 @@ child_level1 @
 % Where a contradiction inside a plain aggregate's goal is reported: as
 % a dead goal, unless this is already a selection's second check.
 :- function inner_mode(ctx) -> check_mode.
-inner_mode(C) | ctx_mode(C) == mode_copy -> mode_copy.
+inner_mode(C) when ctx_mode(C) == mode_copy -> mode_copy.
 inner_mode(_) -> mode_goal.
 
 :- function key_comparison(agg_kind) -> any.
@@ -885,14 +885,14 @@ link_copies_two_way @
 solid_outer(S, V) -> solid_ty(ty_deref(scope_var_ty(S, V))).
 
 :- function solid_ty(ty) -> bool.
-solid_ty(T) | var(T) -> false.
+solid_ty(T) when var(T) -> false.
 solid_ty(rigid(_, _, _)) -> false.
 solid_ty(_) -> true.
 
 % Whether the solid outer types already come first.
 :- function links_ordered(scope, list(any)) -> bool.
 links_ordered(_, []) -> true.
-links_ordered(S, [V|Vs]) | solid_outer(S, V) -> links_ordered(S, Vs).
+links_ordered(S, [V|Vs]) when solid_outer(S, V) -> links_ordered(S, Vs).
 links_ordered(S, Vs) -> not(any(fun(V) -> solid_outer(S, V) end, Vs)).
 
 % The result pattern, in the enclosing scope: its variable has the

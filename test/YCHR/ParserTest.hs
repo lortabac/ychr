@@ -357,7 +357,7 @@ directiveTests =
                 ":- opaque_type oc:foo.",
                 ":- opaque_type oc:foo(T).",
                 "oc:foo(X) -> X.",
-                "oc:foo(X) | g(X) -> X.",
+                "oc:foo(X) when g(X) -> X.",
                 "oc:foo -> 1."
               ]
         forM_ sources $ \src -> (src, pErrs src) @?= (src, qualified),
@@ -365,11 +365,18 @@ directiveTests =
         pErrs ":- chr_constraint X:foo(int)." @?= Right [MalformedDeclaration]
         pErrs ":- function X:foo/1." @?= Right [MalformedDeclaration]
         pErrs ":- function oc:(foo/1)." @?= Right [MalformedDeclaration],
+      testCase "a function guard uses when, and a comma chain stays one guard" $ do
+        let guards m = map (length . (.node.guard.node)) m.equations
+        guards <$> p "f(X) when g(X), h(X) -> X." @?= Right [2]
+        guards <$> p "f(X) -> X." @?= Right [0],
+      testCase "a function guard written with | is rejected" $ do
+        pErrs "f(X) | g(X) -> X." @?= Right [BarInFunctionGuard]
+        pErrs ":- extend_function f(X) | g(X) -> X." @?= Right [BarInFunctionGuard],
       testCase "extension equations may name their target qualified" $ do
         let funNames m = map (.node.funName) (m.extensions ++ m.classExtensions)
         funNames <$> p ":- extend_function oc:f(X) -> 0."
           @?= Right [Qualified "oc" "f"]
-        funNames <$> p ":- extend_class oc:f(X) | g(X) -> 0."
+        funNames <$> p ":- extend_class oc:f(X) when g(X) -> 0."
           @?= Right [Qualified "oc" "f"]
         funNames <$> p ":- extend_function oc:k -> 1."
           @?= Right [Qualified "oc" "k"]

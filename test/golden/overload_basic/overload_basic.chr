@@ -10,8 +10,8 @@
     (size(int) -> int),
     (size(string) -> int).
 
-size(N) | integer(N) -> N.
-size(S) | string(S) -> string_length(S).
+size(N) when integer(N) -> N.
+size(S) when string(S) -> string_length(S).
 
 result(test1, R) <=> R is size(42).
 result(test2, R) <=> R is size("hello").

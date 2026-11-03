@@ -6,7 +6,7 @@ sz(0) -> 10.
 sz(1) -> 11.
 
 :- open_function ef(int) -> int.
-ef(X) | X =< 100 -> X.
+ef(X) when X =< 100 -> X.
 
 :- chr_constraint run_sz/2, run_ef/2.
 run_sz(X, R) <=> R is sz(X).

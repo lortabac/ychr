@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Breaking: function-equation guards are written with `when`, as in
+Erlang, not `|`. `f(X) | X > 0 -> X.` is now `f(X) when X > 0 -> X.`;
+the same holds for `:- extend_function` and `:- extend_class`. Rule
+guards (`H <=> G | B`) keep `|`. `when` is a new operator at priority
+1105, `xfy`, like `|`. The old form is a parse error, YCHR-15031.
+
 NaN and the infinities now print as `+nan.0`, `+inf.0` and `(-inf.0)`
 on both backends. The interpreter printed `NaN.0`, `Infinity.0` and
 `(-Infinity.0)`. The VM s-expression format writes and reads the same

@@ -7,7 +7,7 @@
 gt(X, Y) -> X > Y.
 
 :- function mymax(T, T) -> T requiring gt(T, T) -> bool.
-mymax(X, Y) | gt(X, Y) -> X.
+mymax(X, Y) when gt(X, Y) -> X.
 mymax(_, Y) -> Y.
 
 :- function apply2(fun(A, A) -> A end, A, A) -> A.

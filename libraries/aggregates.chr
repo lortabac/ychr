@@ -154,13 +154,13 @@ fmul_inc(W, X) -> W * X.
 min_spec -> aggregator(nothing, fun min_inc/2, fun identity_final/1).
 
 min_inc(nothing, X) -> just(X).
-min_inc(just(W), X) | X < W -> just(X).
+min_inc(just(W), X) when X < W -> just(X).
 min_inc(W, _) -> W.
 
 max_spec -> aggregator(nothing, fun max_inc/2, fun identity_final/1).
 
 max_inc(nothing, X) -> just(X).
-max_inc(just(W), X) | X > W -> just(X).
+max_inc(just(W), X) when X > W -> just(X).
 max_inc(W, _) -> W.
 
 % The mean of integer elements, as a float. `/` has no integer signature,

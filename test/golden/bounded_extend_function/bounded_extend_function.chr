@@ -8,7 +8,7 @@ gt(X, Y) -> X > Y.
 
 % Bounded open function with one initial equation.
 :- open_function pick(T, T) -> T requiring gt(T, T) -> bool.
-pick(X, _) | gt(X, X) -> X.
+pick(X, _) when gt(X, X) -> X.
 
 % Extension: a new equation for the bounded open function. Allowed
 % because :- extend_function is permitted on bounded open functions;

@@ -9,7 +9,7 @@ gt(X, Y) -> X > Y.
 
 :- function pick_max(T, T) -> T requiring gt(T, T) -> bool.
 
-pick_max(X, Y) | gt(X, Y) -> X.
+pick_max(X, Y) when gt(X, Y) -> X.
 pick_max(_, Y) -> Y.
 
 % Bound unsatisfied: there is no gt(string, string) -> bool.

@@ -1,0 +1,4 @@
+:- module(b, []).
+:- use_module(a).
+
+:- extend_function a:f(X) | X > 0 -> 1.

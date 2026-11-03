@@ -140,7 +140,7 @@ ctx_at(ctx(U, O, Lb, Loc, _), L, M) -> ctx(U, O, Lb, Loc, lvl(L, M)).
 
 % `level_within(K, L)`: `L` is `K` or a level inside it.
 :- function level_within(list(int), list(int)) -> bool.
-level_within(K, L) | K == L -> true.
+level_within(K, L) when K == L -> true.
 level_within(K, [_|L]) -> level_within(K, L).
 level_within(_, []) -> false.
 
@@ -326,6 +326,6 @@ error_units([error(ctx(U, _, _, _, _), _, _)|Es]) -> [U|error_units(Es)].
 
 :- function keep_warnings(list(unit_id), list(warning)) -> list(warning).
 keep_warnings(_, []) -> [].
-keep_warnings(Us, [warning(ctx(U, _, _, _, _), _, _)|Ws]) | member(U, Us) ->
+keep_warnings(Us, [warning(ctx(U, _, _, _, _), _, _)|Ws]) when member(U, Us) ->
     keep_warnings(Us, Ws).
 keep_warnings(Us, [W|Ws]) -> [W|keep_warnings(Us, Ws)].

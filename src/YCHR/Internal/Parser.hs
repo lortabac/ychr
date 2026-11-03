@@ -112,7 +112,7 @@ builtinOps =
       (500, [(P.Fx, "fun")]),
       (750, [(P.Xfx, "is"), (P.Xfx, "=")]),
       (1000, [(P.Xfy, ",")]),
-      (1105, [(P.Xfy, "|")]),
+      (1105, [(P.Xfy, "|"), (P.Xfy, "when")]),
       (1110, [(P.Xfy, "->")]),
       (1100, [(P.Xfy, ";"), (P.Xfx, "\\")]),
       -- Bounded polymorphism: @sig requiring bound1, bound2, ...@,
@@ -721,8 +721,11 @@ data ParseValidationError
     MalformedBoundSig
   | -- | A @:- extend_function@ / @:- extend_class@ payload, or a
     -- top-level equation, does not have the expected
-    -- @lhs [| guard] -> rhs@ shape. The equation is dropped.
+    -- @lhs [when guard] -> rhs@ shape. The equation is dropped.
     MalformedFunctionEquation
+  | -- | A function equation guard written with @|@ (@lhs | guard -> rhs@).
+    -- Equation guards use @when@. The equation is dropped.
+    BarInFunctionGuard
   | -- | A top-level term is neither a directive, a rule
     -- (@\<=\>@/@==\>@), nor a function equation. The item is dropped.
     MalformedTopLevel
@@ -1196,10 +1199,10 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- extend_class_type (foo(int) -> int).
   Compound "extend_class_type" [decls] ->
     DirExtendClassTypeDecl <$> collectDecls convertExtendClassTypeDecl decls
-  -- :- extend_function name(args) [| guards] -> body.
+  -- :- extend_function name(args) [when guards] -> body.
   Compound "extend_function" [eqn] ->
     maybe DirOther DirExtendFunctionEqn <$> convertFunctionEquation AllowQualified eqn
-  -- :- extend_class name(args) [| guards] -> body.
+  -- :- extend_class name(args) [when guards] -> body.
   Compound "extend_class" [eqn] ->
     maybe DirOther DirExtendClassEqn <$> convertFunctionEquation AllowQualified eqn
   -- :- chr_type name ---> con1 ; con2 ; ...
@@ -1853,13 +1856,15 @@ goalList x = AnnP (map convertTerm (flattenComma x)) x.sourceLoc x.node
 
 -- | Convert a top-level PExpr to a 'FunctionEquation'. Returns 'Nothing'
 -- and a 'MalformedFunctionEquation' error when the input is not of the
--- expected @lhs [| guard] -> rhs@ shape.
+-- expected @lhs [when guard] -> rhs@ shape.
 convertFunctionEquation ::
   HeadQualifier -> Ann PExpr -> Conv (Maybe (AnnP FunctionEquation))
 convertFunctionEquation hq (Ann pexpr loc) = case pexpr of
   Compound "->" [lhs, rhs] -> case lhs.node of
-    -- Guarded: lhs_pattern | guard -> rhs
-    Compound "|" [p, guard_] -> equation p (goalList guard_) rhs
+    -- Guarded: lhs_pattern when guard -> rhs
+    Compound "when" [p, guard_] -> equation p (goalList guard_) rhs
+    -- The old spelling, lhs_pattern | guard -> rhs
+    Compound "|" _ -> failWith (AnnP BarInFunctionGuard loc pexpr)
     -- Unguarded: lhs_pattern -> rhs
     _ -> equation lhs (noAnnPAt lhs.sourceLoc []) rhs
   _ -> failWith (AnnP MalformedFunctionEquation loc pexpr)

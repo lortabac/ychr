@@ -124,7 +124,7 @@ renderClass c =
         | k <- NE.toList def.adtCtors
         ]
       _ -> []
-    guarded p = c.cfName <> "(CX) | " <> p <> "(CX) -> true."
+    guarded p = c.cfName <> "(CX) when " <> p <> "(CX) -> true."
 
 -- | One directive per constraint.
 --

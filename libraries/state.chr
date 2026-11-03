@@ -84,7 +84,7 @@
 
 run_state(K, V, G) -> value(head(run_states([kv(K, V)], G))).
 
-run_states(KVs, _) | not(kv_list(KVs)) ->
+run_states(KVs, _) when not(kv_list(KVs)) ->
     panic("state: run_states expects a list of kv(K, V)").
 run_states(KVs, G) -> run_with(KVs, G, maplist(fun fresh_value/1, KVs)).
 
@@ -108,10 +108,10 @@ run_result(false, _) ->
 
 fresh_value(kv(K, _)) -> kv(K, _).
 
-goal_list(G) | is_list(G) -> G.
+goal_list(G) when is_list(G) -> G.
 goal_list(G) -> [G].
 
-kv_list(L) | is_list(L) -> all(fun is_kv/1, L).
+kv_list(L) when is_list(L) -> all(fun is_kv/1, L).
 kv_list(_) -> false.
 
 is_kv(kv(_, _)) -> true.
