@@ -126,8 +126,8 @@ A declaration with no clauses is allowed; every use of it is
   Other arities of those names are allowed.
 - A goal macro also may not have the name and arity of one of the five
   aggregate forms — `aggregate/4`, `argmin/2`, `argmax/2`, `takemin/2`,
-  `takemax/2` (it would always read as the aggregate form):
-  `ReservedAggregateName`; see
+  `takemax/2` (it would always read as the aggregate form), nor `?/1`
+  (the aggregate goal guard): `ReservedAggregateName`; see
   [aggregates.md](aggregates.md#reserved-names). A declaration macro
   is a directive, not a goal, so it is exempt, and other arities of
   these names are allowed.
@@ -827,7 +827,7 @@ Errors:
 | `MacroExpansionTooLarge` | YCHR-20038 | A use written in a rule, a query or a top-level directive causes more than 100000 expansions (see [Recursion and termination](#recursion-and-termination)). |
 | `MalformedMacroPrimitive` | YCHR-20036 | An operand of `'$compound'` or `'$atom'` breaks the rules under [Construction primitives](#construction-primitives). |
 | `MacroPrimitiveOutsideMacro` | YCHR-20037 | A primitive remains after expansion: it was not written in a macro body. |
-| `ReservedAggregateName` | YCHR-20043 | A goal macro is declared at one of the five aggregate-form keys (see [Heads](#heads)). |
+| `ReservedAggregateName` | YCHR-20043 | A goal macro is declared at one of the five aggregate-form keys or at `?/1` (see [Heads](#heads)). |
 
 Declaration-macro errors. All 15xxx codes come before conversion:
 `MacroDeclsForbiddenClause` and `UnknownDirective` from expansion (see

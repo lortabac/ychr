@@ -1,0 +1,9 @@
+% ?/1 is the aggregate guard, so it is reserved too: as a constraint,
+% a function and a goal macro.
+:- module(aggregates_reserved_decl_guard, []).
+:- chr_constraint '?'/1, go/0.
+
+:- function '?'(int) -> int.
+'?'(X) -> X.
+
+:- macro '?'(X) ---> [go].

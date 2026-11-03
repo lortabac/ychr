@@ -1122,7 +1122,7 @@ locAtOrAfter a b = (a.line, a.col) >= (b.line, b.col)
 --     clause's head patterns, which are never evaluated; or a
 --     constraint or function declared with a primitive's reserved name.
 --   * 'ReservedAggregateName' — a constraint, function or goal macro
---     declared at one of the five aggregate-form keys.
+--     declared at one of the five aggregate-form keys, or at @?\/1@.
 --
 -- Plus the 'UnusedMacroParameter' warning for a head variable that
 -- occurs only once in its clause and whose name does not start with
@@ -1141,7 +1141,7 @@ checkMacroDefinitions ctx = do
 
     -- 'checkReservedMacro' already reports these; don't report them
     -- twice.
-    isReservedGoalMacro d = d.kind == GoalMacro && isAggregateFormKey d.name d.arity
+    isReservedGoalMacro d = d.kind == GoalMacro && isReservedAggregateKey d.name d.arity
 
     checkDuplicate seen annDef =
       let key = UnqualifiedIdentifier annDef.node.name annDef.node.arity
@@ -1197,7 +1197,7 @@ checkMacroDefinitions ctx = do
             let origin = slashOrigin n a loc
              in emitErrorIn ctx (AnnP (MacroPrimitiveOutsideMacro n a) loc origin)
         | isConstraintOrFunctionDecl d,
-          isAggregateFormKey n a ->
+          isReservedAggregateKey n a ->
             let origin = slashOrigin n a loc
              in emitErrorIn ctx (AnnP (ReservedAggregateName n a) loc origin)
       _ -> pure ()
@@ -1210,7 +1210,7 @@ checkMacroDefinitions ctx = do
     checkReservedMacro annDef =
       let d = annDef.node
           err = ReservedAggregateName d.name d.arity
-       in when (d.kind == GoalMacro && isAggregateFormKey d.name d.arity) $
+       in when (d.kind == GoalMacro && isReservedAggregateKey d.name d.arity) $
             emitErrorIn ctx (annAt (siteOf annDef) err)
 
     selfDeclaresAndExports n a =
@@ -1423,6 +1423,11 @@ aggregateForm (Unqualified n) args = case (n, args) of
 -- 'aggregateForm' itself, so the two can't drift.
 isAggregateFormKey :: Text -> Int -> Bool
 isAggregateFormKey n a = isJust (aggregateForm (Unqualified n) (replicate a Wildcard))
+
+-- | Keys that can't be declared: the aggregate forms plus the @?\/1@
+-- guard, which only means something inside an aggregate goal.
+isReservedAggregateKey :: Text -> Int -> Bool
+isReservedAggregateKey n a = isAggregateFormKey n a || isGuardFunctor (Unqualified n) a
 
 -- | Rename one aggregate. The arguments are renamed like head or body
 -- terms, except the goal, whose conjuncts are classified structurally
