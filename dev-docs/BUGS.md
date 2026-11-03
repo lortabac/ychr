@@ -11,66 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `fun m:name/arity` is always rejected as "does not export `name/0`"
-
-**Documented claim.** `docs/reference/language.md` §Scheme backend
-portability: "a qualified `module:name` — which the string reader
-accepts but a source `fun` does not — picks one exactly". So a source
-`fun m:name/arity` is unsupported, but the error should say so.
-
-**Test.**
-
-    :- module(implib, [gt/2]).
-    :- function gt(int, int) -> bool.
-    gt(X, Y) -> X > Y.
-
-    :- module(funuser, [bar/2]).
-    :- use_module(implib).
-    :- chr_constraint bar(int, int).
-    bar(X, Y) <=> '$call'(fun implib:gt/2, X, Y) | true.
-
-    ychr check implib.chr funuser.chr
-
-**Expected.** Either accepted (`implib` is imported in full and
-exports `gt/2`), or an error that says a qualified `fun` reference is
-not supported.
-
-**Actual.**
-
-    === error ===
-    funuser.chr:4:15: YCHR-20009
-    Module 'implib' does not export 'gt/0'
-
-The term parses as `fun((implib:gt)/2)`. `renameTerm`'s two `fun`
-arms (`src/YCHR/Internal/Rename.hs`) only match
-`CompoundTerm (Unqualified fname) []` under the `/`, so the qualified
-name falls through to the generic case and is checked as `gt/0`.
-PROJECT.md already notes the same miss for a query
-(`fun prelude:max/2`).
-
-**Fix sketch.** Owner decision: support it, both in source and in
-queries.
-
-- Add one `renameTerm` arm for `fun` that handles both the qualified
-  and unqualified case via a shared `renameFunRef` helper. It calls
-  `resolveName` with `ResolveTop` (same resolution a qualified name
-  gets anywhere else) and reuses the existing `validateQualified`
-  diagnostics (unknown module, not exported, etc.) — no new
-  diagnostics for the "name doesn't exist" cases.
-- New error: `FunRefNotFunction` — a `fun` reference (qualified or
-  not) that resolves to something that isn't a function (a
-  constraint, a data constructor, or `host:...`). Needs a fresh
-  rename error code (next free `200xx`; 20045 is free as of this
-  writing, but check again — another entry in this file may claim it
-  first).
-- New goldens: `funref_qualified` (positive: the repro above, made to
-  pass) and `funref_not_function` (negative: `fun` pointing at a
-  constraint or a data constructor).
-- Docs: update `language.md` §Lambdas and function references and
-  §Scheme backend portability (the "picks one exactly" sentence is
-  now stale). Remove the stale query-side gap sentences in
-  `PROJECT.md`'s "Keyed `'$call'` dispatch" entry.
-
 ## `?/1` can be declared, then is silently ignored
 
 **Documented claim.** `docs/reference/macros.md` §Heads and
@@ -357,8 +297,8 @@ ResolveTop` and `validateQualified`, and the latter happily lets
 
 **Fix sketch.** Owner decisions: D1 — new rename error code (next
 free `200xx`; check what's free at implementation time, since this
-file's other entries may also claim a code — 20045 is free as of this
-writing), name `FunctionInHead`; retire `YCHR-16002` with a one-line
+file's other entries may also claim a code — 20045 is taken by
+`FunRefNotFunction`), name `FunctionInHead`; retire `YCHR-16002` with a one-line
 "retired, see YCHR-xxxxx" note in `Display.hs` (matching how `20004`
 was retired). D2 — when building the function-name key set for this
 check, exclude any `(name, arity)` that's *also* declared as a

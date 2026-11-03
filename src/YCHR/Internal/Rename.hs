@@ -333,6 +333,10 @@ data RenameError
     -- constraints, functions, macros and data constructors. Carries the
     -- module, the name, and the arity.
     ExcludedByImportList Text Text Int
+  | -- | A @fun name/arity@ reference whose name is a constraint, a data
+    -- constructor or a @host:@ name, not a function (YCHR-20045).
+    -- Carries the name as written, and the arity.
+    FunRefNotFunction Name Int
   deriving (Eq, Show)
 
 -- | What is wrong with an aggregate goal conjunct, for
@@ -1892,44 +1896,26 @@ renameTerm ctx site mode t = case t of
   CompoundTerm (Unqualified "quote") [arg] -> do
     renamedArg <- renameTerm ctx site NoResolveQuoted arg
     pure (CompoundTerm (Unqualified "quote") [renamedArg])
-  -- Function reference: @fun name/arity@, i.e. @fun('/'(name, arity))@.
-  -- Like a lambda it is a value, not data, so it fires in every
-  -- non-quoted position. The name is resolved in 'ResolveTop' mode
-  -- (unknown names are errors) and the @fun@ wrapper is stripped, so
-  -- later passes see bare @name/arity@. @quote/1@ opts out.
-  --
-  -- A macro name here is an error ('MacroOutsideGoalPosition'), with
-  -- the same guard as the ordinary case just below.
+  -- Function reference: @fun name/arity@, i.e. @fun('/'(name, arity))@,
+  -- with @name@ bare or qualified. Like a lambda it is a value, not
+  -- data, so it fires in every non-quoted position. See 'renameFunRef'.
+  -- The @fun@ wrapper is stripped, so later passes see bare
+  -- @name/arity@. @quote/1@ opts out.
   CompoundTerm
     (Unqualified "fun")
     [ CompoundTerm
         (Unqualified "/")
-        [ CompoundTerm (Unqualified fname) [],
-          IntTerm farity
-          ]
-      ]
-      | mode /= NoResolveQuoted,
-        Just providerMod <-
-          isVisibleMacro ctx (Unqualified fname) (fromInteger farity) -> do
-          let arity = fromInteger farity
-              err = MacroOutsideGoalPosition (QualifiedName providerMod fname) arity
-          emitErrorIn ctx (annAt site err)
-          pure t
-  CompoundTerm
-    (Unqualified "fun")
-    [ CompoundTerm
-        (Unqualified "/")
-        [ CompoundTerm (Unqualified fname) [],
+        [ CompoundTerm fname [],
           IntTerm farity
           ]
       ] | mode /= NoResolveQuoted -> do
-      resolved <-
-        resolveName ResolveTop ctx site (Unqualified fname) (fromInteger farity)
-      pure
-        ( CompoundTerm
+      renamed <- renameFunRef ctx site fname (fromInteger farity)
+      pure $ case renamed of
+        Nothing -> t
+        Just resolved ->
+          CompoundTerm
             (Unqualified "/")
             [CompoundTerm (Unqualified (flattenName resolved)) [], IntTerm farity]
-        )
   -- 0-arity unqualified compounds (the AST form of bare atoms after
   -- the parser's @Atom t@ rewrite): always lenient under resolution.
   -- A bare atom in body or guard position has the same surface meaning
@@ -2063,6 +2049,41 @@ renameTerm ctx site mode t = case t of
           Qualified _ _ -> pure resolved
     pure (CompoundTerm newName renamedArgs)
   other -> pure other
+
+-- | Resolve the name of a @fun name/arity@ reference. A qualified name
+-- goes through 'validateQualified', like anywhere else. The name must
+-- be a function: a constraint, a data constructor or a @host:@ name is
+-- 'FunRefNotFunction'. A macro name is 'MacroOutsideGoalPosition'.
+-- 'Nothing' means a macro, so the term is kept as written.
+renameFunRef :: RenameCtx -> Site -> Name -> Int -> Rename (Maybe Name)
+renameFunRef ctx site name arity
+  | Just providerMod <- isVisibleMacro ctx name arity = do
+      let qn = QualifiedName providerMod (unqualifiedText name)
+      emitErrorIn ctx (annAt site (MacroOutsideGoalPosition qn arity))
+      pure Nothing
+  | Qualified "host" _ <- name = notFunction name
+  | Unqualified n <- name,
+    null (visibleProviders ctx n arity),
+    not (null (ctorProviders n)) =
+      notFunction name
+  | otherwise = do
+      resolved <- resolveName ResolveTop ctx site name arity
+      case resolved of
+        Qualified m n
+          | not (isFunctionName ctx resolved arity),
+            found m n ->
+              notFunction name
+        _ -> pure (Just resolved)
+  where
+    -- Visible as a constraint or a constructor. Otherwise
+    -- 'validateQualified' has already reported it.
+    found m n = m `elem` visibleProviders ctx n arity || m `elem` ctorProviders n
+    ctorProviders n =
+      Map.findWithDefault [] (UnqualifiedIdentifier n arity) ctx.dataConProviders
+    -- Report the name as written, keep the resolved one going.
+    notFunction n = do
+      emitErrorIn ctx (annAt site (FunRefNotFunction name arity))
+      pure (Just n)
 
 -- ---------------------------------------------------------------------------
 -- Name resolution

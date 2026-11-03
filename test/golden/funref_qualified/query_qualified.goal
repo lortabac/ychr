@@ -1,0 +1,1 @@
+funuser:apply(fun implib:double/1, 3, R)

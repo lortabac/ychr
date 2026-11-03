@@ -1,0 +1,5 @@
+:- module(funref_not_function_ctor).
+:- chr_type color ---> red ; green.
+:- chr_constraint go/1.
+% `red/0` is a data constructor, not a function.
+go(F) <=> F = fun funref_not_function_ctor:red/0.

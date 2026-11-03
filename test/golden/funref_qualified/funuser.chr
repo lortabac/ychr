@@ -1,0 +1,9 @@
+:- module(funuser, [bar/3, apply/3]).
+:- use_module(implib).
+:- chr_constraint bar(int, int, bool), apply(any, int, int).
+
+% A qualified `fun` reference in a guard.
+bar(X, Y, R) <=> '$call'(fun implib:gt/2, X, Y) | R = true.
+bar(_, _, R) <=> R = false.
+
+apply(F, X, R) <=> R is '$call'(F, X).

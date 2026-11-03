@@ -426,6 +426,7 @@ renameErrorCode (MalformedAggregateGoal _) = ErrorCode 20041
 renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
 renameErrorCode (ReservedAggregateName _ _) = ErrorCode 20043
 renameErrorCode (ExcludedByImportList _ _ _) = ErrorCode 20044
+renameErrorCode (FunRefNotFunction _ _) = ErrorCode 20045
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1460,6 +1461,15 @@ renameErrorMsg (ReservedAggregateName name arity) =
         ++ " recognized in every rule head without an import; choose"
         ++ " another name or arity"
     )
+renameErrorMsg (FunRefNotFunction name arity) =
+  withHint
+    ( "'fun "
+        ++ displayName name
+        ++ "/"
+        ++ show arity
+        ++ "' does not name a function"
+    )
+    "only functions can be referenced with fun; use tell/N to tell a constraint by name"
 renameErrorMsg (ExcludedByImportList modName name arity) =
   withHint
     ( "Module '"
