@@ -269,15 +269,23 @@ head-normal-form machinery): repeated variables become equality
 guards, literal and compound patterns become match-and-extract steps.
 `0` matches only the integer 0; `[X | Xs]` only a non-empty cons cell.
 
-Equation guards follow `|` and have rule-guard ask semantics: no
-binding, comma-separated booleans, any function in scope:
+Equation guards follow `when`, as in Erlang, and have rule-guard ask
+semantics: no binding, comma-separated booleans, any function in scope:
 
 ```prolog
 :- function factorial/1.
 
 factorial(0)              -> 1.
-factorial(N) | N > 0      -> N * factorial(N - 1).
+factorial(N) when N > 0   -> N * factorial(N - 1).
 ```
+
+Unlike Erlang, a guard is not limited to a set of guard BIFs: it is an
+ordinary rule guard. The same goes for `:- extend_function` and
+`:- extend_class` equations.
+
+Rule guards keep `|` (`H <=> G | B`). The old equation syntax,
+`f(X) | X > 0 -> ...`, is `BarInFunctionGuard`, YCHR-15030, with a hint
+to use `when`.
 
 Functions are callable in every evaluating position
 ([Tell-side evaluation](#tell-side-evaluation)). No matching equation
@@ -291,8 +299,8 @@ earlier items run strictly left-to-right, for effect or to bind:
 ```prolog
 :- function factorial/1.
 
-factorial(0)         -> 1.
-factorial(N) | N > 0 ->
+factorial(0)            -> 1.
+factorial(N) when N > 0 ->
     host:print(N),
     Prev is factorial(N - 1),
     N * Prev.
@@ -919,7 +927,7 @@ B = true.
 ```
 
 The operator table is a built-in core (the directive keywords, `=`,
-`is`, the rule operators, `requiring`, `refining`, …) plus the
+`is`, the rule operators, `when`, `requiring`, `refining`, …) plus the
 prelude's `op/3` exports. `:list_operators` in the REPL prints it.
 
 A REPL *query* is parsed with a wider table than a module: the union of
@@ -970,7 +978,7 @@ put a term in the message, render it with `library(meta)`'s
 `write_term_to_string/1`.
 
 ```prolog
-nonneg(X) | X >= 0 -> X.
+nonneg(X) when X >= 0 -> X.
 nonneg(_) -> panic("nonneg: negative argument").
 ```
 
