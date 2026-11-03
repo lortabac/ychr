@@ -1,0 +1,4 @@
+:- module(funref_not_function).
+:- chr_constraint go/1, c/1.
+% `c/1` is a constraint, not a function.
+go(F) <=> F = fun c/1.

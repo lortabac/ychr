@@ -1,0 +1,1 @@
+funuser:apply(fun double/1, 4, R)

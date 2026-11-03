@@ -1,0 +1,5 @@
+:- module(implib, [gt/2, double/1]).
+:- function gt(int, int) -> bool.
+gt(X, Y) -> X > Y.
+:- function double(int) -> int.
+double(X) -> X * 2.

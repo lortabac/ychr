@@ -1006,9 +1006,11 @@ make_adder(N) -> fun(X) -> X + N end.
 ```
 
 `fun name/arity` (`fun member/2`) makes a named function a first-class
-value the same way. A string read with `read_term_from_string/1` accepts
-the same spelling and yields the same value, and additionally accepts a
-qualified `module:name` to disambiguate (see
+value the same way. The name may be qualified, `fun lists:member/2`, and
+then follows the usual rules for a qualified name. It must name a
+function: `fun` on a constraint, a data constructor or a `host:` name is
+`YCHR-20045`. A string read with `read_term_from_string/1` accepts the
+same spellings and yields the same value (see
 [Scheme backend portability](#scheme-backend-portability)).
 
 ### `call` and `'$call'`
@@ -1094,9 +1096,8 @@ exactly as the source spelling is: the reader resolves the name against
 the program's functions and yields the same closure value a compiled
 `fun name/arity` does, so `call/N` can apply it. An unqualified name
 matches any loaded module's function of that base and arity — the view a
-top-level goal has; a qualified `module:name` — which the string reader
-accepts but a source `fun` does not — picks one exactly and is also how
-to disambiguate. An unknown name, or one that two modules declare at the
+top-level goal has; a qualified `module:name` picks one exactly and is
+also how to disambiguate. An unknown name, or one that two modules declare at the
 same arity, raises a runtime error. A `fun` term that is not a reference
 spelling — `fun X/1`, or a lambda's parameter list — stays an ordinary
 term. The reader does not implement `quote/1`, so `fun` resolves inside
