@@ -1,0 +1,4 @@
+% A type reference to a type that does not exist.
+:- module(typeref_unknown, [go/1]).
+:- chr_constraint go/1.
+go(R) <=> R = type(nope/0).

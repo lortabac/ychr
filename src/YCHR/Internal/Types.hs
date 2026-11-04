@@ -43,6 +43,8 @@ module YCHR.Internal.Types
 
     -- * Name helpers
     flattenName,
+    typeRefName,
+    typeNamePrefix,
     unqualifiedText,
     qualifiedToName,
     qualifiedNameToIdentifier,
@@ -175,6 +177,25 @@ data ConstraintUse
 flattenName :: Name -> Text
 flattenName (Unqualified t) = t
 flattenName (Qualified m t) = m <> ":" <> t
+
+-- | The name of the atom a type's name becomes at runtime: what
+-- @type(name/arity)@ evaluates to, and what the type checker's encoder
+-- emits for type names. It is the mangled name behind 'typeNamePrefix',
+-- as one bare name, so it compiles to @__type__m__n@.
+--
+-- The prefix keeps type names apart from constructor atoms. A type and
+-- its constructor often share a name (@:- chr_type u ---> u@), and
+-- without it both would be @m__u@. The type checker assumes values of
+-- different types never look the same, so that would be unsound. No
+-- source atom or module name contains @__@ (the lexer rejects it), so
+-- no constructor atom starts with @__@.
+typeRefName :: Name -> Name
+typeRefName (Unqualified n) = Unqualified (typeNamePrefix <> n)
+typeRefName (Qualified m n) = Unqualified (typeNamePrefix <> m <> "__" <> n)
+
+-- | See 'typeRefName'.
+typeNamePrefix :: Text
+typeNamePrefix = "__type__"
 
 -- | The base (module-less) part of a 'Name'. Unlike 'flattenName' this
 -- discards the qualifier rather than rendering it, which is what

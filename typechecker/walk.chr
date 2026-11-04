@@ -33,6 +33,7 @@
 :- use_module('$tc_env').
 :- use_module('$tc_skel').
 :- use_module('$typechecker').
+:- use_module(library(aggregates)).
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
 :- use_module(library(meta)).
@@ -135,10 +136,11 @@ scope_ambient(scope(_, _, Amb, _), Key) -> from_maybe([], assoc_get(Key, Amb)).
 
 :- function encode_ty(list(pair(string, ty)), ty_expr) -> ty.
 encode_ty(TVars, tvar(V)) -> from_maybe(ty_any, assoc_get(V, TVars)).
-encode_ty(_, tconx(N, [])) when N == quote(int) -> ty_int.
-encode_ty(_, tconx(N, [])) when N == quote(float) -> ty_float.
-encode_ty(_, tconx(N, [])) when N == quote(string) -> ty_string.
-encode_ty(_, tconx(N, [])) when N == quote(any) -> ty_any.
+encode_ty(_, tconx(N, [])) when N == type(int/0) -> ty_int.
+encode_ty(_, tconx(N, [])) when N == type(float/0) -> ty_float.
+encode_ty(_, tconx(N, [])) when N == type(string/0) -> ty_string.
+encode_ty(_, tconx(N, [])) when N == type(type_name/0) -> ty_type_name.
+encode_ty(_, tconx(N, [])) when N == type(any/0) -> ty_any.
 encode_ty(TVars, tconx(N, Args)) -> tcon(N, encode_tys(TVars, Args)).
 encode_ty(TVars, tfunx(Args, Ret)) ->
     fun(encode_tys(TVars, Args), encode_ty(TVars, Ret)).
@@ -768,7 +770,7 @@ agg_check_select @
 % `Agg : aggregator(W, E, R)`, at fresh flexible `W`, `E` and `R`.
 agg_shape1 @
     agg_shape(AggTy, W, E, R, Ctx) <=>
-    check_unify(AggTy, tcon(quote(aggregates:aggregator), [W, E, R]), Ctx).
+    check_unify(AggTy, tcon(type(aggregates:aggregator/3), [W, E, R]), Ctx).
 
 % The key is typed only in the second check, so it reports there, in
 % the caller's mode, at the second check's level.
@@ -1243,6 +1245,9 @@ type_of_expr_text @
 type_of_expr_wild @
     type_of_expr(_, wild_e, _) <=> true.
 
+type_of_expr_typeref @
+    type_of_expr(_, typeref_e(_), Out) <=> Out = ty_type_name.
+
 type_of_expr_ctor @
     type_of_expr(S, ctor_e(N, Args), Out) <=>
     type_of_ctor(S, evaluated_position, N, Args, Out).
@@ -1310,6 +1315,9 @@ type_of_expr_struct_text @
 
 type_of_expr_struct_wild @
     type_of_expr_struct(_, wild_e, _) <=> true.
+
+type_of_expr_struct_typeref @
+    type_of_expr_struct(_, typeref_e(_), Out) <=> Out = ty_type_name.
 
 type_of_expr_struct_ctor @
     type_of_expr_struct(S, ctor_e(N, Args), Out) <=>

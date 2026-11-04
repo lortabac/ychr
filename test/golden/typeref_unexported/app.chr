@@ -1,0 +1,5 @@
+% lib's own type secret is not exported, so it is not visible here.
+:- module(app, [go/1]).
+:- use_module(lib).
+:- chr_constraint go/1.
+go(R) <=> R = type(lib:secret/0).

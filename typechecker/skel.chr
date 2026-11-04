@@ -92,7 +92,7 @@
 % arguments. A qualified `m:int` mangles to `m__int` and so is
 % correctly not the built-in, which is why the whole name is compared.
 :- function is_any_ty(ty_expr) -> bool.
-is_any_ty(tconx(N, [])) when N == quote(any) -> true.
+is_any_ty(tconx(N, [])) when N == type(any/0) -> true.
 is_any_ty(_) -> false.
 
 % True when `any` appears anywhere in a type expression, at any depth.
@@ -530,6 +530,7 @@ collect_vars_expr(float_e(_)) -> [].
 collect_vars_expr(text_e(_)) -> [].
 collect_vars_expr(wild_e) -> [].
 collect_vars_expr(funref_e(_, _)) -> [].
+collect_vars_expr(typeref_e(_)) -> [].
 collect_vars_expr(ctor_e(_, Args)) -> collect_vars_exprs(Args).
 collect_vars_expr(call_e(_, Args)) -> collect_vars_exprs(Args).
 collect_vars_expr(apply_e(F, Args)) ->

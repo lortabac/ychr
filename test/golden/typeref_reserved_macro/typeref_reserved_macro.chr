@@ -1,0 +1,5 @@
+% No goal macro may take type/1.
+:- module(typeref_reserved_macro, [go/1]).
+:- chr_constraint go/1.
+:- macro type(X) ---> [go(X)].
+go(R) <=> R = 1.

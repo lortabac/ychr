@@ -63,7 +63,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Internal.Compile.Names (runtimeName)
+import YCHR.Internal.Compile.Names (runtimeName, typeRuntimeName)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.PExpr (PExpr)
@@ -131,6 +131,10 @@ atomTerm t = CompoundTerm (Unqualified t) []
 
 nameTerm :: Name -> Term
 nameTerm = atomTerm . runtimeName
+
+-- | A type's name. See 'typeRuntimeName'.
+typeNameTerm :: Name -> Term
+typeNameTerm = atomTerm . typeRuntimeName
 
 qnameTerm :: QualifiedName -> Term
 qnameTerm = nameTerm . qualifiedToName
@@ -370,6 +374,7 @@ expr (D.CtorExpr n args) = ast "ctor_e" [nameTerm n, exprs args]
 expr (D.CallExpr n args) = ast "call_e" [qnameTerm n, exprs args]
 expr (D.ApplyExpr f args) = ast "apply_e" [expr f, exprs args]
 expr (D.FunRefExpr n arity) = ast "funref_e" [qnameTerm n, intTerm arity]
+expr (D.TypeRefExpr n _) = ast "typeref_e" [typeNameTerm n]
 expr (D.LambdaExpr params body) =
   ast
     "lambda_e"
@@ -397,13 +402,13 @@ typeExpr :: TypeExpr -> Term
 typeExpr (TypeVar v) = ast "tvar" [TextTerm v]
 typeExpr (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") argTys, retTy]) =
   ast "tfunx" [listTerm (map typeExpr argTys), typeExpr retTy]
-typeExpr (TypeCon n args) = ast "tconx" [nameTerm n, listTerm (map typeExpr args)]
+typeExpr (TypeCon n args) = ast "tconx" [typeNameTerm n, listTerm (map typeExpr args)]
 
 typeDef :: TypeDefinition -> Term
 typeDef td =
   ast
     "type_def"
-    [ nameTerm td.name,
+    [ typeNameTerm td.name,
       listTerm (map TextTerm td.typeVars),
       typeKind td.kind,
       encodeSourceLoc td.loc

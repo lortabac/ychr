@@ -80,17 +80,14 @@
 % prefix is internal: `displayTypeAtom` in
 % `src/YCHR/Internal/TypeCheck/Render.hs` strips it again, so
 % user-facing messages still read `int`, `float`, `string`,
-% `any`. All four are prefixed, not just the two that clash, so the
-% strip is one uniform rule.
+% `type_name`, `any`. All of them are prefixed, not just the two that
+% clash, so the strip is one uniform rule.
 %
-% The first field of `tcon` is `any` because a type
-% constructor name may be either an atom (`bool`) or a qualified
-% atom (e.g. `prelude:bool`). Qualified type names that originate in
-% this CHR source — as opposed to arriving inside an encoded program —
-% must be wrapped in `quote/1` so the renamer treats them as
-% opaque data rather than as cross-module references subject to
-% value-level visibility checks. See language.md §The `quote/1`
-% quoting form.
+% The first field of `tcon` is the type's name. A name written in this
+% source is a type reference, `type(prelude:bool/0)`, which gives the
+% same atom the encoder emits. A bare atom would not do: it names a
+% constructor, and a type often shares its name with one. See
+% language.md §Type references.
 % `rigid(Cell, N, Level)` is a *rigid* type variable: a fresh identity `N`
 % allocated by the walker while checking a polymorphic declaration's
 % own equations or rule bodies. Unlike unbound CHR variables (which
@@ -125,8 +122,9 @@
 :- chr_type ty ---> ty_int
                   ; ty_float
                   ; ty_string
+                  ; ty_type_name
                   ; ty_any
-                  ; tcon(any, list(ty))
+                  ; tcon(type_name, list(ty))
                   ; fun(list(ty), ty)
                   ; rigid(ty, int, list(int)).
 
@@ -363,6 +361,7 @@ match_ty(_, ty_any, S) -> S.
 match_ty(ty_int, ty_int, S) -> S.
 match_ty(ty_float, ty_float, S) -> S.
 match_ty(ty_string, ty_string, S) -> S.
+match_ty(ty_type_name, ty_type_name, S) -> S.
 % A rigid tvar is consistent with itself; a pinned one is consistent
 % with whatever its cell holds.
 match_ty(rigid(C, N, _), rigid(C, N, _), S) -> S.
@@ -418,6 +417,7 @@ ty_consistent(_, ty_any) -> true.
 ty_consistent(ty_int, ty_int) -> true.
 ty_consistent(ty_float, ty_float) -> true.
 ty_consistent(ty_string, ty_string) -> true.
+ty_consistent(ty_type_name, ty_type_name) -> true.
 % Same-rigid succeeds; different-rigid (rigid(_, N), rigid(_, M) with
 % N≠M) falls through to the `(_, _) -> false` fallthrough below, so two
 % distinct rigid identities are deliberately inconsistent. This is
@@ -506,6 +506,7 @@ ty_concrete(ty_any) -> true.
 ty_concrete(ty_int) -> true.
 ty_concrete(ty_float) -> true.
 ty_concrete(ty_string) -> true.
+ty_concrete(ty_type_name) -> true.
 ty_concrete(tcon(_, Args)) -> all(fun ty_concrete/1, Args).
 ty_concrete(fun(Args, Ret)) when all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
 % A rigid tvar is treated as concrete for the purpose of
@@ -885,7 +886,7 @@ delegate_unify @
 
 delegate_guard_bool @
     check_guard_bool(T, Ctx) <=>
-    tc_unify(T, tcon(quote(prelude:bool), []), Ctx).
+    tc_unify(T, tcon(type(prelude:bool/0), []), Ctx).
 
 % --------------------------------------------------------------------------
 % Constructor matches (HNF `GuardMatch`)
@@ -1109,6 +1110,9 @@ tc_unify_float @
 tc_unify_string @
     tc_unify(ty_string, ty_string, _) <=> true.
 
+tc_unify_type_name @
+    tc_unify(ty_type_name, ty_type_name, _) <=> true.
+
 % --- type constructors and function types: same shape, check args ---
 %
 % [C-Con] and [C-Fun] require the same argument count on both sides.
@@ -1262,6 +1266,7 @@ make_fresh_rigids_cons @
 base_type(ty_int) -> true.
 base_type(ty_float) -> true.
 base_type(ty_string) -> true.
+base_type(ty_type_name) -> true.
 base_type(_) -> false.
 
 % ==========================================================================
@@ -1515,6 +1520,9 @@ ev_unify_float @
 
 ev_unify_string @
     ev_unify(ty_string, ty_string, _, _) <=> true.
+
+ev_unify_type_name @
+    ev_unify(ty_type_name, ty_type_name, _, _) <=> true.
 
 % Descent into a shared constructor switches to `ev_param`: the
 % component facts are about parameter positions, where equality

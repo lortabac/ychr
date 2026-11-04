@@ -1,0 +1,4 @@
+% No constraint may take type/1.
+:- module(typeref_reserved_constraint, [go/1]).
+:- chr_constraint go/1, type/1.
+go(R) <=> R = 1.
