@@ -289,6 +289,26 @@ ambiguousDataConTests =
             pure ()
           other ->
             assertFailure $
+              "expected AmbiguousDataConstructor error, got " ++ show other,
+      -- Constructors are name-only: two imports declaring 'foo' at
+      -- different arities still make a bare 'foo' ambiguous.
+      testCase "two imports export 'foo' at different arities" $ do
+        let intT = TypeCon (Unqualified "int") []
+            modA = modWithCtor "A" "foo" [intT]
+            modB = modWithCtor "B" "foo" [intT, intT, intT]
+            modC =
+              ( module' "C"
+                  `importing` ["A", "B"]
+                  `declaring` ["r" // 1]
+                  `defining` [ [term "r" [var "R"]]
+                                 <=> [var "R" .=. term "foo" [IntTerm 1, IntTerm 2]]
+                             ]
+              )
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousDataConstructor "foo" ["A", "B"]) _ _) _] ->
+            pure ()
+          other ->
+            assertFailure $
               "expected AmbiguousDataConstructor error, got " ++ show other
     ]
   where
@@ -888,15 +908,15 @@ warningTests =
                   (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [])) dummyLoc (Atom ""))
               ],
       testCase "data constructor arity mismatch names every declared arity" $ do
-        -- 'foo' is visible at two arities here, one per imported module
-        -- (A declares foo/1, B declares foo/3). The warning must name
-        -- both, not just one of them.
-        let fooModule name arity =
-              (module' name)
+        -- 'foo' is visible at two arities here (A declares foo/1 and
+        -- foo/3, in two types). The warning must name both, not just
+        -- one of them. (From two modules it would be ambiguous.)
+        let fooModule arities =
+              (module' "A")
                 { typeDecls =
                     [ noAnn
                         ( algebraicTD
-                            (Unqualified ("t" <> name))
+                            (Unqualified tname)
                             []
                             [ DataConstructor
                                 (Unqualified "foo")
@@ -904,32 +924,32 @@ warningTests =
                             ]
                             dummyLoc
                         )
+                    | (tname, arity) <- zip ["t1", "t2"] arities
                     ]
                 }
-            modA = fooModule "A" 1
-            modB = fooModule "B" 3
+            modA = fooModule [1, 3]
             modC =
               module' "C"
-                `importing` ["A", "B"]
+                `importing` ["A"]
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
                                <=> [atom "true"]
                                |- [term "foo" [var "X", var "Y"]]
                            ]
-        ws <- warningsOf [modA, modB, modC]
+        ws <- warningsOf [modA, modC]
         ws
           @?= [ noDiag
                   (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [3])) dummyLoc (Atom ""))
               ],
       testCase "data constructor arity mismatch deduplicates repeated arities" $ do
-        -- 'foo' is visible at arity 1 from two modules (A and B both
-        -- declare it). The warning must list that arity once, not twice.
-        let fooModule name arity =
-              (module' name)
+        -- 'foo' is declared twice at arity 1 (A declares it in two
+        -- types). The warning must list that arity once, not twice.
+        let fooModule arities =
+              (module' "A")
                 { typeDecls =
                     [ noAnn
                         ( algebraicTD
-                            (Unqualified ("t" <> name))
+                            (Unqualified tname)
                             []
                             [ DataConstructor
                                 (Unqualified "foo")
@@ -937,19 +957,19 @@ warningTests =
                             ]
                             dummyLoc
                         )
+                    | (tname, arity) <- zip ["t1", "t2"] arities
                     ]
                 }
-            modA = fooModule "A" 1
-            modB = fooModule "B" 1
+            modA = fooModule [1, 1]
             modC =
               module' "C"
-                `importing` ["A", "B"]
+                `importing` ["A"]
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
                                <=> [atom "true"]
                                |- [term "foo" [var "X", var "Y"]]
                            ]
-        ws <- warningsOf [modA, modB, modC]
+        ws <- warningsOf [modA, modC]
         ws
           @?= [ noDiag
                   (AnnP (DataConstructorArityMismatch "foo" 2 (1 :| [])) dummyLoc (Atom ""))

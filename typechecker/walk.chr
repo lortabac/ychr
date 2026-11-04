@@ -965,8 +965,7 @@ check_guard_equal @
 
 check_guard_match_g @
     check_guard(_, SynthS, guard_match(Operand, Con, Arity), M, MOut) <=>
-    check_match(SynthS, Operand, canonicalize_con(scope_cons(SynthS), Con),
-                Arity, M, MOut).
+    check_match(SynthS, Operand, Con, Arity, M, MOut).
 
 check_guard_getarg_g @
     check_guard(_, SynthS, guard_getarg(V, Operand, Idx), M, MOut) <=>
@@ -1352,7 +1351,7 @@ type_of_exprs_at_structural @
 
 type_of_ctor1 @
     type_of_ctor(S, Pos, N, Args, Out) <=>
-    type_of_ctor_known(S, Pos, canonicalize_con(scope_cons(S), N), Args, Out).
+    type_of_ctor_known(S, Pos, N, Args, Out).
 
 % A constructor at its declared arity emits the use check; everything
 % else — an unknown name, or a known one at the wrong arity — is typed

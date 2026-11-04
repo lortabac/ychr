@@ -82,6 +82,9 @@ expectsWarnings =
       "type_import_constructor_narrowing",
       "type_predicates",
       "typecheck_goal_ctor_arity",
+      -- Bare `foo` names a constructor of a module that is not
+      -- imported, so it is undeclared here (YCHR-20101).
+      "typecheck_invisible_constructor",
       "typecheck_polymorphic_constraint",
       "typecheck_qualified_in_head",
       -- These are permitted to emit the inaccessible-branch warning

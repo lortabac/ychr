@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Breaking: a bare data constructor is now ambiguous (YCHR-20012) when
+two visible modules declare it, even at different arities. With
+`a:foo/1` and `b:foo/3` visible, `foo(1, 2)` used to pick neither and
+only warn (YCHR-20102); the type checker missed the wrong arity. This
+also covers a module's own constructor against an imported one: a
+module that imports `library(search)` and declares its own `stop`
+atom now gets YCHR-20012 for a bare `stop`, since `search:stop/1` is
+visible. The REPL sees every auto-loaded library, so there a bare
+`stop`, `continue`, `commit`, `just`, `nothing` or `kv` in a query now
+names the library's constructor (or is ambiguous with your own).
+Qualify the use or rename the constructor. A bare constructor
+with one declaring module now always resolves to it, so a wrong-arity
+use is the type error YCHR-60008. A constructor from a module that is
+not imported no longer takes part in arity checking.
+
 Breaking: function-equation guards are written with `when`, as in
 Erlang, not `|`. `f(X) | X > 0 -> X.` is now `f(X) when X > 0 -> X.`;
 the same holds for `:- extend_function` and `:- extend_class`. Rule

@@ -1,0 +1,2 @@
+:- module(a, [type(ta/0)]).
+:- chr_type ta ---> foo(int).

@@ -1248,9 +1248,7 @@ The renamer reports the same mistake as warning `YCHR-20102`, naming
 every arity the constructor is declared at (a name can have several,
 across types). Getting both diagnostics for one use is intended. The
 warning also fires under `--no-check`, and in a few spots the checker
-skips, e.g. the `is` in `f(X) -> Y is p(X), Y.`. Known gap: when a name
-is declared at several arities across modules, the checker misses a
-wrong-arity use and only the warning fires.
+skips, e.g. the `is` in `f(X) -> Y is p(X), Y.`.
 
 ### Unknown constructors
 
@@ -1281,7 +1279,14 @@ is later consumed as a value.
 Constructors are disambiguated by module qualification, per the module
 system: if `red` is a constructor of both `color` and `traffic_light`
 (in different modules), the user must write `color:red` or
-`traffic_light:red`.
+`traffic_light:red`. This holds at any arity: a bare `foo(1, 2)` is
+ambiguous (`YCHR-20012`) when one import declares `foo/1` and another
+`foo/3`. A bare name with one visible declaring module resolves to it
+whatever the arity, so a wrong-arity use reaches the checker as that
+constructor and is reported as `YCHR-60008`. One exception: when a
+constraint or function of that name is visible at exactly the arity
+used, and no constructor is, the term names the constraint or
+function and stays bare.
 
 
 ## Exhaustiveness checking

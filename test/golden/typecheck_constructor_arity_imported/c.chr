@@ -1,0 +1,8 @@
+:- module(c, [go/1]).
+:- use_module(a).
+:- chr_constraint go/1.
+
+% Only `a:foo/1` is visible here (`b` also declares `foo`, at arity 3,
+% but is not imported), so bare `foo` is `a:foo` and the wrong arity
+% is a type error.
+go(R) <=> R = foo(1, 2).
