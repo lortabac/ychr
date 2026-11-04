@@ -71,6 +71,7 @@ module YCHR.Internal.Compile.Names
     aggregateLabel,
     aggregateLevelLabel,
     aggregateAggFunctor,
+    aggregatorTypeName,
     aggregateJustFunctor,
     aggregateNothingAtom,
 
@@ -472,6 +473,13 @@ aggregateLevelLabel k d j =
 -- Note [Aggregator representation] in "YCHR.Internal.Compile.Aggregate".
 aggregateAggFunctor :: Name
 aggregateAggFunctor = vmName (Types.Qualified "aggregates" "aggregator")
+
+-- | The type of an aggregator, @aggregates:aggregator(W, E, R)@. Its
+-- constructor has the same name. The type checker gets it from the
+-- encoded AST, since its CHR source can't spell a type name that is also
+-- a constructor.
+aggregatorTypeName :: Types.Name
+aggregatorTypeName = Types.Qualified "aggregates" "aggregator"
 
 -- | Runtime functor of @maybe:just/1@: what an aggregator's @Final@
 -- closure returns when the aggregate is defined.

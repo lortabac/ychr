@@ -704,7 +704,6 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
     goal_conjs_check(scope, list(agg_conj), goal_links, scope, list(any)),
     link_copies(scope, scope, list(any), link_kind),
     agg_result_check(scope, any, list(guard), ty),
-    agg_shape(ty, ty, ty, ty, ctx),
     scope_fresh(scope, list(any), scope).
 
 aggs_check_nil @
@@ -720,10 +719,11 @@ aggs_check_cons @
 % tests. The escape check waits for the end of solving. What its goal
 % proves stays inside, so the scope after it is the one before it.
 agg_check_plain @
-    agg_check(S, agg_e(agg_plain, just(Agg), Elem, Goal, Shared, Locals, Binds,
-                       just(agg_res(RV, RGuards))), Out) <=>
+    agg_check(S, agg_e(agg_plain(AggTyName), just(Agg), Elem, Goal, Shared, Locals,
+                       Binds, just(agg_res(RV, RGuards))), Out) <=>
     type_of_expr(S, Agg, AggTy),
-    agg_shape(AggTy, _, E, R, scope_ctx(S)),
+    AggShape = tcon(AggTyName, [_, E, R]),
+    check_unify(AggTy, AggShape, scope_ctx(S)),
     child_level(scope_level(S), Level),
     agg_scope(S, Level, inner_mode(scope_ctx(S)), Goal,
               append(Locals, goal_copies(Shared, Goal)), Inner),
@@ -764,11 +764,6 @@ agg_check_select @
                              key_ctx(S, CopyLevel)),
                        key_comparison(Kind), [KeyTy, KeyTy], _),
     Out is scope_with_ambs(S, scope_ambs(HeadEnd)).
-
-% `Agg : aggregator(W, E, R)`, at fresh flexible `W`, `E` and `R`.
-agg_shape1 @
-    agg_shape(AggTy, W, E, R, Ctx) <=>
-    check_unify(AggTy, tcon(quote(aggregates:aggregator), [W, E, R]), Ctx).
 
 % The key is typed only in the second check, so it reports there, in
 % the caller's mode, at the second check's level.

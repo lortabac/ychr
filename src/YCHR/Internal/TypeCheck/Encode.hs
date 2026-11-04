@@ -63,7 +63,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Internal.Compile.Names (runtimeName)
+import YCHR.Internal.Compile.Names (aggregatorTypeName, runtimeName)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.PExpr (PExpr)
@@ -259,7 +259,7 @@ aggregate a =
     names = listTerm . map atomTerm
 
 aggKind :: AggregateKind -> Term
-aggKind AggPlain = ast "agg_plain" []
+aggKind AggPlain = ast "agg_plain" [nameTerm aggregatorTypeName]
 aggKind AggArgmin = ast "agg_argmin" []
 aggKind AggArgmax = ast "agg_argmax" []
 aggKind AggTakemin = ast "agg_takemin" []

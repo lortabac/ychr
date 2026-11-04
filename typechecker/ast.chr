@@ -124,8 +124,12 @@
 % occurrences, the removed ones, and the aggregates.
 :- chr_type rule_head ---> rule_head(list(head_con), list(head_con), list(agg_e)).
 
-% Which aggregate form, `YCHR.Internal.Types.AggregateKind`.
-:- chr_type agg_kind ---> agg_plain
+% Which aggregate form, `YCHR.Internal.Types.AggregateKind`. A plain
+% aggregate carries the name of the aggregator type, which its `Agg` must
+% have. It comes from the encoder because this source can't spell it: the
+% type and its constructor share the name `aggregates:aggregator`, so the
+% atom would be read as the constructor.
+:- chr_type agg_kind ---> agg_plain(any)
                         ; agg_argmin
                         ; agg_argmax
                         ; agg_takemin

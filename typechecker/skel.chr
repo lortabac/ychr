@@ -443,14 +443,14 @@ conj_skel_guards(agg_guard(_)) -> [].
 aggs_skel_cons(Aggs) -> concat_map(fun agg_skel_cons/1, Aggs).
 
 :- function agg_skel_cons(agg_e) -> list(head_con).
-agg_skel_cons(agg_e(agg_plain, _, _, _, _, _, _, _)) -> [].
+agg_skel_cons(agg_e(agg_plain(_), _, _, _, _, _, _, _)) -> [].
 agg_skel_cons(agg_e(_, _, _, Goal, _, _, _, _)) -> goal_skel_cons(Goal).
 
 :- function aggs_skel_guards(list(agg_e)) -> list(guard).
 aggs_skel_guards(Aggs) -> concat_map(fun agg_skel_guards/1, Aggs).
 
 :- function agg_skel_guards(agg_e) -> list(guard).
-agg_skel_guards(agg_e(agg_plain, _, _, _, _, _, _, _)) -> [].
+agg_skel_guards(agg_e(agg_plain(_), _, _, _, _, _, _, _)) -> [].
 agg_skel_guards(agg_e(_, _, _, Goal, _, _, _, _)) -> goal_skel_guards(Goal).
 
 % The same for a query's goal list. The goals of one query share a
