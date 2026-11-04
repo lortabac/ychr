@@ -1,1 +1,1 @@
-R = '__type__int'
+R = type(int / 0)

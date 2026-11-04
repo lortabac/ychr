@@ -57,8 +57,8 @@ ResolveTop` and `validateQualified`, and the latter happily lets
 
 **Fix sketch.** Owner decisions: D1 — new rename error code (next
 free `200xx`; check what's free at implementation time, since this
-file's other entries may also claim a code — 20045 is taken by
-`FunRefNotFunction`), name `FunctionInHead`; retire `YCHR-16002` with a one-line
+file's other entries may also claim a code — 20045 to 20049 are
+taken, 20046 to 20049 by type references), name `FunctionInHead`; retire `YCHR-16002` with a one-line
 "retired, see YCHR-xxxxx" note in `Display.hs` (matching how `20004`
 was retired). D2 — when building the function-name key set for this
 check, exclude any `(name, arity)` that's *also* declared as a

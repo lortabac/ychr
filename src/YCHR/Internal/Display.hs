@@ -431,6 +431,7 @@ renameErrorCode (FunRefNotFunction _ _) = ErrorCode 20045
 renameErrorCode (UnknownTypeRef _ _) = ErrorCode 20046
 renameErrorCode MalformedTypeRef = ErrorCode 20047
 renameErrorCode ReservedTypeRefName = ErrorCode 20048
+renameErrorCode TypeRefInPattern = ErrorCode 20049
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1492,6 +1493,10 @@ renameErrorMsg MalformedTypeRef =
   withHint
     "Malformed type reference"
     "write type(name/arity), e.g. type(int/0) or type(prelude:list/1)"
+renameErrorMsg TypeRefInPattern =
+  withHint
+    "type(...) in a pattern never matches a type name"
+    "compare in a guard instead, e.g. f(N) when N == type(int/0) -> ..."
 renameErrorMsg ReservedTypeRefName =
   withHint
     "type/1 is reserved for type references and cannot be declared"

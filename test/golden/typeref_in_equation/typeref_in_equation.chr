@@ -1,0 +1,7 @@
+% The same in an equation pattern.
+:- module(typeref_in_equation, [go/1]).
+:- function f/1.
+f(type(int/0)) -> 1.
+f(_) -> 0.
+:- chr_constraint go/1.
+go(R) <=> R is f(type(int/0)).

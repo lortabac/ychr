@@ -576,17 +576,18 @@ the usual visibility rules for type names. The built-in types `int`,
 (`type(int/0)`). An unknown or invisible type, or a wrong arity, is
 `YCHR-20046`; an operand that is not `name/arity` is `YCHR-20047`.
 
-The value has type `type_name`. At runtime it is an atom with a
-reserved spelling, `'__type__m__box'` for `m:box`, which is also how the
-type checker names types internally. No constructor or source atom can
-be spelled that way (`__` is rejected in source atoms), so a type name
-is never equal to a constructor value, even when the two share a name
-(`box` above).
+The value has type `type_name` and prints as the reference that made
+it, `type(m:box / 1)`. At runtime it is an atom with a reserved spelling,
+`__type__1__m__box`, which is also how the type checker names types
+internally. No constructor or source atom can be spelled that way
+(`__` is rejected in source atoms), so a type name is never equal to a
+constructor value, even when the two share a name (`box` above).
 
 It is a value form, like `fun name/arity`: it is read as one in
-evaluating positions and in `=` operands. In heads, equation patterns
-and inside `quote(...)` it is a plain compound, so match on a type name
-with a guard: `f(N) when N == type(int/0) -> …`.
+evaluating positions, in `=` operands and on the left of `is`. Inside
+`quote(...)` it is a plain compound. In a head or equation pattern it
+would be data that never matches a type name, so it is `YCHR-20049`
+there; compare in a guard instead: `f(N) when N == type(int/0) -> …`.
 
 `type/1` is reserved: a constraint, function, goal macro or data
 constructor `type/1` is `YCHR-20048`. Other arities of `type` are fine.

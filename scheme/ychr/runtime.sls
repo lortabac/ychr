@@ -1232,15 +1232,11 @@
   ;;; An unbound argument is an *instantiation* failure, not a type
   ;;; error, so that a rule guard calling `name_base` delays rather than
   ;;; aborting — matching the split `Meta.hs` makes on the Haskell side.
-  ;;; A type name's "__type__" prefix (`typeNamePrefix` in
-  ;;; Compile/Names.hs) comes off first, as in `baseOfMangled`.
-  (define %type-name-prefix "__type__")
+  ;;; A type name's "__type__<arity>__" prefix (`typeRefName` in
+  ;;; Types.hs) comes off first, as in `baseOfMangled`.
   (define (%strip-type-prefix s)
-    (let ((p (string-length %type-name-prefix)))
-      (if (and (>= (string-length s) p)
-               (string=? (substring s 0 p) %type-name-prefix))
-          (substring s p (string-length s))
-          s)))
+    (let ((parts (type-ref-atom-parts s)))
+      (if parts (car parts) s)))
   (define (%name-base v)
     (when (%unbound? v)
       (%chr-inst-error

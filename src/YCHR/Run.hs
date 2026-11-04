@@ -812,7 +812,7 @@ evalNestedExpr (R.CtorExpr name args) =
   -- before the compound is built, as in 'Compile.compileExpr'.
   VTerm (vmName name).unName <$> traverse evalNestedExpr args
 evalNestedExpr e@(R.FunRefExpr _ _) = exprToValue e
-evalNestedExpr (R.TypeRefExpr name _) = pure (VAtom (typeRuntimeName name))
+evalNestedExpr (R.TypeRefExpr name arity) = pure (VAtom (typeRuntimeName name arity))
 evalNestedExpr (R.LambdaExpr _ _) =
   error "Run.evalNestedExpr: LambdaExpr survived lambda lifting"
 
