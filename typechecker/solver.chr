@@ -58,7 +58,7 @@
     link_unify/4,
     escape_check/3,
     solving_done/0,
-    rigid_supply/1,
+    new_rigid_supply/1,
     check_bound/6
 ]).
 
@@ -67,6 +67,7 @@
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
 :- use_module(library(pairs)).
+:- use_module(library(state)).
 
 % Type-representation algebraic type. `encode_ty` in `walk.chr`
 % builds these out of a source `ty_expr`: base types are 0-arity
@@ -251,7 +252,6 @@ bc_decls(bc(_, Decls)) -> Decls.
     link_unify_list(list(ty), list(ty), ev_depth, ctx),
     escape_check(list(int), list(ty), ctx),
     solving_done,
-    rigid_supply(int),
     make_fresh_rigid(list(int), ty),
     make_fresh_rigids(list(int), list(ty), list(ty)),
     resolve_overload(any, list(cand), list(ty), ty, ctx),
@@ -1216,8 +1216,8 @@ tc_unify_list_cons @
 % `decl_rigid_supply` in `walk.chr` — and this supply counts DOWN
 % from -1 so the two ranges can never collide (rigid identity
 % comparisons look at the cell and the id, and negative ids surface
-% only cosmetically, as `T#-1` in messages). `main.chr` seeds
-% `rigid_supply(-1)` once per check.
+% only cosmetically, as `T#-1` in messages). `main.chr` seeds it with
+% `new_rigid_supply(-1)` once per check.
 %
 % Both ranges are user-visible — an unpinned skolem renders as `T#n`
 % — so the ids and the *order* they are handed out in are part of what
@@ -1230,11 +1230,16 @@ tc_unify_list_cons @
 % pin rules can fill it in later. The level is the one of the evidence
 % that made the skolem.
 
+% The key is a data constructor because `:- state` needs one.
+:- chr_type solver_supply ---> rigid_supply.
+
+:- state(rigid_supply, int).
+
 make_fresh_rigid1 @
-    rigid_supply(N), make_fresh_rigid(L, Out) <=>
-    N1 is N - 1,
-    Out = rigid(Cell, N, L),
-    rigid_supply(N1).
+    make_fresh_rigid(L, Out) <=>
+    get_rigid_supply(N),
+    put_rigid_supply(N - 1),
+    Out = rigid(_Cell, N, L).
 
 % One fresh rigid per element of the input list (only the length is
 % used; the elements are never inspected).

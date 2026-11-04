@@ -38,6 +38,7 @@
 :- use_module(library(meta)).
 :- use_module(library(pairs)).
 :- use_module(library(search)).
+:- use_module(library(state)).
 
 % Everything a use site needs to know about the scope it sits in.
 % Mirrors `CheckCtx`: the unit's variable slots, the ambient signatures
@@ -197,7 +198,6 @@ tvar_slots(Vs, TVars) ->
 :- chr_constraint
     alloc_flex_tvars(list(string), list(pair(string, ty))),
     alloc_rigid_tvars(list(int), list(string), list(pair(string, ty))),
-    decl_rigid_supply(int),
     make_decl_rigid(list(int), ty),
     make_decl_rigids(list(int), int, list(ty)),
     fresh_slots(int, list(ty)),
@@ -234,11 +234,18 @@ alloc_rigid_tvars_cons @
 %
 % The pin cell is a body-only variable, i.e. a fresh unbound logical
 % variable, so guard-derived evidence can pin it later.
+%
+% The keys are data constructors because `:- state` needs them.
+:- chr_type walk_supply ---> decl_rigid_supply ; scope_supply.
+
+:- state(decl_rigid_supply, int).
+:- state(scope_supply, int).
+
 make_decl_rigid1 @
-    decl_rigid_supply(N), make_decl_rigid(L, Out) <=>
-    N1 is N + 1,
-    Out = rigid(_Cell, N, L),
-    decl_rigid_supply(N1).
+    make_decl_rigid(L, Out) <=>
+    get_decl_rigid_supply(N),
+    put_decl_rigid_supply(N + 1),
+    Out = rigid(_Cell, N, L).
 
 make_decl_rigids_done @
     make_decl_rigids(_, N, Out) <=> N =< 0 | Out = [].
@@ -492,8 +499,8 @@ build_td_con_facts_cons @
 % across both keeps it stated in one place.
 walk_program1 @
     walk_program(Env, P, Facts) <=>
-    decl_rigid_supply(0),
-    scope_supply(0),
+    new_decl_rigid_supply(0),
+    new_scope_supply(0),
     walk_rules_from(Env, P, Facts, program_rules(P)).
 
 % The rule list is handed on rather than recomputed: there is no `let`,
@@ -693,7 +700,6 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
     aggs_check(scope, list(agg_e), scope),
     agg_check(scope, agg_e, scope),
     agg_scope(scope, list(int), check_mode, list(agg_conj), list(any), scope),
-    scope_supply(int),
     child_level(list(int), list(int)),
     goal_conjs_check(scope, list(agg_conj), goal_links, scope, list(any)),
     link_copies(scope, scope, list(any), link_kind),
@@ -772,10 +778,10 @@ key_ctx(S, L) -> ctx_at(scope_ctx(S), L, ctx_mode(scope_ctx(S))).
 % A fresh level inside `P`. The ids only need to differ, so one counter
 % per check is enough.
 child_level1 @
-    scope_supply(N), child_level(P, Out) <=>
-    N1 is N + 1,
-    Out = [N | P],
-    scope_supply(N1).
+    child_level(P, Out) <=>
+    get_scope_supply(N),
+    put_scope_supply(N + 1),
+    Out = [N | P].
 
 % Where a contradiction inside a plain aggregate's goal is reported: as
 % a dead goal, unless this is already a selection's second check.
@@ -1828,9 +1834,9 @@ class_attempt1 @
     class_attempt(Env, Facts, FName, ann(EAnn, ELoc, Eq), Sig) <=>
     errors([]),
     warnings([]),
-    rigid_supply(-1),
-    decl_rigid_supply(0),
-    scope_supply(0),
+    new_rigid_supply(-1),
+    new_decl_rigid_supply(0),
+    new_scope_supply(0),
     retell_decls(Facts),
     check_equation(Env, FName, Sig, [], ann(EAnn, ELoc, Eq), 0),
     collect(Errs),
@@ -1882,13 +1888,13 @@ verdict_of(_, _) -> attempt_failed.
 
 % `decl_rigid_supply` is seeded even though nothing here can consume it:
 % rigids come from head occurrences, `guard_match` betas and declared
-% type parameters, none of which a goal has. Without the seed a walker
-% that grew one of those would not fail — `make_decl_rigid` would simply
-% suspend and leave the type unbound.
+% type parameters, none of which a goal has. It is seeded anyway, so a
+% walker that grew one of those keeps working instead of failing with
+% `state: key is not initialized`.
 walk_goals1 @
     walk_goals(Env, Goals, Loc, Label) <=>
-    decl_rigid_supply(0),
-    scope_supply(0),
+    new_decl_rigid_supply(0),
+    new_scope_supply(0),
     alloc_var_types(collect_vars_goals(Goals), [], VarTypes),
     walk_goals_at(Env, Goals, Loc, Label, VarTypes, 0).
 
