@@ -1,0 +1,5 @@
+% No data constructor may take type/1 either.
+:- module(typeref_reserved_ctor, [go/1]).
+:- chr_type tag ---> type(int).
+:- chr_constraint go/1.
+go(R) <=> R = 1.

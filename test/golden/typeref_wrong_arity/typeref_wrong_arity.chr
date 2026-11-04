@@ -1,0 +1,5 @@
+% box exists, but at arity 1.
+:- module(typeref_wrong_arity, [go/1]).
+:- chr_type box(T) ---> box(T).
+:- chr_constraint go/1.
+go(R) <=> R = type(box/2).

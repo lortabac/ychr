@@ -446,6 +446,7 @@ decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
 | `quote(E)` | `E` as data, unevaluated ([`quote/1`](#the-quote1-quoting-form)). |
 | `fun(X, Y) -> Body end` | Lambda; parameters are variables or wildcards. |
 | `fun name/arity` | Function reference. |
+| `type(name/arity)` | [Type reference](#type-references): the type's name as a value. |
 | `'$call'(F, A1, …, An)` | Wired-in dynamic call, 1–10 arguments; prefer the prelude's `call/N`. |
 | `tell(G, A1, …, Ak)` | [Dynamic tell](#dynamic-tells-telln), a goal only: tell `G` with `A1..Ak` appended. |
 | `X is E`, `X = E`, `A == B`, `A \== B` | Evaluation, unification (tell), structural (ask) equality and disequality. |
@@ -552,10 +553,43 @@ unbound name is still `YCHR-40002`. In heads and equation patterns
 
 Quoted contents skip module-visibility checks: qualified atoms inside
 are not validated against any allowlist or namespace, which is the
-supported way to build synthetic qualified atoms (type tags, say) with
-no exported declaration. Outside `quote(...)`, `M:n` must resolve to a
-visible function, constraint or data constructor of `M`
-(§Type and constructor exports).
+supported way to build synthetic qualified atoms with no exported
+declaration. They are still data, though: an atom inside `quote` that
+names a constructor is that constructor, and the type checker checks
+its arity. To name a *type*, use [`type(name/arity)`](#type-references).
+Outside `quote(...)`, `M:n` must resolve to a visible function,
+constraint or data constructor of `M` (§Type and constructor exports).
+
+### Type references
+
+`type(name/arity)` is the name of a type, as a value:
+
+```prolog
+:- chr_type box(T) ---> box(T).
+
+go(R) <=> R = type(box/1).
+```
+
+The name may be qualified (`type(aggregates:aggregator/3)`) and follows
+the usual visibility rules for type names. The built-in types `int`,
+`float`, `string`, `any` and `type_name` can be named too
+(`type(int/0)`). An unknown or invisible type, or a wrong arity, is
+`YCHR-20046`; an operand that is not `name/arity` is `YCHR-20047`.
+
+The value has type `type_name`. At runtime it is an atom with a
+reserved spelling, `'__type__m__box'` for `m:box`, which is also how the
+type checker names types internally. No constructor or source atom can
+be spelled that way (`__` is rejected in source atoms), so a type name
+is never equal to a constructor value, even when the two share a name
+(`box` above).
+
+It is a value form, like `fun name/arity`: it is read as one in
+evaluating positions and in `=` operands. In heads, equation patterns
+and inside `quote(...)` it is a plain compound, so match on a type name
+with a guard: `f(N) when N == type(int/0) -> …`.
+
+`type/1` is reserved: a constraint, function, goal macro or data
+constructor `type/1` is `YCHR-20048`. Other arities of `type` are fine.
 
 ### Tell-time evaluation errors
 

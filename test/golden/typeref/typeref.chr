@@ -1,0 +1,43 @@
+% type(name/arity): a type's name as a value.
+:- module(typeref, [punned/1, builtin/1, qualified/1, via_fun/1,
+                     is_int/2, self_name/1, not_the_ctor/2, collision/1,
+                     type(box/1), type(answer/0), type(u/0)]).
+
+% The type and its constructor share a name.
+:- chr_type box(T) ---> box(T).
+:- chr_type answer ---> yes ; no.
+% A nullary constructor with its type's name.
+:- chr_type u ---> u.
+
+:- chr_constraint punned(any), builtin(any), qualified(any),
+    via_fun(string), is_int(type_name, answer), self_name(any),
+    not_the_ctor(any, answer), collision(int).
+
+:- function describe(type_name) -> string.
+describe(N) when N == type(box/1) -> "box".
+describe(_) -> "other".
+
+punned(R) <=> R = type(box/1).
+builtin(R) <=> R = type(int/0).
+qualified(R) <=> R = type(prelude:bool/0).
+self_name(R) <=> R = type(type_name/0).
+
+% The example from the spec discussion: bind with `=`, pass on.
+via_fun(R) <=> T = type(box/1), R is describe(T).
+
+is_int(N, R) <=> N == type(int/0) | R = yes.
+is_int(_, R) <=> R = no.
+
+% A type name never equals its constructor. The checker already
+% rejects `type(u/0) == u`, so go through `any`.
+not_the_ctor(X, R) <=> X == u | R = yes.
+not_the_ctor(_, R) <=> R = no.
+
+% The same, through a pattern: `f(u, Y)` must not match a type name,
+% or it would pin T to u and hand `k` a type name.
+:- function k(u) -> int.
+k(u) -> 1.
+:- function f(T, T) -> int.
+f(u, Y) -> k(Y).
+f(_, _) -> 0.
+collision(R) <=> R is f(type(u/0), type(box/1)).

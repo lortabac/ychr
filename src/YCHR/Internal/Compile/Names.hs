@@ -34,6 +34,7 @@ module YCHR.Internal.Compile.Names
     isIdInitialSafe,
     vmName,
     runtimeName,
+    typeRuntimeName,
 
     -- * Active-constraint argument variables
     argName,
@@ -71,7 +72,6 @@ module YCHR.Internal.Compile.Names
     aggregateLabel,
     aggregateLevelLabel,
     aggregateAggFunctor,
-    aggregatorTypeName,
     aggregateJustFunctor,
     aggregateNothingAtom,
 
@@ -219,6 +219,15 @@ vmName (Types.Qualified m n) = Name (encodeText m <> "__" <> encodeText n)
 -- this way.
 runtimeName :: Types.Name -> Text
 runtimeName name = let Name t = vmName name in t
+
+-- | The atom for a type's name. See 'Types.typeRefName'. It is a bare
+-- name, and a bare atom keeps its text as is (as in 'compileTerm' and
+-- 'Run.termToValue'), so no 'encodeText' here: every path that builds
+-- the value has to agree, also for a non-ASCII name.
+typeRuntimeName :: Types.Name -> Text
+typeRuntimeName n = case Types.typeRefName n of
+  Types.Unqualified t -> t
+  Types.Qualified m t -> m <> "__" <> t
 
 -- ---------------------------------------------------------------------------
 -- Procedure-name builders
@@ -473,13 +482,6 @@ aggregateLevelLabel k d j =
 -- Note [Aggregator representation] in "YCHR.Internal.Compile.Aggregate".
 aggregateAggFunctor :: Name
 aggregateAggFunctor = vmName (Types.Qualified "aggregates" "aggregator")
-
--- | The type of an aggregator, @aggregates:aggregator(W, E, R)@. Its
--- constructor has the same name. The type checker gets it from the
--- encoded AST, since its CHR source can't spell a type name that is also
--- a constructor.
-aggregatorTypeName :: Types.Name
-aggregatorTypeName = Types.Qualified "aggregates" "aggregator"
 
 -- | Runtime functor of @maybe:just/1@: what an aggregator's @Final@
 -- closure returns when the aggregate is defined.

@@ -94,6 +94,7 @@ import YCHR.Internal.Compile
     funcProcName,
     vmName,
   )
+import YCHR.Internal.Compile.Names (typeRuntimeName)
 import YCHR.Internal.Compile.Pipeline
   ( CompiledProgram (..),
     Error (..),
@@ -811,6 +812,7 @@ evalNestedExpr (R.CtorExpr name args) =
   -- before the compound is built, as in 'Compile.compileExpr'.
   VTerm (vmName name).unName <$> traverse evalNestedExpr args
 evalNestedExpr e@(R.FunRefExpr _ _) = exprToValue e
+evalNestedExpr (R.TypeRefExpr name _) = pure (VAtom (typeRuntimeName name))
 evalNestedExpr (R.LambdaExpr _ _) =
   error "Run.evalNestedExpr: LambdaExpr survived lambda lifting"
 

@@ -1,0 +1,5 @@
+% A non-ASCII type name: `=` and evaluation give the same atom.
+:- module(typeref_unicode, [same/1, type('été'/0)]).
+:- chr_type 'été' ---> a ; b.
+:- chr_constraint same(any).
+same(R) <=> X = type('été'/0), Y is type('été'/0), R is (X == Y).

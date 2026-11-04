@@ -1,0 +1,6 @@
+% A type name is a type_name, not an int.
+:- module(typeref_mismatch, [go/1]).
+:- chr_constraint go(int).
+go(R) <=> true.
+:- chr_constraint start/0.
+start <=> go(type(int/0)).

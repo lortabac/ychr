@@ -128,7 +128,8 @@ arity_ref_error(Td, Dc, N, UseArity, Declared) ->
 % no arm of its own.
 :- function is_base_type(any) -> bool.
 is_base_type(N) ->
-    member(N, [quote(int), quote(float), quote(string), quote(any)]).
+    member(N, [type(int/0), type(float/0), type(string/0), type(type_name/0),
+               type(any/0)]).
 
 % A declaration-level diagnostic: no checking unit, so it suppresses no
 % warnings, and the source echo is the enclosing type's own name.
@@ -406,6 +407,7 @@ expr_arity(_, float_e(_)) -> [].
 expr_arity(_, text_e(_)) -> [].
 expr_arity(_, wild_e) -> [].
 expr_arity(_, funref_e(_, _)) -> [].
+expr_arity(_, typeref_e(_)) -> [].
 expr_arity(Env, ctor_e(N, Args)) ->
     append(check_arity(Env, N, length(Args)), exprs_arity(Env, Args)).
 expr_arity(Env, call_e(_, Args)) -> exprs_arity(Env, Args).

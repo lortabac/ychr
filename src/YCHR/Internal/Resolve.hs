@@ -1655,6 +1655,11 @@ termToExpr vis loc origin = go
         (Unqualified "/")
         [CompoundTerm (Unqualified flatName) [], IntTerm arity] ->
           pure (R.FunRefExpr (parseFlatName flatName) (fromInteger arity))
+      -- 'type(name/arity)' — resolved in place by the renamer.
+      CompoundTerm
+        (Unqualified "type")
+        [CompoundTerm (Unqualified "/") [CompoundTerm name [], IntTerm arity]] ->
+          pure (R.TypeRefExpr name (fromInteger arity))
       -- Lambda 'fun(P1..Pn) -> body'. Params are patterns; invalid
       -- params get reported here and replaced with 'HeadWildcard' so
       -- traversal can keep going. An empty parameter list is rejected

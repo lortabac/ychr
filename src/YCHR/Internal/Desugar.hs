@@ -204,6 +204,7 @@ quoteExpr e@(R.IntExpr _) = e
 quoteExpr e@(R.FloatExpr _) = e
 quoteExpr e@(R.TextExpr _) = e
 quoteExpr e@(R.FunRefExpr _ _) = e
+quoteExpr e@(R.TypeRefExpr _ _) = e
 
 -- | The primary entry point: converts a resolved program to a desugared program.
 desugarProgram :: R.Program -> Either [Diagnostic DesugarError] D.Program

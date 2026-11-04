@@ -814,7 +814,7 @@ showOperators prog = mapM_ (putStrLn . renderOp) entries
 -- never surfaces here; @displayTypeAtom@
 -- ("YCHR.Internal.TypeCheck.Render") strips it on the way out.
 builtinTypeNames :: [Text]
-builtinTypeNames = ["int", "float", "string", "any"]
+builtinTypeNames = ["int", "float", "string", "type_name", "any"]
 
 -- | The module qualifier @:info@ shows a built-in type under. No
 -- module of the /user's/ program is ever spelled this way; the name is

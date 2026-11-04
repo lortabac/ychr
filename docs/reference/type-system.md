@@ -26,6 +26,7 @@ The type language:
      |  float                        -- floating-point numbers
      |  string                       -- strings
      |  any                          -- the dynamic type
+     |  type_name                    -- names of types
      |  α                            -- type variable
      |  C(τ₁, ..., τₙ)              -- algebraic or opaque type constructor
      |  fun(τ₁, ..., τₙ) -> τᵣ      -- function type
@@ -39,6 +40,10 @@ The type language:
 - **`string`** — string values.
 - **`any`** — the dynamic type. Consistent with every other type; the
   escape hatch for gradually typed code.
+- **`type_name`** — the name of a type, as produced by a type
+  reference `type(name/arity)` (language.md §Type references). Its
+  values never coincide with a value of another type: they are spelled
+  so that no constructor can match them. Guard evidence relies on that.
 
 `bool` is not built-in: the prelude declares it as the algebraic type
 `bool ---> true ; false`.
@@ -1209,6 +1214,10 @@ functor is not a data constructor, so the term is typed `any` (an
 An expression's type is determined by its outermost form:
 
 - **Literal**: `3` has type `int`, `"hi"` has type `string`.
+- **Type reference** `type(name/arity)`: type `type_name`, in evaluating
+  positions and in `=` operands alike, so after `T = type(box/1)` the
+  variable `T` is a `type_name`. No constructor lookup happens, even when
+  a constructor has the same name.
 - **Known constructor**: looked up via constructor typing (§Constructor Typing).
 - **Unknown constructor**: type `any`. The argument *positions* impose
   no expected type, but each argument expression is still typed by its
