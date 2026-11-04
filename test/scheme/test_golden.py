@@ -99,6 +99,9 @@ WERROR_EXEMPT = {
     "type_export_constructor_empty",
     "type_import_constructor_narrowing",
     "type_predicates",
+    # Bare `foo` names a constructor of a module that is not imported,
+    # so it is undeclared here (YCHR-20101).
+    "typecheck_invisible_constructor",
     "typecheck_polymorphic_constraint",
     "typecheck_qualified_in_head",
     # These pin the inaccessible-branch warning (YCHR-20104): a guard

@@ -1,0 +1,9 @@
+:- module(c, [go/1]).
+:- use_module(a).
+:- use_module(b).
+:- chr_constraint go/1.
+
+% `a` and `b` both export a constructor named `foo`, at different
+% arities. Constructors are name-only, so a bare `foo` is ambiguous
+% whatever its arity.
+go(R) <=> R = foo(1, 2).

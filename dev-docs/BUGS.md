@@ -11,114 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## The arity checker misses a wrong-arity use when a constructor name has several arities
-
-**Documented claim.** `docs/reference/type-system.md` §Known
-constructors: using a declared constructor at the wrong arity is a
-type error (`ConstructorArityMismatch`, YCHR-60008), and the renamer's
-own `YCHR-20102` warning reports the same mistake independently.
-
-**Test.**
-
-    % a.chr
-    :- module(a, [type(ta/0)]).
-    :- chr_type ta ---> foo(int).
-
-    % b.chr
-    :- module(b, [type(tb/0)]).
-    :- chr_type tb ---> foo(int, int, int).
-
-    % c.chr
-    :- module(c, [go/1]).
-    :- use_module(a).
-    :- use_module(b).
-    :- chr_constraint go/1.
-    go(R) <=> R = foo(1, 2).
-
-    ychr check a.chr b.chr c.chr
-
-**Expected.** `foo` is declared at arity 1 (module `a`) and arity 3
-(module `b`); `foo(1, 2)` matches neither, so the checker should report
-`YCHR-60008` the same way it does when `foo` has only one declared
-arity.
-
-**Actual.**
-
-    === warning ===
-    c.chr:5:11: YCHR-20102
-    Data constructor 'foo' used with 2 argument(s) but declared with 1 or 3
-    R = foo(1, 2)
-
-Exit code 0. No `YCHR-60008` at all — the checker does not flag the
-mismatch when the name resolves to more than one visible arity, even
-though it does for the single-arity case
-(`test/golden/typecheck_constructor_arity`).
-
-**Notes.** `Rename.canonicalizeDataCon` qualifies a bare constructor
-only on an exact `(name, arity)` match, so `foo(1, 2)` reaches the
-checker as bare `foo`. The checker's alias table (`typechecker/env.chr`,
-`build_con_alias`) is keyed on the name alone and drops any name
-declared twice, so `canonicalize_con` leaves it bare, `lookup_con`
-misses, and `arity_use_of` takes its `nothing` case, as for an
-undeclared name. The renamer keys on `(name, arity)`, so it still sees
-`foo/1` and `foo/3`.
-
-**Fix sketch.** Owner decisions: R1 — move to name-only resolution in
-the renamer itself (data constructors are name-only in the type
-system; see memory note). D2 — remove the checker's and the
-exhaustiveness checker's alias tables in the *same* change (they
-exist only to patch around the renamer's arity-keyed canonicalization;
-once that's gone they're dead weight). D3 — the qualified case
-(`a:foo(1, 2)`, wrong arity but written qualified) stays `YCHR-20009`
-for now; tracked separately as entry 3a below.
-
-1. **`Rename.hs`**: `canonicalizeDataCon` drops its arity argument;
-   resolves `Just (Qualified m n)` when exactly one module exports
-   `n` at *any* arity (a new visibility-filtered, nub'd helper,
-   `conProvidersAnyArity`, ~line 668). `canonicalizeData` and
-   `checkAmbiguousDataCon` lose their arity argument too, and fire
-   `AmbiguousDataConstructor` (already `YCHR-20012` — no new code)
-   whenever `conProvidersAnyArity` has 2+ entries, not just on an
-   exact-arity clash. Update the ~6 call sites and the Haddocks that
-   describe the old arity-keyed behavior. Keep `validateQualified`,
-   `selfDeclaresAndExports`, `isVisibleDataConAt`,
-   `warnUnknownDataCon` as is (`YCHR-20102` still fires for the
-   genuinely-wrong-arity case). The repro above becomes
-   `c.chr:5:11 YCHR-20012 Ambiguous data constructor 'foo' —
-   exported by: a, b` (a different diagnostic, not a silent miss —
-   that's fine, it's still a loud error).
-2. **Remove the alias tables**: `typechecker/env.chr`
-   (`con_env_from`'s alias half, `build_con_alias`, `unique_bases`,
-   `based_names`, `based_name`, `count_base`, `canonicalize_con`),
-   `typechecker/pure.chr` (`check_arity` goes straight through
-   `arity_use_of`; drop `check_canonical`), `skel.chr`/`walk.chr` (a
-   couple of call sites pass the constructor name straight through
-   now instead of canonicalizing first). `src/YCHR/Internal/
-   Constructors.hs` loses `aliases`/`buildConAlias`/`canonicalizeCon`.
-   `Exhaustiveness.hs` looks up the con env directly. Watch for:
-   compiler-generated bare prelude constructor terms (lists, `true`)
-   reaching the checker un-qualified — verify with `make test`;
-   `Desugar.hs`'s relevant arm is marked unreachable today, so this
-   should be fine but needs checking. Regenerate `generated/`
-   (`make mhs-build` does this via `make resources`).
-3. Tests: new golden `ambiguous_constructor_other_arity/` (the repro
-   above, `.error` `YCHR-20012`); new
-   `typecheck_constructor_arity_imported/` (a module that imports only
-   `a` and uses bare `foo(1, 2)`; `.error` `YCHR-60008` naming
-   `a:foo`); new `typecheck_invisible_constructor/` (pins that a
-   constructor from an unimported module doesn't leak into arity
-   checking). `RenameTest`: add a two-different-arities case to
-   `ambiguousDataConTests`. Update the two existing warning tests that
-   assumed per-arity dedup grouping. Full `make test`.
-4. Docs: `type-system.md` §Known constructors (delete the "known gap"
-   sentence) and §Constructor disambiguation (note ambiguity holds at
-   any arity now). `language.md` (same point, one sentence).
-   CHANGELOG breaking-change bullet (bare ctor declared by two
-   imports is now `YCHR-20012` even when arities differ; used to
-   resolve by arity and only warn `20102` on a mismatch).
-5. Remove this entry from BUGS.md; add the new entry below (3a) for
-   the qualified-wrong-arity case this fix deliberately leaves open.
-
 ## `YCHR-16002` ignores arity, and `host:foo(X)` in a rule head is accepted silently
 
 **Documented claim.** PROJECT.md: function names "cannot collide with
@@ -363,8 +255,8 @@ above.
 constructors: using a declared constructor at the wrong arity is a
 type error (`ConstructorArityMismatch`, `YCHR-60008`); data
 constructors are name-only in the type system (any arity of a name
-is "the same constructor" for ambiguity purposes — see the entry
-above and the memory note on this).
+is "the same constructor" for ambiguity purposes; the unqualified
+path already resolves name-only).
 
 **Test.**
 
@@ -393,9 +285,8 @@ since `foo` is declared (at arity 1) and the problem is purely arity.
 Exit code 1, and no YCHR-60008/20102. (Verified against the built
 binary in the worktree.)
 
-**Notes.** This is the deliberately-left-open case from the "arity
-checker misses a wrong-arity use" entry above (owner decision D3):
-qualified lookup (`validateQualified` and friends) is keyed on
+**Notes.** This case was left open on purpose when the unqualified
+path moved to name-only resolution. Qualified lookup (`validateQualified` and friends) is keyed on
 `(name, arity)` as a pair, so a qualified reference at the wrong
 arity looks like a reference to a name that just isn't exported,
 rather than "exported, but at a different arity". Since data
@@ -404,17 +295,16 @@ unqualified one, just on the qualified path.
 
 **Fix sketch.** Not decided yet. When picked up: give qualified data
 constructor lookup the same name-only treatment as the unqualified
-path now has (R1 above) — check the module exports the *name* at any
+path now has — check the module exports the *name* at any
 arity, and if so, report an arity mismatch instead of "not exported".
 Needs its own `(module, name)`-keyed (not `(module, name, arity)`)
 visibility check for data constructors specifically; function/
 constraint qualified lookup should stay arity-keyed, since those
 *are* overloaded by arity in a sense functions are not (actually:
 functions and constraints are also name+arity keyed for real
-collisions — only data constructors are name-only). Verify against
-`test/golden/typecheck_constructor_arity_imported` once entry 4
-(arity checker) lands, since that fix changes what the unqualified
-case reports.
+collisions — only data constructors are name-only). Compare with
+`test/golden/typecheck_constructor_arity_imported`, the unqualified
+case.
 
 ## 3b. A data constructor named `'?'/1` is accepted but every use is rejected
 

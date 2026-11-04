@@ -100,9 +100,10 @@ than one module is ambiguous and rejected.
 Names are qualified with their defining module; unqualified references
 resolve through the module's imports. Data constructors and atoms are
 qualified the same way: `palette:red`. If two imports export the same
-name and arity, an unqualified use is rejected (`YCHR-20001`;
-`YCHR-20012` for a data constructor). Qualify it, or, when the clash is
-with the prelude, rename yours.
+name and arity, an unqualified use is rejected (`YCHR-20001`). Data
+constructors are name-only, so for them the same name at any arity
+clashes (`YCHR-20012`). Qualify it, or, when the clash is with the
+prelude, rename yours.
 
 Qualifying does not bypass imports: `m:name` is valid only if the
 current module imports `m` and the import makes `name` visible.

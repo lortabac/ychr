@@ -1,0 +1,7 @@
+:- module(c, [go/1]).
+:- chr_constraint go/1.
+
+% `a` declares `foo/1` but `c` does not import it, so bare `foo` is not
+% `a:foo`: it is an undeclared constructor (a renamer warning), and
+% its arity is not checked against `a`'s declaration.
+go(R) <=> R = foo(1, 2).

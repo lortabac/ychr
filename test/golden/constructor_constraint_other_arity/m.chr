@@ -1,0 +1,9 @@
+:- module(m, [main/1, go/2, got/1]).
+:- chr_type t ---> go(int).
+:- chr_constraint main/1, go/2, got/1.
+
+% `go` is a constructor at arity 1 and a constraint at arity 2. A built
+% `go(1, 2)` names the constraint, so the renamer must not turn it into
+% the constructor `m:go`: a dynamic tell of it reaches `go/2`.
+main(R) <=> G = go(1, 2), tell(G), got(R).
+go(A, B), got(R) <=> R = A + B.

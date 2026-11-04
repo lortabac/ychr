@@ -32,7 +32,10 @@ constraints `alt/1`, `choose/2`, `between/3`, `try_unify/2`; the
 functions `fail/0`, `solve/1`, `findall/2`, `fold_solutions/4`,
 `forall/3`, `find_n/3`; and the type `step/1` with constructors
 `continue/1`, `stop/1`, `commit/1` — so a bare `continue(1)` is
-`search:continue(1)`. `library(state)` declares no constraints: it puts
+`search:continue(1)`. Constructors match by name alone, at any arity:
+a bare `stop` at the prompt is `search:stop` too (and a type error,
+`YCHR-60008`), and if a loaded file exports its own `stop` it is
+ambiguous (`YCHR-20012`). Qualify it. `library(state)` declares no constraints: it puts
 the functions `run_state/3` and `run_states/2` in query scope, while
 `:- state(Key, Type).` is a declaration macro that can only be used in a
 file, so a state key must come from a loaded module

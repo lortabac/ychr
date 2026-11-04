@@ -417,10 +417,7 @@ expr_arity(Env, lambda_e(_, Body)) -> exprs_arity(Env, Body).
 % An unknown name is not an arity error — a use site the environment
 % does not recognize is left to the rest of the checker.
 :- function check_arity(con_env, any, int) -> list(arity_use).
-check_arity(Env, N, UseArity) -> check_canonical(Env, canonicalize_con(Env, N), UseArity).
-
-:- function check_canonical(con_env, any, int) -> list(arity_use).
-check_canonical(Env, N, UseArity) -> arity_use_of(N, UseArity, lookup_con(Env, N)).
+check_arity(Env, N, UseArity) -> arity_use_of(N, UseArity, lookup_con(Env, N)).
 
 :- function arity_use_of(any, int, maybe(con_info)) -> list(arity_use).
 arity_use_of(_, _, nothing) -> [].

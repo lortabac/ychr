@@ -320,7 +320,7 @@ field_occs(_, [], _) -> [].
 field_occs(Env, [guard_match(Operand, Con, _)|Gs], Matched) ->
     field_occs(Env, Gs,
                record_match(guard_operand_var(Operand),
-                            canonicalize_con(Env, Con), Matched)).
+                            Con, Matched)).
 field_occs(Env, [guard_getarg(V, Operand, Idx)|Gs], Matched) ->
     append(field_occ(Env, V, Idx,
                      scrutinee_con(V, guard_operand_var(Operand), Matched)),

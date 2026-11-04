@@ -46,7 +46,6 @@ import Data.Text qualified as T
 import YCHR.Internal.Constructors
   ( ConEnv,
     buildConEnv,
-    canonicalizeCon,
     lookupCon,
   )
 import YCHR.Internal.Diagnostic (Diagnostic (..))
@@ -184,17 +183,16 @@ termToPat :: ConEnv -> Map Name TypeDefinition -> ColType -> Term -> Pat
 termToPat _ _ OtherCol _ = PWild
 termToPat conEnv typeMap (AlgCol cs) term = case term of
   CompoundTerm name sub ->
-    let canonical = canonicalizeCon conEnv name
-     in case lookupCon conEnv canonical of
-          Just dc
-            -- The constructor must belong to this position's type and be
-            -- applied at its declared arity; otherwise the program is
-            -- type-incorrect (diagnosed elsewhere), so stay conservative
-            -- with a wildcard.
-            | dc.conName `elem` [c.conName | c <- cs],
-              length sub == length dc.conArgs ->
-                PCon dc.conName (zipWith subPat dc.conArgs sub)
-          _ -> PWild
+    case lookupCon conEnv name of
+      Just dc
+        -- The constructor must belong to this position's type and be
+        -- applied at its declared arity; otherwise the program is
+        -- type-incorrect (diagnosed elsewhere), so stay conservative
+        -- with a wildcard.
+        | dc.conName `elem` [c.conName | c <- cs],
+          length sub == length dc.conArgs ->
+            PCon dc.conName (zipWith subPat dc.conArgs sub)
+      _ -> PWild
   _ -> PWild
   where
     subPat ty = termToPat conEnv typeMap (colTypeOf typeMap ty)

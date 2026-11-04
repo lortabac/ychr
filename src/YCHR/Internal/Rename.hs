@@ -589,37 +589,45 @@ buildDataConProviders cons =
     [(UnqualifiedIdentifier c.name c.arity, [c.onType.declaringModule]) | c <- cons]
 
 -- | Canonicalize a use-site data-constructor reference to its declared
--- 'Qualified' form when exactly one declaration matches @(name, arity)@.
+-- 'Qualified' form when exactly one visible module declares the name, at
+-- any arity. Constructors are name-only, so arity plays no part: a
+-- wrong-arity use still resolves, and the type checker reports it.
 -- Returns 'Nothing' for unknown or ambiguous names — callers fall back to
 -- their existing handling (typically: leave the name 'Unqualified' and
 -- emit an undeclared-data-constructor warning).
-canonicalizeDataCon :: RenameCtx -> Text -> Int -> Maybe Name
-canonicalizeDataCon ctx n arity =
-  case Map.lookup (UnqualifiedIdentifier n arity) ctx.dataConProviders of
-    Just [m] -> Just (Qualified m n)
+canonicalizeDataCon :: RenameCtx -> Text -> Maybe Name
+canonicalizeDataCon ctx n =
+  case conProvidersAnyArity ctx n of
+    [m] -> Just (Qualified m n)
     _ -> Nothing
 
 -- | Variant that takes a 'Name' (so compound-functor sites can call it
 -- without unwrapping). 'Qualified' names pass through unchanged;
 -- 'Unqualified' names are canonicalized via 'canonicalizeDataCon'.
+--
+-- One exception: a name that is a visible constraint or function at
+-- exactly this arity, with no constructor at this arity, stays bare.
+-- A constraint may share its name with a constructor, and @go(X, Y)@
+-- next to a constraint @go/2@ and a constructor @go/1@ is the
+-- constraint's term, not a misspelled constructor.
 canonicalizeData :: RenameCtx -> Name -> Int -> Name
 canonicalizeData _ name@(Qualified _ _) _ = name
-canonicalizeData ctx (Unqualified n) arity =
-  case canonicalizeDataCon ctx n arity of
-    Just qn -> qn
-    Nothing -> Unqualified n
+canonicalizeData ctx name@(Unqualified n) arity
+  | not (null (visibleProviders ctx n arity)),
+    not (isVisibleDataConAt ctx name arity) =
+      name
+  | otherwise = fromMaybe name (canonicalizeDataCon ctx n)
 
--- | Emit 'AmbiguousDataConstructor' (YCHR-20012) when the data-constructor
--- providers map lists more than one module for @(n, arity)@. Mirrors
--- the multi-provider arm of 'resolveName' (YCHR-20001) but for the
--- constructor namespace. Callers invoke this at every non-opaque use
+-- | Emit 'AmbiguousDataConstructor' (YCHR-20012) when more than one
+-- visible module declares a data constructor named @n@, at any arity.
+-- Mirrors the multi-provider arm of 'resolveName' (YCHR-20001) but for
+-- the constructor namespace. Callers invoke this at every non-opaque use
 -- site that would otherwise silently fall through 'canonicalizeData'
 -- (which collapses both unknown and ambiguous into a no-op rewrite).
-checkAmbiguousDataCon ::
-  RenameCtx -> Site -> Text -> Int -> Rename ()
-checkAmbiguousDataCon ctx site n arity =
-  case Map.lookup (UnqualifiedIdentifier n arity) ctx.dataConProviders of
-    Just ms@(_ : _ : _) ->
+checkAmbiguousDataCon :: RenameCtx -> Site -> Text -> Rename ()
+checkAmbiguousDataCon ctx site n =
+  case conProvidersAnyArity ctx n of
+    ms@(_ : _ : _) ->
       emitErrorIn ctx (annAt site (AmbiguousDataConstructor n ms))
     _ -> pure ()
 
@@ -1958,10 +1966,8 @@ renameTerm ctx site mode t = case t of
           NoResolveQuoted -> pure ()
           _ ->
             when (null (visibleProviders ctx n 0)) $
-              checkAmbiguousDataCon ctx site n 0
-        case canonicalizeDataCon ctx n 0 of
-          Just qn -> pure (CompoundTerm qn [])
-          Nothing -> pure (CompoundTerm (Unqualified n) [])
+              checkAmbiguousDataCon ctx site n
+        pure (CompoundTerm (canonicalizeData ctx (Unqualified n) 0) [])
   -- Same "elsewhere" check as the 0-arity case above, for a macro
   -- name used at a nonzero arity in an evaluated position.
   CompoundTerm name args
@@ -2020,7 +2026,7 @@ renameTerm ctx site mode t = case t of
             case visibleProviders ctx n (length args) of
               [] -> do
                 warnUnknownDataCon ctx site n (length args)
-                checkAmbiguousDataCon ctx site n (length args)
+                checkAmbiguousDataCon ctx site n
               [_] -> pure ()
               ms ->
                 emitErrorIn ctx (annAt site (AmbiguousName n (length args) ms))
@@ -2049,7 +2055,7 @@ renameTerm ctx site mode t = case t of
             -- YCHR-20012 on top of the YCHR-20001 that 'resolveName'
             -- has already emitted when both namespaces are ambiguous.
             when (null (visibleProviders ctx n (length args))) $
-              checkAmbiguousDataCon ctx site n (length args)
+              checkAmbiguousDataCon ctx site n
             pure (canonicalizeData ctx resolved (length args))
           Qualified _ _ -> pure resolved
     pure (CompoundTerm newName renamedArgs)
