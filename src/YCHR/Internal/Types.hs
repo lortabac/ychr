@@ -44,7 +44,9 @@ module YCHR.Internal.Types
     -- * Name helpers
     flattenName,
     typeRefName,
+    typeRefAtomParts,
     typeNamePrefix,
+    baseTypeNames,
     unqualifiedText,
     qualifiedToName,
     qualifiedNameToIdentifier,
@@ -67,9 +69,13 @@ module YCHR.Internal.Types
   )
 where
 
+import Data.Char (isDigit)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 import YCHR.Internal.Loc (SourceLoc)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
@@ -180,8 +186,10 @@ flattenName (Qualified m t) = m <> ":" <> t
 
 -- | The name of the atom a type's name becomes at runtime: what
 -- @type(name/arity)@ evaluates to, and what the type checker's encoder
--- emits for type names. It is the mangled name behind 'typeNamePrefix',
--- as one bare name, so it compiles to @__type__m__n@.
+-- emits for type names. It is one bare name, 'typeNamePrefix', the
+-- arity, then the mangled name: @type(m:box/1)@ is @__type__1__m__box@.
+-- The arity is there so a printer can show the value as
+-- @type(m:box/1)@ again.
 --
 -- The prefix keeps type names apart from constructor atoms. A type and
 -- its constructor often share a name (@:- chr_type u ---> u@), and
@@ -189,13 +197,31 @@ flattenName (Qualified m t) = m <> ":" <> t
 -- different types never look the same, so that would be unsound. No
 -- source atom or module name contains @__@ (the lexer rejects it), so
 -- no constructor atom starts with @__@.
-typeRefName :: Name -> Name
-typeRefName (Unqualified n) = Unqualified (typeNamePrefix <> n)
-typeRefName (Qualified m n) = Unqualified (typeNamePrefix <> m <> "__" <> n)
+typeRefName :: Name -> Int -> Name
+typeRefName n arity =
+  Unqualified (typeNamePrefix <> Text.pack (show arity) <> "__" <> mangled n)
+  where
+    mangled (Unqualified t) = t
+    mangled (Qualified m t) = m <> "__" <> t
+
+-- | The parts of a 'typeRefName' atom: the name as mangled (@m__n@, or
+-- bare for a built-in) and the arity. 'Nothing' for any other atom.
+typeRefAtomParts :: Text -> Maybe (Text, Int)
+typeRefAtomParts s = do
+  rest <- Text.stripPrefix typeNamePrefix s
+  let (digits, rest') = Text.span isDigit rest
+  name <- Text.stripPrefix "__" rest'
+  if Text.null digits || Text.null name
+    then Nothing
+    else Just (name, read (Text.unpack digits))
 
 -- | See 'typeRefName'.
 typeNamePrefix :: Text
 typeNamePrefix = "__type__"
+
+-- | The built-in types, which take no parameters.
+baseTypeNames :: Set Text
+baseTypeNames = Set.fromList ["int", "float", "string", "any", "type_name"]
 
 -- | The base (module-less) part of a 'Name'. Unlike 'flattenName' this
 -- discards the qualifier rather than rendering it, which is what

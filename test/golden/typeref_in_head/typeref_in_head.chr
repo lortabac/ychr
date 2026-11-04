@@ -1,0 +1,4 @@
+% type(...) in a head would be data and never match a type name.
+:- module(typeref_in_head, [h/2]).
+:- chr_constraint h/2.
+h(type(int/0), R) <=> R = 1.

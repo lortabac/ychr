@@ -61,6 +61,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Compile.Names (runtimeName, typeRuntimeName)
@@ -83,6 +84,7 @@ import YCHR.Internal.Types
     TypeDefinition (..),
     TypeExpr (..),
     TypeKind (..),
+    baseTypeNames,
     flattenName,
     qualifiedToName,
   )
@@ -132,9 +134,18 @@ atomTerm t = CompoundTerm (Unqualified t) []
 nameTerm :: Name -> Term
 nameTerm = atomTerm . runtimeName
 
--- | A type's name. See 'typeRuntimeName'.
-typeNameTerm :: Name -> Term
-typeNameTerm = atomTerm . typeRuntimeName
+-- | A type's name. See 'typeRuntimeName'. The arity is the type's
+-- declared one, so a built-in always gets 0, even where it is wrongly
+-- applied to arguments: the checker reports that as an arity error
+-- against the built-in. For any other type the use arity is the
+-- declared one in a well-formed program. A wrong one names no
+-- declared type, which is what the checker reports anyway.
+typeNameTerm :: Name -> Int -> Term
+typeNameTerm n arity = atomTerm (typeRuntimeName n declared)
+  where
+    declared = case n of
+      Unqualified b | b `Set.member` baseTypeNames -> 0
+      _ -> arity
 
 qnameTerm :: QualifiedName -> Term
 qnameTerm = nameTerm . qualifiedToName
@@ -374,7 +385,7 @@ expr (D.CtorExpr n args) = ast "ctor_e" [nameTerm n, exprs args]
 expr (D.CallExpr n args) = ast "call_e" [qnameTerm n, exprs args]
 expr (D.ApplyExpr f args) = ast "apply_e" [expr f, exprs args]
 expr (D.FunRefExpr n arity) = ast "funref_e" [qnameTerm n, intTerm arity]
-expr (D.TypeRefExpr n _) = ast "typeref_e" [typeNameTerm n]
+expr (D.TypeRefExpr n arity) = ast "typeref_e" [typeNameTerm n arity]
 expr (D.LambdaExpr params body) =
   ast
     "lambda_e"
@@ -402,13 +413,14 @@ typeExpr :: TypeExpr -> Term
 typeExpr (TypeVar v) = ast "tvar" [TextTerm v]
 typeExpr (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") argTys, retTy]) =
   ast "tfunx" [listTerm (map typeExpr argTys), typeExpr retTy]
-typeExpr (TypeCon n args) = ast "tconx" [typeNameTerm n, listTerm (map typeExpr args)]
+typeExpr (TypeCon n args) =
+  ast "tconx" [typeNameTerm n (length args), listTerm (map typeExpr args)]
 
 typeDef :: TypeDefinition -> Term
 typeDef td =
   ast
     "type_def"
-    [ typeNameTerm td.name,
+    [ typeNameTerm td.name (length td.typeVars),
       listTerm (map TextTerm td.typeVars),
       typeKind td.kind,
       encodeSourceLoc td.loc

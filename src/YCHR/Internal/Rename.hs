@@ -346,6 +346,9 @@ data RenameError
   | -- | A constraint, function, goal macro or data constructor declared
     -- at @type\/1@, which is reserved for type references (YCHR-20048).
     ReservedTypeRefName
+  | -- | A @type(...)@ in a head or equation pattern (YCHR-20049). A
+    -- pattern is data, so it would never match a type name.
+    TypeRefInPattern
   deriving (Eq, Show)
 
 -- | What is wrong with an aggregate goal conjunct, for
@@ -522,8 +525,9 @@ data RenameCtx = RenameCtx
     -- ('Rule.expansion'). Shown after 'macroChain'.
     declChain :: [ExpansionStep],
     -- | Whether we are renaming a head or equation pattern. A pattern
-    -- is data, so @type(name/arity)@ is left alone there. Needed
-    -- because '=' operands share the pattern's 'NoResolve' mode.
+    -- is data, so @type(name/arity)@ is an error there
+    -- ('TypeRefInPattern'). Needed because '=' operands share the
+    -- pattern's 'NoResolve' mode.
     inPattern :: Bool
   }
 
@@ -1961,13 +1965,19 @@ renameTerm ctx site mode t = case t of
             (Unqualified "/")
             [CompoundTerm (Unqualified (flattenName resolved)) [], IntTerm farity]
   -- Type reference: @type(name/arity)@, the type's name as a value.
-  -- Unlike @fun@, a pattern leaves it alone: there it is data. The name
+  -- In a pattern it would be data and never match a type name, so it
+  -- is an error there ('TypeRefInPattern'). The name
   -- is resolved in place, so later passes see @type(Name/arity)@ with
   -- @Name@ qualified (bare for a built-in type). See 'renameTypeRef'.
   CompoundTerm (Unqualified "type") [arg]
-    | mode /= NoResolveQuoted,
-      not ctx.inPattern ->
-        renameTypeRef ctx site t arg
+    | mode /= NoResolveQuoted ->
+        if ctx.inPattern
+          then do
+            -- Echo the term itself: an equation's patterns borrow the
+            -- guard's site, which has no source text of its own.
+            emitErrorIn ctx (annAt (Site site.loc (termToPExpr t)) TypeRefInPattern)
+            pure t
+          else renameTypeRef ctx site t arg
   -- 0-arity unqualified compounds (the AST form of bare atoms after
   -- the parser's @Atom t@ rewrite): always lenient under resolution.
   -- A bare atom in body or guard position has the same surface meaning
@@ -2685,10 +2695,6 @@ typeImportProviders ctx = importProviders ctx (typeNames ctx)
 -- silently rewrite every use in the module to a nominal user type.
 reservedTypeNames :: Set.Set Text
 reservedTypeNames = Set.union baseTypeNames (Set.fromList ["fun", "->"])
-
--- | The built-in types, which take no parameters.
-baseTypeNames :: Set.Set Text
-baseTypeNames = Set.fromList ["int", "float", "string", "any", "type_name"]
 
 -- | Reject type declarations whose name collides with a reserved type
 -- name, an earlier declaration in the same module, or a type visible

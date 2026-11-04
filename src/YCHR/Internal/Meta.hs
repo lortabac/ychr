@@ -32,7 +32,6 @@ import Data.Char (chr)
 import Data.Foldable (toList)
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Numeric (readHex)
@@ -115,7 +114,7 @@ decodeMangled s = case T.breakOn "__" s of
 
 -- | The local part of a mangled name: the @n@ of a qualified @m__n@,
 -- and the whole thing when there is no module prefix. A type name's
--- prefix ('Types.typeNamePrefix') comes off
+-- prefix and arity ('Types.typeRefAtomParts') come off
 -- first, so a type's base is its own name. Escapes are left
 -- as they are, so the result stays in the same mangled alphabet as its
 -- input and two base names compare equal exactly when their source
@@ -123,7 +122,7 @@ decodeMangled s = case T.breakOn "__" s of
 baseOfMangled :: Text -> Text
 baseOfMangled s0 = maybe s (.baseName) (decodeMangled s)
   where
-    s = fromMaybe s0 (T.stripPrefix Types.typeNamePrefix s0)
+    s = maybe s0 fst (Types.typeRefAtomParts s0)
 
 -- | Replace every @%%u\<6 hex digits\>@ escape in @s@ with the
 -- corresponding character (inverse of 'Compile.Names.encodeText''s

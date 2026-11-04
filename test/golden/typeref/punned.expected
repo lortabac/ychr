@@ -1,1 +1,1 @@
-R = '__type__typeref__box'
+R = type(typeref:box / 1)

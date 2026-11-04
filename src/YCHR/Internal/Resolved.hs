@@ -288,7 +288,7 @@ exprToTerm (FunRefExpr qn arity) =
       IntTerm (fromIntegral arity)
     ]
 -- 'typeRefName', so it compiles to the same atom a 'TypeRefExpr' does.
-exprToTerm (TypeRefExpr name _) = CompoundTerm (typeRefName name) []
+exprToTerm (TypeRefExpr name arity) = CompoundTerm (typeRefName name arity) []
 exprToTerm (LambdaExpr params body) =
   CompoundTerm
     (Unqualified "->")

@@ -50,6 +50,7 @@ import YCHR.Internal.Types
     TypeDefinition (..),
     TypeExpr (..),
     TypeKind (..),
+    typeRefAtomParts,
     unqualifiedText,
   )
 -- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
@@ -86,6 +87,30 @@ prettyOps = case PE.mergeOps builtinOps stdArithOps of
 -- AST → PExpr conversion
 -- ---------------------------------------------------------------------------
 
+-- | A type-name atom ('typeRefName') as the @type(name/arity)@ that
+-- made it. 'Nothing' for any other atom. Source text can't spell such
+-- an atom, so this only fires on values.
+typeRefPExpr :: Text -> Maybe PE.PExpr
+typeRefPExpr f = do
+  (name, arity) <- typeRefAtomParts f
+  pure
+    ( PE.Compound
+        "type"
+        [ noAnn
+            ( PE.Compound
+                "/"
+                [noAnn (mangledToPExpr name), noAnn (PE.Int (toInteger arity))]
+            )
+        ]
+    )
+  where
+    mangledToPExpr t = case T.breakOn "__" t of
+      (m, rest)
+        | not (T.null m),
+          Just b <- T.stripPrefix "__" rest ->
+            PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom b)]
+      _ -> PE.Atom t
+
 -- | Convert a 'Term' to a 'PE.PExpr'.
 -- This is the inverse of 'convertTerm' in "YCHR.Internal.Parser".
 termToPExpr :: Term -> PE.PExpr
@@ -94,7 +119,9 @@ termToPExpr (IntTerm n) = PE.Int n
 termToPExpr (FloatTerm n) = PE.Float n
 termToPExpr (TextTerm s) = PE.Str s
 termToPExpr Wildcard = PE.Wildcard
-termToPExpr (CompoundTerm (Unqualified f) []) = PE.Atom f
+termToPExpr (CompoundTerm (Unqualified f) [])
+  | Just p <- typeRefPExpr f = p
+  | otherwise = PE.Atom f
 termToPExpr (CompoundTerm (Qualified m f) []) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 termToPExpr (CompoundTerm (Qualified m f) args) =
@@ -210,6 +237,10 @@ runtimeToPExpr (CompoundTerm (Unqualified "prelude__[]") []) = PE.Atom "[]"
 runtimeToPExpr (CompoundTerm (Qualified "prelude" "[]") []) = PE.Atom "[]"
 runtimeToPExpr (CompoundTerm (Unqualified "prelude__.") args) =
   PE.Compound "." (map (noAnn . runtimeToPExpr) args)
+-- A type name prints as the @type(name/arity)@ that made it, the way a
+-- closure prints as its source form.
+runtimeToPExpr (CompoundTerm (Unqualified f) [])
+  | Just p <- typeRefPExpr f = p
 runtimeToPExpr (CompoundTerm (Unqualified f) []) = PE.Atom f
 runtimeToPExpr (CompoundTerm (Qualified m f) []) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
