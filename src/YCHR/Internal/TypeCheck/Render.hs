@@ -112,7 +112,7 @@ showValue v = do
 
 -- | One-line description of a runtime 'Value''s outer shape, used only
 -- in 'error' messages for broken-invariant cases while decoding the
--- diagnostic accumulators.
+-- diagnostic lists.
 showValueShape :: Value -> String
 showValueShape (VTerm f xs) =
   "VTerm " <> T.unpack f <> "/" <> show (length xs)

@@ -47,14 +47,12 @@
 % the fresh parameters of a parametric evidence pin; the walker seeds
 % its up-counting declaration-site supply itself.
 check_program(Program, Errors, Warnings) <=>
-    errors([]),
-    warnings([]),
     new_rigid_supply(-1),
     Env is build_tc_env(Program),
     tell_decls(Env, Program, Facts),
     walk_program(Env, Program, Facts),
     solving_done,
-    collect(SolverErrors),
+    collect_errors(SolverErrors),
     collect_warnings(SolverWarnings),
     AllErrors is append(program_errors(env_cons(Env), Program), SolverErrors),
     Errors = AllErrors,
@@ -66,13 +64,11 @@ check_program(Program, Errors, Warnings) <=>
 % the constructor-arity walk — a goal may *use* a known constructor at
 % the wrong arity — and that runs per goal, in the goal's own unit.
 check_goals(Program, Goals, Loc, Label, Errors, Warnings) <=>
-    errors([]),
-    warnings([]),
     new_rigid_supply(-1),
     Env is build_tc_env(Program),
     tell_decls(Env, Program, _Facts),
     walk_goals(Env, Goals, Loc, Label),
-    collect(SolverErrors),
+    collect_errors(SolverErrors),
     collect_warnings(SolverWarnings),
     AllErrors is append(goals_arity_errors(env_cons(Env), Goals, Label, Loc),
                         SolverErrors),

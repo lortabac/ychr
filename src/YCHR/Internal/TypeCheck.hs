@@ -162,7 +162,7 @@ data CtxInfo = CtxInfo
     origin :: PExpr
   }
 
--- | Decode one accumulator. Errors and warnings have the same
+-- | Decode one diagnostic list. Errors and warnings have the same
 -- @f(Ctx, Code, Detail)@ shape; @constructor@ names the expected
 -- @'$tc_diag'@ one and @decodeBody@ turns the @(Code, Detail)@ pair
 -- into the diagnostic payload.
@@ -176,7 +176,7 @@ decodeDiagnostics origins constructor decodeBody var = do
   items <- derefList var
   case items of
     Nothing ->
-      malformed ("the " <> constructor <> " accumulator is not a list") var
+      malformed ("the " <> constructor <> " diagnostics are not a list") var
     Just xs -> traverse one xs
   where
     functor = diagAtom constructor

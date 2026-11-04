@@ -1752,7 +1752,7 @@ class_eqs_cons @
 
 % One equation. The search runs in a fresh, empty session —
 % `run_chr_session_ep` is `solve` without the copy of the caller's store
-% — so the attempts cannot see the program-wide error accumulator, and
+% — so the attempts cannot see the program-wide reports, and
 % the winning attempt's diagnostics die with the session. What crosses
 % back out is the boolean and the committed solution's values of the
 % goal's variables. The facts go in as a copy, made in one call; see
@@ -1815,26 +1815,24 @@ class_eq_search_sig @
 % re-deriving one and without sharing a variable with the session it
 % came from.
 %
-% The accumulators and the rigid supplies are seeded here, inside the
-% branch, so they are part of the branch's store and vanish with it —
-% the next signature's attempt starts from an empty accumulator without
-% anything having to clear one.
+% The rigid supplies are seeded here, inside the branch, and the
+% attempt's reports are stored there too, so all of it vanishes with
+% the branch: the next signature's attempt starts with no reports
+% without anything having to clear them.
 %
 % The unit id is 0 and the diagnostics never leave, so neither the
 % number nor the annotation id is observable. Suppression runs because
-% a branch drains its accumulators like any other computation; it
+% a branch collects its reports like any other computation; it
 % cannot change the verdict, since it only drops warnings when there is
 % an error, and an error already fails the attempt.
 class_attempt1 @
     class_attempt(Env, Facts, FName, ann(EAnn, ELoc, Eq), Sig) <=>
-    errors([]),
-    warnings([]),
     new_rigid_supply(-1),
     new_decl_rigid_supply(0),
     new_scope_supply(0),
     retell_decls(Facts),
     check_equation(Env, FName, Sig, [], ann(EAnn, ELoc, Eq), 0),
-    collect(Errs),
+    collect_errors(Errs),
     collect_warnings(Warns),
     attempt_result(verdict_of(Errs, suppress_warnings(Errs, Warns))).
 

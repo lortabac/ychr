@@ -24,10 +24,8 @@
     type(error_detail/0),
     report_error/3,
     report_dead/2,
-    errors/1,
-    collect/1,
+    collect_errors/1,
     report_warning/3,
-    warnings/1,
     collect_warnings/1,
     fun suppress_warnings/2,
     fun rule_label/1,
@@ -41,6 +39,7 @@
 ]).
 
 :- use_module('$tc_ast').
+:- use_module(library(aggregates)).
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
 :- use_module(library(pairs)).
@@ -149,7 +148,7 @@ level_within(_, []) -> false.
 level_inside(K, [_|L]) -> level_within(K, L).
 level_inside(_, []) -> false.
 
-% An accumulated error: where it came from, which `TypeCheckError`
+% A reported error: where it came from, which `TypeCheckError`
 % variant it is, and that variant's payload.
 %
 % Both fields are declared rather than `any`, but be precise about what
@@ -175,7 +174,7 @@ level_inside(_, []) -> false.
 % shape that would close the gap.
 :- chr_type error ---> error(ctx, error_code, error_detail).
 
-% An accumulated warning. Same shape as an error, in a separate type so
+% A reported warning. Same shape as an error, in a separate type so
 % that suppression can act on the two lists independently, and so that
 % `warning_code` and `error_code` cannot be confused. The detail
 % vocabulary is shared with errors, which is wider than it needs to be:
@@ -250,19 +249,18 @@ rule_label(nothing) -> label_none.
 rule_label(just(N)) -> label_rule(N).
 
 % ---------------------------------------------------------------------
-% Accumulators
+% Reports
 % ---------------------------------------------------------------------
 %
-% The checking phase reports as it goes and the entry point drains the
-% two lists at the end. The pure declaration checks of `pure.chr` do
-% not go through here: an `error/3` is data, so they return their
-% diagnostics directly and `main.chr` concatenates the two sources.
+% The checking phase reports as it goes: each report stays in the store,
+% and the entry point collects them at the end, in report order. The
+% pure declaration checks of `pure.chr` do not go through here: an
+% `error/3` is data, so they return their diagnostics directly and
+% `main.chr` concatenates the two sources.
 :- chr_constraint
     report_error(ctx, error_code, error_detail),
-    errors(list(error)),
-    collect(list(error)),
+    collect_errors(list(error)),
     report_warning(ctx, warning_code, error_detail),
-    warnings(list(warning)),
     collect_warnings(list(warning)).
 
 % A selection's second goal check repeats the first; see `check_mode`.
@@ -272,19 +270,15 @@ drop_copy_error @
 drop_copy_warning @
     report_warning(ctx(_, _, _, _, lvl(_, mode_copy)), _, _) <=> true.
 
-accumulate_error @
-    report_error(Ctx, Code, Detail), errors(Es) <=>
-    errors([error(Ctx, Code, Detail) | Es]).
-
-collect_errors @
-    collect(E), errors(Es) <=> E = Es.
-
-accumulate_warning @
-    report_warning(Ctx, Code, Detail), warnings(Ws) <=>
-    warnings([warning(Ctx, Code, Detail) | Ws]).
+collect_all_errors @
+    collect_errors(Out),
+    collect(error(Ctx, Code, Detail), report_error(Ctx, Code, Detail), Es) <=>
+    Out = Es.
 
 collect_all_warnings @
-    collect_warnings(W), warnings(Ws) <=> W = Ws.
+    collect_warnings(Out),
+    collect(warning(Ctx, Code, Detail), report_warning(Ctx, Code, Detail), Ws) <=>
+    Out = Ws.
 
 % A contradiction between two whole types: which warning it is depends
 % on where it was found.
