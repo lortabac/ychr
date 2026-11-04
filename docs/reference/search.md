@@ -201,8 +201,8 @@ session: same driver, same commit on the first solution. It lives in
 `library(meta)` beside `run_chr_session/1`, which differs from it only
 in catching errors. It exists for a computation that has to
 be sealed off from its caller in both directions — the type checker's
-overload search, whose attempts must not see the program-wide error
-accumulator and seed their own inside the branch. Everything else in
+overload search, whose attempts must not see the caller's reported
+errors and keep their own inside the branch. Everything else in
 this document applies to all three; where the starting store matters,
 the text says so.
 

@@ -21,7 +21,7 @@
 %   * `Ctx` is the structured `ctx/4` of `'$tc_diag'`, carrying a
 %     diagnostic's checking unit, origin, label and location. The rules
 %     pass it opaquely, so nothing below reads it;
-%   * the diagnostic vocabulary — the accumulators, `error/3`,
+%   * the diagnostic vocabulary — the report constraints, `error/3`,
 %     `warning/3` and the code and detail types — lives in
 %     `'$tc_diag'`, which the declaration checks share, and is
 %     declared rather than `any`: the detail pair is spelled `tpair`
@@ -139,11 +139,11 @@
 
 % The diagnostic vocabulary — `error/3`, `warning/3`, the `error_code`
 % and `warning_code` atoms and the `error_detail` payloads — is
-% declared in `'$tc_diag'`, together with the accumulators
+% declared in `'$tc_diag'`, together with the report constraints
 % `report_error/3` and `report_warning/3` that the rules below emit
 % into. It is shared with the declaration checks of `pure.chr`,
 % which produce the same `error/3` terms without going through a
-% solver at all. Both accumulators are declared over those types, so
+% solver at all. Both report constraints are declared over those types, so
 % `ychr check --Werror` rejects a report site here that invents a
 % code — but not one that hands a code the wrong detail; see the
 % `error/3` declaration there for exactly what the typing does and
