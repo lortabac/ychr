@@ -2024,7 +2024,12 @@ YCHR-60006. An untyped class checks like an untyped function.
 ```
 
 Multiple comma-separated typed declarations with the same name and
-arity are grouped into a single overloaded class definition. An
+arity are grouped into a single overloaded class definition. Put each
+signature in parens: `,` binds tighter than `->`, so a bare
+`f(int) -> int, f(float) -> float` would read as one signature with a
+junk return type. A bare `,` or `->` inside a type (other than a
+function type `fun(T1, ..., Tn) -> T end`) is `CommaOrArrowInType`,
+YCHR-15030. The same holds for `:- extend_class_type`. An
 `:- open_class` extends across modules: other modules may add
 signatures via `:- extend_class_type` and equations via
 `:- extend_class`. The target may be qualified
@@ -2175,6 +2180,13 @@ The `requiring` clause is a comma-separated list of *bound signatures*
 :- function lookup(K, list(pair(K, V))) -> option(V) requiring
     '=='(K, K) -> bool.
 ```
+
+With more than one bound, put each in parens, as in `clamp`. Without
+them, `,` (which binds tighter than `->`) glues the bounds together:
+`'>'(T, T) -> bool, '<'(T, T) -> bool` reads as one bound returning
+`(bool, '<'(T, T)) -> bool`. The parser rejects that as
+`CommaOrArrowInType` (YCHR-15030): a `,` or `->` inside a type, other
+than a function type `fun(T1, ..., Tn) -> T end`.
 
 `requiring` is allowed on `:- function`, `:- open_function`, and
 `:- chr_constraint` (§Bounded constraints); *not* on `:- class` /

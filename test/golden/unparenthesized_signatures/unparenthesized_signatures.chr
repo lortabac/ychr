@@ -1,0 +1,19 @@
+:- module(unparenthesized_signatures, [result/1]).
+
+% Each bound or signature list below lacks parens. ',' binds tighter
+% than '->', so 'a -> b, c -> d' reads as 'a -> ((b, c) -> d)'. The
+% parser rejects it as CommaOrArrowInType (YCHR-15030).
+:- function clamp(T, T, T) -> T requiring
+    '>'(T, T) -> bool,
+    '<'(T, T) -> bool.
+clamp(X, _, _) -> X.
+
+:- open_class sz(int) -> int, sz(float) -> int.
+sz(_) -> 0.
+
+:- extend_class_type sz(string) -> int, sz(bool) -> int.
+
+:- chr_constraint result(int).
+:- chr_constraint c(T) requiring '>'(T, T) -> bool, '<'(T, T) -> bool.
+
+result(R) <=> R is clamp(1, 0, 2).

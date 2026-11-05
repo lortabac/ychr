@@ -1169,7 +1169,9 @@ checkRefiningDeclarations mods =
 
     -- The two-level spelling 'Encode.typeExpr' reads as a function
     -- type. Anything else headed by @->@ is an ordinary type
-    -- reference, as it is everywhere else.
+    -- reference, as it is everywhere else. The parser never makes
+    -- one (YCHR-15030); only the DSL, which builds 'TypeExpr'
+    -- directly, still can.
     isFunctionType
       (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") _, _]) = True
     isFunctionType _ = False

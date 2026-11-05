@@ -336,6 +336,36 @@ directiveTests =
           @?= Right []
         pErrs ":- function pick(T, T) -> T requiring X:gt(T, T) -> bool."
           @?= Right [MalformedBoundSig],
+      testCase "a bare , or -> inside a type is rejected" $ do
+        let sources =
+              [ ":- function clamp(T) -> T requiring gt(T, T) -> bool, lt(T, T) -> bool.",
+                ":- chr_constraint c(T) requiring gt(T, T) -> bool, lt(T, T) -> bool.",
+                ":- class sz(int) -> int, sz(float) -> int.",
+                ":- extend_class_type sz(int) -> int, sz(float) -> int.",
+                ":- function f(int) -> int, g(int) -> int.",
+                ":- chr_type t ---> box((int, int)).",
+                ":- chr_constraint c(m:(a, b)).",
+                ":- chr_constraint c(prelude:fun(int) -> int end)."
+              ]
+        forM_ sources $ \src ->
+          (src, pErrs src) @?= (src, Right [CommaOrArrowInType]),
+      testCase "parenthesized bounds and a function-typed bound are accepted" $ do
+        fmap
+          (fmap length)
+          ( firstRequiring
+              ":- function clamp(T) -> T requiring (gt(T, T) -> bool), (lt(T, T) -> bool)."
+          )
+          @?= Right (Just 2)
+        fmap
+          (fmap (map (.returnType)))
+          (firstRequiring ":- function ap(T) -> T requiring mk(T) -> fun(T) -> T end.")
+          @?= Right
+            ( Just
+                [ TypeCon
+                    (Unqualified "->")
+                    [TypeCon (Unqualified "fun") [TypeVar "T"], TypeVar "T"]
+                ]
+            ),
       testCase "a qualified definition name is rejected" $ do
         let qualified = Right [QualifiedDefinitionName "oc" "foo"]
             sources =

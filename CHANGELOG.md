@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+A `requiring` list with more than one bound must put each bound in
+parens. `requiring '>'(T, T) -> bool, '<'(T, T) -> bool` used to keep
+only the first bound, with a junk return type, and the function's own
+body then failed to type-check.
+
+- **Breaking:** a `,` or `->` inside a type that is not a function type
+  `fun(...) -> T end` is now `YCHR-15030` (`CommaOrArrowInType`). This
+  covers an unparenthesized signature list in `:- function`,
+  `:- open_function`, `:- class`, `:- open_class` and
+  `:- extend_class_type` (the first two used to give YCHR-16011), and
+  types like `c((int -> int))` or `box((int, int))`, which used to be
+  accepted silently.
+
+- **Breaking:** `YCHR.Internal.Parser.ParseValidationError` has a new
+  constructor, `CommaOrArrowInType`.
+
 Breaking: `YCHR.DSL.extendClassType` now returns an
 `ExtendClassTypeDeclBody`, added with the new `withClassTypeExtensions`.
 Passed to `declaring`, it used to be read as a declaration of the
