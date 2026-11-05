@@ -352,6 +352,10 @@ data RenameError
   | -- | A rule head conjunct that is a function at that arity, or a
     -- @host:@ call. Heads must be constraints.
     FunctionInHead Name Int
+  | -- | A qualified head conjunct, aggregate goal conjunct or body goal
+    -- that names a data constructor (at any arity) and no constraint or
+    -- function. Goals must be constraints or function calls.
+    ConstructorAsGoal Name Int
   deriving (Eq, Show)
 
 -- | What is wrong with an aggregate goal conjunct, for
@@ -1431,6 +1435,11 @@ renameCon ctx site (Constraint cname cargs)
             traverse_ (renameTerm (asPattern ctx) site NoResolve) cargs
             emitErrorIn ctx (annAt site (UnknownName n (length cargs)))
             pure [HeadDropped]
+      NotAMacro
+        | isConstructorGoal ctx cname (length cargs) -> do
+            traverse_ (renameTerm (asPattern ctx) site NoResolve) cargs
+            emitErrorIn ctx (annAt site (ConstructorAsGoal cname (length cargs)))
+            pure [HeadDropped]
       NotAMacro -> do
         renamedName <- resolveName ResolveTop ctx site cname (length cargs)
         renamedArgs <- traverse (renameTerm (asPattern ctx) site NoResolve) cargs
@@ -1572,6 +1581,11 @@ renameConjunct ctx site t = case t of
             null (visibleProviders ctx base (length args)) -> do
               traverse_ (renameTerm (asPattern ctx) site NoResolve) args
               badConjunct (ConjunctIsBuiltin base (length args))
+        NotAMacro
+          | isConstructorGoal ctx n (length args) -> do
+              traverse_ (renameTerm (asPattern ctx) site NoResolve) args
+              emitErrorIn ctx (annAt site (ConstructorAsGoal n (length args)))
+              pure []
         NotAMacro -> do
           renamedName <- resolveName ResolveTop ctx site n (length args)
           renamedArgs <- traverse (renameTerm (asPattern ctx) site NoResolve) args
@@ -1587,6 +1601,15 @@ renameConjunct ctx site t = case t of
     badConjunct b = do
       emitErrorIn ctx (annAt site (MalformedAggregateGoal b))
       pure []
+
+-- | Whether a qualified goal name @M:n@ is a visible constructor of @M@
+-- (at any arity, constructors are name-only) and not a constraint or
+-- function. 'validateQualified' would accept it as a value.
+isConstructorGoal :: RenameCtx -> Name -> Int -> Bool
+isConstructorGoal ctx (Qualified m n) arity =
+  m `notElem` visibleProviders ctx n arity
+    && any (\(k, ms) -> k.localName == n && m `elem` ms) (Map.toList ctx.dataConProviders)
+isConstructorGoal _ _ _ = False
 
 -- | Whether a resolved name is a function: a @host:@ call, or a function
 -- some module declares at this arity. An unqualified name did not
@@ -2114,6 +2137,10 @@ renameTerm ctx site mode t = case t of
         -- constructing arbitrary qualified atoms as data (e.g. type
         -- tags inside the typechecker's CHR program).
         pure (canonicalizeData ctx name (length args))
+      ResolveTop
+        | isConstructorGoal ctx name (length args) -> do
+            emitErrorIn ctx (annAt site (ConstructorAsGoal name (length args)))
+            pure name
       _ -> do
         resolved <- resolveName mode ctx site name (length args)
         case resolved of
@@ -2153,9 +2180,12 @@ renameFunRef ctx site name arity
               notFunction name
         _ -> pure (Just resolved)
   where
-    -- Visible as a constraint or a constructor. Otherwise
-    -- 'validateQualified' has already reported it.
-    found m n = m `elem` visibleProviders ctx n arity || m `elem` ctorProviders n
+    -- Visible as a constraint, or as a constructor at any arity
+    -- (constructors are name-only). Otherwise 'validateQualified' has
+    -- already reported it.
+    found m n =
+      m `elem` visibleProviders ctx n arity
+        || isConstructorGoal ctx (Qualified m n) arity
     ctorProviders n =
       Map.findWithDefault [] (UnqualifiedIdentifier n arity) ctx.dataConProviders
     -- Report the name as written, keep the resolved one going.
@@ -2270,6 +2300,9 @@ resolveName _ ctx site name@(Qualified m n) arity = do
 --   * 'ExcludedByImportList' (YCHR-20044) iff @M@ is another module
 --     that exports @(n, arity)@ as a constraint, function, macro or
 --     constructor, but the import list leaves it out;
+--   * 'DataConstructorArityMismatch' (YCHR-20102, a warning) iff @M@
+--     provides a visible constructor @n@ at another arity. Constructors
+--     are name-only, so the type checker reports the arity error;
 --   * constructor-flavored ('NonExportedConstructor', YCHR-20010) iff
 --     @M@ declares @(n, arity)@ as a constructor anywhere — the user
 --     named a real but hidden ctor;
@@ -2292,12 +2325,24 @@ validateQualified ctx site m n arity
       emitErrorIn ctx (annAt site (MacroOutsideGoalPosition (QualifiedName m n) arity))
   | m /= ctx.currentModule.name && exportedByModule =
       emitErrorIn ctx (annAt site (ExcludedByImportList m n arity))
+  -- Constructors are name-only: @M:n@ visible at another arity is a
+  -- wrong-arity use, not a missing name. Warn like the bare case; the
+  -- type checker reports the arity error.
+  | (a : as) <- visibleCtorArities =
+      emitWarningIn ctx (annAt site (DataConstructorArityMismatch n arity (a :| as)))
   | m `elem` Map.findWithDefault [] key ctx.allDataConProviders =
       emitErrorIn ctx (annAt site (NonExportedConstructor m n arity))
   | otherwise =
       emitErrorIn ctx (annAt site (NotExportedByModule m n arity))
   where
     key = UnqualifiedIdentifier n arity
+    -- Arities at which @M@ provides a visible constructor named @n@.
+    visibleCtorArities =
+      [ k.arity
+      | (k, ms) <- Map.toList ctx.dataConProviders,
+        k.localName == n,
+        m `elem` ms
+      ]
     -- Exported macro that the import list hides.
     macroHidden =
       m `elem` lookupExport key ctx.macroExportEnv

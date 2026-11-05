@@ -434,6 +434,7 @@ renameErrorCode MalformedTypeRef = ErrorCode 20047
 renameErrorCode ReservedTypeRefName = ErrorCode 20048
 renameErrorCode TypeRefInPattern = ErrorCode 20049
 renameErrorCode (FunctionInHead _ _) = ErrorCode 20050
+renameErrorCode (ConstructorAsGoal _ _) = ErrorCode 20051
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1437,6 +1438,15 @@ renameErrorMsg (FunctionInHead name arity) =
         ++ "' in a rule head is a function, not a constraint"
     )
     "rule heads must be constraints; call the function from the body or a guard instead"
+renameErrorMsg (ConstructorAsGoal name arity) =
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "/"
+        ++ show arity
+        ++ "' is a data constructor, not a constraint"
+    )
+    "heads and goals must be constraints (a body goal may also call a function)"
 renameErrorMsg (MalformedAggregateGoal (ConjunctIsFunction name arity)) =
   withHint
     ( "'"

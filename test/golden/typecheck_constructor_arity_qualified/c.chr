@@ -1,0 +1,7 @@
+:- module(c, [go/1]).
+:- use_module(a).
+:- chr_constraint go/1.
+
+% `a` exports `foo` at arity 1. Constructors are name-only, so
+% `a:foo/2` is a wrong-arity use (a type error), not a missing export.
+go(R) <=> R = a:foo(1, 2).

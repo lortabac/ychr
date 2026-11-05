@@ -11,63 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## 3a. A qualified data constructor at the wrong arity reports "module does not export" instead of an arity error
-
-**Documented claim.** `docs/reference/type-system.md` §Known
-constructors: using a declared constructor at the wrong arity is a
-type error (`ConstructorArityMismatch`, `YCHR-60008`); data
-constructors are name-only in the type system (any arity of a name
-is "the same constructor" for ambiguity purposes; the unqualified
-path already resolves name-only).
-
-**Test.**
-
-    % a.chr
-    :- module(a, [type(ta/0)]).
-    :- chr_type ta ---> foo(int).
-
-    % c.chr
-    :- module(c, [go/1]).
-    :- use_module(a).
-    :- chr_constraint go/1.
-    go(R) <=> R = a:foo(1, 2).
-
-    ychr check a.chr c.chr
-
-**Expected.** A constructor-arity error (`YCHR-60008`, or the
-`YCHR-20102` renamer warning), the same as the unqualified case,
-since `foo` is declared (at arity 1) and the problem is purely arity.
-
-**Actual.**
-
-    === error ===
-    c.chr:5:11: YCHR-20009
-    Module 'a' does not export 'foo/2'
-
-Exit code 1, and no YCHR-60008/20102. (Verified against the built
-binary in the worktree.)
-
-**Notes.** This case was left open on purpose when the unqualified
-path moved to name-only resolution. Qualified lookup (`validateQualified` and friends) is keyed on
-`(name, arity)` as a pair, so a qualified reference at the wrong
-arity looks like a reference to a name that just isn't exported,
-rather than "exported, but at a different arity". Since data
-constructors are name-only, this is arguably the same bug as the
-unqualified one, just on the qualified path.
-
-**Fix sketch.** Not decided yet. When picked up: give qualified data
-constructor lookup the same name-only treatment as the unqualified
-path now has — check the module exports the *name* at any
-arity, and if so, report an arity mismatch instead of "not exported".
-Needs its own `(module, name)`-keyed (not `(module, name, arity)`)
-visibility check for data constructors specifically; function/
-constraint qualified lookup should stay arity-keyed, since those
-*are* overloaded by arity in a sense functions are not (actually:
-functions and constraints are also name+arity keyed for real
-collisions — only data constructors are name-only). Compare with
-`test/golden/typecheck_constructor_arity_imported`, the unqualified
-case.
-
 ## 3b. A data constructor named `'?'/1` is accepted but every use is rejected
 
 **Documented claim.** None stated — `?/1` is not listed as reserved

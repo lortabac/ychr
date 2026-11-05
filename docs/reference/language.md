@@ -63,6 +63,8 @@ so delete foreign Prolog directives like `:- dynamic`.
 Heads are comma-separated constraint applications. A head conjunct
 that names a function at that arity, or a `host:` call, is an error
 (`YCHR-20050`); a constraint `f/1` next to a function `f/2` is fine.
+A data constructor, qualified or not, is not a constraint either: a
+qualified one in a head or a body goal is `YCHR-20051`.
 Guards are comma-separated boolean expressions with ask semantics (no
 binding); they are expressions, not Prolog predicates, and may call
 [host functions](#host-calls) or user-defined functions. Bodies are

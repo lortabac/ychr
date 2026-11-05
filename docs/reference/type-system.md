@@ -1251,7 +1251,8 @@ so using a known constructor with the wrong number of arguments is a
 type error (`ConstructorArityMismatch`, YCHR-60008), not a
 fall-through to `any`. The error names the declared arity, and the
 offending use is then typed `any` so it draws no second, downstream
-mismatch.
+mismatch. A qualified use like `m:some(1, 2)` is the same mistake,
+not a missing export.
 
 The renamer reports the same mistake as warning `YCHR-20102`, naming
 every arity the constructor is declared at (a name can have several,
