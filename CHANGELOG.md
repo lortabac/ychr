@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+A qualified data constructor at the wrong arity, like `a:foo(1, 2)`
+for `foo/1`, is now a constructor-arity error (`YCHR-20102` warning,
+`YCHR-60008`), not `YCHR-20009` "does not export 'foo/2'". Bare and
+qualified uses now agree.
+
+- **Breaking:** a qualified data constructor as a head conjunct,
+  aggregate goal or body goal (`go(X) <=> a:foo(1), ...`) is now
+  `YCHR-20051` (`ConstructorAsGoal`). It used to be accepted: the head
+  never matched and the body goal did nothing.
+
 A `requiring` list with more than one bound must put each bound in
 parens. `requiring '>'(T, T) -> bool, '<'(T, T) -> bool` used to keep
 only the first bound, with a junk return type, and the function's own
