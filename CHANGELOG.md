@@ -199,6 +199,11 @@ A constraint, function or goal macro declared at `aggregate/4`,
 then ignored. Other arities, data constructors, and declaration
 macros still work.
 
+A data constructor at `?/1` (the aggregate goal guard) is now
+`YCHR-20043` too. Before, the declaration was accepted, but every
+unqualified use of it was read as the guard (`YCHR-20042`), so only a
+qualified `m:'?'(X)` could build it.
+
 - **Breaking:** `YCHR.Internal.Rename.RenameError` has a new
   constructor, `ReservedAggregateName Text Int`.
 

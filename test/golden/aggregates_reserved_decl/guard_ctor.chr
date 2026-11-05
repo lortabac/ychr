@@ -1,0 +1,4 @@
+% A data constructor at ?/1 is reserved too: an unqualified use would
+% read as the aggregate guard.
+:- module(aggregates_reserved_decl_guard_ctor, []).
+:- chr_type t ---> '?'(int).

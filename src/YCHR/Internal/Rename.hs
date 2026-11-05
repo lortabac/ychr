@@ -324,9 +324,10 @@ data RenameError
     -- structurally inside one, and has no meaning anywhere else.
     GuardOutsideAggregateGoal
   | -- | A constraint, function or goal macro declared at an
-    -- aggregate-form key (@aggregate\/4@, @argmin\/2@, …). The head
-    -- reads that key as the aggregate form, so the declaration is
-    -- never used. Carries the name and arity.
+    -- aggregate-form key (@aggregate\/4@, @argmin\/2@, …), or a
+    -- constraint, function, goal macro or data constructor at @?\/1@.
+    -- An unqualified use of those keys reads as the aggregate form or
+    -- the guard, so we forbid the pun. Carries the name and arity.
     ReservedAggregateName Text Int
   | -- | A qualified reference @M:n/a@ where @M@ exports @(n, arity)@ but
     -- the current module's import list for @M@ leaves it out. Covers
@@ -1167,6 +1168,7 @@ locAtOrAfter a b = (a.line, a.col) >= (b.line, b.col)
 --     constraint or function declared with a primitive's reserved name.
 --   * 'ReservedAggregateName' — a constraint, function or goal macro
 --     declared at one of the five aggregate-form keys, or at @?\/1@.
+--     (A data constructor at @?\/1@ is caught by 'validateTypeDecls'.)
 --
 -- Plus the 'UnusedMacroParameter' warning for a head variable that
 -- occurs only once in its clause and whose name does not start with
@@ -2776,6 +2778,11 @@ validateTypeDecls :: RenameCtx -> Rename ()
 validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
   where
     isTypeRefCon dc = isTypeRefKey (unqualifiedText dc.conName) (length dc.conArgs)
+    -- '?'/1 is the aggregate goal guard. An unqualified use reads as
+    -- the guard, so only `m:'?'(X)` could build such a constructor.
+    -- Forbid the pun instead.
+    isGuardCon dc =
+      isGuardFunctor (Unqualified (unqualifiedText dc.conName)) (length dc.conArgs)
     step seen (Ann td _) = do
       let k = typeKey td
           n = k.localName
@@ -2784,6 +2791,8 @@ validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
         emitError (annAt site (ReservedTypeName n k.arity))
       when (any isTypeRefCon (typeConstructors td)) $
         emitError (annAt site ReservedTypeRefName)
+      when (any isGuardCon (typeConstructors td)) $
+        emitError (annAt site (ReservedAggregateName "?" 1))
       when (k `Set.member` seen) $
         emitError (annAt site (DuplicateTypeDeclaration n k.arity))
       -- Module identity is name-based, so a module that shadows a

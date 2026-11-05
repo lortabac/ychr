@@ -1485,8 +1485,7 @@ renameErrorMsg (ReservedAggregateName name arity) =
         ++ T.unpack name
         ++ "/"
         ++ show arity
-        ++ "' is reserved for aggregates and cannot be declared as a"
-        ++ " constraint, function or goal macro"
+        ++ "' is reserved for aggregates and cannot be declared"
     )
     ( "aggregate/4, argmin/2, argmax/2, takemin/2, takemax/2 and ?/1 are"
         ++ " recognized without an import; choose another name or arity"
