@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A lambda bound with `=` (`F = fun(X) -> X + 1 end`) no longer keeps
+  a `quote(...)` wrapper in its value. It now prints the same as
+  one bound with `is`.
+
 - **Breaking:** a type named `,` (`:- chr_type ','(A, B) ---> foo.`)
   is now `YCHR-20016`, like `fun` and `->`. It used to be accepted,
   but `','(int, int)` in a type is `YCHR-15030`, so it was unusable.

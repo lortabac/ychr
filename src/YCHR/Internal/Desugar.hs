@@ -163,16 +163,13 @@ isPrefix = "__is_"
 lambdaPrefix :: Text
 lambdaPrefix = "__lambda_"
 
--- | Functor name for self-describing closure terms.
-closureFunctor :: Text
-closureFunctor = "__closure"
-
 -- | Quote an expression so it becomes ground: variable references
 -- become 0-arity ctor literals; wildcards become @CtorExpr "_" []@.
 -- Used to embed the original lambda source form in the closure
 -- expression without introducing dangling variable references. The
--- pretty-printer reads the quoted form back out at display time; the
--- form is never evaluated. See the comment at 'sourceForm' in
+-- pretty-printer reads the quoted form back out at display time. The
+-- form still holds calls, so evaluating consumers must build it as data
+-- (see 'R.closureParts'). See the comment at 'sourceForm' in
 -- 'liftExpr' for the reason 'LambdaExpr' is flattened here rather
 -- than preserved.
 quoteExpr :: R.Expr -> R.Expr
@@ -697,8 +694,9 @@ type Lift = State LiftState
 -- | Lift lambdas in a single expression. Each 'R.LambdaExpr' is
 -- replaced by a /self-describing closure/ of the form
 -- @__closure(LambdaId, SourceForm, F1, …, Fn)@: @LambdaId@ is an atom
--- identifying the lifted function, @SourceForm@ is a quoted copy of
--- the original lambda (for pretty-printing), and @F1 .. Fn@ are the
+-- identifying the lifted function, @SourceForm@ is a ground copy of
+-- the original lambda (for pretty-printing, built as data; see
+-- 'R.closureParts'), and @F1 .. Fn@ are the
 -- captured free variables. The lambda body itself is lifted into a
 -- fresh top-level 'D.Function'.
 --
@@ -763,24 +761,16 @@ liftExpr modName scope expr = case expr of
                 ]
             }
         lambdaId = modName <> "__" <> lambdaName
-        -- The quoted source form is for pretty-printing only and must
-        -- stay opaque: it contains the lambda body with all its
-        -- function-named subterms (@'+'@, @'*'@, user functions, …)
-        -- still spelled out, and 'compileExpr' would otherwise
-        -- eagerly evaluate them at closure-construction time. Wrap
-        -- in @quote/1@ so 'compileExpr' short-circuits via
-        -- 'compileTerm' on the 'R.exprToTerm' of the quoted subtree.
-        --
-        -- 'quoteExpr' also rewrites 'R.LambdaExpr' into a surface
-        -- @->@/@fun@ 'CtorExpr' with atomised parameter names.
-        -- Keeping a real 'LambdaExpr' here would leave its parameter
-        -- variables as 'HeadVar's; 'R.exprToTerm' would turn each
-        -- into a 'VarTerm', and 'compileTerm' would then look it up
-        -- in the enclosing rule's varMap (where it does not exist)
-        -- and raise 'UnboundVariable'. Atomising the parameters
-        -- breaks that lookup chain.
-        sourceForm =
-          R.CtorExpr (Unqualified "quote") [quoteExpr expr]
+        -- The source form is for printing only. 'quoteExpr' turns
+        -- the lambda into ground data: variables become atoms (so
+        -- 'compileTerm' never looks them up in the enclosing rule)
+        -- and the 'R.LambdaExpr' becomes its surface @fun ... -> ...@
+        -- shape. It still holds calls (@'+'@ and so on), so every
+        -- consumer that evaluates expressions builds this slot as
+        -- data instead (see 'R.closureParts'). No @quote/1@ wrapper:
+        -- @=@ builds its operands as plain terms, and the wrapper would
+        -- stay in the value there.
+        sourceForm = quoteExpr expr
         closureArgs =
           R.CtorExpr (Unqualified lambdaId) [] : sourceForm : map R.VarExpr freeVars
     modify' $ \st ->
@@ -789,7 +779,7 @@ liftExpr modName scope expr = case expr of
           liftedFunctions = st.liftedFunctions |> func,
           liftErrors = st.liftErrors ++ classifyErrs
         }
-    pure (R.CtorExpr (Unqualified closureFunctor) closureArgs)
+    pure (R.CtorExpr (Unqualified R.closureFunctor) closureArgs)
   R.CtorExpr name args -> R.CtorExpr name <$> traverse go args
   R.CallExpr qn args -> R.CallExpr qn <$> traverse go args
   R.ApplyExpr f args -> R.ApplyExpr <$> go f <*> traverse go args

@@ -85,6 +85,6 @@ unify_operand(X, R) <=> R = inc(X).
 % the 'host:+' call that '+' inlines to.
 unify_prelude(R) <=> R = 1 + 2.
 
-% A closure term is a 'quote', so the '+' in the lambda's body must
+% A closure's source slot is data, so the '+' in the lambda's body must
 % not be inlined into it: F prints with 'prelude:+', not 'host:+'.
 lambda_body(F) <=> F is myid(fun(X) -> X + 1 end).
