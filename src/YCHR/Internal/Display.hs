@@ -333,6 +333,7 @@ parseValidationErrorCode MalformedTypeDefinition = ErrorCode 15011
 parseValidationErrorCode OpaqueTypeHasConstructors = ErrorCode 15016
 parseValidationErrorCode MalformedOpaqueTypeDefinition = ErrorCode 15017
 parseValidationErrorCode MalformedBoundSig = ErrorCode 15012
+parseValidationErrorCode CommaOrArrowInType = ErrorCode 15030
 parseValidationErrorCode MalformedFunctionEquation = ErrorCode 15013
 parseValidationErrorCode BarInFunctionGuard = ErrorCode 15031
 parseValidationErrorCode MalformedTopLevel = ErrorCode 15014
@@ -706,6 +707,12 @@ parseValidationErrorMsg MalformedBoundSig =
     "Invalid bound signature"
     ( "expected 'name(t1, ..., tn) -> tret' or 'module:name(t1, ..., tn)"
         ++ " -> tret' (arity zero: 'name -> tret' / 'module:name -> tret')"
+    )
+parseValidationErrorMsg CommaOrArrowInType =
+  withHint
+    "',' or '->' inside a type"
+    ( "a function type is 'fun(T1, ..., Tn) -> T end'; to list several"
+        ++ " signatures, put each in parens: '(f(T) -> T), (g(T) -> T)'"
     )
 parseValidationErrorMsg MalformedFunctionEquation =
   withHint

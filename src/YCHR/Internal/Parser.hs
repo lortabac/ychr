@@ -121,7 +121,10 @@ builtinOps =
       -- signature's arrow, tighter than the directive prefix at 1180
       -- so the clause stays inside the @:- function@ arg.
       -- Comma (1000) is also tighter, so the bound list on the right
-      -- is a comma chain consumed as a single argument here.
+      -- is a comma chain consumed as a single argument here. That
+      -- only works when each bound is in parens: @->@ (1110) is looser
+      -- than @,@, so @r1, b2 -> r2@ reads as @->(','(r1, b2), r2)@.
+      -- 'convertTypeExpr' rejects the bare form (CommaOrArrowInType).
       -- Both are @xfx@ at the /same/ priority, so they cannot chain:
       -- @sig requiring B refining T@ (and the reverse) is a syntax
       -- error, which is how the two clauses are kept mutually
@@ -719,6 +722,10 @@ data ParseValidationError
     -- expected @name(τ₁, …, τₙ) -> τᵣ@ shape. The enclosing declaration
     -- is dropped.
     MalformedBoundSig
+  | -- | A @,@ or @->@ inside a type, other than a function type
+    -- @fun(T1, ..., Tn) -> T end@. Usually an unparenthesized list of
+    -- signatures. The enclosing declaration is dropped.
+    CommaOrArrowInType
   | -- | A @:- extend_function@ / @:- extend_class@ payload, or a
     -- top-level equation, does not have the expected
     -- @lhs [when guard] -> rhs@ shape. The equation is dropped.
@@ -1377,7 +1384,7 @@ convertExportItem (Ann pexpr loc) = case pexpr of
 
 -- | Convert a PExpr to a constraint declaration. Returns 'Nothing' and
 -- a 'MalformedDeclaration' (or 'MalformedTypeExpr' / 'MalformedBoundSig'
--- from sub-conversions) error if the declaration cannot be converted.
+-- / 'CommaOrArrowInType' from sub-conversions) error if the declaration cannot be converted.
 convertConstraintDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
 convertConstraintDecl (Ann pexpr loc)
   | Just err <- definitionHeadError MalformedDeclaration loc pexpr (declHead pexpr) =
@@ -1618,7 +1625,8 @@ convertBoundSig (Ann pexpr loc) = case pexpr of
 --
 -- Returns 'Left' with a 'MalformedTypeExpr' error when the input is not
 -- a variable, atom, or compound term (e.g. a stray literal or string in
--- a type position).
+-- a type position), and with 'CommaOrArrowInType' for a @,@ or @->@
+-- that is not a function type, qualified or not.
 --
 -- See Note [Qualified name handling].
 convertTypeExpr :: Ann PExpr -> Either (AnnP ParseValidationError) TypeExpr
@@ -1628,10 +1636,19 @@ convertTypeExpr (Ann pexpr loc) = case pexpr of
   Atom name -> Right (TypeCon (Unqualified name) [])
   Compound ":" [Ann (Atom m) _, Ann (Atom n) _] ->
     Right (TypeCon (Qualified m n) [])
+  Compound ":" [_, Ann (Compound n _) _]
+    | n == "," || n == "->" -> Left (AnnP CommaOrArrowInType loc pexpr)
   Compound ":" [Ann (Atom m) _, Ann (Compound n args) _] ->
     TypeCon (Qualified m n) <$> traverse convertTypeExpr args
   Compound "." args ->
     TypeCon (Unqualified ".") <$> traverse convertTypeExpr args
+  -- A function type, @fun(T1, ..., Tn) -> T end@.
+  Compound "->" [f@(Ann (Compound "fun" _) _), ret] ->
+    TypeCon (Unqualified "->") <$> traverse convertTypeExpr [f, ret]
+  -- Any other @->@ or @,@ is a mistake, usually an unparenthesized
+  -- list of signatures: @r1, b2 -> r2@ reads as @->(','(r1, b2), r2)@.
+  Compound "->" _ -> Left (AnnP CommaOrArrowInType loc pexpr)
+  Compound "," _ -> Left (AnnP CommaOrArrowInType loc pexpr)
   Compound name args ->
     TypeCon (Unqualified name) <$> traverse convertTypeExpr args
   _ -> Left (AnnP MalformedTypeExpr loc pexpr)

@@ -11,68 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## An unparenthesized multi-bound `requiring` clause silently keeps only the first bound
-
-**Documented claim.** type-system.md §Declaration syntax: the
-`requiring` clause is a comma-separated list of bound signatures. Its
-`clamp` example now puts each bound in parens; written bare it breaks:
-
-    :- function clamp(T, T, T) -> T requiring
-        '>'(T, T) -> bool,
-        '<'(T, T) -> bool.
-
-**Test.** Give this `clamp` a body and a goal that calls it, then
-`ychr check`.
-
-**Actual.** `:info clamp:clamp` shows the clause back almost verbatim:
-
-    :- function clamp(T, T, T) -> T requiring prelude:'>'(T, T) -> bool, T < T -> bool.
-
-but there is only one `BoundSig`, for `>`, whose return type is the
-junk compound `->(,(bool, <(T, T)), bool)` — the `<` bound is
-swallowed. `clamp`'s own body then fails to type-check:
-
-    Type mismatch: '->(,(prelude:bool, <(T#20, T#20)), prelude:bool)' does not match 'prelude:bool'
-
-**Notes.** `,` (1000) binds tighter than `->` (1110), so `r1, b2 ->
-r2` parses as `->(','(r1, b2), r2)` inside the first bound.
-`convertBoundSig` (`Parser.hs`) accepts any compound as a return type.
-The comment above `requiring` in `builtinOps` says the list is a
-clean comma chain; that only holds when each bound is parenthesized.
-This is the same `requiring`-list grammar used by `:- function`/
-`:- open_function`/`:- class`/`:- open_class`/`:- extend_class_type`.
-
-**Fix sketch.** Owner decision: reject a bare `,` or `->` inside a
-type (outside a `fun(...) -> T end` function type) with a new error,
-`YCHR-15030` (`CommaOrArrowInType`). Second commit, after the DSL fix
-above.
-
-1. `Parser.hs`'s `convertTypeExpr`, before the generic `Compound`
-   arm: a `Compound "->" [Compound "fun" args, ret]` keeps today's
-   output (recursively); any other `Compound "->" _` or `Compound ","
-   _` becomes `Left (CommaOrArrowInType ...)`.
-2. `ParseValidationError`: add nullary `CommaOrArrowInType`.
-3. `Display.hs`: code 15030; message "',' or '->' inside a type";
-   hint: "a function type is `fun(T1, ..., Tn) -> T end`; to list
-   several signatures, parenthesize each: `(f(T) -> T), (g(T) -> T)`".
-4. Fix the stale `builtinOps` comment near `requiring` (~line
-   123-125) to explain why an unparenthesized multi-bound list is
-   now rejected rather than silently mis-parsed.
-5. `Resolve.hs`'s `isFunctionType` comment (~1184): note the parser
-   never produces a nested non-function `->` type any more (only the
-   DSL still can, since the DSL builds `TypeExpr` directly).
-6. Tests: `ParserTest` cases for bare two-bound `requiring` on
-   `:- function` and `:- chr_constraint` (rejected with
-   `CommaOrArrowInType`); still accepted: parenthesized multi-bound,
-   and a bound returning `fun(T) -> T end`. New golden
-   `unparenthesized_signatures/` with several `.error` cases (bare
-   `clamp`, `class`, `extend_class_type`, `chr_constraint`).
-7. Docs: `type-system.md` §Bounded Polymorphism and §Signature
-   Overloading declaration syntax — note multiple bounds must each be
-   parenthesized, and a bare `,`/`->` is `YCHR-15030`.
-8. CHANGELOG + breaking-change bullet (new error constructor).
-9. Remove this entry from BUGS.md.
-
 ## 3a. A qualified data constructor at the wrong arity reports "module does not export" instead of an arity error
 
 **Documented claim.** `docs/reference/type-system.md` §Known
