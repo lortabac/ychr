@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Breaking: a function in a rule head is now YCHR-20050 (`FunctionInHead`,
+a rename error), and YCHR-16002 (`FunctionInRuleHead`) is gone. The old
+check ignored arity, so a constraint `f/1` next to a function `f/2`
+could not be used in a head; it now can. A `host:` call in a head used
+to be accepted silently and compiled into a rule that never fired; it
+is now YCHR-20050 too. Every offending head conjunct is reported, not
+just the first rule per name. A name that is both a constraint and a
+function at the same arity in one module is only YCHR-16016 now, also
+when an aggregate goal uses it (that used to add YCHR-20041).
+
 Breaking: a bare data constructor is now ambiguous (YCHR-20012) when
 two visible modules declare it, even at different arities. With
 `a:foo/1` and `b:foo/3` visible, `foo(1, 2)` used to pick neither and

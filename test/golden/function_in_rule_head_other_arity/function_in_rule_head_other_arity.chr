@@ -1,0 +1,10 @@
+:- module(function_in_rule_head_other_arity, [go/1]).
+:- chr_constraint go/1, p/1, f/1, r/1.
+:- function f/2.
+f(X, Y) -> X + Y.
+
+% 'f/1' is a constraint and 'f/2' a function. The head conjunct has one
+% argument, so it names the constraint and the rule fires.
+p(X), f(X) ==> r(X).
+go(R), r(X) <=> R = X.
+go(R) ==> p(1), f(1).

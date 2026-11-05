@@ -60,9 +60,11 @@ so delete foreign Prolog directives like `:- dynamic`.
 [Name @] Kept \ Removed <=> [Guard |] Body.  % simpagation
 ```
 
-Heads are comma-separated constraint applications. Guards are
-comma-separated boolean expressions with ask semantics (no binding);
-they are expressions, not Prolog predicates, and may call
+Heads are comma-separated constraint applications. A head conjunct
+that names a function at that arity, or a `host:` call, is an error
+(`YCHR-20050`); a constraint `f/1` next to a function `f/2` is fine.
+Guards are comma-separated boolean expressions with ask semantics (no
+binding); they are expressions, not Prolog predicates, and may call
 [host functions](#host-calls) or user-defined functions. Bodies are
 comma-separated tells; [`tell/N`](#dynamic-tells-telln) tells a
 constraint chosen at run time.
@@ -1118,7 +1120,8 @@ X + Y -> host:'+'(X, Y).
 `host:` is a wired-in qualifier, not a module; the resolver dispatches
 it to the host function the name denotes. Host calls are allowed in
 every evaluating position: equation bodies, `is` right-hand sides,
-guards, constraint arguments. Arguments are evaluated before the call;
+guards, constraint arguments. A rule head is not one: a `host:` call
+there is `YCHR-20050`. Arguments are evaluated before the call;
 the result flows back as an ordinary value. `host` is reserved and
 cannot name a user module (`YCHR-16019`).
 
