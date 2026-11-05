@@ -43,6 +43,7 @@ module YCHR.DSL
     withEquations,
     withExtensions,
     withClassExtensions,
+    withClassTypeExtensions,
     chrType,
     exporting,
 
@@ -53,11 +54,14 @@ module YCHR.DSL
     openFunction,
     class_,
     openClass,
-    extendClassType,
     typeExport,
     typeExportWith,
     op,
     OpType (..),
+
+    -- * Class-type extensions
+    ExtendClassTypeDeclBody,
+    extendClassType,
 
     -- * Type definitions
     TypeDefinition,
@@ -207,6 +211,13 @@ withClassExtensions :: Module -> [FunctionEquation] -> Module
 withClassExtensions m eqs =
   m {classExtensions = m.classExtensions ++ map noAnnP eqs}
 
+-- | Append @:- extend_class_type (name(args) -> ret)@ signatures, built
+-- with 'extendClassType'. They add a signature to an open class declared
+-- in another module, resolved through this module's imports.
+withClassTypeExtensions :: Module -> [ExtendClassTypeDeclBody] -> Module
+withClassTypeExtensions m eds =
+  m {extensionTypes = m.extensionTypes ++ map noAnn eds}
+
 -- | Append a CHR-type definition (@:- chr_type ...@).
 chrType :: Module -> TypeDefinition -> Module
 chrType m ty = m {typeDecls = m.typeDecls ++ [noAnn ty]}
@@ -260,20 +271,18 @@ functionDecl open kind name arity =
         refining = Nothing
       }
 
--- | @:- extend_class_type (name(args) -> ret)@: adds a signature to an
--- open class declared in another module, resolved through this module's
--- imports.
-extendClassType :: Text -> [TypeExpr] -> TypeExpr -> Declaration
+-- | @:- extend_class_type (name(args) -> ret)@: one signature for an
+-- open class declared in another module. Add it to a module with
+-- 'withClassTypeExtensions', not 'declaring'.
+extendClassType :: Text -> [TypeExpr] -> TypeExpr -> ExtendClassTypeDeclBody
 extendClassType name argTypes returnType =
-  ExtendClassTypeDecl
-    ( ExtendClassTypeDeclBody
-        { name = Unqualified name,
-          arity = length argTypes,
-          argTypes = Just argTypes,
-          returnType = Just returnType,
-          target = Nothing
-        }
-    )
+  ExtendClassTypeDeclBody
+    { name = Unqualified name,
+      arity = length argTypes,
+      argTypes = argTypes,
+      returnType = returnType,
+      target = Nothing
+    }
 
 -- | @:- module(m, [type(name/arity)])@: exports the type and all its
 -- constructors.

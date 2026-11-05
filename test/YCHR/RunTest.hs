@@ -9,13 +9,26 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.DSL (importing, module')
+import YCHR.DSL
+  ( TypeExpr (..),
+    declaring,
+    equation,
+    exporting,
+    extendClassType,
+    function,
+    importing,
+    module',
+    var,
+    withClassTypeExtensions,
+    withEquations,
+  )
 import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Parsed (AnnP (..))
+import YCHR.Internal.Rename (RenameError (..))
 import YCHR.Internal.Resolve (ResolveError (..))
 import YCHR.Internal.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Internal.Types
@@ -68,6 +81,7 @@ tests =
       uncheckedQueryTests,
       reservedModuleNameTests,
       unknownModuleImportTests,
+      classTypeExtensionTests,
       fileReadTests
     ]
 
@@ -862,6 +876,43 @@ reservedModuleNameTests =
           Right _ -> pure ()
           Left err -> assertFailure $ "expected success, got: " ++ displayMsg err
     ]
+
+-- | A DSL @extend_class_type@ goes through the same checks as the parsed
+-- directive.
+classTypeExtensionTests :: TestTree
+classTypeExtensionTests =
+  testGroup
+    "DSL class-type extensions"
+    [ -- The parsed directive also reports YCHR-16013 here (a closed
+      -- function is not a class), so only look for 16005.
+      testCase "extending a closed function is ExtendsClosedFunction" $
+        case compileParsedModules stdlib True [oc, ext "cl"] of
+          Left (ResolveErrors es)
+            | or [True | Diagnostic _ (AnnP (ExtendsClosedFunction _) _ _) _ <- es] ->
+                pure ()
+          Left other ->
+            assertFailure $ "expected ExtendsClosedFunction, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail",
+      testCase "extending an unknown name is UnknownName" $
+        case compileParsedModules stdlib True [oc, ext "nosuch"] of
+          Left (RenameErrors [Diagnostic _ (AnnP (UnknownName "nosuch" 1) _ _) _]) ->
+            pure ()
+          Left other ->
+            assertFailure $ "expected UnknownName, got: " ++ displayMsg other
+          Right _ -> assertFailure "expected compilation to fail"
+    ]
+  where
+    intT = TypeCon (Unqualified "int") []
+    strT = TypeCon (Unqualified "string") []
+    oc =
+      module' "oc"
+        `exporting` [function "cl" 1]
+        `declaring` [function "cl" 1]
+        `withEquations` [equation "cl" [var "X"] [] (var "X")]
+    ext target =
+      module' "ext"
+        `importing` ["oc"]
+        `withClassTypeExtensions` [extendClassType target [strT] intT]
 
 -- | A bare @use_module(M)@ naming anything but a supplied module or
 -- @prelude@ is 'UnknownModuleImport' (YCHR-10005), on both

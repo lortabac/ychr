@@ -153,7 +153,7 @@ data Module = Module
     nameLoc :: SourceLoc,
     imports :: [AnnP Import],
     decls :: [Ann Declaration],
-    extensionTypes :: [Ann Declaration],
+    extensionTypes :: [Ann ExtendClassTypeDeclBody],
     typeDecls :: [Ann TypeDefinition],
     rules :: [Rule],
     equations :: [AnnP FunctionEquation],
@@ -239,8 +239,8 @@ data FunctionDeclBody = FunctionDeclBody
 data ExtendClassTypeDeclBody = ExtendClassTypeDeclBody
   { name :: Name,
     arity :: Int,
-    argTypes :: Maybe [TypeExpr],
-    returnType :: Maybe TypeExpr,
+    argTypes :: [TypeExpr],
+    returnType :: TypeExpr,
     target :: Maybe Name
   }
   deriving (Show, Eq)
@@ -356,7 +356,6 @@ data MacroExportDeclBody = MacroExportDeclBody
 data Declaration
   = ConstraintDecl ConstraintDeclBody
   | FunctionDecl FunctionDeclBody
-  | ExtendClassTypeDecl ExtendClassTypeDeclBody
   | OperatorDecl OpDecl
   | TypeExportDecl TypeExportDeclBody
   | MacroExportDecl MacroExportDeclBody

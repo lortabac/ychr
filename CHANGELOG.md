@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Breaking: `YCHR.DSL.extendClassType` now returns an
+`ExtendClassTypeDeclBody`, added with the new `withClassTypeExtensions`.
+Passed to `declaring`, it used to be read as a declaration of the
+name in the extending module: extending a closed function gave
+YCHR-20001 instead of YCHR-16005, and an unknown target gave no error
+at all instead of YCHR-20002. `Declaration` loses its
+`ExtendClassTypeDecl` constructor, `Module.extensionTypes` is now
+`[Ann ExtendClassTypeDeclBody]`, and the body's `argTypes` and
+`returnType` are no longer `Maybe`.
+
 Breaking: a function in a rule head is now YCHR-20050 (`FunctionInHead`,
 a rename error), and YCHR-16002 (`FunctionInRuleHead`) is gone. The old
 check ignored arity, so a constraint `f/1` next to a function `f/2`

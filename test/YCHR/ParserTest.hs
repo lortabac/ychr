@@ -383,7 +383,7 @@ directiveTests =
         funNames <$> p ":- extend_function f(X) -> 0."
           @?= Right [Unqualified "f"],
       testCase "extend_class_type may name its target qualified" $ do
-        let targets m = [ed.name | Ann (ExtendClassTypeDecl ed) _ <- m.extensionTypes]
+        let targets m = [ed.name | Ann ed _ <- m.extensionTypes]
         targets <$> p ":- extend_class_type oc:sz(string) -> int."
           @?= Right [Qualified "oc" "sz"]
         pErrs ":- extend_class_type X:sz(string) -> int."

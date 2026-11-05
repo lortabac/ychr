@@ -154,7 +154,14 @@ declarationTests =
       testCase "withClassExtensions appends to module.classExtensions" $
         let eq = equation "classify" [atom "dog"] [] (atom "animal")
             m = module' "ext" `withClassExtensions` [eq]
-         in m.classExtensions @?= [noAnnP eq]
+         in m.classExtensions @?= [noAnnP eq],
+      testCase "withClassTypeExtensions appends to module.extensionTypes" $
+        let intCon = TypeCon (Unqualified "int") []
+            ed = extendClassType "cl" [intCon] intCon
+            m = module' "ext" `withClassTypeExtensions` [ed]
+         in do
+              m.extensionTypes @?= [noAnn ed]
+              m.decls @?= []
     ]
 
 functionDeclarationTests :: TestTree
@@ -216,25 +223,23 @@ functionDeclarationTests =
       testCase "extendClassType arity matches argTypes length" $
         let intCon = TypeCon (Unqualified "int") []
          in extendClassType "add" [intCon, intCon] intCon
-              @?= ExtendClassTypeDecl
-                ExtendClassTypeDeclBody
-                  { name = Unqualified "add",
-                    arity = 2,
-                    argTypes = Just [intCon, intCon],
-                    returnType = Just intCon,
-                    target = Nothing
-                  },
+              @?= ExtendClassTypeDeclBody
+                { name = Unqualified "add",
+                  arity = 2,
+                  argTypes = [intCon, intCon],
+                  returnType = intCon,
+                  target = Nothing
+                },
       testCase "extendClassType with zero args is allowed" $
         let intCon = TypeCon (Unqualified "int") []
          in extendClassType "zero" [] intCon
-              @?= ExtendClassTypeDecl
-                ExtendClassTypeDeclBody
-                  { name = Unqualified "zero",
-                    arity = 0,
-                    argTypes = Just [],
-                    returnType = Just intCon,
-                    target = Nothing
-                  }
+              @?= ExtendClassTypeDeclBody
+                { name = Unqualified "zero",
+                  arity = 0,
+                  argTypes = [],
+                  returnType = intCon,
+                  target = Nothing
+                }
     ]
 
 typeDeclarationTests :: TestTree
