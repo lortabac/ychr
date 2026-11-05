@@ -1916,8 +1916,9 @@ compileTerm _ _ Wildcard = pure NewVar
 --     'D.ApplyExpr' an 'ApplyClosure', which resolves the closure
 --     through the program's callables table at runtime.
 --   * 'D.CtorExpr' produces a 'MakeTerm', with its arguments recursively
---     lowered. The native-bool fast path and the @quote\/1@ quoting form
---     are the only structural special cases.
+--     lowered. The native-bool fast path, the @quote\/1@ quoting form
+--     and a lifted lambda's closure ('R.closureParts', whose source
+--     slot is data) are the only structural special cases.
 --   * 'D.FunRefExpr' produces the canonical @'/'(<flatname>, <arity>)@
 --     compound that 'buildCallables' keys the function-reference
 --     entries on and the runtime reads back at a dynamic-call site.
@@ -1957,6 +1958,14 @@ compileExpr varMap si e = case e of
   -- function.
   R.CtorExpr (Types.Unqualified "quote") [arg] ->
     compileTerm varMap si (R.exprToTerm arg)
+  -- A lifted lambda's closure: its source slot is data, like a
+  -- @quote@d subtree. The rest is evaluated as for any constructor.
+  R.CtorExpr name _
+    | Just cl <- R.closureParts e -> do
+        lamId <- compileExpr varMap si cl.lambdaId
+        src <- compileTerm varMap si (R.exprToTerm cl.source)
+        caps <- traverse (compileExpr varMap si) cl.captures
+        pure (MakeTerm (vmName name) (lamId : src : caps))
   -- 0-arity ctors collapse to atom literals at runtime (see comment
   -- in 'compileTerm'). Compiler never emits @MakeTerm name []@.
   R.CtorExpr name@(Types.Qualified _ _) [] ->

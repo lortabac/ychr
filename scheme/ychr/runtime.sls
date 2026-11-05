@@ -498,7 +498,7 @@
   ;;     lambda. The arity is the one it is applied at, because the
   ;;     closure does not record the arity its source lambda declared;
   ;;     the table only holds that declared arity, so any other arity
-  ;;     misses. Captures are the fields after the quoted source form.
+  ;;     misses. Captures are the fields after the source form.
   ;;
   ;; A value `callable-invocation` does not recognize may still be the
   ;; surface shape of a function reference, `fun('/`(name, arity))` —

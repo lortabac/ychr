@@ -36,6 +36,11 @@ module YCHR.Internal.Resolved
 
     -- * Operations
     exprToTerm,
+
+    -- * Lifted lambda closures
+    closureFunctor,
+    ClosureParts (..),
+    closureParts,
   )
 where
 
@@ -295,6 +300,29 @@ exprToTerm (LambdaExpr params body) =
     [ CompoundTerm (Unqualified "fun") (map headArgToTerm (NE.toList params)),
       sequenceToTerm body
     ]
+
+-- | Functor of the closure term lambda lifting builds.
+closureFunctor :: Text
+closureFunctor = "__closure"
+
+-- | The three parts of a closure term
+-- @__closure(Id, Source, Captures…)@.
+data ClosureParts = ClosureParts
+  { lambdaId :: Expr,
+    source :: Expr,
+    captures :: [Expr]
+  }
+
+-- | Split a closure term built by lambda lifting
+-- ('YCHR.Internal.Desugar.liftExpr'). @Source@ is the lambda as
+-- written, kept for printing. It is data: a consumer that evaluates
+-- expressions must build it with 'exprToTerm', not evaluate it, or
+-- the calls in it would run. Users can't write @__closure@ (the lexer
+-- reserves @__@), so this shape only comes from the lifter.
+closureParts :: Expr -> Maybe ClosureParts
+closureParts (CtorExpr (Unqualified f) (i : src : caps))
+  | f == closureFunctor = Just (ClosureParts i src caps)
+closureParts _ = Nothing
 
 -- | Re-build a comma-sequence 'Term' from a non-empty list of 'Expr's.
 -- Inverse of the comma flattening done at the equation- and lambda-body

@@ -34,6 +34,11 @@ HASKELL_ONLY = {
     # the divergence (dev-docs/SCHEME_BACKEND_GAPS.md). The evaluable
     # counterpart, `is_evaluable_host_term`, runs on both backends.
     "host_term_wrong_arity",
+    # Every binding is a closure. The Haskell printer shows it as
+    # `fun(X) -> ... end`; the Scheme one prints the raw
+    # `'__closure'(...)` term (dev-docs/SCHEME_BACKEND_GAPS.md). Remove
+    # once the Scheme printer renders closures the same way.
+    "lambda_bind_print",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only

@@ -801,6 +801,14 @@ evalNestedExpr (R.HostExpr f args) = do
   liftChr (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
 -- @quote(X)@: inner value as data, no nested-call evaluation.
 evalNestedExpr (R.CtorExpr (Types.Unqualified "quote") [arg]) = exprToValue arg
+-- A lifted lambda's closure: the source slot is data, as in
+-- 'Compile.compileExpr'.
+evalNestedExpr e@(R.CtorExpr name _)
+  | Just cl <- R.closureParts e = do
+      lamId <- evalNestedExpr cl.lambdaId
+      src <- exprToValue cl.source
+      caps <- traverse evalNestedExpr cl.captures
+      pure (VTerm (vmName name).unName (lamId : src : caps))
 -- Mirrors 'Compile.compileExpr': 'VBool', as compiled rules produce.
 evalNestedExpr (R.CtorExpr name []) | Just b <- Types.preludeBool name = pure (VBool b)
 -- 0-arity ctors collapse to atoms at the runtime layer.

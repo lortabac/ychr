@@ -268,8 +268,11 @@ rewriteExpr cands = go
       R.FunRefExpr _ _ -> e
       R.TypeRefExpr _ _ -> e
       -- 'compileExpr' does not evaluate under 'quote', so a call in
-      -- there is data. Lambda lifting puts one in every closure term.
+      -- there is data. Same for a closure's source slot.
       R.CtorExpr (Unqualified "quote") [_] -> e
+      R.CtorExpr n _
+        | Just cl <- R.closureParts e ->
+            R.CtorExpr n (go cl.lambdaId : cl.source : map go cl.captures)
       R.CtorExpr n args -> R.CtorExpr n (map go args)
       R.HostExpr n args -> R.HostExpr n (map go args)
       R.ApplyExpr f args -> R.ApplyExpr (go f) (map go args)

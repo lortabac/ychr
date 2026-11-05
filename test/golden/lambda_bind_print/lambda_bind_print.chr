@@ -1,0 +1,7 @@
+:- module(lambda_bind_print, [by_unify/1, by_is/1, by_unify_capture/2]).
+:- chr_constraint by_unify/1, by_is/1, by_unify_capture/2.
+
+% A lambda prints the same whether it is bound with = or with is.
+by_unify(F) <=> F = fun(X) -> X + 1 end.
+by_is(F) <=> F is fun(X) -> X + 1 end.
+by_unify_capture(N, F) <=> F = fun(X) -> X + N end.
