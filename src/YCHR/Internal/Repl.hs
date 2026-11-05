@@ -758,13 +758,6 @@ declarationsText prog = concatMap (++ "\n") declLines
           Parsed.FunctionDecl
             Parsed.FunctionDeclBody {name = n, arity = a, isOpen = o, kind = k} ->
               [(declKindKeyword (toDeclKind o k), m.name, n, a)]
-          -- A qualified target is shown with its own module.
-          Parsed.ExtendClassTypeDecl
-            Parsed.ExtendClassTypeDeclBody {name = Qualified tm n, arity = a} ->
-              [("extend_class_type", tm, n, a)]
-          Parsed.ExtendClassTypeDecl
-            Parsed.ExtendClassTypeDeclBody {name = Unqualified n, arity = a} ->
-              [("extend_class_type", m.name, n, a)]
           _ -> []
       ]
     dedup = go Set.empty

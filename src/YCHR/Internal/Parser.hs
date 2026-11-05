@@ -627,7 +627,7 @@ data Directive
   | DirOpenClassDecl [Ann Declaration]
   | DirInlineDecl [Ann InlineDecl]
   | DirConstraintUseDecl [Ann ConstraintUseDecl]
-  | DirExtendClassTypeDecl [Ann Declaration]
+  | DirExtendClassTypeDecl [Ann ExtendClassTypeDeclBody]
   | DirExtendFunctionEqn (AnnP FunctionEquation)
   | DirExtendClassEqn (AnnP FunctionEquation)
   | DirTypeDecl [Ann TypeDefinition]
@@ -1473,7 +1473,7 @@ convertOpenClassDecl = convertFunctionDeclWith True DKClass
 -- an extension. The inner signature is still converted so that any
 -- sub-errors (malformed type expressions) are reported alongside the
 -- 'RequiringOnExtendClassType' error.
-convertExtendClassTypeDecl :: Ann PExpr -> Conv (Maybe (Ann Declaration))
+convertExtendClassTypeDecl :: Ann PExpr -> Conv (Maybe (Ann ExtendClassTypeDeclBody))
 convertExtendClassTypeDecl (Ann pexpr loc) = case pexpr of
   -- @requiring@ is Xfx, so the inner @sig@ is never another @requiring@.
   Compound "requiring" [sig, _] -> do
@@ -1498,14 +1498,12 @@ convertExtendClassTypeDecl (Ann pexpr loc) = case pexpr of
                 pure
                   ( Just
                       ( Ann
-                          ( ExtendClassTypeDecl
-                              ( ExtendClassTypeDeclBody
-                                  name
-                                  (length args)
-                                  (Just argTypes)
-                                  (Just retType)
-                                  Nothing
-                              )
+                          ( ExtendClassTypeDeclBody
+                              name
+                              (length args)
+                              argTypes
+                              retType
+                              Nothing
                           )
                           l
                       )

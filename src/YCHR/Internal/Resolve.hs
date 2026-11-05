@@ -609,8 +609,7 @@ checkExtendsClosed funcOpenness mods =
         [ noDiag
             (P.AnnP (ExtendsClosedFunction target) loc (P.namePExpr ed.name))
         | m <- mods,
-          P.Ann d loc <- m.extensionTypes,
-          P.ExtendClassTypeDecl ed <- [d],
+          P.Ann ed loc <- m.extensionTypes,
           Just target <- [ed.target],
           isKnownClosed funcOpenness target
         ]
@@ -864,8 +863,7 @@ checkExtensionKinds funcKinds mods =
     notFunctionTypeErrs =
       [ noDiag (P.AnnP err loc (P.namePExpr ed.name))
       | m <- mods,
-        P.Ann d loc <- m.extensionTypes,
-        P.ExtendClassTypeDecl ed <- [d],
+        P.Ann ed loc <- m.extensionTypes,
         Just target@(Qualified _ _) <- [ed.target],
         isNothing (targetKind target),
         let err = ExtensionTargetNotFunction ExtendClassTypeDirective target
@@ -888,8 +886,7 @@ checkExtensionKinds funcKinds mods =
       [ noDiag
           (P.AnnP (ExtendClassTypeOnFunction target) loc (P.namePExpr ed.name))
       | m <- mods,
-        P.Ann d loc <- m.extensionTypes,
-        P.ExtendClassTypeDecl ed <- [d],
+        P.Ann ed loc <- m.extensionTypes,
         Just target <- [ed.target],
         targetKind target == Just DKFunction
       ]
@@ -989,8 +986,7 @@ checkExtendsBounded funcRequiring mods =
   [ noDiag
       (P.AnnP (ExtendTypeOnBoundedFunction target) loc (P.namePExpr ed.name))
   | m <- mods,
-    P.Ann d loc <- m.extensionTypes,
-    P.ExtendClassTypeDecl ed <- [d],
+    P.Ann ed loc <- m.extensionTypes,
     Just target <- [ed.target],
     isBounded target
   ]
@@ -1507,15 +1503,12 @@ collectSignatures decls =
 collectExtensionSignatures ::
   [CollectedModule] -> QualifiedName -> Int -> [FunSignature]
 collectExtensionSignatures mods qn ar =
-  [ FunSignature argTys retTy
+  [ FunSignature ed.argTypes ed.returnType
   | m <- mods,
-    P.Ann d _ <- m.extensionTypes,
-    P.ExtendClassTypeDecl ed <- [d],
+    P.Ann ed _ <- m.extensionTypes,
     ed.arity == ar,
     Just (Qualified tm tn) <- [ed.target],
-    QualifiedName tm tn == qn,
-    Just argTys <- [ed.argTypes],
-    Just retTy <- [ed.returnType]
+    QualifiedName tm tn == qn
   ]
 
 -- | Gather equations for a function declaration, stripping the funName.

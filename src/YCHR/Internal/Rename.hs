@@ -815,8 +815,6 @@ buildMacroDefTable mods =
 declNameArity :: Declaration -> Maybe UnqualifiedIdentifier
 declNameArity (ConstraintDecl cd) = Just (UnqualifiedIdentifier cd.name cd.arity)
 declNameArity (FunctionDecl fd) = Just (UnqualifiedIdentifier fd.name fd.arity)
-declNameArity (ExtendClassTypeDecl ed) =
-  Just (UnqualifiedIdentifier (unqualifiedText ed.name) ed.arity)
 declNameArity (TypeExportDecl td) = Just (UnqualifiedIdentifier td.name td.arity)
 declNameArity (OperatorDecl {}) = Nothing
 -- Macros are tracked through their own table ('YCHR.Internal.Rename.Macro'),
@@ -1028,7 +1026,7 @@ renameModule mods ctx = do
   renamedClassExtensions <- traverse (traverse (renameEquation ctx)) m.classExtensions
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
   renamedDecls <- traverse (renameAnnDecl ctx) m.decls
-  renamedExtensionTypes <- traverse (renameAnnDecl ctx) m.extensionTypes
+  renamedExtensionTypes <- traverse (renameClassTypeExtension ctx) m.extensionTypes
   -- Explicit construction (not @m { ... }@ record update): because
   -- 'CollectedModule' and 'Module' share field names, a record update of
   -- the variable @m@ is ambiguous (GHC cannot tell which record type is
@@ -1101,7 +1099,6 @@ validateImportLists mods ctx =
     checkItem mn site (FunctionDecl FunctionDeclBody {name = n, arity = a}) =
       when (mn `notElem` lookupExport (UnqualifiedIdentifier n a) ctx.exportEnv) $
         emitError (annAt site (UnknownImport mn n a))
-    checkItem _ _ ExtendClassTypeDecl {} = pure ()
     checkItem mn site (TypeExportDecl body) =
       let k = UnqualifiedIdentifier body.name body.arity
        in if mn `notElem` lookupExport k ctx.typeExportEnv
@@ -2633,19 +2630,25 @@ renameDeclaration ctx loc (FunctionDecl fd) = do
             refining = fmap (renameTypeExpr ctx) fd.refining
           }
     )
-renameDeclaration ctx loc (ExtendClassTypeDecl ed) = do
+renameDeclaration _ _ d = pure d
+
+-- | Rename an @:- extend_class_type@: resolve its target and rename the
+-- types in its signature.
+renameClassTypeExtension ::
+  RenameCtx -> Ann ExtendClassTypeDeclBody -> Rename (Ann ExtendClassTypeDeclBody)
+renameClassTypeExtension ctx (Ann ed loc) = do
   resolved <- resolveName ResolveTop ctx (nameSite loc ed.name) ed.name ed.arity
   pure
-    ( ExtendClassTypeDecl
+    ( Ann
         ExtendClassTypeDeclBody
           { name = ed.name,
             arity = ed.arity,
-            argTypes = fmap (map (renameTypeExpr ctx)) ed.argTypes,
-            returnType = fmap (renameTypeExpr ctx) ed.returnType,
+            argTypes = map (renameTypeExpr ctx) ed.argTypes,
+            returnType = renameTypeExpr ctx ed.returnType,
             target = Just resolved
           }
+        loc
     )
-renameDeclaration _ _ d = pure d
 
 -- | Rename a 'BoundSig' inside a @requiring@ clause: resolve the bound
 -- function's name to a 'Qualified' form (so the resolver can look it up

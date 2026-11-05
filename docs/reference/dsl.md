@@ -12,16 +12,18 @@ input. Use it when the program is built or generated from Haskell;
 
 | Kind | Type | Built by |
 |---|---|---|
-| Module | `Module` | `module'`, then `importing`/`library`/`declaring`/`defining`/`withEquations`/`withExtensions`/`chrType`/`exporting` |
-| Declaration | `Declaration` | `(//)`, `function`, `openFunction`, `class_`, `openClass`, `extendClassType`, `typeExport`, `op` |
+| Module | `Module` | `module'`, then `importing`/`library`/`declaring`/`defining`/`withEquations`/`withExtensions`/`withClassExtensions`/`withClassTypeExtensions`/`chrType`/`exporting` |
+| Declaration | `Declaration` | `(//)`, `function`, `openFunction`, `class_`, `openClass`, `typeExport`, `op` |
+| Class-type extension | `ExtendClassTypeDeclBody` | `extendClassType` (add with `withClassTypeExtensions`) |
 | Rule | `Rule` | `(<=>)`, `(==>)`, `(\\)` (with `<=>`), `(@:)`, `(\|-)` |
 | Term | `Term` | `var`, `atom`, `int`, `float`, `bool`, `text`, `wildcard`, `term`, `qterm`, `quote` |
 
 Constraint occurrences, function calls and data-constructor terms are
 all compound terms, classified by what is declared; `term` (qualified:
 `qterm`) builds all of them. Append-style modifiers (`importing`,
-`declaring`, `defining`, `withEquations`, `chrType`, `library`)
-accumulate across calls.
+`declaring`, `defining`, `withEquations`, `withExtensions`,
+`withClassExtensions`, `withClassTypeExtensions`, `chrType`,
+`library`) accumulate across calls.
 
 `wildcard` is the anonymous `_`: in a rule head or equation pattern it
 matches anything and binds nothing, while in a tell or goal argument it
@@ -37,7 +39,7 @@ is a fresh logical variable, one per occurrence.
 | `:- class size/1.` | `\`declaring\` [class_ "size" 1]` |
 | `:- open_function f/1.` | `\`declaring\` [openFunction "f" 1]` |
 | `:- open_class f/1.` | `\`declaring\` [openClass "f" 1]` |
-| `:- extend_class_type (f(int) -> int).` | `\`declaring\` [extendClassType "f" [TypeCon (Unqualified "int") []] (TypeCon (Unqualified "int") [])]` |
+| `:- extend_class_type (f(int) -> int).` | `\`withClassTypeExtensions\` [extendClassType "f" [TypeCon (Unqualified "int") []] (TypeCon (Unqualified "int") [])]` |
 | `:- extend_function f(X) -> X.` | `\`withExtensions\` [equation "f" [var "X"] [] (var "X")]` |
 | `:- extend_class f(X) -> X.` | `\`withClassExtensions\` [equation "f" [var "X"] [] (var "X")]` |
 | `:- chr_type color ---> red ; green.` | `\`chrType\` tyDef "color" [] [dataCtor "red" [], dataCtor "green" []]` |
