@@ -33,6 +33,7 @@ exprVars (D.LambdaExpr params body) =
   sequenceFree (NE.toList body)
     `Set.difference` Set.fromList [v | HeadVar v <- NE.toList params]
 exprVars (D.FunRefExpr _ _) = Set.empty
+exprVars (D.TypeRefExpr _ _) = Set.empty
 exprVars (D.IntExpr _) = Set.empty
 exprVars (D.FloatExpr _) = Set.empty
 exprVars (D.TextExpr _) = Set.empty

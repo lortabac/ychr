@@ -428,6 +428,10 @@ renameErrorCode GuardOutsideAggregateGoal = ErrorCode 20042
 renameErrorCode (ReservedAggregateName _ _) = ErrorCode 20043
 renameErrorCode (ExcludedByImportList _ _ _) = ErrorCode 20044
 renameErrorCode (FunRefNotFunction _ _) = ErrorCode 20045
+renameErrorCode (UnknownTypeRef _ _) = ErrorCode 20046
+renameErrorCode MalformedTypeRef = ErrorCode 20047
+renameErrorCode ReservedTypeRefName = ErrorCode 20048
+renameErrorCode TypeRefInPattern = ErrorCode 20049
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -1476,6 +1480,27 @@ renameErrorMsg (FunRefNotFunction name arity) =
         ++ "' does not name a function"
     )
     "only functions can be referenced with fun; use tell/N to tell a constraint by name"
+renameErrorMsg (UnknownTypeRef name arity) =
+  withHint
+    ( "'type("
+        ++ displayName name
+        ++ "/"
+        ++ show arity
+        ++ ")' does not name a visible type"
+    )
+    "check the name and arity, and that the type's module is imported and exports it"
+renameErrorMsg MalformedTypeRef =
+  withHint
+    "Malformed type reference"
+    "write type(name/arity), e.g. type(int/0) or type(prelude:list/1)"
+renameErrorMsg TypeRefInPattern =
+  withHint
+    "type(...) in a pattern never matches a type name"
+    "compare in a guard instead, e.g. f(N) when N == type(int/0) -> ..."
+renameErrorMsg ReservedTypeRefName =
+  withHint
+    "type/1 is reserved for type references and cannot be declared"
+    "choose another name or arity"
 renameErrorMsg (ExcludedByImportList modName name arity) =
   withHint
     ( "Module '"
@@ -1611,7 +1636,9 @@ renameErrorMsg (ConstructorFunctionAmbiguity name conMods funMods) =
 renameErrorMsg (ReservedTypeName name arity) =
   withHint
     ("Type name '" ++ T.unpack name ++ "/" ++ show arity ++ "' is reserved")
-    "base types (int, float, string, any) and function-type syntax cannot be redeclared"
+    ( "base types (int, float, string, type_name, any) and function-type"
+        ++ " syntax cannot be redeclared"
+    )
 renameErrorMsg (DuplicateTypeDeclaration name arity) =
   withHint
     ("Type '" ++ T.unpack name ++ "/" ++ show arity ++ "' is declared more than once")

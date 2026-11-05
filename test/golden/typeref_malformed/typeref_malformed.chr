@@ -1,0 +1,4 @@
+% The operand of type/1 must be name/arity.
+:- module(typeref_malformed, [go/1]).
+:- chr_constraint go/1.
+go(R) <=> R = type(int).

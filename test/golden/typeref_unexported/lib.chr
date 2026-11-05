@@ -1,0 +1,4 @@
+% Declares secret but does not export it.
+:- module(lib, [type(open/0)]).
+:- chr_type open ---> open.
+:- chr_type secret ---> secret.

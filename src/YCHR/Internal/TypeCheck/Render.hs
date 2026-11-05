@@ -27,6 +27,7 @@ import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Registry (fromValueList)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref)
+import YCHR.Internal.Types (typeRefAtomParts)
 
 -- | The CHR module the type representation is declared in, by its
 -- source module name (@typechecker\/solver.chr@). Renaming that
@@ -44,9 +45,10 @@ typeAtom n = typeModule <> "__" <> n
 -- | Convert a runtime-flattened qualified atom (@m__n@) back to the
 -- source-level display form (@m:n@). No-op when the atom doesn't
 -- contain @__@. Used in error messages so users see familiar syntax.
--- Inverse of the runtime name mangling.
+-- Inverse of the runtime name mangling. A type name's prefix
+-- and arity ('typeRefAtomParts') come off, so a type reads as its plain name.
 displayQualifiedAtom :: Text -> Text
-displayQualifiedAtom = T.replace "__" ":"
+displayQualifiedAtom t = T.replace "__" ":" (maybe t fst (typeRefAtomParts t))
 
 -- | Like 'displayQualifiedAtom', but additionally undoes the internal
 -- spelling of the built-in types: the solver's module qualifier and

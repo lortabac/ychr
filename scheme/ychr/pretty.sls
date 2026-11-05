@@ -3,7 +3,7 @@
 ;;;; Matches the output format of prettyTerm in YCHR.Internal.Pretty (Haskell).
 (library (ychr pretty)
   (export pretty-term pretty-bindings bindings->string pretty-query-result
-          decode-mangled-name)
+          decode-mangled-name type-ref-atom-parts)
   ;; (rnrs unicode) supplies `char-general-category`, which the atom
   ;; quoting predicate needs to mirror Haskell's `isAlphaNum` exactly.
   (import (rnrs) (rnrs unicode) (ychr var) (ychr optable))
@@ -281,12 +281,38 @@
           (vector 'compound ":" (list (vector 'atom module) inner))
           inner)))
 
-  ;; A bare symbol value: `[]` stays the nil atom, everything else goes
-  ;; through the qualified split.
+  ;;; The parts of a type-name atom, "__type__<arity>__<name>": a pair
+  ;;; of the name (still mangled) and the arity, or #f for any other
+  ;;; string. Mirrors `typeRefAtomParts` in Types.hs.
+  (define type-name-prefix "__type__")
+  (define (type-ref-atom-parts s)
+    (let ((p (string-length type-name-prefix))
+          (n (string-length s)))
+      (and (> n p)
+           (string=? (substring s 0 p) type-name-prefix)
+           (let loop ((i p))
+             (cond
+               ((and (< i n) (char-numeric? (string-ref s i))) (loop (+ i 1)))
+               ((and (> i p) (< (+ i 2) n)
+                     (char=? (string-ref s i) #\_)
+                     (char=? (string-ref s (+ i 1)) #\_))
+                (cons (substring s (+ i 2) n)
+                      (string->number (substring s p i))))
+               (else #f))))))
+
+  ;; A bare symbol value: `[]` stays the nil atom, a type name prints as
+  ;; the `type(name/arity)` that made it (as `runtimeToPExpr` does), and
+  ;; everything else goes through the qualified split.
   (define (atom->pexpr sym)
-    (if (nil-functor? sym)
-        (vector 'atom "[]")
-        (name->pexpr sym '())))
+    (let ((parts (type-ref-atom-parts (symbol->string sym))))
+      (cond
+        ((nil-functor? sym) (vector 'atom "[]"))
+        (parts
+         (vector 'compound "type"
+                 (list (vector 'compound "/"
+                               (list (name->pexpr (string->symbol (car parts)) '())
+                                     (vector 'int (cdr parts)))))))
+        (else (name->pexpr sym '())))))
 
   ;;; ---------------------------------------------------------------------
   ;;; PExpr -> string

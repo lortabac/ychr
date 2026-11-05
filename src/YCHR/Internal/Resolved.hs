@@ -63,6 +63,7 @@ import YCHR.Internal.Types
     flattenName,
     headArgToTerm,
     qualifiedToName,
+    typeRefName,
   )
 
 -- | A resolved program: all modules flattened, equations grouped under
@@ -205,6 +206,9 @@ data FunctionEquation = FunctionEquation
 --   * 'ApplyExpr' is dynamic dispatch (the surface @'$call'(F, A1..An)@).
 --   * 'FunRefExpr' is a first-class function reference
 --     (the surface @fun name/arity@).
+--   * 'TypeRefExpr' is a type's name as a value (the surface
+--     @type(name/arity)@). The name is qualified, or bare for a
+--     built-in type. At runtime it is that name's atom.
 --   * 'LambdaExpr' is an anonymous function value. It exists between
 --     resolution and the desugarer's lambda-lifting pass, after which
 --     it is rewritten to a @__closure@-headed 'CtorExpr'. The
@@ -223,6 +227,7 @@ data Expr
   | CallExpr QualifiedName [Expr]
   | ApplyExpr Expr [Expr]
   | FunRefExpr QualifiedName Int
+  | TypeRefExpr Name Int
   | LambdaExpr (NonEmpty HeadArg) (NonEmpty Expr)
   | HostExpr Text [Expr]
   deriving (Show, Eq)
@@ -282,6 +287,8 @@ exprToTerm (FunRefExpr qn arity) =
     [ CompoundTerm (Unqualified (flattenName (qualifiedToName qn))) [],
       IntTerm (fromIntegral arity)
     ]
+-- 'typeRefName', so it compiles to the same atom a 'TypeRefExpr' does.
+exprToTerm (TypeRefExpr name arity) = CompoundTerm (typeRefName name arity) []
 exprToTerm (LambdaExpr params body) =
   CompoundTerm
     (Unqualified "->")

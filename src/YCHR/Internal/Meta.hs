@@ -113,12 +113,16 @@ decodeMangled s = case T.breakOn "__" s of
   (m, rest) -> Just (Types.QualifiedName m (T.drop 2 rest))
 
 -- | The local part of a mangled name: the @n@ of a qualified @m__n@,
--- and the whole thing when there is no module prefix. Escapes are left
+-- and the whole thing when there is no module prefix. A type name's
+-- prefix and arity ('Types.typeRefAtomParts') come off
+-- first, so a type's base is its own name. Escapes are left
 -- as they are, so the result stays in the same mangled alphabet as its
 -- input and two base names compare equal exactly when their source
 -- spellings do ('YCHR.Internal.Compile.Names.encodeText' is injective).
 baseOfMangled :: Text -> Text
-baseOfMangled s = maybe s (.baseName) (decodeMangled s)
+baseOfMangled s0 = maybe s (.baseName) (decodeMangled s)
+  where
+    s = maybe s0 fst (Types.typeRefAtomParts s0)
 
 -- | Replace every @%%u\<6 hex digits\>@ escape in @s@ with the
 -- corresponding character (inverse of 'Compile.Names.encodeText''s

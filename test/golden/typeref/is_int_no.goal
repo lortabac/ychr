@@ -1,0 +1,1 @@
+typeref:is_int(type(box/1), R)

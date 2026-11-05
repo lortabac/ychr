@@ -1988,6 +1988,7 @@ compileExpr varMap si e = case e of
             Lit (IntLit (fromIntegral arity))
           ]
       )
+  R.TypeRefExpr name arity -> pure (Lit (AtomLit (typeRuntimeName name arity)))
   R.LambdaExpr {} ->
     error "Compile.compileExpr: LambdaExpr survived lambda lifting"
 

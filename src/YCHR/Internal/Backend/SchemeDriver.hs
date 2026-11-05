@@ -23,7 +23,7 @@ import YCHR.Internal.Backend.Scheme
     qualifiedAliasIdentifier,
   )
 import YCHR.Internal.Compile (funcProcName)
-import YCHR.Internal.Compile.Names (vmName)
+import YCHR.Internal.Compile.Names (typeRuntimeName, vmName)
 import YCHR.Internal.Compile.Pipeline (Error (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
@@ -163,6 +163,8 @@ exprToScheme (R.ApplyExpr f args) =
   -- library's.
   let fAndArgs = map exprToScheme (f : args)
    in "(%apply-closure %s " <> T.intercalate " " fAndArgs <> ")"
+exprToScheme (R.TypeRefExpr name arity) =
+  printSExpr (compileSymbol (typeRuntimeName name arity))
 exprToScheme (R.FunRefExpr qn arity) =
   -- Mirrors 'compileExpr's encoding for first-class function refs:
   -- the identity is the *flattened* source name (`module:name`), which

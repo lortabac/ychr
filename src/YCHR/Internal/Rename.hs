@@ -337,6 +337,18 @@ data RenameError
     -- constructor or a @host:@ name, not a function (YCHR-20045).
     -- Carries the name as written, and the arity.
     FunRefNotFunction Name Int
+  | -- | A @type(name/arity)@ reference to a type that is not visible
+    -- here, or not at that arity (YCHR-20046). Carries the name as
+    -- written, and the arity.
+    UnknownTypeRef Name Int
+  | -- | A @type(X)@ value whose operand is not @name/arity@ (YCHR-20047).
+    MalformedTypeRef
+  | -- | A constraint, function, goal macro or data constructor declared
+    -- at @type\/1@, which is reserved for type references (YCHR-20048).
+    ReservedTypeRefName
+  | -- | A @type(...)@ in a head or equation pattern (YCHR-20049). A
+    -- pattern is data, so it would never match a type name.
+    TypeRefInPattern
   deriving (Eq, Show)
 
 -- | What is wrong with an aggregate goal conjunct, for
@@ -511,7 +523,12 @@ data RenameCtx = RenameCtx
     macroChain :: [MacroUse],
     -- | Declaration macros that generated the current rule or equation
     -- ('Rule.expansion'). Shown after 'macroChain'.
-    declChain :: [ExpansionStep]
+    declChain :: [ExpansionStep],
+    -- | Whether we are renaming a head or equation pattern. A pattern
+    -- is data, so @type(name/arity)@ is an error there
+    -- ('TypeRefInPattern'). Needed because '=' operands share the
+    -- pattern's 'NoResolve' mode.
+    inPattern :: Bool
   }
 
 -- | Inputs to 'renameProgram' beyond the module list itself. Lets the
@@ -877,6 +894,7 @@ renameCtxFor mods inputs = ctxFor
                 macroExportEnv = macroExportEnv0,
                 macroDefTable = macroDefTable0,
                 macroChain = [],
+                inPattern = False,
                 declChain = []
               }
           visible = visibleCons (visibleDataCons mods exportedCons ctx0) cons
@@ -1208,6 +1226,10 @@ checkMacroDefinitions ctx = do
           isReservedAggregateKey n a ->
             let origin = slashOrigin n a loc
              in emitErrorIn ctx (AnnP (ReservedAggregateName n a) loc origin)
+        | isConstraintOrFunctionDecl d,
+          isTypeRefKey n a ->
+            let origin = slashOrigin n a loc
+             in emitErrorIn ctx (AnnP ReservedTypeRefName loc origin)
       _ -> pure ()
 
     slashOrigin n a loc =
@@ -1218,8 +1240,11 @@ checkMacroDefinitions ctx = do
     checkReservedMacro annDef =
       let d = annDef.node
           err = ReservedAggregateName d.name d.arity
-       in when (d.kind == GoalMacro && isReservedAggregateKey d.name d.arity) $
-            emitErrorIn ctx (annAt (siteOf annDef) err)
+       in do
+            when (d.kind == GoalMacro && isReservedAggregateKey d.name d.arity) $
+              emitErrorIn ctx (annAt (siteOf annDef) err)
+            when (d.kind == GoalMacro && isTypeRefKey d.name d.arity) $
+              emitErrorIn ctx (annAt (siteOf annDef) ReservedTypeRefName)
 
     selfDeclaresAndExports n a =
       let key = UnqualifiedIdentifier n a
@@ -1270,7 +1295,7 @@ renameEquation ctx0 eq = do
   let site = siteOf eq.guard
   resolvedFunName <-
     resolveName ResolveTop ctx (nameSite site.loc eq.funName) eq.funName (length eq.args)
-  renamedArgs <- traverse (renameTerm ctx site NoResolve) eq.args
+  renamedArgs <- traverse (renameTerm (asPattern ctx) site NoResolve) eq.args
   renamedGuard <- traverse (traverse (renameTerm ctx site ResolveAll)) eq.guard
   renamedRhs <-
     traverse
@@ -1389,12 +1414,12 @@ renameCon ctx site (Constraint cname cargs)
         | Unqualified n <- cname,
           isReserved n,
           null (visibleProviders ctx n (length cargs)) -> do
-            traverse_ (renameTerm ctx site NoResolve) cargs
+            traverse_ (renameTerm (asPattern ctx) site NoResolve) cargs
             emitErrorIn ctx (annAt site (UnknownName n (length cargs)))
             pure [HeadDropped]
       NotAMacro -> do
         renamedName <- resolveName ResolveTop ctx site cname (length cargs)
-        renamedArgs <- traverse (renameTerm ctx site NoResolve) cargs
+        renamedArgs <- traverse (renameTerm (asPattern ctx) site NoResolve) cargs
         pure [HeadOk (Constraint renamedName renamedArgs)]
 
 -- | Report a construction primitive left after expansion.
@@ -1437,6 +1462,11 @@ isAggregateFormKey n a = isJust (aggregateForm (Unqualified n) (replicate a Wild
 isReservedAggregateKey :: Text -> Int -> Bool
 isReservedAggregateKey n a = isAggregateFormKey n a || isGuardFunctor (Unqualified n) a
 
+-- | @type\/1@, the type reference form. No constraint, function, goal
+-- macro or data constructor may take it.
+isTypeRefKey :: Text -> Int -> Bool
+isTypeRefKey n a = n == "type" && a == 1
+
 -- | Rename one aggregate. The arguments are renamed like head or body
 -- terms, except the goal, whose conjuncts are classified structurally
 -- ('?\/1' guards and nested aggregates) and whose constraints are
@@ -1454,7 +1484,7 @@ renameAggregate ctx site k args = do
   -- not bind is reported later, by the compiler (YCHR-40002).
   element' <- traverse (renameTerm ctx site NoResolveEvaluated) args.element
   -- The result is a pattern.
-  result' <- traverse (renameTerm ctx site NoResolve) args.result
+  result' <- traverse (renameTerm (asPattern ctx) site NoResolve) args.result
   goal' <-
     concat
       <$> traverse
@@ -1522,11 +1552,11 @@ renameConjunct ctx site t = case t of
           | Unqualified base <- n,
             isReserved base,
             null (visibleProviders ctx base (length args)) -> do
-              traverse_ (renameTerm ctx site NoResolve) args
+              traverse_ (renameTerm (asPattern ctx) site NoResolve) args
               badConjunct (ConjunctIsBuiltin base (length args))
         NotAMacro -> do
           renamedName <- resolveName ResolveTop ctx site n (length args)
-          renamedArgs <- traverse (renameTerm ctx site NoResolve) args
+          renamedArgs <- traverse (renameTerm (asPattern ctx) site NoResolve) args
           if isFunctionName ctx renamedName (length args)
             then badConjunct (ConjunctIsFunction renamedName (length args))
             else pure [AggConstraint (Constraint renamedName renamedArgs)]
@@ -1690,6 +1720,11 @@ isPatternNaming :: ResolveMode -> Bool
 isPatternNaming NoResolve = True
 isPatternNaming NoResolveEvaluated = True
 isPatternNaming _ = False
+
+-- | The context for renaming a head or equation pattern. See
+-- 'inPattern'.
+asPattern :: RenameCtx -> RenameCtx
+asPattern ctx = ctx {inPattern = True}
 
 -- | Rename a lambda body, walking through any top-level comma sequencer
 -- without treating @,@ itself as a data constructor. Each comma-separated
@@ -1929,6 +1964,20 @@ renameTerm ctx site mode t = case t of
           CompoundTerm
             (Unqualified "/")
             [CompoundTerm (Unqualified (flattenName resolved)) [], IntTerm farity]
+  -- Type reference: @type(name/arity)@, the type's name as a value.
+  -- In a pattern it would be data and never match a type name, so it
+  -- is an error there ('TypeRefInPattern'). The name
+  -- is resolved in place, so later passes see @type(Name/arity)@ with
+  -- @Name@ qualified (bare for a built-in type). See 'renameTypeRef'.
+  CompoundTerm (Unqualified "type") [arg]
+    | mode /= NoResolveQuoted ->
+        if ctx.inPattern
+          then do
+            -- Echo the term itself: an equation's patterns borrow the
+            -- guard's site, which has no source text of its own.
+            emitErrorIn ctx (annAt (Site site.loc (termToPExpr t)) TypeRefInPattern)
+            pure t
+          else renameTypeRef ctx site t arg
   -- 0-arity unqualified compounds (the AST form of bare atoms after
   -- the parser's @Atom t@ rewrite): always lenient under resolution.
   -- A bare atom in body or guard position has the same surface meaning
@@ -2095,6 +2144,48 @@ renameFunRef ctx site name arity
     notFunction n = do
       emitErrorIn ctx (annAt site (FunRefNotFunction name arity))
       pure (Just n)
+
+-- | Rename a @type(name/arity)@ reference. Keeps the term as written
+-- if the type can't be resolved, after reporting it.
+renameTypeRef :: RenameCtx -> Site -> Term -> Term -> Rename Term
+renameTypeRef ctx site t arg = case arg of
+  CompoundTerm (Unqualified "/") [CompoundTerm name [], IntTerm a]
+    | a >= 0 -> do
+        let arity = fromInteger a
+        case resolveTypeRef ctx name arity of
+          Right resolved ->
+            pure
+              ( CompoundTerm
+                  (Unqualified "type")
+                  [CompoundTerm (Unqualified "/") [CompoundTerm resolved [], IntTerm a]]
+              )
+          Left err -> do
+            emitErrorIn ctx (annAt site err)
+            pure t
+  _ -> do
+    emitErrorIn ctx (annAt site MalformedTypeRef)
+    pure t
+
+-- | Resolve the name of a type reference in the type namespace. A
+-- built-in type stays bare. A bare name needs exactly one visible
+-- provider; a qualified one must be the current module's own type or
+-- an imported, exported one.
+resolveTypeRef :: RenameCtx -> Name -> Int -> Either RenameError Name
+resolveTypeRef ctx name arity = case name of
+  Unqualified n
+    | arity == 0, n `Set.member` baseTypeNames -> Right name
+    | otherwise -> case nub (ownProviders ctx ns (key n) ++ typeImportProviders ctx (key n)) of
+        [m] -> Right (Qualified m n)
+        [] -> Left unknown
+        ms -> Left (AmbiguousName n arity ms)
+  Qualified m n
+    | m `elem` ownProviders ctx ns (key n) || m `elem` typeImportProviders ctx (key n) ->
+        Right name
+    | otherwise -> Left unknown
+  where
+    ns = typeNames ctx
+    key n = UnqualifiedIdentifier n arity
+    unknown = UnknownTypeRef name arity
 
 -- ---------------------------------------------------------------------------
 -- Name resolution
@@ -2603,7 +2694,7 @@ typeImportProviders ctx = importProviders ctx (typeNames ctx)
 -- function-type syntax. Declaring any of them as a user type would
 -- silently rewrite every use in the module to a nominal user type.
 reservedTypeNames :: Set.Set Text
-reservedTypeNames = Set.fromList ["int", "float", "string", "any", "fun", "->"]
+reservedTypeNames = Set.union baseTypeNames (Set.fromList ["fun", "->"])
 
 -- | Reject type declarations whose name collides with a reserved type
 -- name, an earlier declaration in the same module, or a type visible
@@ -2615,12 +2706,15 @@ reservedTypeNames = Set.fromList ["int", "float", "string", "any", "fun", "->"]
 validateTypeDecls :: RenameCtx -> Rename ()
 validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
   where
+    isTypeRefCon dc = isTypeRefKey (unqualifiedText dc.conName) (length dc.conArgs)
     step seen (Ann td _) = do
       let k = typeKey td
           n = k.localName
           site = Site td.loc (Atom n)
       when (n `Set.member` reservedTypeNames) $
         emitError (annAt site (ReservedTypeName n k.arity))
+      when (any isTypeRefCon (typeConstructors td)) $
+        emitError (annAt site ReservedTypeRefName)
       when (k `Set.member` seen) $
         emitError (annAt site (DuplicateTypeDeclaration n k.arity))
       -- Module identity is name-based, so a module that shadows a

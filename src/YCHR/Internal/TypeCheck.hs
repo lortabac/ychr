@@ -71,7 +71,7 @@ import YCHR.Internal.TypeCheck.Render
     showValue,
     showValueShape,
   )
-import YCHR.Internal.Types (Name (..), Term (..), flattenName)
+import YCHR.Internal.Types (Name (..), Term (..), flattenName, typeRefAtomParts)
 
 -- | Runtime functor name of a constructor declared in @'$tc_diag'@.
 diagAtom :: Text -> Text
@@ -258,11 +258,14 @@ decodeLabel val = do
 -- | A runtime-mangled name back in source spelling, escapes and all.
 -- 'decodeName' is the inverse of the mangling; it builds a 'Term'
 -- because that is what its other caller wants, and a 0-arity one is
--- exactly a name.
+-- exactly a name. A type name's prefix and arity ('typeRefAtomParts')
+-- come off first, so a type reads as its plain name.
 unmangleName :: Text -> Text
-unmangleName a = case decodeName a [] of
+unmangleName a0 = case decodeName a [] of
   CompoundTerm n [] -> flattenName n
   _ -> displayQualifiedAtom a
+  where
+    a = maybe a0 fst (typeRefAtomParts a0)
 
 decodeLoc :: Value -> Chr SourceLoc
 decodeLoc val = do

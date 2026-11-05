@@ -1232,12 +1232,18 @@
   ;;; An unbound argument is an *instantiation* failure, not a type
   ;;; error, so that a rule guard calling `name_base` delays rather than
   ;;; aborting — matching the split `Meta.hs` makes on the Haskell side.
+  ;;; A type name's "__type__<arity>__" prefix (`typeRefName` in
+  ;;; Types.hs) comes off first, as in `baseOfMangled`.
+  (define (%strip-type-prefix s)
+    (let ((parts (type-ref-atom-parts s)))
+      (if parts (car parts) s)))
   (define (%name-base v)
     (when (%unbound? v)
       (%chr-inst-error
        "name_base: argument is not sufficiently instantiated (unbound variable)"))
     (unless (symbol? v) (%chr-error "name_base: expected an atom"))
-    (let* ((s (symbol->string v))
+    (let* ((s0 (symbol->string v))
+           (s (%strip-type-prefix s0))
            (n (string-length s))
            (sep (let loop ((i 0))
                   (cond
@@ -1247,7 +1253,7 @@
                      i)
                     (else (loop (+ i 1)))))))
       (if (or (not sep) (zero? sep))
-          v
+          (string->symbol s)
           (string->symbol (substring s (+ sep 2) n)))))
 
   ;;; read_term_from_string: read one term out of a string, mirroring

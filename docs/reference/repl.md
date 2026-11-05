@@ -125,7 +125,7 @@ the loaded modules, plus the meta-commands at the outer prompt (only
 ### `:info`
 
 `:info NAME` prints the fully qualified name, then an equivalent
-declaration. Built-in types (`int`, `float`, `string`, `any`) print
+declaration. Built-in types (`int`, `float`, `string`, `type_name`, `any`) print
 `built-in type`, qualified by the type checker's internal module.
 `NAME` may be bare (`foo`), an operator atom (`'+'`), `name/arity`
 (`call/2`), qualified (`prelude:max`), or any combination. A bare name

@@ -166,6 +166,7 @@ collectCalls e = case e of
   R.TextExpr _ -> []
   R.WildcardExpr -> []
   R.FunRefExpr _ _ -> []
+  R.TypeRefExpr _ _ -> []
   R.CtorExpr _ args -> concatMap collectCalls args
   R.HostExpr _ args -> concatMap collectCalls args
   R.ApplyExpr f args -> collectCalls f ++ concatMap collectCalls args
@@ -265,6 +266,7 @@ rewriteExpr cands = go
       R.TextExpr _ -> e
       R.WildcardExpr -> e
       R.FunRefExpr _ _ -> e
+      R.TypeRefExpr _ _ -> e
       -- 'compileExpr' does not evaluate under 'quote', so a call in
       -- there is data. Lambda lifting puts one in every closure term.
       R.CtorExpr (Unqualified "quote") [_] -> e
@@ -362,6 +364,7 @@ isTrivial e = case e of
   R.ApplyExpr {} -> False
   R.HostExpr {} -> False
   R.FunRefExpr _ _ -> True
+  R.TypeRefExpr _ _ -> True
   R.LambdaExpr {} -> False
 
 -- | Every free variable name referenced anywhere inside an expression,
@@ -374,6 +377,7 @@ varOccurrences e = case e of
   R.TextExpr _ -> []
   R.WildcardExpr -> []
   R.FunRefExpr _ _ -> []
+  R.TypeRefExpr _ _ -> []
   R.CtorExpr _ args -> concatMap varOccurrences args
   R.HostExpr _ args -> concatMap varOccurrences args
   R.ApplyExpr f args -> varOccurrences f ++ concatMap varOccurrences args
@@ -403,6 +407,7 @@ occursUnderQuote v = goTop
       R.TextExpr _ -> False
       R.WildcardExpr -> False
       R.FunRefExpr _ _ -> False
+      R.TypeRefExpr _ _ -> False
 
 -- | Whether a wanted sequence of (distinct, single-occurrence)
 -- variable names appears, in that order, among an expression's
@@ -428,6 +433,7 @@ substExpr subst = go
       R.TextExpr _ -> e
       R.WildcardExpr -> e
       R.FunRefExpr _ _ -> e
+      R.TypeRefExpr _ _ -> e
       R.CtorExpr n args -> R.CtorExpr n (map go args)
       R.HostExpr n args -> R.HostExpr n (map go args)
       R.ApplyExpr f args -> R.ApplyExpr (go f) (map go args)

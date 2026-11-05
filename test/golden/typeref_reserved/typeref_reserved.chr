@@ -1,0 +1,6 @@
+% type/1 is reserved for type references.
+:- module(typeref_reserved, [go/1]).
+:- chr_constraint go/1.
+:- function type/1.
+type(X) -> X.
+go(R) <=> R = 1.

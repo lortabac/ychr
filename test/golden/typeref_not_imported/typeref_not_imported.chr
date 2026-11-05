@@ -1,0 +1,4 @@
+% A qualified type reference needs the module to be imported.
+:- module(typeref_not_imported, [go/1]).
+:- chr_constraint go/1.
+go(R) <=> R = type(aggregates:aggregator/3).
