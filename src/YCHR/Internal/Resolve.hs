@@ -28,12 +28,9 @@ where
 import Control.Monad (unless, when)
 import Control.Monad.Trans.State.Strict
   ( State,
-    evalState,
     execState,
-    get,
     gets,
     modify',
-    put,
   )
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub)
@@ -82,8 +79,6 @@ import Prelude hiding (head)
 data ResolveError
   = -- | A name declared as a constraint has function equations.
     ConstraintHasEquations Name
-  | -- | A name declared as a function appears in a rule head.
-    FunctionInRuleHead Name
   | -- | A name collides with a reserved built-in.
     ReservedName Name
   | -- | A user module has a reserved name (@host@ or @prelude@).
@@ -276,7 +271,6 @@ resolveProgram mods =
       funcKinds = buildFunctionKinds mods
       funcRequiring = buildFunctionRequiring mods
       eqErrors = checkEquations constraintNames mods
-      headErrors = checkRuleHeads (Set.map qualifiedToName functionNames) mods
       reservedErrors = checkReservedNames mods
       orphanEqErrors = checkOrphanEquations functionNames mods
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
@@ -298,7 +292,6 @@ resolveProgram mods =
         runWriter (resolveFunctions funVisibility inlineSet mods)
       errs =
         eqErrors
-          ++ headErrors
           ++ reservedErrors
           ++ orphanEqErrors
           ++ extendsClosedErrors
@@ -1292,28 +1285,6 @@ typeExprVars :: TypeExpr -> [Text]
 typeExprVars (TypeVar v) = [v]
 typeExprVars (TypeCon _ args) = concatMap typeExprVars args
 
--- | Check that no rule head constraint is a function-declared name.
--- Reports only the first rule per name.
-checkRuleHeads :: Set Name -> [CollectedModule] -> [Diagnostic ResolveError]
-checkRuleHeads fNames mods =
-  concat (evalState (traverse check [r | m <- mods, r <- m.rules]) Set.empty)
-  where
-    -- The state holds the names already reported. A name repeated in
-    -- one head is reported once per occurrence.
-    check r = do
-      seen <- get
-      let names =
-            [ c.name
-            | c <- headConstraints r.head.node,
-              c.name `Set.member` fNames,
-              c.name `Set.notMember` seen
-            ]
-      put (foldr Set.insert seen names)
-      pure
-        [ noDiag (P.AnnP (FunctionInRuleHead n) r.head.sourceLoc r.head.parsed)
-        | n <- names
-        ]
-
 -- | Reserved names that cannot be used as constraint or function declarations.
 reservedDeclNames :: Set Text
 reservedDeclNames = Set.fromList ["quote", "tell"]
@@ -1346,11 +1317,6 @@ checkReservedModuleNames mods =
   | m <- mods,
     m.name `Set.member` reservedModuleNames
   ]
-
-headConstraints :: P.Head -> [P.Constraint]
-headConstraints (P.Simplification cs _) = cs
-headConstraints (P.Propagation cs _) = cs
-headConstraints (P.Simpagation ks rs _) = ks ++ rs
 
 toQualId :: Name -> Int -> Maybe QualifiedIdentifier
 toQualId (Qualified m n) a = Just (QualifiedIdentifier m n a)

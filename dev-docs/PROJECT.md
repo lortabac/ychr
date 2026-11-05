@@ -701,7 +701,7 @@ Functions are callable in guards, `is` RHS expressions, and rule body position (
 
 Equation patterns are normalized using the same Head Normal Form (HNF) machinery as rule heads: non-variable patterns become fresh variables with explicit guard conditions. Equations are tried top-to-bottom; if no equation matches, a runtime error is raised.
 
-Function names are qualified like constraint names and cannot collide with constraint declarations in the same module (rejected as YCHR-16016, `ConstraintFunctionCollision`).
+Function names are qualified like constraint names and cannot collide with constraint declarations in the same module (rejected as YCHR-16016, `ConstraintFunctionCollision`). A rule head conjunct that names a function at its arity, or a `host:` call, is YCHR-20050 (`FunctionInHead`, in `Rename`); a constraint and a function with the same name but different arities don't clash.
 
 A function name may not pun on a data-constructor name either, because the head of a compound is what decides between a call and a constructor application. Declaring both in one module is YCHR-16020 (`ConstructorFunctionCollision`, in `Resolve`): both spell as `mod:name`, so qualifying could not disambiguate. Across modules the two *are* distinguishable, so the declarations stand and only a bare reference is rejected, per use site, as YCHR-20020 (`ConstructorFunctionAmbiguity`, in `Rename`); `mod:name` keeps working. Arity is not part of either comparison — data constructors are name-only in the type system.
 

@@ -5,7 +5,7 @@
 % in the same module. Constraints and functions share the symbol
 % namespace, so the collision is ambiguous regardless of whether 'foo'
 % is ever referenced. No equation or rule head touches 'foo', so this
-% test isolates the collision check from YCHR-16001 / YCHR-16002.
+% test isolates the collision check from YCHR-16001 / YCHR-20050.
 :- function foo/1.
 
 go <=> true.

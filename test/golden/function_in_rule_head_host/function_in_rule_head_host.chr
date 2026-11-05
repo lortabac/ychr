@@ -1,0 +1,7 @@
+:- module(function_in_rule_head_host, [go/0]).
+:- chr_constraint p/1, go/0.
+
+% Forbidden: a host call is not a constraint, so it can't be a head
+% conjunct.
+p(X), host:foo(X) ==> true.
+go <=> p(1).

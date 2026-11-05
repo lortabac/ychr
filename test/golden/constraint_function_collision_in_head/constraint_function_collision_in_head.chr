@@ -1,0 +1,7 @@
+:- module(constraint_function_collision_in_head, [go/0]).
+:- chr_constraint go, foo(any).
+:- function foo/1.
+
+% 'foo/1' is both a constraint and a function. That is the collision
+% (YCHR-16016); the head use is not reported again as YCHR-20050.
+go, foo(X) <=> true.

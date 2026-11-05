@@ -351,7 +351,7 @@ parseValidationErrorCode (QualifiedDefinitionName _ _) = ErrorCode 15029
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
 resolveErrorCode (ConstraintHasEquations _) = ErrorCode 16001
-resolveErrorCode (FunctionInRuleHead _) = ErrorCode 16002
+-- Code 16002 is retired, see YCHR-20050 (FunctionInHead).
 resolveErrorCode (ReservedName _) = ErrorCode 16003
 resolveErrorCode (ReservedModuleName _) = ErrorCode 16019
 resolveErrorCode (UnqualifiedConstraintName _) = ErrorCode 16004
@@ -432,6 +432,7 @@ renameErrorCode (UnknownTypeRef _ _) = ErrorCode 20046
 renameErrorCode MalformedTypeRef = ErrorCode 20047
 renameErrorCode ReservedTypeRefName = ErrorCode 20048
 renameErrorCode TypeRefInPattern = ErrorCode 20049
+renameErrorCode (FunctionInHead _ _) = ErrorCode 20050
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -746,13 +747,6 @@ resolveErrorMsg (ConstraintHasEquations name) =
         ++ "' is declared as a constraint but has function equations (->)"
     )
     "either declare it with :- function or remove the equations"
-resolveErrorMsg (FunctionInRuleHead name) =
-  withHint
-    ( "'"
-        ++ displayName name
-        ++ "' is declared as a function but appears in a rule head"
-    )
-    "rule heads must be constraints; call the function from the body or a guard instead"
 resolveErrorMsg (ReservedName name) =
   "'"
     ++ displayName name
@@ -1427,6 +1421,15 @@ renameErrorMsg (AggregateOutsideHead name arity) =
     ( "an aggregate decides whether a rule applies, so it is a head"
         ++ " conjunct; it cannot appear anywhere else"
     )
+renameErrorMsg (FunctionInHead name arity) =
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "/"
+        ++ show arity
+        ++ "' in a rule head is a function, not a constraint"
+    )
+    "rule heads must be constraints; call the function from the body or a guard instead"
 renameErrorMsg (MalformedAggregateGoal (ConjunctIsFunction name arity)) =
   withHint
     ( "'"

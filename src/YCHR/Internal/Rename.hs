@@ -349,6 +349,9 @@ data RenameError
   | -- | A @type(...)@ in a head or equation pattern (YCHR-20049). A
     -- pattern is data, so it would never match a type name.
     TypeRefInPattern
+  | -- | A rule head conjunct that is a function at that arity, or a
+    -- @host:@ call. Heads must be constraints.
+    FunctionInHead Name Int
   deriving (Eq, Show)
 
 -- | What is wrong with an aggregate goal conjunct, for
@@ -481,8 +484,9 @@ data RenameCtx = RenameCtx
     -- 'checkConstructorFunctionAmbiguity'.
     visibleFunNames :: Map Text [Text],
     -- | Every function declared anywhere in the program, by declaring
-    -- module, name and arity. Used to reject a function call as an
-    -- aggregate goal conjunct ('isFunctionName').
+    -- module, name and arity, minus the ones that are also a
+    -- constraint of that module. Used to reject a function call as a
+    -- rule head or aggregate goal conjunct ('isFunctionName').
     functionKeys :: Set.Set QualifiedIdentifier,
     typeDeclEnv :: DeclEnv,
     typeExportEnv :: ExportEnv,
@@ -865,12 +869,25 @@ renameCtxFor mods inputs = ctxFor
     macroDeclEnv0 = buildMacroDeclEnv mods
     macroExportEnv0 = buildMacroExportEnv mods
     macroDefTable0 = buildMacroDefTable mods
+    -- A key that is also a constraint of the same module is left out:
+    -- that pair is Resolve's 'ConstraintFunctionCollision', so a head
+    -- or aggregate goal using it is not reported a second time here.
     functionKeys0 =
       Set.fromList
         [ QualifiedIdentifier m.name fd.name fd.arity
         | m <- mods,
-          Ann (FunctionDecl fd) _ <- m.decls
+          Ann (FunctionDecl fd) _ <- m.decls,
+          not (isConstraintOf m fd.name fd.arity)
         ]
+    isConstraintOf m n a =
+      not
+        ( null
+            [ ()
+            | Ann (ConstraintDecl cd) _ <- m.decls,
+              cd.name == n,
+              cd.arity == a
+            ]
+        )
     ctxFor m =
       let ctx0 =
             RenameCtx
@@ -1420,7 +1437,11 @@ renameCon ctx site (Constraint cname cargs)
       NotAMacro -> do
         renamedName <- resolveName ResolveTop ctx site cname (length cargs)
         renamedArgs <- traverse (renameTerm (asPattern ctx) site NoResolve) cargs
-        pure [HeadOk (Constraint renamedName renamedArgs)]
+        if isFunctionName ctx renamedName (length cargs)
+          then do
+            emitErrorIn ctx (annAt site (FunctionInHead renamedName (length cargs)))
+            pure [HeadDropped]
+          else pure [HeadOk (Constraint renamedName renamedArgs)]
 
 -- | Report a construction primitive left after expansion.
 primitiveOutsideMacro :: RenameCtx -> Site -> Name -> Int -> Rename ()
