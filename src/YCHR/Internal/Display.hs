@@ -1643,10 +1643,7 @@ renameErrorMsg (ConstructorFunctionAmbiguity name conMods funMods) =
         -- import list cannot be narrowed (YCHR-20019), so "rename
         -- yours" is the only advice that applies to a prelude clash.
         -- Say so only when the prelude is actually one of the sides.
-        -- MicroHs's 'Data.List.elem' lacks a fixity declaration and
-        -- defaults to 'infixl 9'; the parentheses pin the 'infix 4'
-        -- parse that base already produces (dev-docs/MICROHS_GAPS.md, gap 7).
-        ++ if "prelude" `elem` (conMods ++ funMods)
+        ++ if "prelude" `elem` conMods ++ funMods
           then
             "; the prelude's import cannot be narrowed, so renaming your"
               ++ " own constructor is the way out of a prelude clash"

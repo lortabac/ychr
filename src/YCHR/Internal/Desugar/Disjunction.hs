@@ -105,9 +105,8 @@ lowerDisjunctions prog =
 -- | Lower the disjunctions in one rule's body.
 lowerRule :: D.Rule -> State LowerState D.Rule
 lowerRule rule = do
-  let bodyAnn = rule.body
-  goals <- lowerGoals (contextOf rule) bodyAnn.node
-  pure rule {D.body = bodyAnn {node = goals}}
+  goals <- lowerGoals (contextOf rule) rule.body.node
+  pure rule {D.body = rule.body {node = goals}}
 
 -- | What a lifted branch needs from the rule it came out of: the
 -- module to declare the new constraint in, the variables in scope, and
@@ -151,13 +150,11 @@ liftBranch ctx branch = do
   idx <- gets (.counter)
   let params = Set.toAscList (bodyGoalVars branch' `Set.intersection` ctx.scope)
       qname = QualifiedName ctx.modName (disjPrefix <> T.pack (show idx))
-      headAnn = ctx.headAnn
-      bodyAnn = ctx.bodyAnn
       rule =
         D.Rule
           { name = Nothing,
             head =
-              headAnn
+              ctx.headAnn
                 { node =
                     D.Head
                       { kept = [],
@@ -168,8 +165,8 @@ liftBranch ctx branch = do
                         aggregates = []
                       }
                 },
-            guard = bodyAnn {node = []},
-            body = bodyAnn {node = branch'}
+            guard = ctx.bodyAnn {node = []},
+            body = ctx.bodyAnn {node = branch'}
           }
   modify' (\st -> st {counter = idx + 1, lifted = rule : st.lifted})
   pure (quoted (R.CtorExpr (qualifiedToName qname) (map R.VarExpr params)))
