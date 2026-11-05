@@ -76,8 +76,9 @@ data. In patterns (head and equation arguments, `Result`, `=`
 operands, the `is` left-hand side) and in `quote/1` they are data
 too. Declaring a constraint, function or goal macro at
 one of these keys, or at `?/1` (the [goal guard](#aggregate-goals)), is
-`ReservedAggregateName` (YCHR-20043). Other arities and declaration
-macros are fine.
+`ReservedAggregateName` (YCHR-20043). So is a data constructor at
+`?/1`: an unqualified use of it would read as the guard. Other arities and
+declaration macros are fine.
 
 ### Typing
 
@@ -120,7 +121,7 @@ write `count((k(Y), ? X == Y), N)`.
 
 `?/1` is recognized structurally inside an aggregate goal, as `,` is;
 outside one it has no meaning, and it can't be declared as a
-constraint, function or goal macro (YCHR-20043). `library(aggregates)` exports the
+constraint, function, goal macro or data constructor (YCHR-20043). `library(aggregates)` exports the
 operator `op(900, fy, '?')`. Without the operator, write the functor
 quoted: `'?'(Guard)`.
 
@@ -650,7 +651,7 @@ lowers an aggregate in the occurrence procedure itself:
 | YCHR-20040 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head (see [Reserved names](#reserved-names)). |
 | YCHR-20041 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard (see [Aggregate goals](#aggregate-goals)). |
 | YCHR-20042 | `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal, including a rule head. |
-| YCHR-20043 | `ReservedAggregateName` | A constraint, function or goal macro declared at one of the five aggregate-form keys or at `?/1` (see [Reserved names](#reserved-names)). |
+| YCHR-20043 | `ReservedAggregateName` | A constraint, function or goal macro declared at one of the five aggregate-form keys, or a constraint, function, goal macro or data constructor at `?/1` (see [Reserved names](#reserved-names)). |
 | YCHR-40002 | `UnboundVariable` | An `Element` variable the match cannot supply. |
 | YCHR-40003 | `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
 | YCHR-40004 | `AggregateNestedTake` | A `takemin`/`takemax` inside an aggregate goal. |

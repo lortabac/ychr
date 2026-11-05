@@ -11,50 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## 3b. A data constructor named `'?'/1` is accepted but every use is rejected
-
-**Documented claim.** None stated — `?/1` is not listed as reserved
-for data constructors anywhere in the docs.
-
-**Test.**
-
-    :- chr_type t ---> '?'(int).
-    :- chr_constraint go/1.
-    go(R) <=> R = '?'(1).
-
-    ychr check t.chr
-
-**Expected.** Either: accepted and usable like any other constructor,
-or rejected at declaration time with a clear "reserved" error.
-
-**Actual.** The `:- chr_type` declaration itself is accepted. Every
-*use* of `'?'(1)` — including in plain data position, inside `quote`,
-anywhere — is rejected with `YCHR-20042`
-(`GuardOutsideAggregateGoal`), the same error a bare guard-form `?/1`
-gets. `isGuardFunctor` (Rename.hs ~1541-1542) matches on name `"?"`
-and arity 1 unconditionally, with no check for whether a visible data
-constructor of that name/arity actually exists — it fires in data and
-quoted positions too, where the guard-form interpretation doesn't
-even apply. (Verified against the built binary: declaration succeeds,
-`check` on the use fails with 20042, exit 1.)
-
-**Fix sketch.** Owner to decide between two options (record both,
-pick later):
-
-- (a) Reject the *declaration* instead: `'?'/1` as a data constructor
-  name is reserved, the same way the aggregate keys are reserved for
-  constraints/functions/macros. Simple, consistent with "`?` is
-  reserved for aggregates" (`?/1` is already reserved for
-  constraints, functions and goal macros, YCHR-20043), but makes
-  `?` unavailable as a constructor name forever.
-- (b) Let data/quoted positions win: `isGuardFunctor`'s callers already
-  know whether they're in a position where the guard-form
-  interpretation even applies (data argument, pattern, `quote(...)`);
-  only treat `'?'(X)` as the guard form when no visible constructor
-  named `?/1` exists, and as plain data otherwise. More permissive,
-  but adds a visibility lookup to a hot path and a "which one wins"
-  rule to document.
-
 ## 3c. `:- chr_type ','(A, B) ---> ...` declares a type named `,`
 
 **Documented claim.** None stated — `,` is not listed as a reserved
