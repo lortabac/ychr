@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Breaking:** a type named `,` (`:- chr_type ','(A, B) ---> foo.`)
+  is now `YCHR-20016`, like `fun` and `->`. It used to be accepted,
+  but `','(int, int)` in a type is `YCHR-15030`, so it was unusable.
+
 A qualified data constructor at the wrong arity, like `a:foo(1, 2)`
 for `foo/1`, is now a constructor-arity error (`YCHR-20102` warning,
 `YCHR-60008`), not `YCHR-20009` "does not export 'foo/2'". Bare and

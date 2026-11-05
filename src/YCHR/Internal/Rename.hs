@@ -2764,8 +2764,10 @@ typeImportProviders ctx = importProviders ctx (typeNames ctx)
 -- | Type names the grammar wires in: the base types plus the
 -- function-type syntax. Declaring any of them as a user type would
 -- silently rewrite every use in the module to a nominal user type.
+-- @,@ is here too: a type reference can't apply it to arguments
+-- (YCHR-15030), so a type named @,@ is almost always a mistake.
 reservedTypeNames :: Set.Set Text
-reservedTypeNames = Set.union baseTypeNames (Set.fromList ["fun", "->"])
+reservedTypeNames = Set.union baseTypeNames (Set.fromList ["fun", "->", ","])
 
 -- | Reject type declarations whose name collides with a reserved type
 -- name, an earlier declaration in the same module, or a type visible

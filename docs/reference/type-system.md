@@ -63,6 +63,9 @@ An algebraic type definition introduces:
 - A type constructor name with zero or more type parameters.
 - One or more data constructors, each with zero or more typed fields.
 
+The type name can't be a built-in type, `fun`, `->` or `,`
+(`YCHR-20016`).
+
 ### Opaque types
 
 An *opaque type* is a nominal type whose values are introduced and

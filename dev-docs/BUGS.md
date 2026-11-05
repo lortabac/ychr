@@ -11,45 +11,6 @@ sketch", without re-asking what to do. Line numbers are approximate
 
 Remove entries from this file when the underlying bug is fixed.
 
-## 3c. `:- chr_type ','(A, B) ---> ...` declares a type named `,`
-
-**Documented claim.** None stated — `,` is not listed as a reserved
-type name anywhere; whatever check rejects other reserved words as
-declaration names doesn't cover `,`.
-
-**Test.** (Verified against the built binary.)
-
-    :- module(tc4, [go/1]).
-    :- chr_type ','(A, B) ---> foo.
-    :- chr_constraint go/1.
-    go(R) <=> R = 1.
-
-    ychr check tc4.chr
-
-(Params must be variables — `','(a, b)` with lowercase atoms instead
-hits `YCHR-15018 Invalid type parameter` first, which is a correct,
-unrelated check. Also note `:- chr_type (a, b) ---> foo.` written
-with a space does *not* reproduce this: that parses as the directive
-name `chr_type` applied to `(a, b)` as two arguments, i.e. a
-different, unknown directive `--->/2`, giving `YCHR-15024`. The
-repro needs the quoted-atom functor form `','(A, B)`.)
-
-**Expected.** Rejected — `,` is a control form, not a legal type (or
-constructor/atom) name, the same way other reserved symbols are
-rejected as declaration names.
-
-**Actual.** Exit 0, no diagnostic at all. The type `,` /2 is declared
-successfully with no warning or error.
-
-**Fix sketch.** Not investigated beyond the repro. Reserve `","` as a
-type name — add it wherever type-name declarations are validated
-(likely alongside other reserved-name checks in `Resolve.hs`/
-`Rename.hs`), reported with the existing reserved-name error for that
-position rather than a new code. Needs a look at how other reserved
-names (`tell`, the aggregate forms) are rejected as *type* names, if
-at all, to reuse the same mechanism rather than inventing one just
-for `,`.
-
 ## A lambda bound with `=` keeps a `quote(...)` wrapper
 
 **Documented claim.** `docs/reference/language.md` §Lambdas: a lambda

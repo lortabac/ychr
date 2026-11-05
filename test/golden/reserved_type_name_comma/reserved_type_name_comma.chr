@@ -1,0 +1,5 @@
+:- module(reserved_type_name_comma, []).
+
+% A type reference can't apply `,` to arguments (YCHR-15030), so a
+% type named `,` is unusable. Declaring one used to pass with no diagnostic.
+:- chr_type ','(A, B) ---> foo.
