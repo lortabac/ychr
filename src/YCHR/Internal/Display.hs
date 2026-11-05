@@ -1655,8 +1655,8 @@ renameErrorMsg (ConstructorFunctionAmbiguity name conMods funMods) =
 renameErrorMsg (ReservedTypeName name arity) =
   withHint
     ("Type name '" ++ T.unpack name ++ "/" ++ show arity ++ "' is reserved")
-    ( "base types (int, float, string, type_name, any) and function-type"
-        ++ " syntax cannot be redeclared"
+    ( "base types (int, float, string, type_name, any), function-type"
+        ++ " syntax (fun, ->) and ',' cannot be redeclared"
     )
 renameErrorMsg (DuplicateTypeDeclaration name arity) =
   withHint
