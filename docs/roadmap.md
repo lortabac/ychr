@@ -32,10 +32,7 @@ what is planned.
 - [x] Keyed `'$call'` dispatch (a callables dispatch table plus a
       closure-apply VM construct, mirroring the evaluables table used
       by `EvalIs`)
-- [ ] Known-closure `'$call'` specialization (compile a syntactically
-      known lambda or `fun name/arity` argument to a direct procedure
-      call)
-- [ ] Function inlining
+- [x] Function inlining
 - [ ] Rule unfolding (investigation: the correctness conditions of
       Tacchella, Gabbrielli, Meo, 2007, *Unfolding in CHR* are stated
       for the abstract semantics and need adaptation to the refined
