@@ -150,6 +150,24 @@ Skipped on Scheme: the whole `lambda_bind_print` directory and
 equivalent in `value->pexpr` and a `var` node in `render-pexpr`.
 
 
+## Binding a variable does not move its observers
+
+When Haskell's `unify` binds an unbound `X` to a term, it re-registers
+`X`'s observers on every unbound variable reachable in that term
+(`unify'` in `src/YCHR/Internal/Runtime/Var.hs`). The Scheme `unify*`
+(`scheme/ychr/var.sls`) only wakes them and clears `X`'s list. So after
+`X = g(A)`, a later `A = 1` wakes nothing on Scheme:
+
+    p(X), X = g(A), A = 1
+
+`fire @ p(g(1)) <=> out(1).` fires on Haskell and never fires on
+Scheme. Skipped on Scheme: `("reactivation_through_binding",
+"through_binding")`. The `direct` case in the same directory has no
+intermediate binding and passes on both. A fix is an `add-observer!`
+of each of `X`'s observers on the bound term in the `(var? d1)` arm;
+`add-observer!` already trails its writes.
+
+
 ## `library(search)` implementation notes
 
 Not a gap: the search driver runs on both backends. These notes cover
