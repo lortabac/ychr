@@ -119,25 +119,6 @@ digits plus `show`'s exponent thresholds) would close it, and the
 printer is shared, so that is a change of its own.
 
 
-## Closure pretty-printing does not unwrap the source form
-
-The reference printer unwraps a closure value before rendering it:
-`runtimeToPExpr` turns `__closure`(identity, sourceForm, captures…) into
-the source form and runs `unquoteToPExpr` over it, which also renders a
-0-arity atom whose name looks like a variable (uppercase- or
-`_`-initial) as a variable rather than a quoted atom
-(`src/YCHR/Internal/Pretty.hs`). `pretty-term` has no such branch, so a
-bound closure prints as the internal compound. For
-`test/golden/lambda_bind_print`'s `by_unify_capture(2, F)`:
-
-    Haskell: F = fun(X) -> prelude:(X + N) end
-    Scheme : F = '__closure'(lambda_bind_print:'__lambda_2', fun('X') -> prelude:('X' + 'N') end, 2)
-
-Skipped on Scheme: the whole `lambda_bind_print` directory and
-`("inline_basic", "lambda_body")`. A fix needs an `unquoteToPExpr`
-equivalent in `value->pexpr` and a `var` node in `render-pexpr`.
-
-
 ## `library(search)` implementation notes
 
 Not a gap: the search driver runs on both backends. These notes cover

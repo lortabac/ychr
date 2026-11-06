@@ -224,10 +224,8 @@
   ;;; infix renderer can parenthesize the qualified form exactly as
   ;;; `prettyPrec` does.
   ;;;
-  ;;; One exception: a `__closure` value is *not* unwrapped to its source
-  ;;; form the way the reference's `runtimeToPExpr` does, so it prints as
-  ;;; the internal compound. That pre-dates this port and is recorded in
-  ;;; dev-docs/SCHEME_BACKEND_GAPS.md ("Closure pretty-printing").
+  ;;; A `__closure` value prints as its source form, through
+  ;;; `source->pexpr` (the reference's `unquoteToPExpr`).
   ;;; ---------------------------------------------------------------------
 
   ;; ALIASES maps a var id to the name to print for it (see
@@ -253,6 +251,7 @@
         ((and (number? d) (inexact? d)) (vector 'float d))
         ((string? d) (vector 'text d))
         ((symbol? d) (atom->pexpr d))
+        ((closure? d) (source->pexpr aliases (vector-ref (term-args d) 1)))
         ((term? d)
          (let ((f (term-functor d))
                (args (map (lambda (a) (value->pexpr aliases a))
@@ -265,6 +264,44 @@
              ((cons-functor? f) (vector 'compound "." args))
              (else (name->pexpr f args)))))
         (else (vector 'opaque d)))))
+
+  ;; A closure: `__closure`(Identity, SourceForm, Capture ...).
+  (define (closure? d)
+    (and (term? d)
+         (eq? (term-functor d) '__closure)
+         (>= (vector-length (term-args d)) 2)))
+
+  ;; Mirror of `unquoteToPExpr`: the source form was quoted, so an
+  ;; unqualified atom that looks like a variable (uppercase- or
+  ;; `_`-initial) is a variable. Anything not an atom or a compound goes
+  ;; back to `value->pexpr`. A nested `__closure` stays a plain compound,
+  ;; as in the reference.
+  (define (source->pexpr aliases v)
+    (let ((d (deref v)))
+      (cond
+        ((symbol? d) (source-name->pexpr d '()))
+        ((term? d)
+         (let ((f (term-functor d))
+               (args (map (lambda (a) (source->pexpr aliases a))
+                          (vector->list (term-args d)))))
+           (if (cons-functor? f)
+               (vector 'compound "." args)
+               (source-name->pexpr f args))))
+        (else (value->pexpr aliases d)))))
+
+  (define (source-name->pexpr sym args)
+    (let ((segments (unmangle-segments (symbol->string sym))))
+      (if (and (null? args) (not (car segments)) (var-like? (cdr segments)))
+          (vector 'var (cdr segments))
+          (name->pexpr sym args))))
+
+  ;; Haskell `isUpper c || c == '_'` on the first character.
+  (define (var-like? s)
+    (and (> (string-length s) 0)
+         (let ((c (string-ref s 0)))
+           (or (char=? c #\_)
+               (memq (char-general-category c) '(Lu Lt))))
+         #t))
 
   ;; An atom or a mangled functor plus its arguments, split into the `:`
   ;; compound when the spelling is qualified. A compound with no
