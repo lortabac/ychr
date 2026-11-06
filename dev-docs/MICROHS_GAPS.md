@@ -18,19 +18,22 @@ terse, fix-shaped, removable when closed.
 
 ## Status
 
-Re-verified against upstream MicroHs `d756fa92` (2026-10-30,
-`mhs` 0.16.12.0). Nine gaps are open; four have closed and been removed
+Re-verified against upstream MicroHs `c98846b1` (2026-11-05,
+`mhs` 0.16.12.0). Seven gaps are open; six have closed and been removed
 from this document (see below the table). The local workarounds for
-gaps 1, 3, 5, 6, 7, 8 and 10 are applied (gap 5 is the resources
-provider described below, which since `dev-docs/MICROHS_PERFORMANCE.md`
-option B decodes its two resources at build time rather than at run
-time; gaps 7 and 8 are one pair of parentheses and one no-op modifier;
-gap 10 is one helper taking its argument as `Text` rather than as a
-record). Gap 11 has no YCHR-side workaround: it is a difference in how
-coarsely file I/O errors are reported, not a crash. Every open gap's
-reproducer was rerun at `d756fa92` and still fails. At that revision
-a type error reads `type mismatch` / `expected:` / `actual:` rather than
-the `Cannot satisfy constraint: X ~ Y` quoted in the older entries.
+gaps 1, 5, 6, 8 and 10 are applied (gap 5 is the resources provider
+described below, which since `dev-docs/MICROHS_PERFORMANCE.md` option B
+decodes its two resources at build time rather than at run time; gap 8
+is one no-op modifier; gap 10 is one helper taking its argument as
+`Text` rather than as a record). Gap 11 has no YCHR-side workaround: it
+is a difference in how coarsely file-open errors are reported, not a
+crash. The reproducers for gaps 1, 2, 6, 10 and 11 were rerun at
+`c98846b1` and still fail; gap 8 depends on the optparse-applicative
+pin, which did not move. At this revision a type error reads
+`type mismatch` / `expected:` / `actual:` rather than the
+`Cannot satisfy constraint: X ~ Y` quoted in the older entries. The pin
+is `c98846b1` and not upstream's head `4b1b88e6`, which fails to
+bootstrap (`src/MicroHs/Parse.hs:886`: `undefined value: rights`).
 No Template Haskell remains in `library ychr`, and the `ychr` executable
 has a MicroHs twin of the compile-time embedder, so `mcabal build` now
 completes: it builds `library ychr` and `exe:ychr`, and the binary runs
@@ -42,23 +45,30 @@ suite, the benchmark or the `stlc` example (they need
 the `examples` flag defaults off), so those remain GHC-only. CI compiles
 the MicroHs target on every push and pull request — the `microhs` job,
 which runs no tests — from the environment `make mhs-install` installs:
-MicroHs `d756fa92`, the prettyprinter and optparse-applicative commits
+MicroHs `c98846b1`, the prettyprinter and optparse-applicative commits
 pinned in `tools/mhs-install.sh`, and the package versions in
 `tools/mhs-packages.txt`. Keep those pins in sync with this paragraph.
-Gaps 7 and 8 were found on the way to that point and are recorded
-below.
+Gap 8 was found on the way to that point and is recorded below.
 
 | # | Gap | State |
 |---|---|---|
 | 1 | `OverloadedRecordDot` rejects an already-bound field name | open — workaround applied to `src/` (see below) |
 | 2 | `NoFieldSelectors` silently ignored | open |
-| 3 | Record update on a record-dot expression doesn't parse | open — workaround applied to `src/` (see below) |
 | 5 | No `TemplateHaskell` support | open upstream — workaround applied: no TH in `library ychr`; the MicroHs `ychr` compiles resources decoded at build time by `make resources` (see below) |
 | 6 | `mapAccumL` is list-only | open — no site left in `src/` (see below) |
-| 7 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
 | 8 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
 | 10 | A local binding inferred as `HasField`-polymorphic is not generalized | open — workaround applied to `src/YCHR/Internal/Resolve.hs` (see below) |
-| 11 | File-opening errors carry no description, and `createDirectoryIfMissing` swallows mkdir failures | open upstream — no YCHR-side workaround (see below) |
+| 11 | File-opening errors carry no description | open upstream — no YCHR-side workaround (see below) |
+
+Record update after a field selection (`e.fld { f = … }`, formerly
+gap 3) parses since upstream `c17e43de` (#566). The selectors hoisted
+into local bindings in `Desugar.hs` and `Desugar/Disjunction.hs` are
+inlined again.
+
+`Data.List.elem` and `notElem` (formerly gap 7, a number reused after
+the `try` gap below closed) are `infix 4` since
+upstream `8f108ebd` (#564). The parentheses in `Display.hs`'s
+`ConstructorFunctionAmbiguity` message are gone.
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
@@ -296,14 +306,14 @@ Verified module by module with `mhs -fno-code` on a scratch copy of
 `Compile/Occurrences.hs`, `Compile.hs`, `Pretty.hs`, `Resolve.hs` and
 `TypeCheck/Encode.hs` compile. `Desugar.hs` and
 `Desugar/Disjunction.hs` cleared the gap-1 error and then stopped on
-gap-3 sites (`func.equations {node = …}`, `ctx.bodyAnn {node = …}`),
-not on this gap; those now compile as well, since gap 3's workaround
-landed. `Runtime/Monad.hs` sits behind them through
+record-update-after-selector sites (`func.equations {node = …}`,
+`ctx.bodyAnn {node = …}`), not on this gap; those compile as well now
+(that gap is closed, see the Status section). `Runtime/Monad.hs` sits behind them through
 `Compile.Pipeline`, so its call was checked with the equivalent
 `TrailState` reproducer instead (`ambiguous value: length […]` without
 the qualification, accepted with it). There was still no end-to-end
-check at the time: the library stopped on gap 7 before the CLI was
-reached, and the `try` gap — since closed — was worked around only after
+check at the time: the library stopped on the `elem` fixity gap before
+the CLI was reached, and the `try` gap was worked around only after
 this sweep. Both have since been closed, and `mcabal build` now builds
 the CLI too (see the Status section).
 The test component is out of reach as well (`tasty` and `hedgehog` are
@@ -357,91 +367,6 @@ way to resolve at all.
 
 None directly — this gap is observable only through gap 1, and its
 workaround is the same.
-
-
-## 3. Record update on a record-dot expression doesn't parse
-
-> **Re-verified.** Still open upstream; the workaround is now applied to
-> `src/`. The doc recorded one site; there are five, all in the
-> desugaring passes (the fifth came with the aggregates work). With them
-> hoisted, `mhs -fno-code -isrc YCHR.Internal.Desugar` and
-> `…YCHR.Internal.Desugar.Disjunction` report `No code generated`.
-
-The expression form `e.fld { f = ... }` (record update applied to the
-result of a record-dot selector chain) fails with a parse error — the
-line numbers are from before the workaround below:
-
-```
-mhs: uncaught exception: error: "src/YCHR/Internal/Desugar.hs": line 965, col 48:
-  found:    {
-  expected: . LQIdent ( UQIdent [ QualString literal _primitive @ (# \ case let if QualDo do mdo QSymOper ` :: ∷ , }
-```
-
-Trigger:
-
-```haskell
-func { D.equations = func.equations { node = eqs' } }
---                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-```
-
-A `let` binding to name `func.equations` first works around it. GHC
-accepts the inline form.
-
-The same shape recurs three more times; the recorded site is the first
-one `mhs` reaches, not the only one. Line numbers and updates below are
-the current (post-workaround) code; each `…Ann` binding holds the
-selector that used to be written inline:
-
-| site | update |
-|---|---|
-| `src/YCHR/Internal/Desugar.hs:966` | `func {D.equations = eqsAnn {node = eqs'}}` |
-| `src/YCHR/Internal/Desugar.hs:1034-1035` | `rule {D.guard = guardAnn {node = guards'}, D.body = bodyAnn {node = body'}}` |
-| `src/YCHR/Internal/Desugar.hs` `liftRule` (aggregates) | `rule.head {node = headNode {D.aggregates = aggs'}}` |
-| `src/YCHR/Internal/Desugar/Disjunction.hs:109` | `rule {D.body = bodyAnn {node = goals}}` |
-| `src/YCHR/Internal/Desugar/Disjunction.hs:157,164-165` | `headAnn {node = ...}`, `bodyAnn {node = ...}` |
-
-Note the trigger is not exactly "a selector chain": `ctx.headAnn { ... }`
-is a single field of a local record and still fails, while a direct
-record update like `rule { D.body = ... }` is fine. What fails is an
-update applied to an expression reached through a `.` selector,
-whatever the selector's depth.
-
-### Upstream fix sketch
-
-`MicroHs/src/MicroHs/Parse.hs` `pAExpr` runs `many pUpdate` then
-`many pSelect`, so updates after selects aren't recognised. Allowing
-`pUpdate` / `pSelect` to interleave (`many (Right <$> pUpdate <|>
-Left <$> pSelect)`) would match GHC's behaviour.
-
-### Local workaround (applied)
-
-Applied to `src/` as a hoist of the selector into a local binding:
-
-| site | hoist |
-|---|---|
-| `Desugar.hs` `liftFunction` | `eqsAnn = func.equations` |
-| `Desugar.hs` `liftRule` | `headAnn = rule.head`, `guardAnn = rule.guard`, `bodyAnn = rule.body` |
-| `Disjunction.hs` `lowerRule` | `bodyAnn = rule.body` |
-| `Disjunction.hs` `liftBranch` | `headAnn = ctx.headAnn`, `bodyAnn = ctx.bodyAnn` |
-
-```haskell
-let eqsAnn = func.equations
-    newEqs = eqsAnn { node = eqs' }
-in func { D.equations = newEqs }
-```
-
-Parenthesizing the selector parses too — `(func.equations) { node = eqs' }`
-is accepted by `mhs`, which puts the update inside `many pUpdate` after a
-`pAExpr'` atom — but the hoist is preferred: the parentheses read as
-redundant and would invite deletion, while the binding is
-self-documenting. It also removes a repeated selector at every site. A
-pattern sweep over `src/`, `app/`, `test/`, `bench/` and
-`examples/` finds no other update-on-selector site; the modules behind
-the `try` gap were checked with its sites bypassed (that sweep predates
-the shim, which is since deleted).
-
-Cheap and rare. Comfortable to keep even if MicroHs never grows the
-parser fix.
 
 
 ## 5. No `TemplateHaskell` support
@@ -576,9 +501,9 @@ Verified on this revision:
 > **Re-verified.** Still open upstream; the workaround is now applied to
 > `src/`. It is a single site, and the round trip is free: `NonEmpty a`
 > is `a :| [a]`, and `NE.toList` / `NE.fromList` are lazy O(1) views.
-> The tree now carries gap 3's hoists, so the module that holds the site
-> — `YCHR.Internal.Desugar` — is checked directly rather than on a
-> scratch copy; see "Local workaround (applied)".
+> `YCHR.Internal.Desugar`, the module that held the site, is checked
+> directly rather than on a scratch copy; see "Local workaround
+> (applied)".
 
 Found while working past gaps 1–5; not previously recorded.
 
@@ -661,13 +586,13 @@ Verified:
   with `Cannot satisfy constraint: NonEmpty ~ []`; the same module with
   `NE.toList` compiles (`No code generated`).
 - Direct check: `mhs -fno-code -isrc YCHR.Internal.Desugar` reports "No
-  code generated" on the stock tree, since gap 3's hoists are now in it.
+  code generated" on the stock tree.
   The earlier "typechecks fully" claim for a scratch copy should have
   been scoped to this module: a whole-library check passes
   `Compile.Pipeline`, `Meta`, `VM` and `Backend.SchemeDriver` but stops
-  on the `try` gap (since closed) in `Runtime/Interpreter.hs` and gap 7
+  on the `try` gap in `Runtime/Interpreter.hs` and the `elem` fixity gap
   in `Display.hs`, both of which predate this change and are unrelated to
-  it (both have since been worked around). Reverting only this change in a
+  it (both have since been closed). Reverting only this change in a
   scratch copy brings the error back at the `D.BodyOr` arm
   (`Cannot satisfy constraint: NonEmpty ~ []`).
 
@@ -675,106 +600,11 @@ Invocation detail: the include path must be attached (`-i<dir>`, not
 `-i <dir>`); the separate form is read as a module name and surfaces as
 `undefined export: main`. With `-isrc`, a library module is checked
 directly — `mhs -fno-code -isrc YCHR.Internal.Desugar` reports "No code
-generated" (before gap 3's workaround it reported the parse error at
-`Desugar.hs:965`). The mhs-only overlay needs `-isrc/mhs` as well.
+generated". The mhs-only overlay needs `-isrc/mhs` as well.
 
 Cheap, but it means every `NonEmpty` crossing a `Traversable`-generic
 helper needs an explicit conversion pair, and a mistake shows up as the
 opaque `NonEmpty ~ []` rather than a missing-name error.
-
-
-## 7. `Data.List` functions lack their fixity declarations
-
-> **Re-verified.** Still open upstream; the workaround is now applied to
-> `src/`, at the single site below. Found while working past gap 3; not
-> previously recorded. It was the next failure after the `try` gap (since
-> closed): with that workaround in place the library failure landed here,
-> at `Display.hs:888` (the `elem` is now at `:891`, after the comment
-> added with the fix), and the library now compiles past it.
-
-`MicroHs/lib/Data/List.hs` declares fixities only for `\\`, `!!` and
-`!?` (lines 473, 486, 497). The names it leaves bare fall back to the
-Haskell default `infixl 9`; where `base` declares a tighter fixity, a
-backticked use therefore binds tighter than it does under GHC:
-
-```haskell
-"prelude" `elem` conMods ++ funMods
--- mhs parses ("prelude" `elem` conMods) ++ funMods:
---   Cannot satisfy constraint: Bool ~ [Text]
--- GHC parses "prelude" `elem` (conMods ++ funMods)
-```
-
-The failing name is the list-specific `Data.List.elem`
-(`lib/Data/List.hs:414`), which `Prelude` re-exports (`lib/Prelude.hs:72`).
-It is a different binding from `Data.Foldable.elem`, whose fixity *is*
-declared — `infix 4` for `elem` and `notElem` at
-`lib/Data/Foldable.hs:69` — so a module that imports `Data.Foldable`'s
-`elem` instead compiles the unparenthesised form. `elem` and `notElem`
-are the affected pair: `base`'s versions (the `Foldable` methods) are
-`infix 4`, while MicroHs's `Data.List` copies carry no declaration.
-`union`, `intersect`, `isPrefixOf`, `isSuffixOf`, `isInfixOf` and
-`isSubsequenceOf` have no fixity in `base` either (`ghci :i` prints no
-`infix` line for them), so both compilers default them to `infixl 9` and
-they cannot diverge.
-
-The one site is `src/YCHR/Internal/Display.hs:891`. Ordinary operators
-are not affected either: MicroHs declares the fixities of `++` and `:`
-(`lib/Data/List_Type.hs:5,11`), `$` and `.` (`lib/Data/Function.hs`),
-`&&`/`||`, the comparisons, `<>`, and also `div`/`mod`/`quot`/`rem`,
-`on` and `seq`.
-
-### Upstream fix sketch
-
-Add ``infix 4 `elem`, `notElem` `` to `MicroHs/lib/Data/List.hs`, where
-`elem` and `notElem` are list-specific bindings
-(`lib/Data/List.hs:414,417`) rather than the `Foldable` methods that
-already carry the declaration (`lib/Data/Foldable.hs:69`), and check the
-`Prelude` re-exports.
-
-### Local workaround (applied)
-
-Applied to `src/YCHR/Internal/Display.hs:891`, the `elem` in
-`renameErrorMsg`'s `ConstructorFunctionAmbiguity` arm:
-
-```haskell
-++ if "prelude" `elem` (conMods ++ funMods)
-```
-
-Under GHC the parentheses are redundant: `base`'s `elem` is `infix 4`,
-so `++` (`infixr 5`) already binds tighter and the tree is the one GHC
-built before the change. They are load-bearing only under MicroHs, where
-the absent fixity defaulted `elem` to `infixl 9` and made it bind
-*tighter* than `++`. The site carries a comment pointing here.
-
-Verified:
-
-- GHC: `make format` clean and `make test` green. The parenthesised form
-  is the tree GHC already built, so no test can distinguish the two; the
-  suite only rules out an accidental edit.
-- Reproducer: `mhs -fno-code -isrc -isrc/mhs YCHR.Internal.Display`
-  failed at `Display.hs:888:26` with
-  `Cannot satisfy constraint: Bool ~ [Text]` before the change, and
-  prints "No code generated" after it.
-- Sweep: every backticked `elem` and `notElem` — the only names in this
-  position that `base` fixes — was inspected across `src/`, `app/`,
-  `test/`, `bench/`, `examples/` and `embed/`. `Display.hs:891` is the
-  only one next to an operator whose precedence lies between the
-  function's real fixity and the default 9 (here `++` at `infixr 5`,
-  against `elem`'s `infix 4`). The others sit inside parentheses
-  (``filter (`elem` xs)``), under a guard or comprehension bar, in a
-  different branch (``if '.' `elem` s then s else s ++ ".0"``), or next
-  to `&&`/`||`/`$`, which sit at or below `infix 4`, so both compilers
-  build the same tree. Unlike the first sweep, this one covers `app/`,
-  `test/`, `bench/` and `embed/`.
-- `mcabal build` then compiled `library ychr` to completion and moved on
-  to the `ychr` executable, where it stopped on gap 5's missing resources
-  provider (`embed/YCHR/Embedded/StdLib.hs:29` cannot find
-  `Language.Haskell.TH`) rather than on a fixity site. Since closed:
-  gap 5's provider is in place and the build completes (see the Status
-  section).
-
-Remove the parentheses once MicroHs declares the fixity for
-`Data.List.elem`; the comment can go with them.
 
 
 ## 8. `optparse-applicative`'s `fullDesc` is missing from the MicroHs package
@@ -783,7 +613,7 @@ Remove the parentheses once MicroHs declares the fixity for
 > The workaround is applied to `app/Main.hs`; what remains open is the
 > package the MicroHs package set ships.
 
-`mcabal build` reaches the CLI once gaps 1–7 are worked around, and then
+`mcabal build` reaches the CLI once the earlier gaps are worked around, and then
 stops on the first line of `app/Main.hs`'s `main`:
 
 ```
@@ -834,7 +664,7 @@ Verified:
 
 ## 10. A local binding inferred as `HasField`-polymorphic is not generalized
 
-> **Re-verified against `d756fa92`.** Still open. The reproducer used to
+> **Re-verified against `c98846b1`.** Still open. The reproducer used to
 > show a *top-level* `origin`; that one compiles under MicroHs (also at
 > `f65d3c65`). Only a local binding fails, which is the shape the
 > `Resolve.hs` site has, so the reproducer below now uses `where`.
@@ -877,10 +707,13 @@ originForDecl m n = PExpr.Atom (m.name <> ":" <> n)
 ```
 
 
-## 11. File-open errors carry no description, and `createDirectoryIfMissing` swallows mkdir failures
+## 11. File-open errors carry no description
 
-> **New; found while fixing `YCHR-50005` (a missing or unreadable
-> input file used to crash with an uncaught `IOException`).**
+> **Re-verified against `c98846b1`.** The `openFile` half is still open.
+> The `createDirectoryIfMissing` half is fixed upstream (`0e12b043`,
+> #565): `ychr compile -d blocker/sub prog.chr`, with `blocker` a file,
+> now prints `Error: cannot write blocker/sub: Not a directory` under
+> both compilers.
 
 MicroHs's `openFile`/`openBinaryFile` collapse every failure to
 `NoSuchThing` with an empty description (`System/IO/Base.hs`:
@@ -900,34 +733,21 @@ A directory given as input reads back empty instead of failing, at
 the C runtime's `getb`/`readb` primitives, below any Haskell-level
 API choice.
 
-`System/Directory.hs`'s `createDirectoryIfMissing True d` (~164–172)
-splits `d` into prefixes and discards each `mkdir`'s result (`_ <- …;
-return ()`), so it never raises even when one fails — the write then
-fails later, at the `.chr`/`.vm`/`.sls` file itself rather than the
-directory that was actually missing:
-
-```
-$ dist-mcabal/bin/mhs/ychr compile -d blocker/sub prog.chr
-Error: cannot write blocker/sub/program.vm: openFile: Does not exist
-# GHC: Error: cannot write blocker/sub: Not a directory
-```
-
 ### Upstream fix sketch
 
 Have `openFile`/`openBinaryFile` build the right `IOErrorType` from
 `errno`, with the OS's `strerror` text in `ioe_description`, the way
-GHC's `errnoToIOError` does. Have `createDirectoryIfMissing True`
-check each prefix's `mkdir` result instead of discarding it.
+GHC's `errnoToIOError` does (MicroHs has it in `Foreign/C/Error.hs`).
 
 ### Local workaround
 
-None. Only the reason text differs; YCHR-50005 and the write error
-still fire with exit 1. Reason-text asserts are GHC-only.
+None. Only the reason text differs; YCHR-50005 still fires with exit 1.
+Reason-text asserts are GHC-only.
 
 Verified:
 
-- The two reproducers above, each paired with the GHC build's output
-  on the same input.
+- The reproducer above, paired with the GHC build's output on the same
+  input.
 
 
 ## Out of scope (not gaps, just noted)

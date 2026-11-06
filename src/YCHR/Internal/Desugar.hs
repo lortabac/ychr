@@ -913,20 +913,16 @@ bodyGoalVars = Set.unions . map goalVars
 -- the guard's and the body's.
 liftRule :: D.Rule -> Lift D.Rule
 liftRule rule = do
-  let headAnn = rule.head
-      headNode = headAnn.node
-      guardAnn = rule.guard
-      bodyAnn = rule.body
-      scope = ruleScope rule
-      modName = ruleModName headNode
-  guards' <- traverse (liftGuard modName scope) guardAnn.node
-  body' <- traverse (liftBodyGoal modName scope) bodyAnn.node
-  aggs' <- traverse (liftAggregate modName scope) headNode.aggregates
+  let scope = ruleScope rule
+      modName = ruleModName rule.head.node
+  guards' <- traverse (liftGuard modName scope) rule.guard.node
+  body' <- traverse (liftBodyGoal modName scope) rule.body.node
+  aggs' <- traverse (liftAggregate modName scope) rule.head.node.aggregates
   pure
     rule
-      { D.head = headAnn {node = headNode {D.aggregates = aggs'}},
-        D.guard = guardAnn {node = guards'},
-        D.body = bodyAnn {node = body'}
+      { D.head = rule.head {node = rule.head.node {D.aggregates = aggs'}},
+        D.guard = rule.guard {node = guards'},
+        D.body = rule.body {node = body'}
       }
 
 -- | Lift lambdas in one aggregate. Its three expression positions see

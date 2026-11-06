@@ -6,6 +6,12 @@
   a `quote(...)` wrapper in its value. It now prints the same as
   one bound with `is`.
 
+The MicroHs pin moves to upstream `c98846b1`. It parses a record
+update after a field selection and gives `Data.List.elem` its
+`infix 4` fixity, so the workarounds for both are gone. Under MicroHs,
+`ychr compile -d` into a path that cannot be created now names the
+directory that failed, as under GHC.
+
 - **Breaking:** a type named `,` (`:- chr_type ','(A, B) ---> foo.`)
   is now `YCHR-20016`, like `fun` and `->`. It used to be accepted,
   but `','(int, int)` in a type is `YCHR-15030`, so it was unusable.
