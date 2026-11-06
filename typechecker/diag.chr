@@ -119,7 +119,11 @@ bump_unit(unit(U)) -> unit(U + 1).
 %   * the label to render;
 %   * the source position;
 %   * the evidence level and check mode.
-:- chr_type ctx ---> ctx(unit_id, diag_origin, diag_label, loc, ev_level).
+:- chr_type ctx ---> ctx(unit :: unit_id,
+                         origin :: diag_origin,
+                         label :: diag_label,
+                         loc :: loc,
+                         level :: ev_level).
 
 :- function ctx_level(ctx) -> list(int).
 ctx_level(ctx(_, _, _, _, lvl(L, _))) -> L.
@@ -135,7 +139,7 @@ ctx_in_function(_) -> false.
 
 % The same context at another level and mode.
 :- function ctx_at(ctx, list(int), check_mode) -> ctx.
-ctx_at(ctx(U, O, Lb, Loc, _), L, M) -> ctx(U, O, Lb, Loc, lvl(L, M)).
+ctx_at(C, L, M) -> set_field(level, C, lvl(L, M)).
 
 % `level_within(K, L)`: `L` is `K` or a level inside it.
 :- function level_within(list(int), list(int)) -> bool.

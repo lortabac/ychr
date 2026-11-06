@@ -47,10 +47,10 @@
 % context its emissions are attributed to. The program-wide environment
 % rides along so that a walker constraint takes one argument instead of
 % two.
-:- chr_type scope ---> scope(tc_env,
-                             list(pair(any, ty)),
-                             list(pair(amb_key, list(fun_sig_t))),
-                             ctx).
+:- chr_type scope ---> scope(env :: tc_env,
+                             vars :: list(pair(any, ty)),
+                             ambs :: list(pair(amb_key, list(fun_sig_t))),
+                             ctx :: ctx).
 
 % Which kind of position a constructor application's fields are
 % recursed into as (docs/reference/type-system.md §Expression Typing:
@@ -73,26 +73,11 @@
 % declaration path. Mirrors `MatchState`.
 :- chr_type match_state ---> match_state(any, list(ty)).
 
-:- function scope_env(scope) -> tc_env.
-scope_env(scope(Env, _, _, _)) -> Env.
-
 :- function scope_cons(scope) -> con_env.
-scope_cons(S) -> env_cons(scope_env(S)).
-
-:- function scope_ctx(scope) -> ctx.
-scope_ctx(scope(_, _, _, C)) -> C.
+scope_cons(S) -> get_field(cons, get_field(env, S)).
 
 :- function scope_level(scope) -> list(int).
-scope_level(S) -> ctx_level(scope_ctx(S)).
-
-:- function scope_vars(scope) -> list(pair(any, ty)).
-scope_vars(scope(_, Vars, _, _)) -> Vars.
-
-:- function scope_ambs(scope) -> list(pair(amb_key, list(fun_sig_t))).
-scope_ambs(scope(_, _, Amb, _)) -> Amb.
-
-:- function scope_with_ambs(scope, list(pair(amb_key, list(fun_sig_t)))) -> scope.
-scope_with_ambs(scope(Env, Vars, _, C), Amb) -> scope(Env, Vars, Amb, C).
+scope_level(S) -> ctx_level(get_field(ctx, S)).
 
 % A source variable's pre-allocated type slot. `collect_vars_rule` walks
 % the same nodes this walk visits, so every variable has one; a miss
@@ -105,7 +90,7 @@ scope_with_ambs(scope(Env, Vars, _, C), Amb) -> scope(Env, Vars, Amb, C).
 % The lookup is linear, so a unit's checking cost is quadratic in its
 % distinct variables; see the note in `skel.chr`'s header.
 :- function scope_var_ty(scope, any) -> ty.
-scope_var_ty(scope(_, Vars, _, _), V) -> slot_or_any(assoc_get(V, Vars)).
+scope_var_ty(S, V) -> slot_or_any(assoc_get(V, get_field(scope::vars, S))).
 
 :- function slot_or_any(maybe(ty)) -> ty.
 slot_or_any(just(T)) -> T.
@@ -117,11 +102,11 @@ slot_or_any(nothing) -> ty_any.
 % enclosing variable's type nor leak their own back out, and a
 % function-body `is`, which rebinds its variable to a fresh slot.
 :- function scope_shadow(scope, list(pair(any, ty))) -> scope.
-scope_shadow(scope(Env, Vars, Amb, C), New) -> scope(Env, append(New, Vars), Amb, C).
+scope_shadow(S, New) -> set_field(scope::vars, S, append(New, get_field(scope::vars, S))).
 
 % The ambient signatures visible for one `(name, arity)` in this scope.
 :- function scope_ambient(scope, amb_key) -> list(fun_sig_t).
-scope_ambient(scope(_, _, Amb, _), Key) -> from_maybe([], assoc_get(Key, Amb)).
+scope_ambient(S, Key) -> from_maybe([], assoc_get(Key, get_field(ambs, S))).
 
 % ---------------------------------------------------------------------
 % Source types to solver types
@@ -324,11 +309,13 @@ encode_sigs_cons @
     build_td_con_facts(type_def, list(data_con), list(decl_fact)).
 
 tell_decls1 @
-    tell_decls(_, program(_, Funs, ConTypes, ConBounds, Tds, _), Out) <=>
-    build_constraint_facts(ConTypes, ConBounds, ConFacts),
-    build_function_facts(Funs, FunFacts),
-    build_con_facts(Tds, CtorFacts),
-    DetFacts is maplist(fun(N) -> df_determining(N) end, determining_types(Tds)),
+    tell_decls(_, P, Out) <=>
+    build_constraint_facts(get_field(program::con_types, P), get_field(program::con_bounds, P),
+                           ConFacts),
+    build_function_facts(get_field(funs, P), FunFacts),
+    build_con_facts(get_field(type_defs, P), CtorFacts),
+    DetFacts is maplist(fun(N) -> df_determining(N) end,
+                        determining_types(get_field(type_defs, P))),
     Facts is append(ConFacts, append(FunFacts, append(CtorFacts, DetFacts))),
     tell_facts(Facts),
     Out = Facts.
@@ -503,20 +490,14 @@ walk_program1 @
     walk_program(Env, P, Facts) <=>
     new_decl_rigid_supply(0),
     new_scope_supply(0),
-    walk_rules_from(Env, P, Facts, program_rules(P)).
+    walk_rules_from(Env, P, Facts, get_field(rules, P)).
 
 % The rule list is handed on rather than recomputed: there is no `let`,
 % so a value two goals need becomes a helper's parameter.
 walk_rules_from1 @
     walk_rules_from(Env, P, Facts, Rules) <=>
     walk_rules(Env, Rules, 0),
-    walk_funs(Env, Facts, program_funs(P), length(Rules)).
-
-:- function program_rules(program) -> list(rule).
-program_rules(program(Rules, _, _, _, _, _)) -> Rules.
-
-:- function program_funs(program) -> list(fun_def).
-program_funs(program(_, Funs, _, _, _, _)) -> Funs.
+    walk_funs(Env, Facts, get_field(funs, P), length(Rules)).
 
 walk_rules_nil @
     walk_rules(_, [], _) <=> true.
@@ -555,10 +536,10 @@ walk_rule1 @
     check_guards(scope(Env, VarTypes, Amb, GuardCtx), scope(Env, VarTypes, Amb, HeadCtx),
                  hnf_guards(Guards), []),
     aggs_check(scope(Env, VarTypes, Amb, HeadCtx), Aggs, AggsEnd),
-    check_guards(scope(Env, VarTypes, scope_ambs(AggsEnd), GuardCtx),
-                 scope(Env, VarTypes, scope_ambs(AggsEnd), HeadCtx),
+    check_guards(scope(Env, VarTypes, get_field(ambs, AggsEnd), GuardCtx),
+                 scope(Env, VarTypes, get_field(ambs, AggsEnd), HeadCtx),
                  user_guards(Guards), []),
-    check_body_goals(scope(Env, VarTypes, scope_ambs(AggsEnd),
+    check_body_goals(scope(Env, VarTypes, get_field(ambs, AggsEnd),
                            ctx(unit(Unit), origin_ann(BAnn), Label, BLoc, lvl([], mode_rule))),
                      Body).
 
@@ -605,14 +586,14 @@ head_cons_check_cons @
 % two skolems.
 head_con_check1 @
     head_con_check(S, head_con(N, Args), AmbIn, Out) <=>
-    DeclTys is env_constraint_types(scope_env(S), con_key(N, length(Args))),
-    Bounds is env_constraint_bounds(scope_env(S), con_key(N, length(Args))),
+    DeclTys is env_constraint_types(get_field(env, S), con_key(N, length(Args))),
+    Bounds is env_constraint_bounds(get_field(env, S), con_key(N, length(Args))),
     alloc_rigid_tvars(scope_level(S),
                       sort_unique_tvars(append(collect_ty_vars(DeclTys),
                                                bound_sigs_vars(Bounds))),
                       TVars),
     type_of_head_args(S, Args, ArgTys),
-    unify_zip(ArgTys, encode_tys(TVars, DeclTys), scope_ctx(S)),
+    unify_zip(ArgTys, encode_tys(TVars, DeclTys), get_field(ctx, S)),
     Out is add_ambients(AmbIn, Bounds, TVars).
 
 type_of_head_args_nil @
@@ -725,19 +706,19 @@ agg_check_plain @
     agg_check(S, agg_e(agg_plain, just(Agg), Elem, Goal, Shared, Locals, Binds,
                        just(agg_res(RV, RGuards))), Out) <=>
     type_of_expr(S, Agg, AggTy),
-    agg_shape(AggTy, _, E, R, scope_ctx(S)),
+    agg_shape(AggTy, _, E, R, get_field(ctx, S)),
     child_level(scope_level(S), Level),
-    agg_scope(S, Level, inner_mode(scope_ctx(S)), Goal,
+    agg_scope(S, Level, inner_mode(get_field(ctx, S)), Goal,
               append(Locals, goal_copies(Shared, Goal)), Inner),
     goal_conjs_check(Inner, Goal, glinks(S, link_one_way, goal_copies(Shared, Goal)),
                      InnerEnd, Later),
     link_copies(S, Inner, Later, link_one_way),
     type_of_expr(InnerEnd, Elem, ElemTy),
-    check_unify(ElemTy, E, scope_ctx(Inner)),
+    check_unify(ElemTy, E, get_field(ctx, Inner)),
     agg_result_check(S, RV, RGuards, R),
     escape_check(scope_level(S),
                  [E, R | maplist(fun(B) -> scope_var_ty(S, B) end, Binds)],
-                 scope_ctx(S)),
+                 get_field(ctx, S)),
     Out = S.
 
 % A selection. The first check binds the names it shows to the rule;
@@ -748,7 +729,7 @@ agg_check_plain @
 % selection, as a head's are: it fires with one match.
 agg_check_select @
     agg_check(S, agg_e(Kind, nothing, Key, Goal, Shared, Locals, Binds, nothing), Out) <=>
-    agg_scope(S, scope_level(S), ctx_mode(scope_ctx(S)), Goal,
+    agg_scope(S, scope_level(S), ctx_mode(get_field(ctx, S)), Goal,
               append(Locals, goal_copies(Shared, Goal)), Head),
     goal_conjs_check(Head, Goal, glinks(S, link_two_way, goal_copies(Shared, Goal)),
                      HeadEnd, HeadLater),
@@ -759,13 +740,11 @@ agg_check_select @
     goal_conjs_check(Copy, Goal, glinks(S, link_one_way, goal_copies(Shared, Goal)),
                      CopyEnd, CopyLater),
     link_copies(S, Copy, CopyLater, link_one_way),
-    type_of_expr(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(CopyEnd),
-                       key_ctx(S, CopyLevel)),
-                 Key, KeyTy),
-    emit_function_call(scope(scope_env(S), scope_vars(CopyEnd), scope_ambs(S),
+    type_of_expr(set_field(ctx, CopyEnd, key_ctx(S, CopyLevel)), Key, KeyTy),
+    emit_function_call(scope(get_field(env, S), get_field(scope::vars, CopyEnd), get_field(ambs, S),
                              key_ctx(S, CopyLevel)),
                        key_comparison(Kind), [KeyTy, KeyTy], _),
-    Out is scope_with_ambs(S, scope_ambs(HeadEnd)).
+    Out is set_field(ambs, S, get_field(ambs, HeadEnd)).
 
 % `Agg : aggregator(W, E, R)`, at fresh flexible `W`, `E` and `R`.
 agg_shape1 @
@@ -775,7 +754,7 @@ agg_shape1 @
 % The key is typed only in the second check, so it reports there, in
 % the caller's mode, at the second check's level.
 :- function key_ctx(scope, list(int)) -> ctx.
-key_ctx(S, L) -> ctx_at(scope_ctx(S), L, ctx_mode(scope_ctx(S))).
+key_ctx(S, L) -> ctx_at(get_field(ctx, S), L, ctx_mode(get_field(ctx, S))).
 
 % A fresh level inside `P`. The ids only need to differ, so one counter
 % per check is enough.
@@ -825,11 +804,10 @@ getarg_targets([_|Gs]) -> getarg_targets(Gs).
 agg_scope1 @
     agg_scope(S, Level, Mode, Goal, Names, Out) <=>
     alloc_var_types(Names,
-                    head_var_skeletons(scope_env(S), goal_skel_cons(Goal),
+                    head_var_skeletons(get_field(env, S), goal_skel_cons(Goal),
                                        goal_skel_guards(Goal)),
                     Slots),
-    Out is scope(scope_env(S), append(Slots, scope_vars(S)), scope_ambs(S),
-                 ctx_at(scope_ctx(S), Level, Mode)).
+    Out is set_field(ctx, scope_shadow(S, Slots), ctx_at(get_field(ctx, S), Level, Mode)).
 
 % The goal's conjuncts, left to right. A constraint is checked like a
 % head occurrence, at the goal's level, and its bounds become ambient in
@@ -843,12 +821,12 @@ goal_conjs_nil @
 
 goal_conjs_con @
     goal_conjs_check(S, [agg_con(HC, Guards)|Cs], glinks(O, K, P), Out, Later) <=>
-    head_con_check(S, HC, scope_ambs(S), Amb),
+    head_con_check(S, HC, get_field(ambs, S), Amb),
     check_guards(S, S, Guards, []),
     Now is filter(fun(V) -> member(V, conj_bound_names(agg_con(HC, Guards))) end, P),
     Wait is filter(fun(V) -> not(solid_outer(O, V)) end, Now),
     link_copies(O, S, filter(fun(V) -> not(member(V, Wait)) end, Now), K),
-    goal_conjs_check(scope_with_ambs(S, Amb), Cs,
+    goal_conjs_check(set_field(ambs, S, Amb), Cs,
                      glinks(O, K, filter(fun(V) -> not(member(V, Now)) end, P)),
                      Out, Rest),
     Later is append(Wait, Rest).
@@ -881,12 +859,12 @@ link_copies_nil @
 
 link_copies_one_way @
     link_copies(Outer, Inner, [V|Vs], link_one_way) <=>
-    link_unify(scope_var_ty(Outer, V), scope_var_ty(Inner, V), ev_top, scope_ctx(Inner)),
+    link_unify(scope_var_ty(Outer, V), scope_var_ty(Inner, V), ev_top, get_field(ctx, Inner)),
     link_copies(Outer, Inner, Vs, link_one_way).
 
 link_copies_two_way @
     link_copies(Outer, Inner, [V|Vs], link_two_way) <=>
-    eq_unify(scope_var_ty(Outer, V), scope_var_ty(Inner, V), ev_top, scope_ctx(Inner)),
+    eq_unify(scope_var_ty(Outer, V), scope_var_ty(Inner, V), ev_top, get_field(ctx, Inner)),
     link_copies(Outer, Inner, Vs, link_two_way).
 
 :- function solid_outer(scope, any) -> bool.
@@ -909,7 +887,7 @@ links_ordered(S, Vs) -> not(any(fun(V) -> solid_outer(S, V) end, Vs)).
 agg_result_check1 @
     agg_result_check(S, RV, RGuards, R) <=>
     scope_fresh(S, unscoped(S, [RV | collect_vars_guards(RGuards)]), S2),
-    check_unify(scope_var_ty(S2, RV), R, scope_ctx(S2)),
+    check_unify(scope_var_ty(S2, RV), R, get_field(ctx, S2)),
     check_guards(S2, S2, RGuards, []).
 
 scope_fresh1 @
@@ -919,7 +897,7 @@ scope_fresh1 @
 
 :- function unscoped(scope, list(any)) -> list(any).
 unscoped(S, Vs) ->
-    distinct(filter(fun(V) -> not(assoc_member(V, scope_vars(S))) end, Vs)).
+    distinct(filter(fun(V) -> not(assoc_member(V, get_field(scope::vars, S))) end, Vs)).
 
 % ---------------------------------------------------------------------
 % Guards
@@ -968,7 +946,7 @@ check_guard_equal @
     check_guard(_, SynthS, guard_equal(E1, E2), M, MOut) <=>
     type_of_expr_struct(SynthS, E1, T1),
     type_of_expr_struct(SynthS, E2, T2),
-    eq_unify(T1, T2, ev_top, scope_ctx(SynthS)),
+    eq_unify(T1, T2, ev_top, get_field(ctx, SynthS)),
     MOut = M.
 
 check_guard_match_g @
@@ -986,7 +964,7 @@ check_guard_getarg_g @
 check_guard_expr_g @
     check_guard(UserS, _, guard_expr(E), M, MOut) <=>
     type_of_expr(UserS, E, T),
-    check_guard_bool(T, scope_ctx(UserS)),
+    check_guard_bool(T, get_field(ctx, UserS)),
     tell_refinement_evidence(UserS, E),
     MOut = M.
 
@@ -1003,7 +981,7 @@ check_match_known @
     fresh_slots(Arity, FieldSlots),
     make_decl_rigids(scope_level(SynthS), parent_type_arity(scope_cons(SynthS), Con),
                      Betas),
-    check_guard_match(OperandTy, Con, Betas, FieldSlots, scope_ctx(SynthS)),
+    check_guard_match(OperandTy, Con, Betas, FieldSlots, get_field(ctx, SynthS)),
     MOut is record_match(guard_operand_var(Operand), match_state(Con, FieldSlots), M).
 
 % An undeclared constructor, or one at the wrong arity: nothing is
@@ -1036,7 +1014,7 @@ getarg_scrutinee1 @
 % extraction at a rigid scrutinee.
 getarg_slot_matched @
     getarg_slot(SynthS, V, _, _, _, just(Slot)) <=>
-    check_unify(scope_var_ty(SynthS, V), Slot, scope_ctx(SynthS)).
+    check_unify(scope_var_ty(SynthS, V), Slot, get_field(ctx, SynthS)).
 
 getarg_slot_unmatched @
     getarg_slot(SynthS, V, Operand, Idx, Scrut, nothing) <=>
@@ -1049,7 +1027,7 @@ getarg_declared_within @
     getarg_declared(SynthS, V, Operand, Idx, Con) <=>
     within_con_arity(scope_cons(SynthS), Con, Idx) |
     type_of_expr(SynthS, Operand, OperandTy),
-    check_guard_getarg(scope_var_ty(SynthS, V), OperandTy, Con, Idx, scope_ctx(SynthS)).
+    check_guard_getarg(scope_var_ty(SynthS, V), OperandTy, Con, Idx, get_field(ctx, SynthS)).
 
 getarg_declared_beyond @
     getarg_declared(_, _, _, _, _) <=> true.
@@ -1082,7 +1060,7 @@ idx_within(Idx, just(Info)) -> Idx < con_arity(Info).
 % program's declared refinements.
 tell_refinement_evidence_call @
     tell_refinement_evidence(S, call_e(N, [var_e(V)])) <=>
-    tell_refinement_fact(S, V, env_refinement(scope_env(S), N)).
+    tell_refinement_fact(S, V, env_refinement(get_field(env, S), N)).
 
 tell_refinement_evidence_other @
     tell_refinement_evidence(_, _) <=> true.
@@ -1104,7 +1082,7 @@ tell_refinement_fact_some @
     tell_refinement_fact(S, V, just(TE)) <=>
     alloc_flex_tvars(sort_unique_tvars(collect_ty_vars_expr(TE)), TVars),
     ev_unify(encode_ty(TVars, TE), scope_var_ty(S, V), ev_top,
-             scope_ctx(S)).
+             get_field(ctx, S)).
 
 % ---------------------------------------------------------------------
 % Body goals
@@ -1144,7 +1122,7 @@ check_body_unify @
     check_body_goal(S, body_unify(E1, E2)) <=>
     type_of_expr_struct(S, E1, T1),
     type_of_expr_struct(S, E2, T2),
-    check_unify(T1, T2, scope_ctx(S)).
+    check_unify(T1, T2, get_field(ctx, S)).
 
 % The RHS is an evaluated position, and its result meets the left-hand
 % variable's slot through the ordinary meet table. `is` has no special
@@ -1152,7 +1130,7 @@ check_body_unify @
 check_body_is @
     check_body_goal(S, body_is(V, E)) <=>
     type_of_expr(S, E, T),
-    check_unify(scope_var_ty(S, V), T, scope_ctx(S)).
+    check_unify(scope_var_ty(S, V), T, get_field(ctx, S)).
 
 check_body_call @
     check_body_goal(S, body_call(N, Args)) <=>
@@ -1195,9 +1173,9 @@ check_body_branches_cons @
 emit_constraint_use1 @
     emit_constraint_use(S, N, ArgTys) <=>
     build_bound_cands(S,
-                      env_constraint_bounds(scope_env(S), con_key(N, length(ArgTys))),
+                      env_constraint_bounds(get_field(env, S), con_key(N, length(ArgTys))),
                       Cands),
-    check_constraint_use(N, length(ArgTys), Cands, ArgTys, scope_ctx(S)).
+    check_constraint_use(N, length(ArgTys), Cands, ArgTys, get_field(ctx, S)).
 
 % ---------------------------------------------------------------------
 % Expression typing
@@ -1376,7 +1354,7 @@ type_of_ctor_declared @
     type_of_ctor_known(S, Pos, Con, Args, Out) <=>
     known_con_with_arity(scope_cons(S), Con, length(Args)) |
     type_of_exprs_at(S, Pos, Args, ArgTys),
-    check_constructor_use(Con, ArgTys, Out, scope_ctx(S)).
+    check_constructor_use(Con, ArgTys, Out, get_field(ctx, S)).
 
 type_of_ctor_unknown @
     type_of_ctor_known(S, Pos, _, Args, Out) <=>
@@ -1427,7 +1405,7 @@ alloc_lambda_params_wild @
 emit_function_call1 @
     emit_function_call(S, N, ArgTys, RetTy) <=>
     build_bound_cands(S,
-                      env_function_bounds(scope_env(S), amb_key(N, length(ArgTys))),
+                      env_function_bounds(get_field(env, S), amb_key(N, length(ArgTys))),
                       Cands),
     emit_call_form(S, N, length(ArgTys),
                    scope_ambient(S, amb_key(N, length(ArgTys))),
@@ -1435,11 +1413,11 @@ emit_function_call1 @
 
 emit_call_plain @
     emit_call_form(S, N, A, [], Cands, ArgTys, RetTy) <=>
-    check_function_use(N, A, Cands, ArgTys, RetTy, scope_ctx(S)).
+    check_function_use(N, A, Cands, ArgTys, RetTy, get_field(ctx, S)).
 
 emit_call_ambient @
     emit_call_form(S, N, A, Ambs, Cands, ArgTys, RetTy) <=>
-    check_function_use_with_ambient(N, A, Ambs, Cands, ArgTys, RetTy, scope_ctx(S)).
+    check_function_use_with_ambient(N, A, Ambs, Cands, ArgTys, RetTy, get_field(ctx, S)).
 
 % A `fun name/arity` reference is checked against the expected function
 % type at its use site; for a class referent the return component
@@ -1448,11 +1426,11 @@ emit_call_ambient @
 emit_function_ref1 @
     emit_function_ref(S, N, ArgTys, RetTy) <=>
     build_bound_cands(S,
-                      env_function_bounds(scope_env(S), amb_key(N, length(ArgTys))),
+                      env_function_bounds(get_field(env, S), amb_key(N, length(ArgTys))),
                       Cands),
     check_function_ref(N, length(ArgTys),
                        scope_ambient(S, amb_key(N, length(ArgTys))),
-                       Cands, ArgTys, RetTy, scope_ctx(S)).
+                       Cands, ArgTys, RetTy, get_field(ctx, S)).
 
 % One `bc(ambients, declared)` per bound-named function, keyed on that
 % name and with same-named bounds merged. The discharge rules are pure
@@ -1467,7 +1445,7 @@ bound_cand_entries_nil @
 
 bound_cand_entries_cons @
     bound_cand_entries(S, [bound_sig(N, _, Args, _, _)|Bs], Acc, Out) <=>
-    encode_sigs(env_function_sigs(scope_env(S), N), Decls),
+    encode_sigs(env_function_sigs(get_field(env, S), N), Decls),
     bound_cand_entries(S, Bs,
                        assoc_put_with(fun merge_bc/2, N,
                                       bc(scope_ambient(S,
@@ -1538,10 +1516,10 @@ walk_funs_plain @
     walk_funs(Env, Facts, Fs, Unit + fun_eq_count(F)).
 
 :- function fun_sig_count(fun_def) -> int.
-fun_sig_count(fun_def(_, _, Sigs, _, _)) -> length(Sigs).
+fun_sig_count(F) -> length(get_field(sigs, F)).
 
 :- function fun_eq_count(fun_def) -> int.
-fun_eq_count(fun_def(_, _, _, _, Eqs)) -> length(Eqs).
+fun_eq_count(F) -> length(get_field(eqs, F)).
 
 % The effective single signature. An untyped function checks exactly
 % like its all-`any` spelled-out form, which mentions no type variables
@@ -1577,7 +1555,8 @@ check_equation1 @
     check_equation(Env, FName, fun_sig(ArgTys, RetTy), Bounds,
                    ann(EAnn, ELoc, Eq), Unit) <=>
     alloc_var_types(collect_vars_eq(Eq),
-                    param_var_skeletons(Env, eq_params(Eq), ArgTys, eq_guards(Eq)),
+                    param_var_skeletons(Env, get_field(params, Eq), ArgTys,
+                                        get_field(fun_eq::guards, Eq)),
                     VarTypes),
     alloc_rigid_tvars([],
                       sort_unique_tvars(append(append(collect_ty_vars(ArgTys),
@@ -1588,12 +1567,6 @@ check_equation1 @
                             ctx(unit(Unit), origin_ann(EAnn),
                                 label_function(FName), ELoc, lvl([], mode_rule))),
                       TVars, fun_sig(ArgTys, RetTy), Bounds, Eq).
-
-:- function eq_params(fun_eq) -> list(head_arg).
-eq_params(fun_eq(Params, _, _, _)) -> Params.
-
-:- function eq_guards(fun_eq) -> list(guard).
-eq_guards(fun_eq(_, Guards, _, _)) -> Guards.
 
 % Bounds, then parameters, then guards, then the prelude statements,
 % then the result. The order is the operational one — an equation's
@@ -1609,11 +1582,11 @@ check_equation_at1 @
                       fun_eq(Params, Guards, Prelude, Rhs)) <=>
     tell_equation_bounds(S, TVars, Bounds),
     type_of_head_args(S, Params, ParamTys),
-    unify_zip(ParamTys, encode_tys(TVars, ArgTys), scope_ctx(S)),
+    unify_zip(ParamTys, encode_tys(TVars, ArgTys), get_field(ctx, S)),
     check_guards(S, S, Guards, []),
     check_fun_stmts(S, Prelude, S2),
     type_of_expr(S2, Rhs, RhsTy),
-    check_unify(RhsTy, encode_ty(TVars, RetTy), scope_ctx(S)).
+    check_unify(RhsTy, encode_ty(TVars, RetTy), get_field(ctx, S)).
 
 tell_equation_bounds_nil @
     tell_equation_bounds(_, _, []) <=> true.
@@ -1632,9 +1605,9 @@ tell_equation_bounds_nil @
 % that stops being self-satisfying should start failing here.
 tell_equation_bounds_cons @
     tell_equation_bounds(S, TVars, [bound_sig(N, _, Args, Ret, _)|Bs]) <=>
-    encode_sigs(env_function_sigs(scope_env(S), N), Decls),
+    encode_sigs(env_function_sigs(get_field(env, S), N), Decls),
     check_bound(N, scope_ambient(S, amb_key(N, length(Args))), Decls,
-                encode_tys(TVars, Args), encode_ty(TVars, Ret), scope_ctx(S)),
+                encode_tys(TVars, Args), encode_ty(TVars, Ret), get_field(ctx, S)),
     tell_equation_bounds(S, TVars, Bs).
 
 % --- Prelude statements ---------------------------------------------
@@ -1674,7 +1647,7 @@ fun_is_bind_any @
 % a top-level argument of a tell introduces a variable.
 fun_is_bind_fresh @
     fun_is_bind(S, V, T, Out) <=>
-    check_unify(NewSlot, T, scope_ctx(S)),
+    check_unify(NewSlot, T, get_field(ctx, S)),
     Out is scope_shadow(S, [pair(V, NewSlot)]).
 
 check_fun_stmt_host @

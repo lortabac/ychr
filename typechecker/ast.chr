@@ -136,8 +136,14 @@
 % the binder fields Desugar computed — the shared names, the locals, the
 % names it binds — and the result pattern in head normal form (absent
 % for a selection).
-:- chr_type agg_e ---> agg_e(agg_kind, maybe(expr), expr, list(agg_conj),
-                             list(any), list(any), list(any), maybe(agg_res)).
+:- chr_type agg_e ---> agg_e(kind :: agg_kind,
+                             agg :: maybe(expr),
+                             elem :: expr,
+                             goal :: list(agg_conj),
+                             shared :: list(any),
+                             locals :: list(any),
+                             binds :: list(any),
+                             result :: maybe(agg_res)).
 
 % A goal conjunct, `YCHR.Internal.Desugared.AggregateConjunct`: a
 % constraint with its own HNF guards, a nested aggregate, or a `?` guard.
@@ -212,10 +218,10 @@
 % A rule, `YCHR.Internal.Desugared.Rule`. The name is absent for an
 % unnamed rule; it is a string rather than an atom because it is only
 % ever rendered, never compared against a runtime name.
-:- chr_type rule ---> rule(maybe(string),
-                           ann(rule_head),
-                           ann(list(guard)),
-                           ann(list(body_goal))).
+:- chr_type rule ---> rule(name :: maybe(string),
+                           head :: ann(rule_head),
+                           guards :: ann(list(guard)),
+                           body :: ann(list(body_goal))).
 
 % One declared signature of a function: argument types and return type.
 :- chr_type fun_sig ---> fun_sig(list(ty_expr), ty_expr).
@@ -223,11 +229,18 @@
 % A required signature from a `requiring` clause,
 % `YCHR.Internal.Types.BoundSig`: the bound function's name, its arity,
 % the argument types, the return type, and the clause's own location.
-:- chr_type bound_sig ---> bound_sig(any, int, list(ty_expr), ty_expr, loc).
+:- chr_type bound_sig ---> bound_sig(name :: any,
+                                     arity :: int,
+                                     args :: list(ty_expr),
+                                     ret :: ty_expr,
+                                     loc :: loc).
 
 % A function equation, `YCHR.Internal.Desugared.Equation`: post-HNF
 % parameters, guards, prelude statements, and the result expression.
-:- chr_type fun_eq ---> fun_eq(list(head_arg), list(guard), list(fun_stmt), expr).
+:- chr_type fun_eq ---> fun_eq(params :: list(head_arg),
+                               guards :: list(guard),
+                               prelude :: list(fun_stmt),
+                               rhs :: expr).
 
 % A function, `YCHR.Internal.Desugared.Function`: name, arity, declared
 % signatures (more than one means a class function), `requiring`
@@ -235,7 +248,11 @@
 % its origin id and source location — so a diagnostic about an equation
 % contributed by another module's `:- extend_function` can point at that
 % extension site rather than at the owning declaration.
-:- chr_type fun_def ---> fun_def(any, int, list(fun_sig), list(bound_sig), list(ann(fun_eq))).
+:- chr_type fun_def ---> fun_def(name :: any,
+                                 arity :: int,
+                                 sigs :: list(fun_sig),
+                                 bounds :: list(bound_sig),
+                                 eqs :: list(ann(fun_eq))).
 
 % A data constructor of an algebraic type,
 % `YCHR.Internal.Types.DataConstructor`.
@@ -249,7 +266,10 @@
 
 % A type declaration, `YCHR.Internal.Types.TypeDefinition`: name, type
 % parameter names, kind, and location.
-:- chr_type type_def ---> type_def(type_name, list(string), type_kind, loc).
+:- chr_type type_def ---> type_def(name :: type_name,
+                                   vars :: list(string),
+                                   kind :: type_kind,
+                                   loc :: loc).
 
 % The key of the per-constraint declaration maps,
 % `YCHR.Internal.Types.ConstraintKey`. Constraints are
@@ -269,9 +289,9 @@
 % has sixteen, and the environment passes the list through without
 % walking it. The cost is the name-only key, whose soundness rests on
 % the unary-only rule `Resolve` enforces.
-:- chr_type program ---> program(list(rule),
-                                 list(fun_def),
-                                 list(pair(con_key, list(ty_expr))),
-                                 list(pair(con_key, list(bound_sig))),
-                                 list(type_def),
-                                 list(pair(any, ty_expr))).
+:- chr_type program ---> program(rules :: list(rule),
+                                 funs :: list(fun_def),
+                                 con_types :: list(pair(con_key, list(ty_expr))),
+                                 con_bounds :: list(pair(con_key, list(bound_sig))),
+                                 type_defs :: list(type_def),
+                                 refinements :: list(pair(any, ty_expr))).
