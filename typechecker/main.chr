@@ -54,7 +54,7 @@ check_program(Program, Errors, Warnings) <=>
     solving_done,
     collect_errors(SolverErrors),
     collect_warnings(SolverWarnings),
-    AllErrors is append(program_errors(env_cons(Env), Program), SolverErrors),
+    AllErrors is append(program_errors(get_field(cons, Env), Program), SolverErrors),
     Errors = AllErrors,
     Warnings is suppress_warnings(AllErrors, SolverWarnings).
 
@@ -70,7 +70,7 @@ check_goals(Program, Goals, Loc, Label, Errors, Warnings) <=>
     walk_goals(Env, Goals, Loc, Label),
     collect_errors(SolverErrors),
     collect_warnings(SolverWarnings),
-    AllErrors is append(goals_arity_errors(env_cons(Env), Goals, Label, Loc),
+    AllErrors is append(goals_arity_errors(get_field(cons, Env), Goals, Label, Loc),
                         SolverErrors),
     Errors = AllErrors,
     Warnings is suppress_warnings(AllErrors, SolverWarnings).

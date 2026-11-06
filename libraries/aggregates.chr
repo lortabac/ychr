@@ -67,10 +67,12 @@
 :- use_module(library(pairs)).
 
 % The working-value constructor. `aggregator(Init, Inc, Final)` is what an
-% `Agg` expression evaluates to; the compiler reads the three fields with
-% `get-arg`.
+% `Agg` expression evaluates to; the compiler reads the three fields by
+% position, with `get-arg`.
 :- chr_type aggregator(W, E, R) --->
-       aggregator(W, fun(W, E) -> W end, fun(W) -> maybe(R) end).
+       aggregator(init :: W,
+                  inc :: fun(W, E) -> W end,
+                  final :: fun(W) -> maybe(R) end).
 
 :- function
     (count_spec() -> aggregator(int, A, int)),

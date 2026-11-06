@@ -87,8 +87,14 @@ type `E`, working values of type `W` and results of type `R`:
 
 ```prolog
 :- chr_type aggregator(W, E, R) --->
-       aggregator(W, fun(W, E) -> W end, fun(W) -> maybe(R) end).
+       aggregator(init :: W,
+                  inc :: fun(W, E) -> W end,
+                  final :: fun(W) -> maybe(R) end).
 ```
+
+The fields are labelled, so an aggregator can also be built with
+`new_record(aggregates:aggregator, [init = ..., inc = ..., final = ...])`
+(see [Labelled fields](language.md#labelled-fields)).
 
 `Agg` has type `aggregator(W, E, R)`, `Element` type `E` and `Result`
 type `R`. The selection key must be comparable with `<` (or `>` for

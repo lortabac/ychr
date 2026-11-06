@@ -21,7 +21,7 @@
 % The constructor is `pair/2`, like the type. Not Prolog's `-/2`: `-`
 % is the prelude's subtraction, and a bare name that is a function in
 % one module and a constructor in another is rejected (YCHR-20020).
-:- chr_type pair(K, V) ---> pair(K, V).
+:- chr_type pair(K, V) ---> pair(key :: K, value :: V).
 
 :- function
     (key(pair(K, V)) -> K),

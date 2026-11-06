@@ -31,8 +31,8 @@
 % needs the same one, and building it twice is the expensive half of
 % this module.
 :- function program_errors(con_env, program) -> list(error).
-program_errors(Env, program(Rules, Funs, _, _, Tds, _)) ->
-    all_errors(Env, Rules, Funs, Tds).
+program_errors(Env, P) ->
+    all_errors(Env, get_field(rules, P), get_field(funs, P), get_field(type_defs, P)).
 
 % Units are numbered by position: rule `i` is unit `i`, and the
 % equations of the plain functions continue from there. The absolute
@@ -73,10 +73,10 @@ validate_fields(Td, Dc, Ts, All) ->
 
 :- function validate_field(type_def, data_con, ty_expr, list(type_def)) -> list(error).
 % A type variable must be one of the enclosing declaration's parameters.
-validate_field(Td, _, tvar(V), _) when member(V, type_def_vars(Td)) -> [].
+validate_field(Td, _, tvar(V), _) when member(V, get_field(type_def::vars, Td)) -> [].
 validate_field(Td, Dc, tvar(V), _) ->
     [decl_error(Td, unbound_type_var,
-                unbound_type_var_d(type_def_name(Td), con_name(Dc), V))].
+                unbound_type_var_d(get_field(type_def::name, Td), con_name(Dc), V))].
 % A function type names no declared type at either level, so only the
 % components are validated. The encoder has already recognized the
 % `'->'(fun(...), Ret)` spelling and emitted `tfunx`, so there is no
@@ -115,12 +115,13 @@ sole_arity_error(Td, Dc, N, Args, [Declared]) when not(Declared == length(Args))
     [arity_ref_error(Td, Dc, N, length(Args), Declared)].
 sole_arity_error(Td, Dc, N, _, _) ->
     [decl_error(Td, undefined_type,
-                undefined_type_d(type_def_name(Td), con_name(Dc), N))].
+                undefined_type_d(get_field(type_def::name, Td), con_name(Dc), N))].
 
 :- function arity_ref_error(type_def, data_con, any, int, int) -> error.
 arity_ref_error(Td, Dc, N, UseArity, Declared) ->
     decl_error(Td, type_ref_arity,
-               type_ref_arity_d(type_def_name(Td), con_name(Dc), N, UseArity, Declared)).
+               type_ref_arity_d(get_field(type_def::name, Td), con_name(Dc), N,
+                                UseArity, Declared)).
 
 % The four built-in base types, which have no declaration to find and
 % take no parameters. The comparison is against the whole mangled
@@ -135,7 +136,8 @@ is_base_type(N) ->
 % warnings, and the source echo is the enclosing type's own name.
 :- function decl_error(type_def, error_code, error_detail) -> error.
 decl_error(Td, Code, Detail) ->
-    error(ctx(no_unit, origin_atom(type_def_name(Td)), label_none, type_def_loc(Td),
+    error(ctx(no_unit, origin_atom(get_field(type_def::name, Td)), label_none,
+              get_field(type_def::loc, Td),
               lvl([], mode_rule)),
           Code, Detail).
 
@@ -171,7 +173,8 @@ td_decls(Td, Dcs, Groups) ->
     -> list(pair(any, list(con_decl))).
 td_decl(Td, Groups, Dc) ->
     push_decl(con_name(Dc),
-              con_decl(type_def_name(Td), length(con_args(Dc)), type_def_loc(Td)),
+              con_decl(get_field(type_def::name, Td), length(con_args(Dc)),
+                       get_field(type_def::loc, Td)),
               Groups).
 
 :- function push_decl(any, con_decl, list(pair(any, list(con_decl))))
@@ -295,8 +298,8 @@ funs_arity_errors(Env, [F|Fs], Unit) ->
 
 % Same count-based split as walk.chr's walk_funs_class/walk_funs_plain.
 :- function fun_unit_count(fun_def) -> int.
-fun_unit_count(fun_def(_, _, Sigs, _, _)) when length(Sigs) > 1 -> 0.
-fun_unit_count(fun_def(_, _, _, _, Eqs)) -> length(Eqs).
+fun_unit_count(F) when length(get_field(sigs, F)) > 1 -> 0.
+fun_unit_count(F) -> length(get_field(eqs, F)).
 
 :- function fun_arity_errors(con_env, fun_def, int) -> list(error).
 fun_arity_errors(Env, fun_def(FName, _, Sigs, _, Eqs), _) when length(Sigs) > 1 ->
