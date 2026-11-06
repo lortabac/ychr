@@ -44,16 +44,6 @@ HASKELL_ONLY = {
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
 # some cases in a directory diverge.
 HASKELL_ONLY_CASES = {
-    # The Scheme runtime registers a suspension as an observer of the
-    # variables reachable at *store* time only. The Haskell runtime
-    # additionally transfers a bound variable's observers onto the
-    # variables that binding made reachable, which is what this case
-    # needs: `p(X)` is stored, `X = g(A)` binds X, and only the later
-    # `A = 1` completes the match. The `direct` case in the same
-    # directory runs the same rules without the intermediate binding
-    # and passes on both backends. Remove this entry once the Scheme
-    # runtime's unify does the same transfer.
-    ("reactivation_through_binding", "through_binding"),
     # The binding is a closure. The Haskell printer shows it as
     # `fun(X) -> ... end`; the Scheme one prints the raw
     # `'__closure'(...)` term. The `+` inside is `prelude:` on both,

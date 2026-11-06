@@ -125,6 +125,10 @@
          (trail-observers! d1)
          (var-value-set! d1 d2)
          (var-observers-set! d1 '())
+         ;; Move X's observers onto the unbound vars now reachable
+         ;; through X, like Haskell's `unify'` (Var.hs). Otherwise after
+         ;; X = g(A), a later A = 1 wakes nothing.
+         (for-each (lambda (oid) (add-observer! oid d2)) obs)
          (emit! obs)
          #t))
       ((var? d2)
