@@ -68,16 +68,6 @@ they hit the arity gap above.
 design: the lexer reserves `__`, so no source program can name them.
 
 
-## `read_term_from_string` on an unbound argument
-
-Haskell's `read_term_from_string` (`YCHR.Internal.Meta`) raises a
-general error for any non-text argument, unbound included. The Scheme
-`%read-term-from-string` raises an instantiation error for an unbound
-one, like every other strict Scheme primitive. So
-`p(S) <=> boolean(read_term_from_string(S)) | out(1).` delays on
-`p(Y)` in Scheme and aborts in Haskell. Fixing it means making the
-Haskell side classify the unbound case (`argError`).
-
 ## Numeric primitives accept more than Haskell's
 
 The Scheme numeric primitives succeed on operand combinations the
