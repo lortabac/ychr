@@ -749,8 +749,8 @@
   ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print`,
   ;; `read_term_from_string` and `write_term_to_string`, the reachable
   ;; entries of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`).
-  ;; `name_base` and the unimplemented meta calls are deliberately left
-  ;; out (see dev-docs/SCHEME_BACKEND_GAPS.md), and so are
+  ;; `name_base` is still missing (see
+  ;; dev-docs/SCHEME_BACKEND_GAPS.md). Left out on purpose:
   ;; `print_store` and `write_store_to_list`: their only arity is 0, and
   ;; a nullary `host:` spelling compiles to an atom, so the deep
   ;; evaluator — which dispatches only `term?` values — can never ask
@@ -1359,9 +1359,8 @@
   ;;; compound (`m:c(1)`) and not the mangled `m__c` functor a compiled
   ;;; occurrence of the same spelling carries. The reference makes the
   ;;; same choice, so a value from `write_store_to_list` does not unify
-  ;;; with the equivalent written term on either backend; see
-  ;;; dev-docs/SCHEME_BACKEND_GAPS.md. The name is the caller's, resolved
-  ;;; once per type group the way `suspsOfGroup` resolves it.
+  ;;; with the equivalent written term on either backend. The name is
+  ;;; the caller's, resolved once per type group the way `suspsOfGroup` resolves it.
   (define (constraint-value name susp)
     (let* ((parts (split-mangled-name name))
            (inner (make-term (string->symbol (cdr parts))

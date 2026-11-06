@@ -266,7 +266,7 @@ programInfoBindingName libName = case reverse libName of
 -- user-defined function in the library.
 --
 -- > (define (NAME)
--- >   (let ((%s (%make-session N POSITIONS TABLE TYPES)))
+-- >   (let ((%s (%make-session N POSITIONS TABLE TYPES INERT)))
 -- >     (register-evaluable! %s 'functor1 arity1 proc1)
 -- >     ...
 -- >     (register-callable! %s '/ "prelude:double" 1 proc2)
