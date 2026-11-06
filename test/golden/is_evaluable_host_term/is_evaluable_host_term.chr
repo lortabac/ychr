@@ -1,4 +1,4 @@
-:- module(is_evaluable_host_term, [go/2, user_value/2]).
+:- module(is_evaluable_host_term, [go/2, name_base_term/1, user_value/2]).
 :- use_module(library(prelude)).
 
 % Regression test: `is` on a *bound* compound evaluates it when the
@@ -37,3 +37,12 @@ go(X, R) <=> R is X.
 % arguments are ignored, so the result distinguishes it from the host
 % call it stands in for.
 user_value(_, _) -> 99.
+
+% `=` does not evaluate, so `X` holds the `host:name_base` term and
+% `is` has to dispatch it. Pins `name_base` in the Scheme prelude
+% host-call table. `foo` is qualified as a declared constructor, so
+% this also checks that the module part comes off.
+:- chr_type name_atom ---> foo.
+:- chr_constraint name_base_term(any).
+
+name_base_term(R) <=> X = host:name_base(foo), R is X.

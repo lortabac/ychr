@@ -53,13 +53,11 @@ never as the vmName `host__-/2`. Locked by the Haskell golden cases in
 `test/golden/is_non_evaluable_error/`, and on the Scheme side by
 `scheme/test/test-runtime.scm`'s `host functor deep-eval` group.
 
-## Host calls missing from `*prelude-host-calls*`
+## Host calls left out of `*prelude-host-calls*`
 
-The table should mirror the Haskell registries (`baseHostCallRegistry`
-and the reachable part of `metaHostCallRegistry`). `name_base` is
-missing: `%name-base` exists, but `T = host:name_base(foo), R is T.`
-reports `is: functor is not evaluable: host:name_base/1` where Haskell
-answers `R = foo`.
+The table mirrors the Haskell registries (`baseHostCallRegistry`,
+the reachable part of `metaHostCallRegistry`, and the search
+entries).
 
 `print_store` and `write_store_to_list` are left out on purpose. Their
 only arity is 0, and a nullary `host:` compound is an atom on both
