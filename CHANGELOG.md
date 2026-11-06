@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Breaking:** the `library(pairs)` constructor is now `pair/2`, the
+  same name as its type. It used to be `kv/2`.
+
 - A lambda bound with `=` (`F = fun(X) -> X + 1 end`) no longer keeps
   a `quote(...)` wrapper in its value. It now prints the same as
   one bound with `is`.

@@ -197,7 +197,7 @@ dup_error_for(N, [con_decl(TName, A, L), D2|Ds]) ->
              maplist(fun decl_pair/1, [con_decl(TName, A, L), D2|Ds])))].
 
 :- function decl_pair(con_decl) -> pair(any, int).
-decl_pair(con_decl(TName, A, _)) -> kv(TName, A).
+decl_pair(con_decl(TName, A, _)) -> pair(TName, A).
 
 % Strictly earlier by source position, on `(file, line, col)` — the same
 % key `List.sortOn` uses, and the strict less-than `sort_by` sorts a

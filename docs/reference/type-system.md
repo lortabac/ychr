@@ -626,7 +626,7 @@ A parametric algebraic type `D` is *determining* when every
 constructor keeps every parameter: for each constructor and each
 parameter `A`, some field *witnesses* `A`. A field type witnesses `A`
 when it is `A`, or `E(τ₁, ..., τₘ)` with `E` determining and some `τᵢ`
-witnessing `A`. So `box(A) ---> box(A)` and `pair(K, V) ---> kv(K, V)`
+witnessing `A`. So `box(A) ---> box(A)` and `pair(K, V) ---> pair(K, V)`
 are determining, a field `pair(A, list(int))` witnesses `A`, and a
 field `list(A)` does not. The definition is read as a greatest
 fixpoint, so a recursive type qualifies too:
@@ -649,7 +649,7 @@ parameters of functions are not restricted.
 ```prolog
 :- use_module(library(pairs)).
 :- chr_constraint box(T), stack(list(T)).
-ok @ go(1) <=> box(1), box(kv(1, "a")), stack([1, 2]).
+ok @ go(1) <=> box(1), box(pair(1, "a")), stack([1, 2]).
 bad @ go(2) <=> box([1, 2]).     % YCHR-60016: T at list(int)
 ```
 

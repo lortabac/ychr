@@ -1,1 +1,1 @@
-R = [pairs:kv(pairs_library:a, 9), pairs:kv(pairs_library:b, 2)]
+R = [pairs:pair(pairs_library:a, 9), pairs:pair(pairs_library:b, 2)]

@@ -19,7 +19,7 @@
 % after Haskell's runState:
 %
 %   run_state(K, V, quote(Goal))     the final value of K
-%   run_states(KVs, quote(Goal))     the final kv(K, V) of each key of KVs
+%   run_states(KVs, quote(Goal))     the final pair(K, V) of each key of KVs
 %
 % The runner creates each key of the run at its initial value, runs the
 % goal and reads the values back, so no key has to be closed by hand. The
@@ -34,14 +34,14 @@
 %
 % A runner dispatches on the key *value*, so a key named in the runner is
 % also a data constructor: declare `:- chr_type key ---> k ; n.` to write
-% `kv(k, 1)`, as the pairs library's own `kv/2` wants. An integer key
-% (`:- state(1, int).`, `kv(1, V)`) needs no declaration.
+% `pair(k, 1)`, as the pairs library's own `pair/2` wants. An integer key
+% (`:- state(1, int).`, `pair(1, V)`) needs no declaration.
 %
 % The goal's constraints are told with the prelude's `tell_list/1`, so
 % they resolve program-wide by their bare spelling: a generated name must
 % stay unique across the program, and the goal's own constraints must be
 % nameable that way. A dynamically told goal is not type-checked at all:
-% a mistyped `kv(K, V)` is accepted and runs, and only a goal that names
+% a mistyped `pair(K, V)` is accepted and runs, and only a goal that names
 % no constraint is an error. A runtime error propagates, and a run whose
 % goal has no solution is a runtime error too.
 %
@@ -77,15 +77,15 @@
     (get_goal_of(pair(K, any)) -> any),
     (fresh_value(pair(K, any)) -> pair(K, any)),
     (goal_list(any) -> list(any)),
-    (kv_list(any) -> bool),
-    (is_kv(any) -> bool),
+    (pair_list(any) -> bool),
+    (is_pair(any) -> bool),
     (not_initialized() -> any),
     (already_initialized() -> any).
 
-run_state(K, V, G) -> value(head(run_states([kv(K, V)], G))).
+run_state(K, V, G) -> value(head(run_states([pair(K, V)], G))).
 
-run_states(KVs, _) when not(kv_list(KVs)) ->
-    panic("state: run_states expects a list of kv(K, V)").
+run_states(KVs, _) when not(pair_list(KVs)) ->
+    panic("state: run_states expects a list of pair(K, V)").
 run_states(KVs, G) -> run_with(KVs, G, maplist(fun fresh_value/1, KVs)).
 
 run_with(KVs, G, Out) ->
@@ -106,16 +106,16 @@ run_result(true, Out) -> Out.
 run_result(false, _) ->
     panic("state: the goal of a run has no solution").
 
-fresh_value(kv(K, _)) -> kv(K, _).
+fresh_value(pair(K, _)) -> pair(K, _).
 
 goal_list(G) when is_list(G) -> G.
 goal_list(G) -> [G].
 
-kv_list(L) when is_list(L) -> all(fun is_kv/1, L).
-kv_list(_) -> false.
+pair_list(L) when is_list(L) -> all(fun is_pair/1, L).
+pair_list(_) -> false.
 
-is_kv(kv(_, _)) -> true.
-is_kv(_) -> false.
+is_pair(pair(_, _)) -> true.
+is_pair(_) -> false.
 
 % The request that failed is a generated name with the key in it, so the
 % message doesn't repeat the key: naming it here would mean passing a

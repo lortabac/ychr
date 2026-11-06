@@ -6,4 +6,4 @@
 
 :- chr_constraint run/1.
 
-run(R) <=> [kv(k, R)] is run_states([kv(k, 1)], quote([])).
+run(R) <=> [pair(k, R)] is run_states([pair(k, 1)], quote([])).

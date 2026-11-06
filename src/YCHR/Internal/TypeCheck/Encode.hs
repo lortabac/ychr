@@ -164,8 +164,8 @@ maybeTerm Nothing = CompoundTerm (Unqualified "maybe__nothing") []
 maybeTerm (Just t) = CompoundTerm (Unqualified "maybe__just") [t]
 
 -- | A @library(pairs)@ association-list entry.
-kvTerm :: Term -> Term -> Term
-kvTerm k v = CompoundTerm (Unqualified "pairs__kv") [k, v]
+pairTerm :: Term -> Term -> Term
+pairTerm k v = CompoundTerm (Unqualified "pairs__pair") [k, v]
 
 intTerm :: (Integral a) => a -> Term
 intTerm = IntTerm . fromIntegral
@@ -212,7 +212,7 @@ program prog = do
           -- name alone: a @refining@ clause is unary-only, so the name
           -- identifies the declaration.
           listTerm
-            [ kvTerm (qnameTerm f.name) (typeExpr t)
+            [ pairTerm (qnameTerm f.name) (typeExpr t)
             | f <- prog.functions,
               Just t <- [f.refining]
             ]
@@ -221,7 +221,7 @@ program prog = do
 
 -- | A @Map ConstraintKey v@ as an assoc list, in ascending key order.
 assocTerm :: (v -> Term) -> Map ConstraintKey v -> Term
-assocTerm f m = listTerm [kvTerm (conKey k) (f v) | (k, v) <- Map.toAscList m]
+assocTerm f m = listTerm [pairTerm (conKey k) (f v) | (k, v) <- Map.toAscList m]
 
 conKey :: ConstraintKey -> Term
 conKey k = ast "con_key" [qnameTerm k.name, intTerm k.arity]
