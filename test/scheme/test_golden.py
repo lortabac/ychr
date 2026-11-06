@@ -560,8 +560,7 @@ def test_gen_driver_nested_goal_var_declaration(ychr_bin, project_root, tmp_path
     `p(1, X)`, today `quote(p(1, X))`) reached the constraint as a free
     identifier and Guile rejected the whole script with
     `Unbound variable: X`. This pins the recursive collection that
-    closed the `type_predicates-grd_no` gap
-    (dev-docs/SCHEME_BACKEND_GAPS.md) without needing Guile.
+    closed the `type_predicates-grd_no` gap without needing Guile.
     """
     program = tmp_path / "gdn.chr"
     program.write_text(
