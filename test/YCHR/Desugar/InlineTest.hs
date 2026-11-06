@@ -171,5 +171,25 @@ tests =
             \inc(X) -> host:'+'(X, 1).\n\
             \:- chr_constraint r/2.\n\
             \r(X, R) <=> R is inc(X).\n"
-        map (.name) prog.functions @?= [qn "inc"]
+        map (.name) prog.functions @?= [qn "inc"],
+      testCase "same name, different arity: two candidates, no cycle" $ do
+        -- Candidates are keyed by name and arity. Keyed by name alone,
+        -- add/1 and add/2 collapse into one entry, so one of them is
+        -- never inlined (or add/1's call to add/2 reads as a self-call).
+        prog <-
+          inlinedProgram
+            "\
+            \:- module(m, []).\n\
+            \:- function add/1.\n\
+            \:- function add/2.\n\
+            \:- inline add/1, add/2.\n\
+            \add(X) -> add(X, 1).\n\
+            \add(X, Y) -> host:'+'(X, Y).\n\
+            \:- chr_constraint r/2.\n\
+            \r(X, R) <=> R is add(X).\n"
+        case prog.rules of
+          [r] ->
+            r.body.node
+              @?= [D.BodyIs "R" (R.HostExpr "+" [R.VarExpr "X", R.IntExpr 1])]
+          rs -> assertFailure ("expected 1 rule, got " ++ show (length rs))
     ]

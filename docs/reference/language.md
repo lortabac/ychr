@@ -412,6 +412,8 @@ YCHR-16024) — `:- class` is fine, since overloading is type-level
 only and there is one runtime equation set. Two or more `:- inline`
 functions calling each other, directly or transitively, is
 `InlineCycle`, YCHR-30010: a function with no finite inlined form.
+A function is named by name and arity, so `f/1` calling `f/2` is not
+a cycle.
 
 At a given call, the substitution happens only when it cannot change
 what gets evaluated, when, or how often: an argument that is a
@@ -435,7 +437,9 @@ cost of the hint.
 
 The prelude marks its arithmetic and comparison functions (`+ - * /
 div mod rem < > >= =< == \==`) and its type tests (`var`, `nonvar`,
-`integer`, `float`, `atom`, `boolean`, `string`, `ground`) this way.
+`integer`, `float`, `atom`, `boolean`, `string`, `ground`) this way,
+and `call/2` … `call/11`, so a `call(F, X)` in a higher-order function
+like `maplist` compiles to a direct `'$call'(F, X)`.
 
 ## Expression forms
 

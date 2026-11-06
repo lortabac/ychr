@@ -49,6 +49,7 @@ import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 -- The inline errors are 'DesugarError' constructors, so their codes and
 -- messages live with the other desugar errors.
 import YCHR.Internal.Desugar (DesugarError (..))
@@ -76,7 +77,15 @@ data Candidate = Candidate
     rhs :: R.Expr
   }
 
-type Candidates = Map QualifiedName Candidate
+-- | A function is named by its name and its arity: @call/2@ and
+-- @call/3@ share a name but are different functions.
+data FunKey = FunKey
+  { name :: QualifiedName,
+    arity :: Int
+  }
+  deriving (Eq, Ord)
+
+type Candidates = Map FunKey Candidate
 
 -- | Rewrite the program: substitute every eligible call to an
 -- @:- inline@-marked function with its body, everywhere an 'R.Expr' or
@@ -110,7 +119,7 @@ inlineFunctions prog = do
 -- after checking it is eligible on its own (one equation, no guards,
 -- no prelude) and that no candidate's call graph contains a cycle.
 buildCandidates ::
-  [D.Function] -> Either [Diagnostic DesugarError] (Map QualifiedName Candidate)
+  [D.Function] -> Either [Diagnostic DesugarError] Candidates
 buildCandidates functions =
   let marked = [f | f <- functions, f.inline]
       shapeErrs = concatMap shapeCheck marked
@@ -119,7 +128,7 @@ buildCandidates functions =
         else
           let raw =
                 Map.fromList
-                  [ (f.name, Candidate {params = annEq.node.params, rhs = annEq.node.rhs})
+                  [ (funKey f, Candidate {params = annEq.node.params, rhs = annEq.node.rhs})
                   | f <- marked,
                     [annEq] <- [f.equations]
                   ]
@@ -133,6 +142,10 @@ buildCandidates functions =
            in if not (null cyclic)
                 then Left [cycleDiagnostic marked cyclic]
                 else Right raw
+
+-- | The key a function is looked up by.
+funKey :: D.Function -> FunKey
+funKey f = FunKey {name = f.name, arity = f.arity}
 
 -- | Check that a single @:- inline@-marked function has the shape an
 -- inline substitution needs. Every violation is independent, so a
@@ -158,7 +171,7 @@ atFirstEquation eqs err = case eqs of
 -- | Every 'R.CallExpr' target reachable anywhere inside an expression,
 -- regardless of nesting. Used both to build the candidate call graph
 -- and (via 'rewriteExpr') to perform the actual substitution.
-collectCalls :: R.Expr -> [QualifiedName]
+collectCalls :: R.Expr -> [FunKey]
 collectCalls e = case e of
   R.VarExpr _ -> []
   R.IntExpr _ -> []
@@ -170,15 +183,15 @@ collectCalls e = case e of
   R.CtorExpr _ args -> concatMap collectCalls args
   R.HostExpr _ args -> concatMap collectCalls args
   R.ApplyExpr f args -> collectCalls f ++ concatMap collectCalls args
-  R.CallExpr qn args -> qn : concatMap collectCalls args
+  R.CallExpr qn args -> FunKey qn (length args) : concatMap collectCalls args
   -- Unreachable: lambda lifting runs before this pass, so no
   -- 'R.LambdaExpr' survives into a desugared function's body. Walked
   -- anyway rather than left partial, matching 'compileExpr's own
   -- defensive 'error' on the same shape.
   R.LambdaExpr _ body -> concatMap collectCalls (NE.toList body)
 
--- | The candidates (by name) that an expression calls directly.
-directCallees :: Set QualifiedName -> R.Expr -> Set QualifiedName
+-- | The candidates (by name and arity) that an expression calls directly.
+directCallees :: Set FunKey -> R.Expr -> Set FunKey
 directCallees candNames =
   Set.filter (`Set.member` candNames) . Set.fromList . collectCalls
 
@@ -186,7 +199,7 @@ directCallees candNames =
 -- reachable from one of its own direct callees. A self-call (@f@ calls
 -- @f@) is a cycle of length one and is caught the same way, since
 -- @f@'s own name is then among its direct callees.
-cyclicNodes :: Map QualifiedName (Set QualifiedName) -> [QualifiedName]
+cyclicNodes :: Map FunKey (Set FunKey) -> [FunKey]
 cyclicNodes graph =
   [n | n <- Map.keys graph, n `Set.member` reachableFrom (successors n)]
   where
@@ -199,11 +212,13 @@ cyclicNodes graph =
 
 -- | The 'InlineCycle' error, anchored at the first cyclic candidate's
 -- first equation.
-cycleDiagnostic :: [D.Function] -> [QualifiedName] -> Diagnostic DesugarError
+cycleDiagnostic :: [D.Function] -> [FunKey] -> Diagnostic DesugarError
 cycleDiagnostic marked cyclic =
-  let names = sort (map (flattenName . qualifiedToName) cyclic)
+  let names = sort (map keyText cyclic)
+      keyText k =
+        flattenName (qualifiedToName k.name) <> "/" <> Text.pack (show k.arity)
       cyclicSet = Set.fromList cyclic
-      firstCyclic = take 1 [f | f <- marked, Set.member f.name cyclicSet]
+      firstCyclic = take 1 [f | f <- marked, Set.member (funKey f) cyclicSet]
    in atFirstEquation (concatMap (.equations) firstCyclic) (InlineCycle names)
 
 -- ---------------------------------------------------------------------------
@@ -229,7 +244,7 @@ finalCandidates raw = List.foldl' step Map.empty (topoOrder graph)
 -- callers — as the finish order of a postorder depth-first walk.
 -- Sound only when the graph is acyclic, which every caller here has
 -- already checked; an unchecked cyclic graph would make this loop.
-topoOrder :: Map QualifiedName (Set QualifiedName) -> [QualifiedName]
+topoOrder :: Map FunKey (Set FunKey) -> [FunKey]
 topoOrder graph = reverse walk.finished
   where
     walk = execState (mapM_ visit (Map.keys graph)) (TopoWalk Set.empty [])
@@ -244,9 +259,9 @@ topoOrder graph = reverse walk.finished
 -- | The state of 'topoOrder'.
 data TopoWalk = TopoWalk
   { -- | Nodes already entered.
-    visited :: Set QualifiedName,
+    visited :: Set FunKey,
     -- | Nodes whose walk is done, last finished first.
-    finished :: [QualifiedName]
+    finished :: [FunKey]
   }
 
 -- ---------------------------------------------------------------------------
@@ -280,7 +295,7 @@ rewriteExpr cands = go
       R.LambdaExpr params body -> R.LambdaExpr params (NE.map go body)
       R.CallExpr qn args ->
         let args' = map go args
-         in case Map.lookup qn cands of
+         in case Map.lookup (FunKey qn (length args)) cands of
               Nothing -> R.CallExpr qn args'
               Just cand -> fromMaybe (R.CallExpr qn args') (trySubstitute cand args')
 
@@ -298,7 +313,7 @@ rewriteIsRhs cands e = case e of
   R.CallExpr qn args ->
     let args' = map (rewriteExpr cands) args
         kept = R.CallExpr qn args'
-     in case Map.lookup qn cands of
+     in case Map.lookup (FunKey qn (length args)) cands of
           Nothing -> kept
           Just cand -> case trySubstitute cand args' of
             Just (R.VarExpr _) -> kept
@@ -554,7 +569,7 @@ data StmtCallResult
 rewriteStmtCall :: Candidates -> QualifiedName -> [R.Expr] -> StmtCallResult
 rewriteStmtCall cands qn args =
   let args' = map (rewriteExpr cands) args
-   in case Map.lookup qn cands of
+   in case Map.lookup (FunKey qn (length args)) cands of
         Nothing -> KeptCall qn args'
         Just cand -> case trySubstitute cand args' of
           Just (R.HostExpr f innerArgs) -> SubstHost f innerArgs
