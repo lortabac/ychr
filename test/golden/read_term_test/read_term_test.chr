@@ -1,5 +1,5 @@
 :- module(read_term_test,
-          [go/2, is_bool/2, matches/2, observed/1, type(answer/0),
+          [go/2, is_bool/2, matches/2, observed/1, delayed/1, type(answer/0),
            op(500, yfx, '&&&')]).
 
 :- use_module(library(meta)).
@@ -40,3 +40,11 @@ f(N) <=> N = 1, chk(N).
 chk(1) <=> out(1).
 
 gather(R), out(V) <=> R = V.
+
+% An unbound string is an instantiation error, so the guard delays
+% instead of aborting, and the rule fires once `S` is bound.
+:- chr_constraint delayed/1, wait_read/2.
+
+delayed(R) <=> wait_read(S, R), S = "true".
+
+wait_read(S, R) <=> boolean(read_term_from_string(S)) | R = yes.

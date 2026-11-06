@@ -692,6 +692,7 @@ arguments, so for them "an unbound argument on the failure path" means
 | `write`, `writeln`, `panic` | instantiation failure |
 | `compound_to_list`, `list_to_compound` | instantiation failure |
 | `name_base` | instantiation failure |
+| `read_term_from_string` | instantiation failure |
 | `==`, `\==`, `unifiable` | answers normally (never raises) |
 | `var`, `nonvar`, `ground`, `integer`, `float`, `atom`, `boolean`, `string` | answers normally (never raises) |
 | `term_variables`, `copy_term` | answers normally (never raises) |
@@ -1148,6 +1149,8 @@ the reader consults it. A session created without a compiled program
 same `builtinOps` the interpreter gives a hand-built session. An
 operator that is neither built-in nor declared by a loaded module is a
 syntax error on either backend.
+An unbound argument is an instantiation error, so a guard that reads
+one delays until it is bound.
 `fun name/arity` in a read string is a first-class function reference,
 exactly as the source spelling is: the reader resolves the name against
 the program's functions and yields the same closure value a compiled

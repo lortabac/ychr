@@ -39,7 +39,13 @@ import YCHR.Internal.Parser (parseTermWith)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (CallableRegistry, Chr, SessionEnv (..))
-import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
+import YCHR.Internal.Runtime.Registry
+  ( HostCallFn (..),
+    HostCallRegistry,
+    argError,
+    unit,
+    valueList,
+  )
 import YCHR.Internal.Runtime.Store
   ( StoredGroup (..),
     Suspension (..),
@@ -224,7 +230,11 @@ metaHostCallRegistry =
                 -- reader has no renamer, so it resolves the name here.
                 term' <- resolveFunRefs term
                 evalStateT (termToValue term') Map.empty
-          _ -> runtimeErrorS "read_term_from_string: expected 1 Text argument"
+          args ->
+            argError
+              "read_term_from_string"
+              args
+              "read_term_from_string: expected 1 Text argument"
       ),
       ( Name "print_store",
         HostCallFn $ \_ -> do

@@ -31,6 +31,7 @@ module YCHR.Internal.Runtime.Registry
     isNonvar,
 
     -- * Generic helpers
+    argError,
     allM,
     collectVars,
     copyTerm,
@@ -243,20 +244,23 @@ baseHostCallRegistry =
     copyTermHost = HostCallFn $ \case
       [v] -> copyTerm v
       _ -> runtimeErrorS "copy_term: expected 1 argument"
-    -- Report a strict primitive's failure. Each caller is a total
-    -- function of its arguments' values with no ignored positions, so
-    -- reaching the failure path with an argument that is still an
-    -- unbound variable means the value was demanded and was not there:
-    -- an instantiation failure, which a rule guard catches and turns
-    -- into a silent @false@. Any other failure (wrong type, wrong
-    -- arity) is a general error and stays fatal everywhere.
-    argError label args general = do
-      unbound <- anyUnbound args
-      if unbound
-        then
-          instantiationErrorS $
-            label ++ ": argument is not sufficiently instantiated (unbound variable)"
-        else runtimeErrorS general
+
+-- | Report a strict primitive's failure. Each caller is a total
+-- function of its arguments' values with no ignored positions, so
+-- reaching the failure path with an argument that is still an
+-- unbound variable means the value was demanded and was not there:
+-- an instantiation failure, which a rule guard catches and turns
+-- into a silent @false@. Any other failure (wrong type, wrong
+-- arity) is a general error and stays fatal everywhere.
+argError :: String -> [Value] -> String -> Chr a
+argError label args general = do
+  unbound <- anyUnbound args
+  if unbound
+    then
+      instantiationErrorS $
+        label ++ ": argument is not sufficiently instantiated (unbound variable)"
+    else runtimeErrorS general
+  where
     anyUnbound [] = pure False
     anyUnbound (v : vs) = do
       v' <- deref v
