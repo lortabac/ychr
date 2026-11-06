@@ -201,7 +201,7 @@ The distinction matters because guards must not leave half-done bindings if they
 Reactivation follows this flow:
 
 1. When a constraint of a non-inert type is stored (`Store`), the runtime registers it as an observer of every unbound variable reachable from its arguments. This recurses into compound terms, so a variable nested inside an argument (e.g. the `X` in `pair(X, 1)` or `[X, X]`) is observed too — otherwise binding it later would silently fail to reactivate the constraint. An *inert* type is one whose `activate_c` runs no occurrence procedure, so its reactivation could do nothing; the program header lists them (see Program Structure).
-2. When `Unify` binds a variable, the runtime pushes the constraints observing that variable onto a reactivation queue, skipping any that are already dead. Nothing removes an id from an observer list, so without that filter a variable would keep enqueueing every constraint that ever observed it. The drain checks liveness again, since a constraint can die between being enqueued and being reached.
+2. When `Unify` binds a variable, the runtime pushes the constraints observing that variable onto a reactivation queue, skipping any that are already dead. Nothing removes an id from an observer list, so without that filter a variable would keep enqueueing every constraint that ever observed it. The drain checks liveness again, since a constraint can die between being enqueued and being reached. Binding also moves the variable's observers onto the unbound variables reachable in its new value (or merges the two lists, for a variable-to-variable binding), so after `X = g(A)` a later `A = 1` still wakes them.
 3. The compiler generates code using `DrainReactivationQueue` to iterate over the queue and dispatch each constraint to its `activate_c` procedure via `reactivate_dispatch`.
 
 This is the *Selective Constraint Reactivation* optimization (paper §5.3). The blanket `reactivate_all` procedure used for the modification problem (paper §5.1–5.2) is intentionally not generated.
@@ -1078,7 +1078,7 @@ To add a new golden test, create a directory under `test/golden/`, drop the `.ch
 
 ### Scheme backend skip lists
 
-Some tests pin behavior that the Scheme runtime does not (yet) match — typically because it keys its prelude host-call table by `(name, arity)` where the Haskell registry keys by name alone (so a host call at an arity no primitive provides reports a different error), or misses an observer-transfer rule in `unify` (`reactivation_through_binding`). The Scheme harness in `test/scheme/test_golden.py` provides two skip mechanisms so a divergent case does not block `make test`:
+Some tests pin behavior that the Scheme runtime does not (yet) match — typically because it keys its prelude host-call table by `(name, arity)` where the Haskell registry keys by name alone (so a host call at an arity no primitive provides reports a different error), or prints a closure as its raw internal term (`lambda_bind_print`). The Scheme harness in `test/scheme/test_golden.py` provides two skip mechanisms so a divergent case does not block `make test`:
 
 - `HASKELL_ONLY` — a set of test-directory names. Every case in those directories is skipped on the Scheme backend.
 - `HASKELL_ONLY_CASES` — a set of `(test_dir, case_name)` pairs for finer control when only some cases in a directory diverge.

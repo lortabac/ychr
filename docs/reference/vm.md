@@ -910,6 +910,10 @@ A backend must implement the following runtime capabilities.
   it onto the reactivation queue. A runtime may drop dead observers
   there; the drain checks liveness regardless, since a constraint can
   die between being enqueued and being reached.
+- Observer transfer: binding an unbound variable to a term moves its
+  observers onto every unbound variable reachable in that term;
+  binding it to another variable merges the two lists. Otherwise,
+  after `X = g(A)`, a later `A = 1` wakes nothing.
 
 ### Compound terms
 
