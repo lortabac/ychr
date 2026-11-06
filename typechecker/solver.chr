@@ -384,7 +384,7 @@ match_ty_list(Xs, Ys, S) ->
                 end,
                 zip_exact(Xs, Ys)).
 
-match_var(V, T, nothing, S) -> match_ok([kv(V, T) | S]).
+match_var(V, T, nothing, S) -> match_ok([pair(V, T) | S]).
 match_var(_, T, just(T0), S) when ty_consistent(T0, T) -> match_ok(S).
 match_var(_, _, _, _) -> match_failed.
 
@@ -531,14 +531,14 @@ ty_concrete(_) -> false.
 % rule is listed before `constraint_match` so the more-specific
 % three-head pattern is preferred when both rules match.
 %
-% The `kv` is the plain pair of `library(pairs)`, used here and in the
-% three other bounded rules purely as a vehicle for copying two
-% structures in one `copy_term`. It is not a signature and carries no
+% `pair/2` is `library(pairs)`'s constructor, used here and in the
+% three other bounded rules only to copy two structures in one
+% `copy_term`. It is not a signature and carries no
 % meaning of its own.
 bounded_constraint_match @
     constraint_sig(Name, Arity, DeclTypes), constraint_bounds(Name, Arity, Bounds) \
         check_constraint_use(Name, Arity, BoundCands, ArgTypes, Ctx) <=>
-    Fresh is copy_term(quote(kv(DeclTypes, Bounds))),
+    Fresh is copy_term(quote(pair(DeclTypes, Bounds))),
     FreshTypes is key(Fresh),
     FreshBounds is value(Fresh),
     check_determined_params(term_variables(FreshTypes), Name, Ctx),
@@ -628,7 +628,7 @@ undetermined @
 bounded_function_match @
     function_sig(Name, Arity, Sig), function_bounds(Name, Arity, Bounds) \
         check_function_use(Name, Arity, BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(quote(kv(Sig, Bounds))),
+    Fresh is copy_term(quote(pair(Sig, Bounds))),
     FreshSig is key(Fresh),
     FreshBounds is value(Fresh),
     FreshArgTypes is sig_args(FreshSig),
@@ -740,7 +740,7 @@ funref_ambient_single @
 funref_bounded @
     function_sig(Name, Arity, Sig), function_bounds(Name, Arity, Bounds) \
         check_function_ref(Name, Arity, _, BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(quote(kv(Sig, Bounds))),
+    Fresh is copy_term(quote(pair(Sig, Bounds))),
     FreshSig is key(Fresh),
     FreshBounds is value(Fresh),
     check_arg_list(sig_args(FreshSig), ArgTypes, Ctx),
@@ -1869,7 +1869,7 @@ commit_decl @
 
 commit_decl_bounded @
     commit_candidate([decl_bounded(Sig, Bounds, BoundCands) | _], ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(quote(kv(Sig, Bounds))),
+    Fresh is copy_term(quote(pair(Sig, Bounds))),
     FreshSig is key(Fresh),
     FreshBounds is value(Fresh),
     check_arg_list(sig_args(FreshSig), ArgTypes, Ctx),

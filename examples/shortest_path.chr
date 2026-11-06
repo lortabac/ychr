@@ -7,7 +7,7 @@
 % nodes that the store knows at that point:
 %
 %   - `edge_to_path` adds (and is kept alongside) a one-hop `path/4`
-%     whose route is the single pair `kv(X, Y)` and whose distance is W.
+%     whose route is the single hop `pair(X, Y)` and whose distance is W.
 %   - `dominance`: of two candidate routes between the same endpoints,
 %     only the shortest survives (simpagation); ties keep one
 %     arbitrarily. Dominated candidates are dropped and never extended.
@@ -27,7 +27,7 @@
 %
 %   edge(1, 2, 1), edge(2, 3, 2), edge(1, 3, 5),
 %   shortest_path(1, 3, P, D).
-%   % P = [pairs:kv(1, 2), pairs:kv(2, 3)], D = 3.
+%   % P = [pairs:pair(1, 2), pairs:pair(2, 3)], D = 3.
 %
 % Nodes are polymorphic (the constraint declarations are over `A`); only
 % weights are `int`. A cycle of negative total weight makes `relaxation`
@@ -35,7 +35,7 @@
 
 :- module(shortest_path, [edge/3, shortest_path/4]).
 
-% append/2 comes from library(lists); pair/2 and kv/2 from library(pairs).
+% append/2 comes from library(lists); pair/2 from library(pairs).
 :- use_module(library(lists)).
 :- use_module(library(pairs)).
 
@@ -44,7 +44,7 @@
 :- chr_constraint shortest_path(A, A, list(pair(A, A)), int).
 
 % Each edge becomes a one-hop path; the edge itself stays in the store.
-edge_to_path @ edge(X, Y, W) ==> path(X, Y, [kv(X, Y)], W).
+edge_to_path @ edge(X, Y, W) ==> path(X, Y, [pair(X, Y)], W).
 
 % Dominance: keep one candidate per pair, the shortest told so far. A
 % cheaper route told later wins, because simpagation matches either

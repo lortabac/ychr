@@ -13,7 +13,7 @@ start, task(_, A, _), r(A, K), r(A, K2) ==> lt(K, K2) | out(K).
 out(K) \ go(X) <=> X = K.
 go(X) <=> task(1, 0, 5), r(0, 1), r(0, 2), start, go(X).
 
-% Instances at determining types are fine too: box and kv keep their
+% Instances at determining types are fine too: box and pair keep their
 % parameters in every constructor, and nel does so through its own
 % recursion.
 :- chr_type box(A) ---> box(A).
@@ -21,5 +21,5 @@ go(X) <=> task(1, 0, 5), r(0, 1), r(0, 2), start, go(X).
 :- chr_constraint hold(T), probe(T, any), hold_all(any).
 hold(X), probe(X, R) <=> R = 1.
 hold_all(R) <=>
-    hold(box(1)), hold(kv(1, "a")), hold(more(1, one(2))), hold(box(box(3))),
+    hold(box(1)), hold(pair(1, "a")), hold(more(1, one(2))), hold(box(box(3))),
     probe(more(1, one(2)), R).

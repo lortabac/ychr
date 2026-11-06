@@ -214,7 +214,7 @@ alloc_flex_tvars_nil @
 alloc_flex_tvars_cons @
     alloc_flex_tvars([V|Vs], Out) <=>
     alloc_flex_tvars(Vs, Rest),
-    Out = [kv(V, _Slot) | Rest].
+    Out = [pair(V, _Slot) | Rest].
 
 % Rigids are allocated head-first so the ids ascend with the (sorted)
 % name list. The first argument is the evidence level they belong to:
@@ -227,7 +227,7 @@ alloc_rigid_tvars_cons @
     alloc_rigid_tvars(L, [V|Vs], Out) <=>
     make_decl_rigid(L, T),
     alloc_rigid_tvars(L, Vs, Rest),
-    Out = [kv(V, T) | Rest].
+    Out = [pair(V, T) | Rest].
 
 % The declaration-site rigid supply. It counts *up* from 0 while the
 % solver's own `rigid_supply` counts down from -1, so the two ranges
@@ -397,7 +397,7 @@ build_constraint_facts_nil @
 % The argument types and the bounds share one type-variable map, so a
 % single `copy_term` at the use site freshens both consistently.
 build_constraint_facts_cons @
-    build_constraint_facts([kv(con_key(N, A), ArgTys)|Rest], Bounds, Out) <=>
+    build_constraint_facts([pair(con_key(N, A), ArgTys)|Rest], Bounds, Out) <=>
     Bs is from_maybe([], assoc_get(con_key(N, A), Bounds)),
     alloc_flex_tvars(sort_unique_tvars(append(collect_ty_vars(ArgTys),
                                               bound_sigs_vars(Bs))),
@@ -1407,7 +1407,7 @@ alloc_lambda_params_repeat @
 alloc_lambda_params_var @
     alloc_lambda_params([head_var(V)|Ps], Acc, Bindings, Tys) <=>
     Tys = [T | Rest],
-    alloc_lambda_params(Ps, [kv(V, T)|Acc], Bindings, Rest).
+    alloc_lambda_params(Ps, [pair(V, T)|Acc], Bindings, Rest).
 
 alloc_lambda_params_wild @
     alloc_lambda_params([head_wild|Ps], Acc, Bindings, Tys) <=>
@@ -1668,14 +1668,14 @@ check_fun_stmt_is @
 % the declaration said to leave alone.
 fun_is_bind_any @
     fun_is_bind(S, V, _, Out) <=> scope_var_ty(S, V) == ty_any |
-    Out is scope_shadow(S, [kv(V, ty_any)]).
+    Out is scope_shadow(S, [pair(V, ty_any)]).
 
 % The unification comes first so that the fresh slot is allocated: only
 % a top-level argument of a tell introduces a variable.
 fun_is_bind_fresh @
     fun_is_bind(S, V, T, Out) <=>
     check_unify(NewSlot, T, scope_ctx(S)),
-    Out is scope_shadow(S, [kv(V, NewSlot)]).
+    Out is scope_shadow(S, [pair(V, NewSlot)]).
 
 check_fun_stmt_host @
     check_fun_stmt(S, fun_host(_, Args), Out) <=>

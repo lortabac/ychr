@@ -169,7 +169,7 @@ tests =
                 ("left(1)", "m:either(int, _)"),
                 ("mk_handle(1)", "m:handle(int)"),
                 ("fun(X) -> X + 1 end", "fun(int) -> int"),
-                ("kv(1, [2])", "pairs:pair(int, prelude:list(int))"),
+                ("pair(1, [2])", "pairs:pair(int, prelude:list(int))"),
                 ("box([1])", "m:box(prelude:list(int))")
               ]
         mapM_
@@ -184,7 +184,7 @@ tests =
                 "\"a\"",
                 "red",
                 "box(1)",
-                "kv(1, \"a\")",
+                "pair(1, \"a\")",
                 "more(1, one(2))",
                 "box(box(red))",
                 "X"

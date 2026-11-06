@@ -370,7 +370,7 @@ decodeDeclList val = do
   where
     one item =
       deref item >>= \case
-        VTerm "pairs__kv" [k, v] -> do
+        VTerm "pairs__pair" [k, v] -> do
           k' <- deref k
           v' <- deref v
           case (k', v') of

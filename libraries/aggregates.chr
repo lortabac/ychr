@@ -165,19 +165,19 @@ max_inc(W, _) -> W.
 
 % The mean of integer elements, as a float. `/` has no integer signature,
 % so the division is done in floats.
-avg_spec -> aggregator(kv(0, 0), fun avg_inc/2, fun avg_final/1).
+avg_spec -> aggregator(pair(0, 0), fun avg_inc/2, fun avg_final/1).
 
-avg_inc(kv(S, N), X) -> kv(S + X, N + 1).
+avg_inc(pair(S, N), X) -> pair(S + X, N + 1).
 
-avg_final(kv(_, 0)) -> nothing.
-avg_final(kv(S, N)) -> just(int_to_float(S) / int_to_float(N)).
+avg_final(pair(_, 0)) -> nothing.
+avg_final(pair(S, N)) -> just(int_to_float(S) / int_to_float(N)).
 
-favg_spec -> aggregator(kv(0.0, 0), fun favg_inc/2, fun favg_final/1).
+favg_spec -> aggregator(pair(0.0, 0), fun favg_inc/2, fun favg_final/1).
 
-favg_inc(kv(S, N), X) -> kv(S + X, N + 1).
+favg_inc(pair(S, N), X) -> pair(S + X, N + 1).
 
-favg_final(kv(_, 0)) -> nothing.
-favg_final(kv(S, N)) -> just(S / int_to_float(N)).
+favg_final(pair(_, 0)) -> nothing.
+favg_final(pair(S, N)) -> just(S / int_to_float(N)).
 
 % The list of elements, in goal order: the fold prepends, so `Final`
 % reverses.

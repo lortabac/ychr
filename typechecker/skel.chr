@@ -247,8 +247,8 @@ reach_step(Links, Acc, Xs, New) -> reach(Links, append(Acc, New), append(New, Xs
 
 :- function neighbors(list(pair(any, any)), any) -> list(any).
 neighbors([], _) -> [].
-neighbors([kv(A, B)|Rest], X) when A == X -> [B|neighbors(Rest, X)].
-neighbors([kv(A, B)|Rest], X) when B == X -> [A|neighbors(Rest, X)].
+neighbors([pair(A, B)|Rest], X) when A == X -> [B|neighbors(Rest, X)].
+neighbors([pair(A, B)|Rest], X) when B == X -> [A|neighbors(Rest, X)].
 neighbors([_|Rest], X) -> neighbors(Rest, X).
 
 % The neighbours not already reached, each counted once. Dropping the
@@ -273,7 +273,7 @@ comp_skeletons(Comp, Srcs) -> assign_skeleton(Comp, skeleton_of(Srcs)).
 % The component's members all get the component's skeleton — as a
 % shape, not as a shared term; see `var_skeletons` above.
 :- function assign_skeleton(list(any), type_skeleton) -> list(pair(any, type_skeleton)).
-assign_skeleton(Comp, Sk) -> maplist(fun(V) -> kv(V, Sk) end, Comp).
+assign_skeleton(Comp, Sk) -> maplist(fun(V) -> pair(V, Sk) end, Comp).
 
 :- function comp_sources(list(any), list(pair(any, ty_expr))) -> list(ty_expr).
 comp_sources(Comp, Occs) ->
@@ -290,7 +290,7 @@ comp_sources(Comp, Occs) ->
 :- function guard_equal_links(list(guard)) -> list(pair(any, any)).
 guard_equal_links([]) -> [].
 guard_equal_links([guard_equal(var_e(A), var_e(B))|Gs]) ->
-    [kv(A, B)|guard_equal_links(Gs)].
+    [pair(A, B)|guard_equal_links(Gs)].
 guard_equal_links([_|Gs]) -> guard_equal_links(Gs).
 
 % The variable an HNF guard scrutinizes. Every `guard_match` and
@@ -345,7 +345,7 @@ field_occ(Env, V, Idx, Con) -> field_occ_of(V, con_field_at(Idx, lookup_con(Env,
 
 :- function field_occ_of(any, maybe(ty_expr)) -> list(pair(any, ty_expr)).
 field_occ_of(_, nothing) -> [].
-field_occ_of(V, just(T)) -> [kv(V, T)].
+field_occ_of(V, just(T)) -> [pair(V, T)].
 
 % `nth_maybe` answers `nothing` for an index past the end and for a
 % negative one, in one total step. The negative arm is unreachable: the
@@ -379,7 +379,7 @@ head_con_occs(Env, head_con(N, Args)) ->
 :- function arg_occs(list(head_arg), list(ty_expr)) -> list(pair(any, ty_expr)).
 arg_occs([], _) -> [].
 arg_occs(_, []) -> [].
-arg_occs([head_var(V)|As], [T|Ts]) -> [kv(V, T)|arg_occs(As, Ts)].
+arg_occs([head_var(V)|As], [T|Ts]) -> [pair(V, T)|arg_occs(As, Ts)].
 arg_occs([head_wild|As], [_|Ts]) -> arg_occs(As, Ts).
 
 % Slot skeletons determined by a single-signature equation's parameter
@@ -560,7 +560,7 @@ alloc_var_types_cons @
     alloc_var_types([V|Vs], Skels, Out) <=>
     alloc_skeleton(from_maybe(sk_open, assoc_get(V, Skels)), T),
     alloc_var_types(Vs, Skels, Rest),
-    Out = [kv(V, T) | Rest].
+    Out = [pair(V, T) | Rest].
 
 % Materialize one skeleton. Mirrors the source-type encoding's shapes,
 % so a shaped slot meets a declared type componentwise instead of

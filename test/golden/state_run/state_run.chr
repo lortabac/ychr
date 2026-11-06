@@ -48,8 +48,8 @@ swap <=> get_k(A), get_n(B), put_k(B), put_n(A).
 counted(R) <=> R is run_state(k, 1, quote([inc_k, inc_k])).
 
 pair_run(A, B) <=>
-    [kv(k, A), kv(n, B)] is
-        run_states([kv(k, 1), kv(n, 2)], quote([swap, inc_k])).
+    [pair(k, A), pair(n, B)] is
+        run_states([pair(k, 1), pair(n, 2)], quote([swap, inc_k])).
 
 % An empty goal runs the init and the reads only.
 single(R) <=> R is run_state(k, 5, quote([])).
@@ -62,7 +62,7 @@ close_in_run(R) <=> R is run_state(k, 1, quote([close_k, new_k(2)])).
 
 % The runner's values are dynamically typed, as on master: this creates
 % `state_k("a")` for a key declared `int`.
-unchecked(R) <=> [kv(k, R)] is run_states([kv(k, "a")], quote([])).
+unchecked(R) <=> [pair(k, R)] is run_states([pair(k, "a")], quote([])).
 
 % Creating a key the caller already holds is a `new_k` on a key that
 % exists.
@@ -75,7 +75,7 @@ no_leak(R) <=> _ is run_state(k, 1, quote([])), get_k(R).
 missing_key(R) <=> R is run_state(k, 1, quote(get_n(_))).
 
 % Two entries for the same key.
-dup_keys(R) <=> R is run_states([kv(k, 1), kv(k, 2)], quote([])).
+dup_keys(R) <=> R is run_states([pair(k, 1), pair(k, 2)], quote([])).
 
 failing(R) <=> R is run_state(k, 1, quote(try_unify(1, 2))).
 
@@ -92,9 +92,9 @@ out_var(Mid, Final) <=>
 % The final value is read back unchecked too: the goal stores a string in
 % an `int` key.
 unchecked_out(R) <=>
-    [kv(k, R)] is run_states([kv(k, 1)], quote(put_k("z"))).
+    [pair(k, R)] is run_states([pair(k, 1)], quote(put_k("z"))).
 
-% A `KVs` that is not a proper list of `kv(K, V)`.
+% A `KVs` that is not a proper list of `pair(K, V)`.
 bad_kvs(L, R) <=> R is run_states(L, quote([])).
 
 % A run inside a run. The inner goal forks the outer run's store, so it

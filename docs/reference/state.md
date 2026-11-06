@@ -47,14 +47,14 @@ after Haskell's runState:
 counted(R) <=> R is run_state(count, 1, quote([step, step])).
 
 pair_run(A, B) <=>
-    [kv(count, A), kv(name, B)] is
-        run_states([kv(count, 1), kv(name, "x")], quote([swap])).
+    [pair(count, A), pair(name, B)] is
+        run_states([pair(count, 1), pair(name, "x")], quote([swap])).
 ```
 
 `run_state(K, V, quote(Goal))` creates `K` at `V`, runs `Goal` and
 returns the final value. `run_states(KVs, quote(Goal))` does the same for
-every `kv(K, V)` of `KVs` and returns the final `kv` list; a `KVs` that
-is not a proper list of `kv` pairs is a runtime error. The goal is a
+every `pair(K, V)` of `KVs` and returns the final list of pairs; a `KVs` that
+is not a proper list of `pair` entries is a runtime error. The goal is a
 constraint term or a list of them, as for `search:solve/1`, and runs as
 `solve/1` runs it, against a fork of the calling session
 ([search.md](search.md#scope-search-forks-the-calling-session)): the keys
@@ -65,11 +65,11 @@ happen before any choice point the goal leaves is explored, so write the
 goal deterministically: a goal that searches does not give the values of
 its solution.
 
-The runner takes `kv(K, V)`, so a key named in it is also a data
-constructor: `:- chr_type key ---> k ; n.` makes `kv(k, 1)` a value.
+The runner takes `pair(K, V)`, so a key named in it is also a data
+constructor: `:- chr_type key ---> k ; n.` makes `pair(k, 1)` a value.
 Without the declaration the generated dispatch reports the key as an
 undeclared data constructor (`YCHR-20101`), which `--Werror` rejects. An
-integer key (`:- state(1, int).`, `kv(1, V)`) needs no declaration. The
+integer key (`:- state(1, int).`, `pair(1, V)`) needs no declaration. The
 key of `:- state(Key, Type).` itself must be an atom or an integer, since
 the expansion builds the generated names from it.
 
@@ -113,7 +113,7 @@ the type checker. So is a `_`, as in `:- state(k, _).`
 The runner's own values are not checked. `KVs` is a `list(pair(K, any))`,
 and the goal's constraints are told by their bare name with the prelude's
 `tell_list/1`, so a dynamically told goal bypasses the checker: a
-`kv(K, V)` of the wrong type is accepted and runs, and only a goal that
+`pair(K, V)` of the wrong type is accepted and runs, and only a goal that
 names no constraint is an error. That bare-name resolution is
 program-wide: keep every generated name unique across the program. Two
 modules declaring `:- state(k, int).` both generate `new_k/1`, and every
