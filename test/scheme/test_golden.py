@@ -34,23 +34,11 @@ HASKELL_ONLY = {
     # the divergence (dev-docs/SCHEME_BACKEND_GAPS.md). The evaluable
     # counterpart, `is_evaluable_host_term`, runs on both backends.
     "host_term_wrong_arity",
-    # Every binding is a closure. The Haskell printer shows it as
-    # `fun(X) -> ... end`; the Scheme one prints the raw
-    # `'__closure'(...)` term (dev-docs/SCHEME_BACKEND_GAPS.md). Remove
-    # once the Scheme printer renders closures the same way.
-    "lambda_bind_print",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
 # some cases in a directory diverge.
-HASKELL_ONLY_CASES = {
-    # The binding is a closure. The Haskell printer shows it as
-    # `fun(X) -> ... end`; the Scheme one prints the raw
-    # `'__closure'(...)` term. The `+` inside is `prelude:` on both,
-    # which is what the case checks. Remove once the Scheme printer
-    # renders closures the same way.
-    ("inline_basic", "lambda_body"),
-}
+HASKELL_ONLY_CASES: set[tuple[str, str]] = set()
 
 # Test directories where the .chr program or goal deliberately uses
 # bare atoms whose constructor the renamer cannot resolve — the warning

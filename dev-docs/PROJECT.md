@@ -1078,7 +1078,7 @@ To add a new golden test, create a directory under `test/golden/`, drop the `.ch
 
 ### Scheme backend skip lists
 
-Some tests pin behavior that the Scheme runtime does not (yet) match — typically because it keys its prelude host-call table by `(name, arity)` where the Haskell registry keys by name alone (so a host call at an arity no primitive provides reports a different error), or prints a closure as its raw internal term (`lambda_bind_print`). The Scheme harness in `test/scheme/test_golden.py` provides two skip mechanisms so a divergent case does not block `make test`:
+Some tests pin behavior that the Scheme runtime does not (yet) match — typically because it keys its prelude host-call table by `(name, arity)` where the Haskell registry keys by name alone (so a host call at an arity no primitive provides reports a different error). The Scheme harness in `test/scheme/test_golden.py` provides two skip mechanisms so a divergent case does not block `make test`:
 
 - `HASKELL_ONLY` — a set of test-directory names. Every case in those directories is skipped on the Scheme backend.
 - `HASKELL_ONLY_CASES` — a set of `(test_dir, case_name)` pairs for finer control when only some cases in a directory diverge.
