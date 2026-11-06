@@ -1,0 +1,1 @@
+main:move(shapes:circle(shapes:pt(1, 2), 5), 3, R)

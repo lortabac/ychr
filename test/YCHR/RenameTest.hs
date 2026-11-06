@@ -321,7 +321,7 @@ ambiguousDataConTests =
                 ( algebraicTD
                     (Unqualified "t")
                     []
-                    [DataConstructor (Unqualified ctor) argTypes]
+                    [DataConstructor (Unqualified ctor) (Positional argTypes)]
                     dummyLoc
                 )
             ]
@@ -855,7 +855,7 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "foo")
-                                [TypeCon (Unqualified "int") []]
+                                (Positional [TypeCon (Unqualified "int") []])
                             ]
                             dummyLoc
                         )
@@ -896,7 +896,7 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "foo")
-                                [TypeCon (Unqualified "int") []]
+                                (Positional [TypeCon (Unqualified "int") []])
                             ]
                             dummyLoc
                         )
@@ -920,7 +920,7 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "foo")
-                                (replicate arity (TypeCon (Unqualified "int") []))
+                                (Positional (replicate arity (TypeCon (Unqualified "int") [])))
                             ]
                             dummyLoc
                         )
@@ -953,7 +953,7 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "foo")
-                                (replicate arity (TypeCon (Unqualified "int") []))
+                                (Positional (replicate arity (TypeCon (Unqualified "int") [])))
                             ]
                             dummyLoc
                         )
@@ -1147,7 +1147,7 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "empty")
-                                []
+                                (Positional [])
                             ]
                             dummyLoc
                         )
@@ -1168,7 +1168,7 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "leaf")
-                                [TypeCon (Unqualified "int") []]
+                                (Positional [TypeCon (Unqualified "int") []])
                             ]
                             dummyLoc
                         )
@@ -1195,7 +1195,7 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "red")
-                                []
+                                (Positional [])
                             ]
                             dummyLoc
                         )
@@ -1210,10 +1210,12 @@ warningTests =
                             []
                             [ DataConstructor
                                 (Unqualified "w")
-                                [ TypeCon
-                                    (Unqualified "color")
-                                    []
-                                ]
+                                ( Positional
+                                    [ TypeCon
+                                        (Unqualified "color")
+                                        []
+                                    ]
+                                )
                             ]
                             dummyLoc
                         )
@@ -1222,7 +1224,7 @@ warningTests =
         case renameProgram [modA, modB] of
           Right (Renamed [_, renamedB] _) -> case renamedB.typeDecls of
             [Ann td _] -> case typeConstructors td of
-              [dc] -> case dc.conArgs of
+              [dc] -> case conArgs dc of
                 [TypeCon colorName []] -> colorName @?= Qualified "A" "color"
                 args -> assertFailure $ "unexpected constructor args: " ++ show args
               dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)

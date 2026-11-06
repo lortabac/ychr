@@ -55,6 +55,7 @@ import YCHR.Internal.Types
     AggregateConjunct (..),
     AggregateKind (..),
     BoundSig (..),
+    ConFields (..),
     Constraint (..),
     ConstraintType (..),
     ConstraintUse (..),
@@ -145,6 +146,8 @@ deriving instance Generic TypeKind
 
 deriving instance Generic DataConstructor
 
+deriving instance Generic ConFields
+
 deriving instance Generic TypeExpr
 
 deriving instance Generic BoundSig
@@ -184,6 +187,9 @@ instance ToCode TypeKind where
   toCode = genericToCode
 
 instance ToCode DataConstructor where
+  toCode = genericToCode
+
+instance ToCode ConFields where
   toCode = genericToCode
 
 instance ToCode TypeExpr where

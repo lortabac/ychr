@@ -61,6 +61,9 @@ module YCHR.Internal.Types
     TypeKind (..),
     typeConstructors,
     DataConstructor (..),
+    ConFields (..),
+    conArgs,
+    conLabels,
     TypeExpr (..),
     FunSignature (..),
 
@@ -70,6 +73,8 @@ module YCHR.Internal.Types
 where
 
 import Data.Char (isDigit)
+import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -417,9 +422,28 @@ typeConstructors td = case td.kind of
 -- | A data constructor within a type declaration.
 data DataConstructor = DataConstructor
   { conName :: Name,
-    conArgs :: [TypeExpr]
+    conFields :: ConFields
   }
   deriving (Show, Eq)
+
+-- | A constructor's arguments. Labels are all or none, so a labelled
+-- constructor has at least one argument, and every one has a label.
+data ConFields
+  = Positional [TypeExpr]
+  | Labelled (NonEmpty (Text, TypeExpr))
+  deriving (Show, Eq)
+
+-- | The argument types, in order. Labels are dropped.
+conArgs :: DataConstructor -> [TypeExpr]
+conArgs dc = case dc.conFields of
+  Positional ts -> ts
+  Labelled fs -> map snd (NE.toList fs)
+
+-- | The labels, in argument order. Empty for a positional constructor.
+conLabels :: DataConstructor -> [Text]
+conLabels dc = case dc.conFields of
+  Positional _ -> []
+  Labelled fs -> map fst (NE.toList fs)
 
 -- | A type expression (argument of a data constructor).
 data TypeExpr

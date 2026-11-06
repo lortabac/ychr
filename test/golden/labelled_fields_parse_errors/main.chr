@@ -1,0 +1,7 @@
+% Every parse error of labelled fields.
+:- module(main, []).
+:- chr_type a ---> a(X :: int).
+:- chr_type b ---> b(x :: int, x :: int).
+:- chr_type c ---> c(x :: int, int).
+:- chr_type d(T) ---> [] ; [h :: T | d(T)].
+:- chr_constraint e(x :: int).

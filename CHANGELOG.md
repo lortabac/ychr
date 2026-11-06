@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Labelled constructor fields: `:- chr_type point(X, Y) ---> point(x :: X, y :: Y).`,
+  read and updated with `get_field/2` and `set_field/3`, built with
+  `new_record/2`. See language.md §Labelled fields.
+  **Breaking:** `get_field`, `set_field` and `new_record` are now
+  reserved names, and `::` is a built-in operator (`xfx 200`).
+
 - **Breaking:** the `library(pairs)` constructor is now `pair/2`, the
   same name as its type. It used to be `kv/2`.
 

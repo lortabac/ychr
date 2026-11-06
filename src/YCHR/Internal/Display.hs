@@ -348,6 +348,10 @@ parseValidationErrorCode (DiscontiguousMacroClauses _ _) = ErrorCode 15026
 parseValidationErrorCode (DeclMacroBuiltinDirective _ _) = ErrorCode 15027
 parseValidationErrorCode (MalformedDirective _) = ErrorCode 15028
 parseValidationErrorCode (QualifiedDefinitionName _ _) = ErrorCode 15029
+parseValidationErrorCode InvalidFieldLabel = ErrorCode 15032
+parseValidationErrorCode (DuplicateFieldLabel _) = ErrorCode 15033
+parseValidationErrorCode (PartialFieldLabels _) = ErrorCode 15034
+parseValidationErrorCode MisplacedFieldLabel = ErrorCode 15035
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -435,6 +439,15 @@ renameErrorCode ReservedTypeRefName = ErrorCode 20048
 renameErrorCode TypeRefInPattern = ErrorCode 20049
 renameErrorCode (FunctionInHead _ _) = ErrorCode 20050
 renameErrorCode (ConstructorAsGoal _ _) = ErrorCode 20051
+renameErrorCode (UnknownFieldLabel _) = ErrorCode 20052
+renameErrorCode (AmbiguousFieldLabel _ _) = ErrorCode 20053
+renameErrorCode (NoSuchFieldLabel _ _) = ErrorCode 20054
+renameErrorCode (FieldLabelNotLiteral _) = ErrorCode 20055
+renameErrorCode MalformedRecordFields = ErrorCode 20056
+renameErrorCode (RecordConstructorNotLabelled _) = ErrorCode 20057
+renameErrorCode RecordFieldMismatch {} = ErrorCode 20058
+renameErrorCode (FieldFormArity _ _) = ErrorCode 20059
+renameErrorCode (MisplacedFieldForm _) = ErrorCode 20060
 
 -- | Declaration-macro expansion. Its own errors are 15xxx, raised
 -- before conversion to the AST; the renamer's errors it raises keep
@@ -739,6 +752,20 @@ parseValidationErrorMsg InvalidTypeParameter =
     ( "type parameters must be distinct named variables"
         ++ " (a wildcard '_' is not a usable parameter)"
     )
+parseValidationErrorMsg InvalidFieldLabel =
+  withHint "Invalid field label" "a label is an atom: write 'name :: Type'"
+parseValidationErrorMsg (DuplicateFieldLabel l) =
+  withHint
+    ("Duplicate field label '" ++ T.unpack l ++ "'")
+    "the labels of one constructor must be distinct"
+parseValidationErrorMsg (PartialFieldLabels c) =
+  withHint
+    ("Constructor '" ++ T.unpack c ++ "' labels some arguments but not all")
+    "label every argument of the constructor, or none"
+parseValidationErrorMsg MisplacedFieldLabel =
+  withHint
+    "Field label outside a constructor argument"
+    "labels ('name :: Type') are only allowed on the arguments of a :- chr_type constructor"
 parseValidationErrorMsg (DuplicateTypeParameter v) =
   withHint
     ("Duplicate type parameter '" ++ T.unpack v ++ "'")
@@ -1312,6 +1339,56 @@ renameErrorMsg (TellControlGoal n arity) =
         ++ " is a control form, not a constraint"
     )
     "write the goal directly in the rule body; tell/N only tells constraints"
+renameErrorMsg (UnknownFieldLabel l) =
+  withHint
+    ("No visible constructor has the field label '" ++ T.unpack l ++ "'")
+    "check the spelling, and that the constructor is imported"
+renameErrorMsg (AmbiguousFieldLabel l cs) =
+  withHint
+    ( "Field label '"
+        ++ T.unpack l
+        ++ "' belongs to several constructors: "
+        ++ intercalate ", " (map T.unpack cs)
+    )
+    ("qualify it with its constructor, e.g. ctor::" ++ T.unpack l)
+renameErrorMsg (NoSuchFieldLabel c l) =
+  withHint
+    ("No visible constructor '" ++ T.unpack c ++ "' with field label '" ++ T.unpack l ++ "'")
+    "check the constructor's declaration and imports"
+renameErrorMsg (FieldLabelNotLiteral form) =
+  withHint
+    (T.unpack form ++ ": the field label must be written literally")
+    "write lab, ctor::lab or m:ctor::lab"
+renameErrorMsg MalformedRecordFields =
+  withHint
+    "new_record: the fields must be a literal list of Label = Expr"
+    "e.g. new_record(pair, [fst = 1, snd = 2])"
+renameErrorMsg (RecordConstructorNotLabelled c) =
+  withHint
+    ("new_record: '" ++ T.unpack c ++ "' is not a visible constructor with field labels")
+    "new_record takes a constructor whose arguments are labelled"
+renameErrorMsg (RecordFieldMismatch c missing repeated unknown) =
+  withHint
+    ("new_record: the fields do not match the labels of '" ++ T.unpack c ++ "'")
+    ( intercalate
+        "; "
+        ( ["missing: " ++ commaList missing | not (null missing)]
+            ++ ["repeated: " ++ commaList repeated | not (null repeated)]
+            ++ ["unknown: " ++ commaList unknown | not (null unknown)]
+        )
+    )
+  where
+    commaList = intercalate ", " . map T.unpack
+renameErrorMsg (FieldFormArity form arity) =
+  withHint
+    (T.unpack form ++ "/" ++ show arity ++ " is not supported")
+    "get_field takes 2 arguments, set_field 3 and new_record 2"
+renameErrorMsg (MisplacedFieldForm form) =
+  withHint
+    (T.unpack form ++ " is not allowed here")
+    ( "it is an expression: use it where a value is evaluated, not as a"
+        ++ " goal, in a pattern or as an = operand (bind it with is)"
+    )
 renameErrorMsg (UnsupportedTellArity arity) =
   withHint
     ("tell/" ++ show arity ++ " is not supported")

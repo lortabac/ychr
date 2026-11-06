@@ -44,6 +44,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Collected (CollectedImport (..), CollectedModule (..))
 import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
+import YCHR.Internal.Fields (accessorFunctions, getterName, setterName)
 import YCHR.Internal.PExpr qualified as PExpr
 import YCHR.Internal.Parsed (FunctionDeclKind (..))
 import YCHR.Internal.Parsed qualified as P
@@ -262,11 +263,14 @@ data BoundTargetKind
 resolveProgram :: [CollectedModule] -> Either [Diagnostic ResolveError] R.Program
 resolveProgram mods =
   let constraintNames = buildConstraintNames mods
-      functionNames = buildFunctionNames mods
+      typeDefs = [td.node | m <- mods, td <- m.typeDecls]
+      accessorFuns = accessorFunctions typeDefs
+      functionNames =
+        buildFunctionNames mods
+          <> Set.fromList [fd.name | fd <- accessorFuns]
       dataConNames = buildDataConNames mods
       conTypes = collectConstraintTypes mods
       conBounds = collectConstraintBounds mods
-      typeDefs = [td.node | m <- mods, td <- m.typeDecls]
       funcOpenness = buildFunctionOpenness mods
       funcKinds = buildFunctionKinds mods
       funcRequiring = buildFunctionRequiring mods
@@ -312,7 +316,7 @@ resolveProgram mods =
           Right
             R.Program
               { rules = resolvedRules,
-                functions = resolvedFunctions,
+                functions = resolvedFunctions ++ accessorFuns,
                 constraintTypes = conTypes,
                 constraintBounds = conBounds,
                 constraintUses = buildConstraintUses mods,
@@ -1285,7 +1289,8 @@ typeExprVars (TypeCon _ args) = concatMap typeExprVars args
 
 -- | Reserved names that cannot be used as constraint or function declarations.
 reservedDeclNames :: Set Text
-reservedDeclNames = Set.fromList ["quote", "tell"]
+reservedDeclNames =
+  Set.fromList ["quote", "tell", "get_field", "set_field", "new_record"]
 
 -- | Check that no declaration uses a reserved name.
 checkReservedNames :: [CollectedModule] -> [Diagnostic ResolveError]
@@ -1642,6 +1647,15 @@ termToExpr vis loc origin = go
       -- every compound inside is a data constructor.
       CompoundTerm (Unqualified "quote") [arg] ->
         pure (R.CtorExpr (Unqualified "quote") [quotedToExpr arg])
+      -- 'get_field(m:ctor::lab, X)' and 'set_field(m:ctor::lab, X, V)',
+      -- canonicalized by the renamer: calls of the generated accessors
+      -- (see "YCHR.Internal.Fields").
+      CompoundTerm (Unqualified "get_field") [l, x]
+        | Just (m, c, lab) <- fieldLabel l ->
+            R.CallExpr (getterName m c lab) <$> traverse go [x]
+      CompoundTerm (Unqualified "set_field") [l, x, v]
+        | Just (m, c, lab) <- fieldLabel l ->
+            R.CallExpr (setterName m c lab) <$> traverse go [x, v]
       -- 'host:f(args)' — host language call.
       CompoundTerm (Qualified "host" f) args ->
         R.HostExpr f <$> traverse go args
@@ -1678,6 +1692,15 @@ termToExpr vis loc origin = go
     classifyParam bad = do
       tell [noDiag (P.AnnP (LambdaParamError bad) loc origin)]
       pure HeadWildcard
+
+-- | The canonical label term @m:ctor::lab@ the renamer writes.
+fieldLabel :: Term -> Maybe (Text, Text, Text)
+fieldLabel t = case t of
+  CompoundTerm
+    (Unqualified "::")
+    [CompoundTerm (Qualified m c) [], CompoundTerm (Unqualified lab) []] ->
+      Just (m, c, lab)
+  _ -> Nothing
 
 -- | Translate a 'Term' that lives inside a @quote/1@ quotation. No
 -- function-set lookup happens here: quoting suppresses evaluation, so

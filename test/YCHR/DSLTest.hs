@@ -264,8 +264,8 @@ typeDeclarationTests =
               typeVars = [],
               kind =
                 Algebraic
-                  [ DataConstructor (Unqualified "red") [],
-                    DataConstructor (Unqualified "green") []
+                  [ DataConstructor (Unqualified "red") (Positional []),
+                    DataConstructor (Unqualified "green") (Positional [])
                   ],
               loc = dummyLoc
             },
@@ -284,8 +284,10 @@ typeDeclarationTests =
                   typeVars = ["a"],
                   kind =
                     Algebraic
-                      [ DataConstructor (Unqualified "nil") [],
-                        DataConstructor (Unqualified "cons") [TypeVar "a", listCon]
+                      [ DataConstructor (Unqualified "nil") (Positional []),
+                        DataConstructor
+                          (Unqualified "cons")
+                          (Positional [TypeVar "a", listCon])
                       ],
                   loc = dummyLoc
                 }

@@ -1,0 +1,23 @@
+% Every rename error of labelled fields, one per function or rule.
+:- module(main, []).
+:- use_module(lib).
+
+:- chr_type pr(K, V) ---> pr(fst :: K, snd :: V).
+:- chr_type q ---> q(fst :: int) ; plain(int).
+
+:- function unknown/1, hidden/1, ambiguous/1, no_such/1, not_literal/1,
+            bad_list/1, not_labelled/1, mismatch/1, arity/1, in_pattern/1.
+unknown(X) -> get_field(zzz, X).
+hidden(X) -> get_field(w, X).
+ambiguous(X) -> get_field(fst, X).
+no_such(X) -> set_field(pr::zzz, X, 1).
+not_literal(X) -> get_field(L, X).
+bad_list(X) -> new_record(pr, X).
+not_labelled(_) -> new_record(plain, []).
+mismatch(X) -> new_record(pr, [fst = X, fst = 1, zzz = 2]).
+arity(X) -> get_field(pr::fst).
+in_pattern(pr(get_field(pr::fst, Y), _)) -> Y.
+
+:- chr_constraint c/1.
+c(X) <=> get_field(pr::fst, X).
+c(X) <=> X = new_record(pr, [fst = 1, snd = 2]).

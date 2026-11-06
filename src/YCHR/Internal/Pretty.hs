@@ -30,6 +30,7 @@ where
 
 import Data.Char (isUpper)
 import Data.List (intercalate)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -41,6 +42,7 @@ import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Types
   ( BoundSig (..),
+    ConFields (..),
     Constraint (..),
     DataConstructor (..),
     FunSignature (..),
@@ -506,7 +508,9 @@ prettyTypeDecl td =
 ctorToString :: DataConstructor -> String
 ctorToString c =
   let baseName = unqualifiedText c.conName
-      pexpr = case c.conArgs of
-        [] -> PE.Atom baseName
-        args -> PE.Compound baseName (map (noAnn . typeExprToPExpr) args)
+      field (l, t) = PE.Compound "::" [noAnn (PE.Atom l), noAnn (typeExprToPExpr t)]
+      pexpr = case c.conFields of
+        Positional [] -> PE.Atom baseName
+        Positional args -> PE.Compound baseName (map (noAnn . typeExprToPExpr) args)
+        Labelled fs -> PE.Compound baseName (map (noAnn . field) (NE.toList fs))
    in PE.prettyPExpr prettyOps pexpr

@@ -1,0 +1,5 @@
+% The label forms are reserved names.
+:- module(main, []).
+:- function get_field/2.
+get_field(A, _) -> A.
+:- chr_constraint new_record/1.

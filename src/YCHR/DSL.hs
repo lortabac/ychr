@@ -71,6 +71,7 @@ module YCHR.DSL
     tyDef,
     tyOpaque,
     dataCtor,
+    recordCtor,
 
     -- * Rules
     Rule,
@@ -325,7 +326,12 @@ tyOpaque n vs =
 
 -- | Data constructor: name and argument types.
 dataCtor :: Text -> [TypeExpr] -> DataConstructor
-dataCtor n args = DataConstructor {conName = Unqualified n, conArgs = args}
+dataCtor n args = DataConstructor {conName = Unqualified n, conFields = Positional args}
+
+-- | Data constructor with labelled arguments: name and @(label, type)@
+-- pairs. The labels must be distinct; this is not checked here.
+recordCtor :: Text -> NE.NonEmpty (Text, TypeExpr) -> DataConstructor
+recordCtor n fs = DataConstructor {conName = Unqualified n, conFields = Labelled fs}
 
 -- ---------------------------------------------------------------------------
 -- Rules

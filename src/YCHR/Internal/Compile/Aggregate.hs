@@ -74,6 +74,7 @@ import YCHR.Internal.Types
     DataConstructor (..),
     Term (..),
     TypeDefinition (..),
+    conArgs,
     typeConstructors,
   )
 import YCHR.Internal.Types qualified as Types
@@ -274,7 +275,7 @@ aggregateResultTypeDeclared typeDefs = any declaresMaybe typeDefs
     declaresMaybe td =
       td.name == maybeTypeName
         && any
-          (\dc -> dc.conName == justConName && length dc.conArgs == 1)
+          (\dc -> dc.conName == justConName && length (conArgs dc) == 1)
           (typeConstructors td)
 
 -- | @library(maybe)@'s type and the constructor the protocol needs. Both

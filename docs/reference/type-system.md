@@ -66,6 +66,12 @@ An algebraic type definition introduces:
 The type name can't be a built-in type, `fun`, `->` or `,`
 (`YCHR-20016`).
 
+A constructor's arguments may carry labels (`point(x :: X, y :: Y)`,
+[language.md §Labelled fields](language.md#labelled-fields)). The
+checker never sees them: the label forms are rewritten to positional
+code, and calls of generated accessor functions typed from the
+declaration, before checking.
+
 ### Opaque types
 
 An *opaque type* is a nominal type whose values are introduced and

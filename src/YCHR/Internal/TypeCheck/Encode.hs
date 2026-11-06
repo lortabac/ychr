@@ -85,6 +85,7 @@ import YCHR.Internal.Types
     TypeExpr (..),
     TypeKind (..),
     baseTypeNames,
+    conArgs,
     flattenName,
     qualifiedToName,
   )
@@ -431,7 +432,7 @@ typeKind (Algebraic cs) = ast "algebraic" [listTerm (map dataCon cs)]
 typeKind Opaque = ast "opaque" []
 
 dataCon :: DataConstructor -> Term
-dataCon dc = ast "data_con" [nameTerm dc.conName, listTerm (map typeExpr dc.conArgs)]
+dataCon dc = ast "data_con" [nameTerm dc.conName, listTerm (map typeExpr (conArgs dc))]
 
 -- ---------------------------------------------------------------------------
 -- Handing the result to a session

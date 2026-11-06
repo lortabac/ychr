@@ -68,6 +68,9 @@ module YCHR.Internal.Parsed
     TypeKind (..),
     typeConstructors,
     DataConstructor (..),
+    ConFields (..),
+    conArgs,
+    conLabels,
     TypeExpr (..),
     BoundSig (..),
     Aggregate (..),
@@ -85,6 +88,7 @@ import YCHR.Internal.Types
     AggregateConjunct (..),
     AggregateKind (..),
     BoundSig (..),
+    ConFields (..),
     Constraint (..),
     ConstraintUse (..),
     DataConstructor (..),
@@ -93,6 +97,8 @@ import YCHR.Internal.Types
     TypeDefinition (..),
     TypeExpr (..),
     TypeKind (..),
+    conArgs,
+    conLabels,
     typeConstructors,
   )
 
