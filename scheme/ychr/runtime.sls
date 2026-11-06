@@ -746,11 +746,11 @@
 
   ;; Prelude host-call table for `deep-eval-value`. Mirrors the
   ;; bare-name entries in Haskell's `baseHostCallRegistry`
-  ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print`,
-  ;; `read_term_from_string` and `write_term_to_string`, the reachable
-  ;; entries of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`).
-  ;; `name_base` is still missing (see
-  ;; dev-docs/SCHEME_BACKEND_GAPS.md). Left out on purpose:
+  ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus the reachable
+  ;; entries of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`):
+  ;; `print`, `read_term_from_string`, `write_term_to_string` and
+  ;; `name_base`, and the search entries (`Runtime/Search.hs`). Left
+  ;; out on purpose:
   ;; `print_store` and `write_store_to_list`: their only arity is 0, and
   ;; a nullary `host:` spelling compiles to an atom, so the deep
   ;; evaluator — which dispatches only `term?` values — can never ask
@@ -824,6 +824,7 @@
       (h 'compound_to_list 1 (lambda (s v) (%compound-to-list v)))
       (h 'list_to_compound 1 (lambda (s v) (%list-to-compound v)))
       (h 'copy_term 1 (lambda (s v) (%copy-term s v)))
+      (h 'name_base 1 (lambda (s v) (%name-base v)))
       ;; library(search): each reads the store or a session table, so all
       ;; take the session first; `fail` reads only the trail but keeps
       ;; the same convention.

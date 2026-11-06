@@ -344,6 +344,11 @@
               1
               (deep-eval-value (fresh-session)
                                (make-term 'copy_term (vector 1))))
+  (test-equal "host__name_base evaluates"
+              'foo
+              (deep-eval-value (fresh-session)
+                               (make-term 'host__name_base
+                                          (vector 'm__foo))))
   ;; Arity is part of the prelude key, so the wrong arity misses the
   ;; table and is reported as not-evaluable. Haskell's name-only
   ;; registry reaches the primitive and reports *its* arity error
