@@ -59,6 +59,7 @@ import YCHR.Internal.Types
     TypeDefinition (..),
     TypeExpr (..),
     TypeKind (..),
+    conArgs,
     flattenName,
     qualifiedToName,
   )
@@ -190,8 +191,8 @@ termToPat conEnv typeMap (AlgCol cs) term = case term of
         -- type-incorrect (diagnosed elsewhere), so stay conservative
         -- with a wildcard.
         | dc.conName `elem` [c.conName | c <- cs],
-          length sub == length dc.conArgs ->
-            PCon dc.conName (zipWith subPat dc.conArgs sub)
+          length sub == length (conArgs dc) ->
+            PCon dc.conName (zipWith subPat (conArgs dc) sub)
       _ -> PWild
   _ -> PWild
   where
@@ -243,8 +244,8 @@ completeSignature (AlgCol ctors) present
 specializeWitness ::
   (TypeExpr -> ColType) -> [ColType] -> [[Pat]] -> DataConstructor -> Maybe [Pat]
 specializeWitness classify ts matrix dc =
-  let argTypes = map classify dc.conArgs
-      n = length dc.conArgs
+  let argTypes = map classify (conArgs dc)
+      n = length (conArgs dc)
    in case findMissing classify (argTypes ++ ts) (specialize dc matrix) of
         Nothing -> Nothing
         Just w -> Just (PCon dc.conName (take n w) : drop n w)
@@ -256,7 +257,7 @@ missingHead :: ColType -> Set Name -> Pat
 missingHead OtherCol _ = PWild
 missingHead (AlgCol ctors) present =
   case find (\dc -> not (dc.conName `Set.member` present)) ctors of
-    Just dc -> PCon dc.conName (replicate (length dc.conArgs) PWild)
+    Just dc -> PCon dc.conName (replicate (length (conArgs dc)) PWild)
     Nothing -> PWild -- unreachable: incomplete implies a missing ctor
 
 -- | Specialize the matrix on a constructor: rows headed by that
@@ -266,7 +267,7 @@ missingHead (AlgCol ctors) present =
 specialize :: DataConstructor -> [[Pat]] -> [[Pat]]
 specialize dc = mapMaybe row
   where
-    n = length dc.conArgs
+    n = length (conArgs dc)
     row (PCon c args : rest)
       | c == dc.conName = Just (args ++ rest)
       | otherwise = Nothing

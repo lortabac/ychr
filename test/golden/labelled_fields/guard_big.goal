@@ -1,0 +1,1 @@
+main:in_guard(shapes:circle(shapes:pt(0, 0), 50), R)

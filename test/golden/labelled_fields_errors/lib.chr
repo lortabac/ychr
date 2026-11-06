@@ -1,0 +1,3 @@
+:- module(lib, [type(box/0, [])]).
+% `box` is exported without constructors, so `w` is hidden.
+:- chr_type box ---> box(w :: int).

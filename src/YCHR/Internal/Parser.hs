@@ -69,6 +69,7 @@ where
 
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.Either (partitionEithers)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -108,6 +109,9 @@ builtinOps :: OpTable
 builtinOps =
   P.mkOpTable
     [ (100, [(P.Yfx, ":")]),
+      -- Field labels: @fst :: K@ in a constructor, @pair::fst@ in a
+      -- use. Looser than @:@, so @m:pair::fst@ is @::(m:pair, fst)@.
+      (200, [(P.Xfx, "::")]),
       (400, [(P.Yfx, "/")]),
       (500, [(P.Fx, "fun")]),
       (750, [(P.Xfx, "is"), (P.Xfx, "=")]),
@@ -700,6 +704,19 @@ data ParseValidationError
     -- not an atom or compound term. The enclosing type definition is
     -- dropped.
     MalformedDataConstructor
+  | -- | A field label (@L :: T@) whose @L@ is not an atom. The type
+    -- definition is dropped.
+    InvalidFieldLabel
+  | -- | The same label twice in one constructor. The type definition is
+    -- dropped.
+    DuplicateFieldLabel Text
+  | -- | A constructor labels some of its arguments but not all. The type
+    -- definition is dropped.
+    PartialFieldLabels Text
+  | -- | A field label (@L :: T@) anywhere but a constructor argument of
+    -- a @:- chr_type@, or on the list cell. The enclosing declaration is
+    -- dropped.
+    MisplacedFieldLabel
   | -- | A @:- chr_type@ directive does not have the expected
     -- @head ---> alts@ shape. The type definition is dropped.
     MalformedTypeDefinition
@@ -1649,6 +1666,9 @@ convertTypeExpr (Ann pexpr loc) = case pexpr of
   -- list of signatures: @r1, b2 -> r2@ reads as @->(','(r1, b2), r2)@.
   Compound "->" _ -> Left (AnnP CommaOrArrowInType loc pexpr)
   Compound "," _ -> Left (AnnP CommaOrArrowInType loc pexpr)
+  -- A label is only valid on a constructor argument, which
+  -- 'convertDataConstructor' strips before it gets here.
+  Compound "::" _ -> Left (AnnP MisplacedFieldLabel loc pexpr)
   Compound name args ->
     TypeCon (Unqualified name) <$> traverse convertTypeExpr args
   _ -> Left (AnnP MalformedTypeExpr loc pexpr)
@@ -1753,6 +1773,9 @@ reservedMacroHeadNames =
       "fun",
       "$call",
       "tell",
+      "get_field",
+      "set_field",
+      "new_record",
       ":",
       "$compound",
       "$atom"
@@ -1788,17 +1811,41 @@ convertMacroClause (Ann pexpr loc) = case pexpr of
 convertDataConstructor ::
   Ann PExpr -> Either (AnnP ParseValidationError) DataConstructor
 convertDataConstructor (Ann pexpr loc) = case pexpr of
-  Atom "[]" -> Right (DataConstructor (Unqualified "[]") [])
-  Atom name -> Right (DataConstructor (Unqualified name) [])
+  Atom "[]" -> Right (DataConstructor (Unqualified "[]") (Positional []))
+  Atom name -> Right (DataConstructor (Unqualified name) (Positional []))
   -- [T|list(T)] — list constructor sugar
   Compound "." args ->
-    DataConstructor (Unqualified ".") <$> traverse convertTypeExpr args
+    DataConstructor (Unqualified ".") . Positional <$> traverse convertTypeExpr args
   _
     | Just err <- definitionHeadError MalformedDataConstructor loc pexpr pexpr ->
         Left err
-  Compound name args ->
-    DataConstructor (Unqualified name) <$> traverse convertTypeExpr args
+  Compound name args -> DataConstructor (Unqualified name) <$> convertConFields name args
   _ -> Left (AnnP MalformedDataConstructor loc pexpr)
+
+-- | Convert a constructor's arguments. Either all are labelled
+-- (@L :: T@) or none.
+convertConFields ::
+  Text -> [Ann PExpr] -> Either (AnnP ParseValidationError) ConFields
+convertConFields cname args = case args of
+  (a : rest)
+    | all isLabelled args -> do
+        fs <- traverse labelled (a :| rest)
+        case firstDup Set.empty (map fst (NE.toList fs)) of
+          Just l -> Left (AnnP (DuplicateFieldLabel l) a.sourceLoc a.node)
+          Nothing -> Right (Labelled fs)
+  _ -> case filter isLabelled args of
+    [] -> Positional <$> traverse convertTypeExpr args
+    (b : _) -> Left (AnnP (PartialFieldLabels cname) b.sourceLoc b.node)
+  where
+    isLabelled (Ann (Compound "::" [_, _]) _) = True
+    isLabelled _ = False
+    labelled (Ann (Compound "::" [Ann (Atom l) _, ty]) _) =
+      (\t -> (l, t)) <$> convertTypeExpr ty
+    labelled (Ann e l) = Left (AnnP InvalidFieldLabel l e)
+    firstDup _ [] = Nothing
+    firstDup seen (x : xs)
+      | Set.member x seen = Just x
+      | otherwise = firstDup (Set.insert x seen) xs
 
 -- ** Rule conversion
 

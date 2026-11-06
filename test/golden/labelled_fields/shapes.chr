@@ -1,0 +1,9 @@
+% Types with labelled fields, used from another module.
+:- module(shapes, [type(pt/2), type(shape/0), type(hidden/0, [])]).
+
+:- chr_type pt(X, Y) ---> pt(x :: X, y :: Y).
+% `circle` is labelled, `rect` is not. `r` is also a label of `hidden`,
+% which is exported without constructors, so `r` alone is not ambiguous
+% for an importer.
+:- chr_type shape ---> circle(c :: pt(int, int), r :: int) ; rect(int, int).
+:- chr_type hidden ---> hidden(r :: int).

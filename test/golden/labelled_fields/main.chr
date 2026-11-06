@@ -1,0 +1,42 @@
+:- module(main, [type(cell/0), type(odd/0), get_x/2, set_x/3, origin/1, radius/2, grow/2, move/3,
+                 in_guard/2, nested/2, own/2, qualified/2, wrong_ctor/2,
+                 quoted/1, wait/1, odd_names/1]).
+
+:- use_module(shapes).
+
+% A local type that reuses label `x`, so `x` alone is ambiguous here.
+:- chr_type cell ---> cell(x :: int, next :: cell) ; nil.
+:- chr_type size ---> big ; small.
+% Quoted names with `::` in them. The accessors must not clash.
+:- chr_type odd ---> 'p::q'(s :: int) ; p(q :: int, 'q::s' :: int).
+
+:- function px(pt(int, int)) -> int.
+px(P) -> get_field(pt::x, P).
+
+:- chr_constraint get_x/2, set_x/3, origin/1, radius/2, grow/2, move/3,
+                  in_guard/2, nested/2, own/2, qualified/2, wrong_ctor/2,
+                  quoted/1, late/2, wait/1, odd_names/1.
+
+get_x(P, R) <=> R is px(P).
+set_x(P, V, R) <=> R is set_field(pt::x, P, V).
+% Fields given out of order; arguments are expressions.
+origin(R) <=> R is new_record(pt, [y = 1 + 1, x = 0]).
+radius(S, R) <=> R is get_field(r, S).
+grow(S, R) <=> R is set_field(r, S, get_field(r, S) * 2).
+% Update a field of a field.
+move(S, DX, R) <=>
+    C is get_field(c, S),
+    R is set_field(c, S, set_field(pt::x, C, get_field(pt::x, C) + DX)).
+in_guard(S, R) <=> get_field(r, S) > 10 | R = big.
+in_guard(_, R) <=> R = small.
+% A label form as a constraint argument and a constructor argument.
+nested(S, R) <=> R is pt(get_field(r, S), new_record(cell, [next = nil, x = 1])).
+own(C, R) <=> R is get_field(next, C).
+qualified(P, R) <=> R is get_field(shapes:pt::y, P).
+wrong_ctor(S, R) <=> R is get_field(r, S).
+% Inside quote/1 a label form is data.
+quoted(R) <=> R is quote(get_field(x, y)).
+% An unbound field soft-fails the guard, which waits for a binding.
+late(P, R) <=> get_field(pt::x, P) > 0 | R = big.
+wait(R) <=> late(P, R), P = pt(1, 2).
+odd_names(R) <=> R is pt(get_field(s, 'p::q'(7)), get_field('q::s', p(1, 2))).

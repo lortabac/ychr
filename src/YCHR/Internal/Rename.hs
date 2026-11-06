@@ -272,6 +272,33 @@ data RenameError
     -- state directly, and none is a constraint @tell@ could reach.
     -- Carries the form's name and arity.
     TellControlGoal Text Int
+  | -- | A label form (@get_field@, @set_field@, @new_record@) at the
+    -- wrong arity. Carries the form's name and the arity used.
+    FieldFormArity Text Int
+  | -- | A label form where it is not evaluated: a head or equation
+    -- pattern, an @=@ operand, the left of @is@, or as a goal. Carries
+    -- the form's name.
+    MisplacedFieldForm Text
+  | -- | The label of @get_field@ or @set_field@ is not written as
+    -- @lab@, @ctor::lab@ or @m:ctor::lab@. Carries the form's name.
+    FieldLabelNotLiteral Text
+  | -- | No visible constructor has this label.
+    UnknownFieldLabel Text
+  | -- | More than one visible constructor has this label. Carries the
+    -- label and the constructors, as @m:ctor@.
+    AmbiguousFieldLabel Text [Text]
+  | -- | @ctor::lab@ where no visible constructor @ctor@ has label @lab@.
+    -- Carries the constructor as written and the label.
+    NoSuchFieldLabel Text Text
+  | -- | @new_record@'s second argument is not a literal list of
+    -- @Label = Expr@.
+    MalformedRecordFields
+  | -- | @new_record@ names a constructor that is not visible or has no
+    -- labels. Carries the constructor as written.
+    RecordConstructorNotLabelled Text
+  | -- | @new_record@'s labels do not match the constructor's. Carries
+    -- the constructor, then the missing, repeated and unknown labels.
+    RecordFieldMismatch Text [Text] [Text] [Text]
   | -- | A macro body refers to @M:x\/a@, where @M@ is the macro's own
     -- declaring module, and @M@ does not declare and export
     -- @x\/a@ (as a constraint, function, macro, or data constructor).
@@ -472,6 +499,9 @@ data RenameCtx = RenameCtx
     exportEnv :: ExportEnv,
     dataConEnv :: DataConEnv,
     dataConProviders :: DataConProviders,
+    -- | The constructors visible to the current module, with their
+    -- labels. Used to resolve field labels.
+    visibleConstructors :: [DeclaredCon],
     -- | All declared @(constructorName, arity)@ providers across the
     -- program, /unfiltered/ by visibility. Used to disambiguate
     -- diagnostics for qualified references: if a missing
@@ -571,7 +601,9 @@ defaultRenameInputs =
 data DeclaredCon = DeclaredCon
   { onType :: DeclaredType,
     name :: Text,
-    arity :: Int
+    arity :: Int,
+    -- | Field labels in argument order; empty if positional.
+    labels :: [Text]
   }
 
 -- | Every data constructor the modules declare. Constructors come from
@@ -579,7 +611,7 @@ data DeclaredCon = DeclaredCon
 -- parser never produces qualified constructor names).
 declaredCons :: [CollectedModule] -> [DeclaredCon]
 declaredCons mods =
-  [ DeclaredCon (declaredType m.name td) t (length dc.conArgs)
+  [ DeclaredCon (declaredType m.name td) t (length (conArgs dc)) (conLabels dc)
   | m <- mods,
     Ann td _ <- m.typeDecls,
     dc <- typeConstructors td,
@@ -898,6 +930,7 @@ renameCtxFor mods inputs = ctxFor
                 exportEnv = exportEnv0,
                 dataConEnv = Map.empty,
                 dataConProviders = Map.empty,
+                visibleConstructors = [],
                 allDataConProviders = allCons,
                 exportedDataConProviders = exportedConProviders,
                 visibleFunNames = buildVisibleFunctionNames mods m,
@@ -920,7 +953,8 @@ renameCtxFor mods inputs = ctxFor
           visible = visibleCons (visibleDataCons mods exportedCons ctx0) cons
        in ctx0
             { dataConEnv = buildDataConEnv visible,
-              dataConProviders = buildDataConProviders visible
+              dataConProviders = buildDataConProviders visible,
+              visibleConstructors = visible
             }
 
 -- | The result of a renaming run that reported no errors.
@@ -1891,6 +1925,126 @@ requireSearchImport ctx site =
     )
     (emitErrorIn ctx (annAt site DisjunctionWithoutSearch))
 
+-- | The arity of a label form, or 'Nothing' if the name is not one.
+fieldFormArity :: Text -> Maybe Int
+fieldFormArity f = case f of
+  "get_field" -> Just 2
+  "set_field" -> Just 3
+  "new_record" -> Just 2
+  _ -> Nothing
+
+-- | Rename a label form. @get_field@ and @set_field@ keep their shape,
+-- with the label rewritten to @m:ctor::lab@, for Resolve to turn into
+-- a call of the generated accessor. @new_record@ becomes the positional
+-- term. Only evaluated positions take them; a goal ('ResolveTop') or a
+-- pattern does not.
+renameFieldForm ::
+  RenameCtx -> Site -> ResolveMode -> Text -> [Term] -> Rename Term
+renameFieldForm ctx site mode form args
+  | Just n <- fieldFormArity form,
+    length args /= n =
+      failed (FieldFormArity form (length args))
+  | mode == ResolveTop || not (isEvaluating mode) =
+      failed (MisplacedFieldForm form)
+  | otherwise = case args of
+      [l, x] | form == "get_field" -> withLabel l $ \lt -> do
+        x' <- sub x
+        pure (CompoundTerm (Unqualified form) [lt, x'])
+      [l, x, v] | form == "set_field" -> withLabel l $ \lt -> do
+        x' <- sub x
+        v' <- sub v
+        pure (CompoundTerm (Unqualified form) [lt, x', v'])
+      [c, fs] -> newRecord c fs
+      _ -> pure orig
+  where
+    orig = CompoundTerm (Unqualified form) args
+    failed e = emitErrorIn ctx (annAt site e) >> pure orig
+    sub = renameTerm ctx site mode
+    withLabel l k = resolveFieldLabel ctx site form l >>= maybe (pure orig) k
+    newRecord c fs = case c of
+      CompoundTerm cname [] ->
+        lookupLabelledCon ctx site cname >>= \case
+          ConAmbiguous -> pure orig
+          ConFound d | not (null d.labels) -> case recordFields fs of
+            Nothing -> failed MalformedRecordFields
+            Just given -> do
+              let names = map fst given
+                  missing = [l | l <- d.labels, l `notElem` names]
+                  repeated = nub [l | (i, l) <- zip [0 :: Int ..] names, l `elem` take i names]
+                  unknown = [l | l <- names, l `notElem` d.labels]
+              if null missing && null repeated && null unknown
+                then do
+                  args' <- traverse (\l -> sub (fromMaybe Wildcard (lookup l given))) d.labels
+                  pure (CompoundTerm (Qualified d.onType.declaringModule d.name) args')
+                else failed (RecordFieldMismatch (nameDisplay cname) missing repeated unknown)
+          _ -> failed (RecordConstructorNotLabelled (nameDisplay cname))
+      _ -> failed (RecordConstructorNotLabelled (termHead c))
+    termHead (CompoundTerm n _) = nameDisplay n
+    termHead _ = "_"
+
+-- | A literal list of @Label = Expr@, or 'Nothing'.
+recordFields :: Term -> Maybe [(Text, Term)]
+recordFields t = case t of
+  CompoundTerm (Unqualified "[]") [] -> Just []
+  CompoundTerm (Unqualified ".") [field, rest]
+    | CompoundTerm (Unqualified "=") [CompoundTerm (Unqualified l) [], e] <- field ->
+        ((l, e) :) <$> recordFields rest
+  _ -> Nothing
+
+-- | Resolve the label of @get_field@ or @set_field@ to the canonical
+-- @m:ctor::lab@ term, or report why it cannot.
+resolveFieldLabel :: RenameCtx -> Site -> Text -> Term -> Rename (Maybe Term)
+resolveFieldLabel ctx site form l = case l of
+  CompoundTerm (Unqualified lab) []
+    | lab /= "::" -> case [d | d <- ctx.visibleConstructors, lab `elem` d.labels] of
+        [d] -> pure (Just (labelTerm d lab))
+        [] -> failed (UnknownFieldLabel lab)
+        ds -> failed (AmbiguousFieldLabel lab (map conDisplay ds))
+  CompoundTerm (Unqualified "::") [CompoundTerm cname [], CompoundTerm (Unqualified lab) []] ->
+    lookupLabelledCon ctx site cname >>= \case
+      ConAmbiguous -> pure Nothing
+      ConFound d | lab `elem` d.labels -> pure (Just (labelTerm d lab))
+      _ -> failed (NoSuchFieldLabel (nameDisplay cname) lab)
+  _ -> failed (FieldLabelNotLiteral form)
+  where
+    failed e = emitErrorIn ctx (annAt site e) >> pure Nothing
+    labelTerm d lab =
+      CompoundTerm
+        (Unqualified "::")
+        [ CompoundTerm (Qualified d.onType.declaringModule d.name) [],
+          CompoundTerm (Unqualified lab) []
+        ]
+    conDisplay d = d.onType.declaringModule <> ":" <> d.name
+
+-- | What a constructor name used with a label denotes.
+data ConLookup
+  = ConFound DeclaredCon
+  | ConMissing
+  | -- | Already reported, so the caller reports nothing more.
+    ConAmbiguous
+
+-- | The visible constructor a name denotes. An ambiguous bare name is
+-- reported here; an unknown one is left to the caller.
+lookupLabelledCon :: RenameCtx -> Site -> Name -> Rename ConLookup
+lookupLabelledCon ctx site name = case candidates of
+  [d] -> pure (ConFound d)
+  [] -> pure ConMissing
+  ds -> do
+    let n = unqualifiedText name
+    let mods = nub (map (.onType.declaringModule) ds)
+    emitErrorIn ctx (annAt site (AmbiguousDataConstructor n mods))
+    pure ConAmbiguous
+  where
+    candidates = case name of
+      Unqualified n -> [d | d <- ctx.visibleConstructors, d.name == n]
+      Qualified m n ->
+        [d | d <- ctx.visibleConstructors, d.name == n, d.onType.declaringModule == m]
+
+-- | A name as written: @m:n@ or @n@.
+nameDisplay :: Name -> Text
+nameDisplay (Qualified m n) = m <> ":" <> n
+nameDisplay (Unqualified n) = n
+
 -- | The module that declares the choice-point constraint @;@ compiles
 -- to. Matches 'YCHR.Internal.Runtime.Goal.altName'.
 searchModuleName :: Text
@@ -1957,6 +2111,12 @@ renameTerm ctx site mode t = case t of
     | mode == ResolveAll -> do
         emitErrorIn ctx (annAt site (TellOutsideGoalPosition (length args)))
         pure t
+  -- Label forms: @get_field@, @set_field@, @new_record@. Inside
+  -- @quote\/1@ they are data, so they fall through to the generic arm.
+  CompoundTerm (Unqualified f) args
+    | Just _ <- fieldFormArity f,
+      mode /= NoResolveQuoted ->
+        renameFieldForm ctx site mode f args
   -- Lambda: @fun(params) -> body end@, i.e. @'->'(fun(params), body)@.
   -- A lambda is a value, not data, so this arm fires in every
   -- non-quoted position, patterns included; otherwise a lambda passed
@@ -2641,7 +2801,9 @@ renameDataConstructor :: RenameCtx -> DataConstructor -> DataConstructor
 renameDataConstructor ctx dc =
   DataConstructor
     { conName = Qualified ctx.currentModule.name (unqualifiedText dc.conName),
-      conArgs = map (renameTypeExpr ctx) dc.conArgs
+      conFields = case dc.conFields of
+        Positional ts -> Positional (map (renameTypeExpr ctx) ts)
+        Labelled fs -> Labelled (fmap (fmap (renameTypeExpr ctx)) fs)
     }
 
 renameAnnDecl :: RenameCtx -> Ann Declaration -> Rename (Ann Declaration)
@@ -2779,12 +2941,12 @@ reservedTypeNames = Set.union baseTypeNames (Set.fromList ["fun", "->", ","])
 validateTypeDecls :: RenameCtx -> Rename ()
 validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
   where
-    isTypeRefCon dc = isTypeRefKey (unqualifiedText dc.conName) (length dc.conArgs)
+    isTypeRefCon dc = isTypeRefKey (unqualifiedText dc.conName) (length (conArgs dc))
     -- '?'/1 is the aggregate goal guard. An unqualified use reads as
     -- the guard, so only `m:'?'(X)` could build such a constructor.
     -- Forbid the pun instead.
     isGuardCon dc =
-      isGuardFunctor (Unqualified (unqualifiedText dc.conName)) (length dc.conArgs)
+      isGuardFunctor (Unqualified (unqualifiedText dc.conName)) (length (conArgs dc))
     step seen (Ann td _) = do
       let k = typeKey td
           n = k.localName

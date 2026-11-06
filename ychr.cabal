@@ -409,6 +409,7 @@ library
                     , YCHR.Internal.Diagnostic
                     , YCHR.Internal.Display
                     , YCHR.Internal.Exhaustiveness
+                    , YCHR.Internal.Fields
                     , YCHR.Internal.Interpreter.Slots
                     , YCHR.Internal.Repl
                     , YCHR.Internal.Meta

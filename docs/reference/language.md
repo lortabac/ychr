@@ -29,6 +29,9 @@ static type checker is specified in [type-system.md](type-system.md).
 - Strings: `"…"`, escapes `\"`, `\\`, `\n`, `\t`. Type `string`, not
   code lists.
 - `:` qualifies a name with its module: `lists:append`.
+- `::` (`xfx 200`, looser than `:`) attaches a label: `x :: X` in a
+  type declaration, `point::x` in a
+  [labelled field](#labelled-fields) reference.
 - `[]`, `[a, b]`, `[H | T]` are `'.'/2` cells.
 
 ## Directives
@@ -453,6 +456,7 @@ decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
 | `type(name/arity)` | [Type reference](#type-references): the type's name as a value. |
 | `'$call'(F, A1, …, An)` | Wired-in dynamic call, 1–10 arguments; prefer the prelude's `call/N`. |
 | `tell(G, A1, …, Ak)` | [Dynamic tell](#dynamic-tells-telln), a goal only: tell `G` with `A1..Ak` appended. |
+| `get_field(L, X)`, `set_field(L, X, V)`, `new_record(C, Fields)` | [Labelled fields](#labelled-fields). |
 | `X is E`, `X = E`, `A == B`, `A \== B` | Evaluation, unification (tell), structural (ask) equality and disequality. |
 | `A ; B` | [Disjunction](#disjunction-in-rule-bodies) in a rule body. |
 
@@ -1014,6 +1018,130 @@ Store the argument already evaluated when you want the value.
 `quote(...)` keeps a subtree symbolic where it is written, but the
 resulting value is an ordinary term: `is` on a variable bound to it
 still walks it.
+
+## Labelled fields
+
+A constructor may name its arguments. Labels are a front-end
+convenience: they are gone before type checking and compilation, which
+only see positional arguments.
+
+```prolog
+:- module(points, [type(point/2), type(shape/0), get_x/1, set_x/2, origin/0]).
+
+:- chr_type point(X, Y) ---> point(x :: X, y :: Y).
+:- chr_type shape ---> circle(r :: float) ; rect(float, float).
+```
+
+- `Label :: Type` labels one argument. A label is an atom
+  (`YCHR-15032` otherwise).
+- A constructor labels all its arguments or none (`YCHR-15034`).
+  `circle` is labelled, `rect` is not.
+- Labels of one constructor are distinct (`YCHR-15033`). Other
+  constructors, of the same type or not, may reuse a label.
+- `::` anywhere else in a type is `YCHR-15035`. That includes the list
+  cell `[T | list(T)]` and a constraint declaration.
+- Positional construction and matching still work: `point(1, 2)`, and
+  a head or equation pattern `point(A, B)`.
+
+Three expression forms use labels:
+
+| Form | Value |
+|---|---|
+| `get_field(L, X)` | The argument of `X` labelled `L`. |
+| `set_field(L, X, V)` | A copy of `X` with that argument replaced by `V`. |
+| `new_record(C, [L1 = E1, ..., Ln = En])` | The term `C(...)` with each `Ei` at label `Li`. |
+
+```prolog
+:- function get_x/1, set_x/2, origin/0.
+get_x(P) -> get_field(x, P).
+set_x(P, V) -> set_field(point::x, P, V).
+origin -> new_record(point, [y = 0, x = 0]).
+```
+
+```
+ychr> X is get_x(point(1, 2)).
+X = 1.
+ychr> X is set_x(point(1, 2), 9).
+X = points:point(9, 2).
+ychr> X is origin.
+X = points:point(0, 0).
+```
+
+They are allowed where a value is evaluated: guards, `is` right-hand
+sides, function bodies, arguments of a told constraint, queries. As a
+goal, in a head or equation pattern, as an `=` operand or on the left
+of `is` they are `YCHR-20060`: there is no matching by label, and
+`X = new_record(...)` would not evaluate it, so write
+`X is new_record(...)`. Inside `quote/1` they are plain data.
+
+The label `L` is written literally, in one of three forms:
+
+- `lab`: the one visible constructor with label `lab`. No such
+  constructor is `YCHR-20052`; more than one is `YCHR-20053`, and the
+  message lists them.
+- `ctor::lab`: label `lab` of constructor `ctor`. `ctor` resolves like
+  any constructor name. No visible constructor `ctor` with that label
+  is `YCHR-20054`.
+- `m:ctor::lab`: the same, with a module-qualified constructor.
+
+A label is visible where its constructor is: exporting
+`type(point/2, [])` hides `x` and `y` too. Like every name in a macro
+body, a label is resolved where the macro is used, so a library macro
+should write `m:ctor::lab`. A label that is not written
+literally (a variable, a number, a call) is `YCHR-20055`.
+
+`new_record`'s first argument is a constructor name, plain or
+module-qualified. The second is a literal list of `Label = Expr`, with
+plain labels of that constructor, in any order, each exactly once. No
+label has a default. Errors: the list is not a literal list of
+`Label = Expr` (`YCHR-20056`); the constructor is not visible or has no
+labels (`YCHR-20057`); a label is missing, repeated or unknown
+(`YCHR-20058`). `new_record` becomes the positional term, so the
+arguments are evaluated in declaration order, not in the order written.
+
+`get_field`, `set_field` and `new_record` are reserved at every arity,
+like `tell`. The wrong arity is `YCHR-20059`; declaring one as a
+constraint or function is `YCHR-16003`.
+
+`get_field` and `set_field` become calls to two functions the compiler
+writes for each labelled argument. For `x` above:
+
+```prolog
+'get_field(point__::x)'(point(A1, _)) -> A1.
+'set_field(point__::x)'(point(_, A2), V) -> point(V, A2).
+```
+
+The names hold `__`, so no source can name them. If the type has other
+constructors, each gets an equation that panics, so for `r`:
+
+```prolog
+'get_field(circle__::r)'(circle(A1)) -> A1.
+'get_field(circle__::r)'(rect(_, _)) -> panic("get_field(circle::r): not a circle/1").
+```
+
+An unbound argument matches no equation, so a guard waits for it as it
+would for a hand-written accessor
+([Soft guard failure](#soft-guard-failure)). A value built by another
+constructor is a runtime error:
+
+```
+ychr> X is get_field(r, rect(1.0, 2.0)).
+=== runtime error ===
+libraries/prelude.chr:292:1: YCHR-60001
+<<function prelude:panic/1>>
+get_field(circle::r): not a circle/1
+panic(S) -> host:panic(S)
+
+=== stack trace ===
+points.chr:4:13: YCHR-60001
+<<function points:get_field(circle__::r)/1>>
+get_field(circle :: r, X)
+```
+
+The two functions are typed from the declaration: `get_field(x, P)`
+checks as `point(X, Y) -> X`, and `set_field(x, P, V)` as
+`(point(X, Y), X) -> point(X, Y)`. So `set_field` cannot change a
+field's type.
 
 ## Runtime errors: `panic/1`
 

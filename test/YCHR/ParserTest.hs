@@ -921,9 +921,9 @@ typeTests =
                   [ algebraicTD
                       (Unqualified "color")
                       []
-                      [ DataConstructor (Unqualified "red") [],
-                        DataConstructor (Unqualified "green") [],
-                        DataConstructor (Unqualified "blue") []
+                      [ DataConstructor (Unqualified "red") (Positional []),
+                        DataConstructor (Unqualified "green") (Positional []),
+                        DataConstructor (Unqualified "blue") (Positional [])
                       ]
                       dummyLoc
                   ]
@@ -934,17 +934,19 @@ typeTests =
                   [ algebraicTD
                       (Unqualified "tree")
                       []
-                      [ DataConstructor (Unqualified "empty") [],
+                      [ DataConstructor (Unqualified "empty") (Positional []),
                         DataConstructor
                           (Unqualified "leaf")
-                          [TypeCon (Unqualified "int") []],
+                          (Positional [TypeCon (Unqualified "int") []]),
                         DataConstructor
                           (Unqualified "branch")
-                          [ TypeCon
-                              (Unqualified "tree")
-                              [],
-                            TypeCon (Unqualified "tree") []
-                          ]
+                          ( Positional
+                              [ TypeCon
+                                  (Unqualified "tree")
+                                  [],
+                                TypeCon (Unqualified "tree") []
+                              ]
+                          )
                       ]
                       dummyLoc
                   ]
@@ -955,7 +957,9 @@ typeTests =
                   [ algebraicTD
                       (Unqualified "pair")
                       ["A", "B"]
-                      [ DataConstructor (Unqualified "pair") [TypeVar "A", TypeVar "B"]
+                      [ DataConstructor
+                          (Unqualified "pair")
+                          (Positional [TypeVar "A", TypeVar "B"])
                       ]
                       dummyLoc
                   ]
@@ -966,12 +970,14 @@ typeTests =
                   [ algebraicTD
                       (Unqualified "list")
                       ["T"]
-                      [ DataConstructor (Unqualified "[]") [],
+                      [ DataConstructor (Unqualified "[]") (Positional []),
                         DataConstructor
                           (Unqualified ".")
-                          [ TypeVar "T",
-                            TypeCon (Unqualified "list") [TypeVar "T"]
-                          ]
+                          ( Positional
+                              [ TypeVar "T",
+                                TypeCon (Unqualified "list") [TypeVar "T"]
+                              ]
+                          )
                       ]
                       dummyLoc
                   ]
@@ -984,12 +990,14 @@ typeTests =
                       []
                       [ DataConstructor
                           (Unqualified "wrap")
-                          [ TypeCon
-                              (Unqualified "pair")
-                              [ TypeCon (Unqualified "int") [],
-                                TypeCon (Unqualified "int") []
+                          ( Positional
+                              [ TypeCon
+                                  (Unqualified "pair")
+                                  [ TypeCon (Unqualified "int") [],
+                                    TypeCon (Unqualified "int") []
+                                  ]
                               ]
-                          ]
+                          )
                       ]
                       dummyLoc
                   ]
@@ -1004,7 +1012,7 @@ typeTests =
               @?= [ algebraicTD
                       (Unqualified "t")
                       []
-                      [DataConstructor (Unqualified "a") []]
+                      [DataConstructor (Unqualified "a") (Positional [])]
                       dummyLoc
                   ],
       testCase "multiple type decls" $
@@ -1013,12 +1021,12 @@ typeTests =
                   [ algebraicTD
                       (Unqualified "a")
                       []
-                      [DataConstructor (Unqualified "x") []]
+                      [DataConstructor (Unqualified "x") (Positional [])]
                       dummyLoc,
                     algebraicTD
                       (Unqualified "b")
                       []
-                      [DataConstructor (Unqualified "y") []]
+                      [DataConstructor (Unqualified "y") (Positional [])]
                       dummyLoc
                   ]
               ),

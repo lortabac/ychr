@@ -135,7 +135,20 @@ macroEntry _ = Nothing
 -- match those cases (e.g. @is/3@).
 reservedSymbolSet :: Set Text
 reservedSymbolSet =
-  Set.fromList ["true", "=", "is", "->", ";", "$call", "quote", "fun", "tell"]
+  Set.fromList
+    [ "true",
+      "=",
+      "is",
+      "->",
+      ";",
+      "$call",
+      "quote",
+      "fun",
+      "tell",
+      "get_field",
+      "set_field",
+      "new_record"
+    ]
 
 -- | Whether @t@ is one of the names in 'reservedSymbolSet'.
 isReserved :: Text -> Bool
