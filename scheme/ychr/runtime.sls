@@ -5,7 +5,7 @@
     make-session session? make-counters
     ;; From (ychr var)
     make-var var? var-id deref unify unifiable? equal?/chr
-    make-term term? term-functor term-args
+    make-term term? term-functor term-args chr-atom? atom->symbol symbol->atom
     match-term get-arg add-observer! ground-key get-var-id
     ;; From (ychr store)
     make-store-by-type create-constraint store-constraint
@@ -37,7 +37,7 @@
     %idiv %imod %irem
     %str-concat %str-length %str-upper %str-lower
     %copy-term
-    %nil %cons
+    %nil %cons deep-deref
     ;; Deep-eval dispatch table for the @is@ operator
     register-evaluable! deep-eval-value
     ;; Closure-apply dispatch table for @'$call'@
@@ -786,7 +786,7 @@
       ;; Type predicates
       (h 'float 1 (lambda (s v) (flonum? v)))
       (h 'integer 1 (lambda (s v) (integer? v)))
-      (h 'atom 1 (lambda (s v) (symbol? v)))
+      (h 'atom 1 (lambda (s v) (chr-atom? v)))
       (h 'boolean 1 (lambda (s v) (boolean? v)))
       (h 'string 1 (lambda (s v) (string? v)))
       (h 'var 1 (lambda (s v) (var? v)))
@@ -1133,6 +1133,7 @@
   (define (%ground? v)
     (let ((d (deref v)))
       (cond ((var? d) #f)
+            ((pair? d) (and (%ground? (car d)) (%ground? (cdr d))))
             ((term? d)
              (let ((a (term-args d)))
                (let loop ((i 0))
@@ -1141,25 +1142,21 @@
                           (loop (+ i 1)))))))
             (else #t))))
 
-  ;;; Prolog-style list helpers. After the renamer-driven flattening,
-  ;;; @[]@ and @.@ are canonicalized to the @prelude__[]@ /
-  ;;; @prelude__.@ runtime functors. 0-arity compounds collapse to
-  ;;; symbols at the runtime layer (matching the Haskell-side @VAtom@
-  ;;; canonical form), so %nil is the bare symbol; %cons is a 2-ary
-  ;;; term. %nil?/%cons? also accept the legacy 0-ary term form.
-  (define (%nil) (string->symbol "prelude__[]"))
-  (define (%cons h t) (make-term (string->symbol "prelude__.") (vector h t)))
+  ;;; Prolog-style list helpers. The canonical list is a native Scheme
+  ;;; list (see `(ychr var)`): %nil is `'()` and %cons is `cons`.
+  ;;; %nil?/%cons? also accept the bare `[]` / `.`(H, T) spelling that
+  ;;; the reader builds, as `isListFunctor` does on the Haskell side.
+  (define (%nil) '())
+  (define (%cons h t) (cons h t))
+  (define bare-nil (string->symbol "[]"))
+  (define bare-cons (string->symbol "."))
   (define (%nil? v)
-    (or (and (symbol? v) (eq? v (string->symbol "[]")))
-        (and (symbol? v) (eq? v (string->symbol "prelude__[]")))
-        (and (term? v)
-             (eq? (term-functor v) (string->symbol "prelude__[]"))
-             (= (vector-length (term-args v)) 0))))
+    (or (null? v) (eq? v bare-nil)))
   (define (%cons? v)
-    (and (term? v)
-         (or (eq? (term-functor v) (string->symbol "prelude__."))
-             (eq? (term-functor v) (string->symbol ".")))
-         (= (vector-length (term-args v)) 2)))
+    (or (pair? v)
+        (and (term? v)
+             (eq? (term-functor v) bare-cons)
+             (= (vector-length (term-args v)) 2))))
 
   ;;; term_variables
   (define (%term-variables t)
@@ -1178,15 +1175,17 @@
       (walk t)
       (fold-right %cons (%nil) (reverse result))))
 
-  ;;; compound_to_list — also accepts a symbol (the runtime form of a
-  ;;; 0-arity compound), returning a singleton list.
+  ;;; compound_to_list — also accepts an atom (the runtime form of a
+  ;;; 0-arity compound), returning a singleton list. The functor goes
+  ;;; through `symbol->atom`, so a `prelude__[]` functor comes out as
+  ;;; nil and not as a second spelling of it.
   (define (%compound-to-list c)
     (cond
-      ((symbol? c) (%cons c (%nil)))
+      ((chr-atom? c) (%cons c (%nil)))
       ((term? c)
        (let ((f (term-functor c)) (a (term-args c)))
          (let loop ((i (- (vector-length a) 1)) (acc (%nil)))
-           (if (< i 0) (%cons f acc)
+           (if (< i 0) (%cons (symbol->atom f) acc)
                (loop (- i 1) (%cons (vector-ref a i) acc))))))
       (else
        (%arg-error "compound_to_list" (list c)
@@ -1219,9 +1218,10 @@
             (cond
               ((not (%nil? l)) (reject))
               ((null? parts) (reject))
-              ((not (symbol? (car parts))) (reject))
+              ((not (chr-atom? (car parts))) (reject))
               ((null? (cdr parts)) (car parts))
-              (else (make-term (car parts) (list->vector (cdr parts)))))))))
+              (else (make-term (atom->symbol (car parts))
+                               (list->vector (cdr parts)))))))))
 
   ;;; name_base — the local part of a mangled name symbol. Splits at
   ;;; the first "__", which vmName (Compile/Names.hs) reserves for the
@@ -1242,8 +1242,8 @@
     (when (%unbound? v)
       (%chr-inst-error
        "name_base: argument is not sufficiently instantiated (unbound variable)"))
-    (unless (symbol? v) (%chr-error "name_base: expected an atom"))
-    (let* ((s0 (symbol->string v))
+    (unless (chr-atom? v) (%chr-error "name_base: expected an atom"))
+    (let* ((s0 (symbol->string (atom->symbol v)))
            (s (%strip-type-prefix s0))
            (n (string-length s))
            (sep (let loop ((i 0))
@@ -1343,9 +1343,11 @@
   ;;; printer renders it `_`.
   (define (deep-deref v)
     (let ((d (deref v)))
-      (if (term? d)
-          (make-term (term-functor d) (deep-deref-args (term-args d)))
-          d)))
+      (cond
+        ((pair? d) (cons (deep-deref (car d)) (deep-deref (cdr d))))
+        ((term? d)
+         (make-term (term-functor d) (deep-deref-args (term-args d))))
+        (else d))))
 
   (define (deep-deref-args args)
     (let* ((n (vector-length args))
@@ -2102,6 +2104,9 @@
                    (let ((fresh (make-var s)))
                      (hashtable-set! cache id fresh)
                      fresh))))
+            ((pair? d)
+             (let ((h (loop (car d))))
+               (cons h (loop (cdr d)))))
             ((term? d)
              (let* ((args (term-args d))
                     (n (vector-length args))

@@ -11,6 +11,11 @@
           term?
           term-functor
           term-args
+          cons-functor
+          nil-symbol
+          chr-atom?
+          atom->symbol
+          symbol->atom
           match-term
           get-arg
           add-observer!
@@ -50,9 +55,47 @@
         (trail-push! (lambda () (var-observers-set! v old))))))
 
   ;;; Compound terms
-  (define-record-type (term make-term term?)
-    (fields (immutable functor term-functor)
-            (immutable args term-args)))
+  ;;;
+  ;;; A CHR list is a native Scheme list: the cons cell
+  ;;; `prelude__.`(H, T) is a pair and the nil atom `prelude__[]` is
+  ;;; `'()`. Every other compound is a `compound` record.
+  ;;;
+  ;;; `term?`, `term-functor`, `term-args` and `make-term` hide the split,
+  ;;; so generic code sees a pair as a 2-ary `prelude__.` term.
+  ;;; `term-args` allocates a vector for a pair, so hot paths test
+  ;;; `pair?` first. `make-term` builds a pair for `prelude__.`/2, so
+  ;;; there is only one way to spell a cons cell.
+  ;;;
+  ;;; Only the canonical spellings map to pairs. The bare `.`/2 and `[]`
+  ;;; that the reader builds stay a record and a symbol, as they are
+  ;;; distinct values on the Haskell side too.
+  (define cons-functor (string->symbol "prelude__."))
+  (define nil-symbol (string->symbol "prelude__[]"))
+
+  (define-record-type (compound %make-compound compound?)
+    (fields (immutable functor compound-functor)
+            (immutable args compound-args)))
+
+  (define (term? v) (or (pair? v) (compound? v)))
+
+  (define (term-functor v)
+    (if (pair? v) cons-functor (compound-functor v)))
+
+  (define (term-args v)
+    (if (pair? v) (vector (car v) (cdr v)) (compound-args v)))
+
+  (define (make-term functor args)
+    (if (and (eq? functor cons-functor) (= (vector-length args) 2))
+        (cons (vector-ref args 0) (vector-ref args 1))
+        (%make-compound functor args)))
+
+  ;;; Atoms. An atom is a symbol, or `'()` for the nil atom.
+  ;;; `atom->symbol` gives an atom's name as a symbol; `symbol->atom` is
+  ;;; its inverse, and is what code that builds an atom from a name must
+  ;;; use, so nil is never spelled as the symbol.
+  (define (chr-atom? v) (or (symbol? v) (null? v)))
+  (define (atom->symbol v) (if (null? v) nil-symbol v))
+  (define (symbol->atom s) (if (eq? s nil-symbol) '() s))
 
   ;;; Dereferencing with path compression
   ;;;
@@ -141,11 +184,19 @@
        (eq? d1 d2))
       ((and (string? d1) (string? d2))
        (string=? d1 d2))
-      ((and (term? d1) (term? d2)
-            (eq? (term-functor d1) (term-functor d2))
-            (= (vector-length (term-args d1))
-               (vector-length (term-args d2))))
-       (unify-args (term-args d1) (term-args d2) 0 emit!))
+      ((and (null? d1) (null? d2)) #t)
+      ((and (pair? d1) (pair? d2))
+       (let-values (((ok obs) (unify (car d1) (car d2))))
+         (emit! obs)
+         (and ok
+              (let-values (((ok obs) (unify (cdr d1) (cdr d2))))
+                (emit! obs)
+                ok))))
+      ((and (compound? d1) (compound? d2)
+            (eq? (compound-functor d1) (compound-functor d2))
+            (= (vector-length (compound-args d1))
+               (vector-length (compound-args d2))))
+       (unify-args (compound-args d1) (compound-args d2) 0 emit!))
       (else #f)))
 
   (define (unify-args v1 v2 i emit!)
@@ -185,11 +236,14 @@
           ((and (symbol? d1) (symbol? d2)) (eq? d1 d2))
           ((and (boolean? d1) (boolean? d2)) (eq? d1 d2))
           ((and (string? d1) (string? d2)) (string=? d1 d2))
-          ((and (term? d1) (term? d2)
-                (eq? (term-functor d1) (term-functor d2))
-                (= (vector-length (term-args d1))
-                   (vector-length (term-args d2))))
-           (uni-args (term-args d1) (term-args d2) 0))
+          ((and (null? d1) (null? d2)) #t)
+          ((and (pair? d1) (pair? d2))
+           (and (uni (car d1) (car d2)) (uni (cdr d1) (cdr d2))))
+          ((and (compound? d1) (compound? d2)
+                (eq? (compound-functor d1) (compound-functor d2))
+                (= (vector-length (compound-args d1))
+                   (vector-length (compound-args d2))))
+           (uni-args (compound-args d1) (compound-args d2) 0))
           (else #f)))
       (define (uni-args v1 v2 i)
         (if (>= i (vector-length v1))
@@ -222,11 +276,15 @@
       ((and (symbol? d1) (symbol? d2)) (eq? d1 d2))
       ((and (boolean? d1) (boolean? d2)) (eq? d1 d2))
       ((and (string? d1) (string? d2)) (string=? d1 d2))
-      ((and (term? d1) (term? d2)
-            (eq? (term-functor d1) (term-functor d2))
-            (= (vector-length (term-args d1))
-               (vector-length (term-args d2))))
-       (equal-args (term-args d1) (term-args d2) 0))
+      ((and (null? d1) (null? d2)) #t)
+      ((and (pair? d1) (pair? d2))
+       (and (equal?/chr (car d1) (car d2))
+            (equal?/chr (cdr d1) (cdr d2))))
+      ((and (compound? d1) (compound? d2)
+            (eq? (compound-functor d1) (compound-functor d2))
+            (= (vector-length (compound-args d1))
+               (vector-length (compound-args d2))))
+       (equal-args (compound-args d1) (compound-args d2) 0))
       (else #f)))
 
   (define (equal-args v1 v2 i)
@@ -243,14 +301,19 @@
   (define (match-term v functor arity)
     (let ((d (deref v)))
       (cond
+        ((pair? d) (and (= arity 2) (eq? functor cons-functor)))
+        ((null? d) (and (= arity 0) (eq? functor nil-symbol)))
         ((symbol? d) (and (= arity 0) (eq? d functor)))
-        ((term? d)
-         (and (eq? (term-functor d) functor)
-              (= (vector-length (term-args d)) arity)))
+        ((compound? d)
+         (and (eq? (compound-functor d) functor)
+              (= (vector-length (compound-args d)) arity)))
         (else #f))))
 
   (define (get-arg v idx)
-    (vector-ref (term-args (deref v)) idx))
+    (let ((d (deref v)))
+      (if (pair? d)
+          (if (= idx 0) (car d) (cdr d))
+          (vector-ref (compound-args d) idx))))
 
   ;;; Observer management
   ;; Register an observer on every unbound variable reachable from a
@@ -265,8 +328,11 @@
         ((and (var? d) (eq? (var-value d) *unbound*))
          (trail-observers! d)
          (var-observers-set! d (cons suspension-id (var-observers d))))
-        ((term? d)
-         (add-observer-args! suspension-id (term-args d) 0)))))
+        ((pair? d)
+         (add-observer! suspension-id (car d))
+         (add-observer! suspension-id (cdr d)))
+        ((compound? d)
+         (add-observer-args! suspension-id (compound-args d) 0)))))
 
   (define (add-observer-args! suspension-id args i)
     (when (< i (vector-length args))
@@ -285,7 +351,7 @@
   ;;; distinct, exactly as `equal?/chr` keeps them):
   ;;;
   ;;;   (num . n)       a number, with `number-key` normalization below
-  ;;;   (atom . s)      a symbol
+  ;;;   (atom . s)      a symbol; nil is the symbol `prelude__[]`
   ;;;   (text . s)      a string
   ;;;   (bool . b)      a boolean
   ;;;   (term f k ...)  a compound: functor plus one key per argument
@@ -340,8 +406,15 @@
          #f)
         ((number? d) (cons 'num (number-key d)))
         ((symbol? d) (cons 'atom d))
+        ((null? d) (cons 'atom nil-symbol))
         ((string? d) (cons 'text d))
         ((boolean? d) (cons 'bool d))
+        ((pair? d)
+         ;; Same key shape as the record form, so the key does not
+         ;; depend on how the cell is stored.
+         (let* ((kh (value-key (car d) oid))
+                (kt (value-key (cdr d) oid)))
+           (and kh kt (list 'term cons-functor kh kt))))
         ((term? d)
          (let* ((args (term-args d))
                 (n (vector-length args)))

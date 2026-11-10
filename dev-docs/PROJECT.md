@@ -985,6 +985,9 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   (`open-session`, `tell`) so end-users can drive a compiled program
   interactively without writing a driver script — see
   [`docs/how-to/scheme-repl.md`](../docs/how-to/scheme-repl.md).
+  CHR lists are native Scheme lists (pairs and `'()`), so lists pass
+  between CHR and Scheme code unchanged; see
+  `dev-docs/SCHEME_BACKEND_GAPS.md` ("Lists are native").
   `ychr repl --repl-backend=chez` uses the same runtime for its Scheme
   backend. Haskell keeps the query front end: `Compile.compileQueryGoals`
   lowers the prepared `[D.BodyGoal]` to VM statements, and

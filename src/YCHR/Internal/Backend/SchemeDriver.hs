@@ -18,8 +18,10 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Backend.Scheme
   ( HostCallTarget (..),
+    compileAtom,
     compileSymbol,
     hostCallTarget,
+    makeTermSExpr,
     qualifiedAliasIdentifier,
   )
 import YCHR.Internal.Compile (funcProcName)
@@ -142,7 +144,7 @@ exprToScheme (R.CtorExpr name [])
 exprToScheme (R.CtorExpr (Types.Unqualified n) []) =
   printSExpr (compileSymbol n)
 exprToScheme (R.CtorExpr name@(Types.Qualified _ _) []) =
-  printSExpr (compileSymbol (vmName name).unName)
+  printSExpr (compileAtom (vmName name).unName)
 exprToScheme (R.CtorExpr name args) =
   makeTerm (vmName name).unName (map exprToScheme args)
 exprToScheme (R.CallExpr qn args) =
@@ -210,27 +212,23 @@ termToScheme (CompoundTerm name [])
       schemeBool b
 termToScheme (CompoundTerm (Types.Unqualified s) []) = printSExpr (compileSymbol s)
 termToScheme (CompoundTerm name@(Types.Qualified _ _) []) =
-  printSExpr (compileSymbol (vmName name).unName)
+  printSExpr (compileAtom (vmName name).unName)
 termToScheme (TextTerm s) = printSExpr (SString s)
 termToScheme (VarTerm n) = n
 -- See 'exprToScheme': a quoted @_@ is a fresh logical variable too.
 termToScheme Wildcard = "(make-var %s)"
 termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
-  "(%cons " <> termToScheme h <> " " <> termToScheme t <> ")"
+  "(cons " <> termToScheme h <> " " <> termToScheme t <> ")"
 termToScheme (CompoundTerm name@(Types.Qualified _ _) ts) =
   makeTerm (vmName name).unName (map termToScheme ts)
 termToScheme (CompoundTerm (Types.Unqualified n) ts) =
   makeTerm n (map termToScheme ts)
 
--- | A @make-term@ call building a compound with the given functor and
--- already-compiled arguments.
+-- | A compound with the given functor and already-compiled arguments:
+-- a pair for a cons cell, a @make-term@ call otherwise
+-- ('makeTermSExpr').
 makeTerm :: Text -> [Text] -> Text
-makeTerm functor args =
-  "(make-term "
-    <> printSExpr (compileSymbol functor)
-    <> " (vector "
-    <> T.intercalate " " args
-    <> "))"
+makeTerm functor args = printSExpr (makeTermSExpr functor (map SAtom args))
 
 -- | Collect every variable name mentioned anywhere in an expression
 -- tree, so each can be declared as a logical variable in the

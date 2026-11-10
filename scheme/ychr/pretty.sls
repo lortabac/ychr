@@ -251,6 +251,7 @@
         ((and (number? d) (inexact? d)) (vector 'float d))
         ((string? d) (vector 'text d))
         ((symbol? d) (atom->pexpr d))
+        ((null? d) (vector 'atom "[]"))
         ((closure? d) (source->pexpr aliases (vector-ref (term-args d) 1)))
         ((term? d)
          (let ((f (term-functor d))
@@ -280,6 +281,7 @@
     (let ((d (deref v)))
       (cond
         ((symbol? d) (source-name->pexpr d '()))
+        ((null? d) (vector 'atom "[]"))
         ((term? d)
          (let ((f (term-functor d))
                (args (map (lambda (a) (source->pexpr aliases a))

@@ -22,6 +22,8 @@ module YCHR.Internal.Backend.Scheme
 
     -- * Helpers shared with the driver generator
     compileSymbol,
+    compileAtom,
+    makeTermSExpr,
     isValidSchemeIdentifier,
     qualifiedAliasIdentifier,
     HostCallTarget (..),
@@ -1140,11 +1142,7 @@ compileValExpr (ApplyClosure f args) =
 compileValExpr NewVar =
   SList [SAtom "make-var", SAtom "%s"]
 compileValExpr (MakeTerm (Name f) args) =
-  SList
-    [ SAtom "make-term",
-      compileSymbol f,
-      SList (SAtom "vector" : map compileValExpr args)
-    ]
+  makeTermSExpr f (map compileValExpr args)
 compileValExpr (GetArg e i) =
   SList [SAtom "get-arg", compileValExpr e, SInt (fromIntegral i)]
 compileValExpr (FieldArg e (ArgIndex i)) =
@@ -1168,7 +1166,7 @@ compileBoolExpr (BNot e) = SList [SAtom "not", compileBoolExpr e]
 compileBoolExpr (BAnd a b) = SList [SAtom "and", compileBoolExpr a, compileBoolExpr b]
 compileBoolExpr (BOr a b) = SList [SAtom "or", compileBoolExpr a, compileBoolExpr b]
 compileBoolExpr (BMatchTerm e (Name f) arity) =
-  SList [SAtom "match-term", compileValExpr e, compileSymbol f, SInt (fromIntegral arity)]
+  matchTermSExpr (compileValExpr e) f arity
 compileBoolExpr (BEqual a b) =
   SList [SAtom "equal?/chr", compileValExpr a, compileValExpr b]
 compileBoolExpr (BIdEqual a b) =
@@ -1217,10 +1215,40 @@ compileCallArg (AId e) = compileIdExpr e
 compileLiteral :: Literal -> SExpr
 compileLiteral (IntLit n) = SInt n
 compileLiteral (FloatLit n) = SFloat n
-compileLiteral (AtomLit s) = compileSymbol s
+compileLiteral (AtomLit s) = compileAtom s
 compileLiteral (TextLit s) = SString s
 compileLiteral (BoolLit True) = SAtom "#t"
 compileLiteral (BoolLit False) = SAtom "#f"
+
+-- | The runtime's list spelling. A CHR list is a native Scheme list:
+-- the cons cell @prelude__.(H, T)@ is a pair and the nil atom
+-- @prelude__[]@ is @'()@ (see @scheme\/ychr\/var.sls@). Only these
+-- canonical names map; the bare @.@ and @[]@ stay a record and a symbol.
+consFunctor, nilAtom :: Text
+consFunctor = "prelude__."
+nilAtom = "prelude__[]"
+
+-- | An atom value: a symbol, or @'()@ for the nil atom.
+compileAtom :: Text -> SExpr
+compileAtom s
+  | s == nilAtom = SList [SAtom "quote", SList []]
+  | otherwise = compileSymbol s
+
+-- | A compound term with the given functor and compiled arguments: a
+-- pair for a cons cell, a @make-term@ call for anything else.
+makeTermSExpr :: Text -> [SExpr] -> SExpr
+makeTermSExpr f [h, t] | f == consFunctor = SList [SAtom "cons", h, t]
+makeTermSExpr f args =
+  SList [SAtom "make-term", compileSymbol f, SList (SAtom "vector" : args)]
+
+-- | A 'BMatchTerm' test. A cons cell or nil is a plain @pair?@ or
+-- @null?@ test; anything else goes through @match-term@.
+matchTermSExpr :: SExpr -> Text -> Word -> SExpr
+matchTermSExpr e f arity
+  | f == consFunctor && arity == 2 = SList [SAtom "pair?", SList [SAtom "deref", e]]
+  | f == nilAtom && arity == 0 = SList [SAtom "null?", SList [SAtom "deref", e]]
+  | otherwise =
+      SList [SAtom "match-term", e, compileSymbol f, SInt (fromIntegral arity)]
 
 -- | Compile a text to a Scheme symbol expression.
 -- Uses @(quote sym)@ for valid identifiers, @(string->symbol "...")@ otherwise.
@@ -1264,7 +1292,7 @@ hostCallMap =
       ("__chr_is_unbound", "%unbound?"),
       ("__chr_inst_error", "%chr-inst-error"),
       ("integer", "integer?"),
-      ("atom", "symbol?"),
+      ("atom", "chr-atom?"),
       ("boolean", "boolean?"),
       ("string", "string?"),
       ("var", "var?"),
@@ -1389,11 +1417,7 @@ compileEvalDeep (ApplyClosure f args) =
         : map compileEvalDeep args
     )
 compileEvalDeep (MakeTerm (Name f) args) =
-  SList
-    [ SAtom "make-term",
-      compileSymbol f,
-      SList (SAtom "vector" : map compileEvalDeep args)
-    ]
+  makeTermSExpr f (map compileEvalDeep args)
 compileEvalDeep e = compileValExpr e -- GetArg, FieldArg, FieldType, NewVar
 
 compileCallArgDeep :: CallArg -> SExpr
@@ -1409,12 +1433,7 @@ compileBoolEvalDeep (BAnd a b) =
 compileBoolEvalDeep (BOr a b) =
   SList [SAtom "or", compileBoolEvalDeep a, compileBoolEvalDeep b]
 compileBoolEvalDeep (BMatchTerm e (Name f) arity) =
-  SList
-    [ SAtom "match-term",
-      compileEvalDeep e,
-      compileSymbol f,
-      SInt (fromIntegral arity)
-    ]
+  matchTermSExpr (compileEvalDeep e) f arity
 compileBoolEvalDeep (BEqual a b) =
   SList [SAtom "equal?/chr", compileEvalDeep a, compileEvalDeep b]
 compileBoolEvalDeep (BUnify a b) =

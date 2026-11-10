@@ -18,8 +18,8 @@
     pretty-term pretty-bindings bindings->string pretty-query-result
     ;; --- (ychr runtime): vars, terms, unification --------------------
     make-var var? var-id deref unify unifiable? equal?/chr
-    make-term term? term-functor term-args
-    match-term get-arg
+    make-term term? term-functor term-args chr-atom? atom->symbol symbol->atom
+    match-term get-arg deep-deref
     ;; --- (ychr runtime): constraint store ----------------------------
     alive-constraint? constraint-id constraint-arg constraint-type
     id-equal? is-constraint-type? kill-constraint
