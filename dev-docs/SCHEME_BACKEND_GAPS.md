@@ -248,6 +248,19 @@ contracts from the invariant side.
   `pretty-query-result`. User output and bindings go to stdout (inherited
   by the REPL); one `YCHR-REPL-OK` or `YCHR-REPL-ERR <escaped>` frame per
   query goes to stderr.
+- **Lists are native.** A `prelude__.`/2 cell is a Scheme pair and the
+  atom `prelude__[]` is `'()`; every other compound is a `compound` record
+  (`scheme/ychr/var.sls`). The backend emits `cons`, `'()`, `pair?` and
+  `null?` for these (`makeTermSExpr`, `compileAtom`, `matchTermSExpr`), and
+  the runtime's `make-term` builds a pair for that functor too, so a cons
+  cell has one spelling. `term?`/`term-functor`/`term-args` treat a pair as
+  a 2-ary `prelude__.` term, so generic code needs no pair case; hot paths
+  test `pair?` first because `term-args` allocates a vector for a pair.
+  Since `'()` is not a symbol, code that asks "is this an atom" must use
+  `chr-atom?`, and code that builds an atom from a name must use
+  `symbol->atom`. Only the canonical spellings map: the bare `.`/2 and
+  `[]` the string reader builds stay a record and a symbol, distinct
+  values as they are on the Haskell side.
 - **Query-scope dynamic tell.** `%tell-term` special-cases the compiler's
   `<query>` scope: it resolves the goal through the program's exports
   (`resolve-export` + the session's goals table), as the Haskell

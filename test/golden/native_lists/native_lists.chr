@@ -1,0 +1,24 @@
+% Lists and the nil atom. The Scheme runtime stores a list as native
+% pairs and nil as '(), so these pin the spots where that differs
+% from a plain compound or symbol.
+:- module(native_lists, [is_atom/2, c2l/2, l2c/2, partial/3, lookup_go/1]).
+
+:- chr_constraint is_atom/2, c2l/2, l2c/2.
+
+is_atom(X, R) <=> R is atom(X).
+c2l(X, R) <=> R is compound_to_list(X).
+l2c(X, R) <=> R is list_to_compound(X).
+
+% A constraint over a partial list wakes up when the tail is bound.
+:- chr_constraint partial/3, one/2.
+
+one([X], R) <=> R = X.
+partial(A, T, R) <=> one([A|T], R), T = [], A = 5.
+
+% A list as an indexed key. Enough facts to cross the index threshold.
+:- chr_constraint lookup_go/1, fill/1, fact/2, lookup/2.
+
+fill(0) <=> true.
+fill(N) <=> N > 0 | fact([N, 0], N), M is N - 1, fill(M).
+fact(K, V) \ lookup(K, R) <=> R = V.
+lookup_go(R) <=> fill(40), lookup([7, 0], R).

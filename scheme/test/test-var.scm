@@ -431,4 +431,78 @@
       (test-eq "returns false" #f (unifiable? x 8))
       (test-eqv "still bound to 7" 7 (deref x)))))
 
+;;; --------------------------------------------------------------------------
+;;; Native lists: a `prelude__.` cell is a pair and nil is '()
+;;; --------------------------------------------------------------------------
+
+(test-group "native-lists"
+  (define cons-f (string->symbol "prelude__."))
+  (define nil-s (string->symbol "prelude__[]"))
+
+  (test-group "make-term builds a pair for a cons cell"
+    (let ((l (make-term cons-f (vector 1 '()))))
+      (test-assert "is a pair" (pair? l))
+      (test-equal "is (1)" '(1) l)
+      (test-assert "is a term" (term? l))
+      (test-eq "functor" cons-f (term-functor l))
+      (test-equal "args" (vector 1 '()) (term-args l))))
+
+  (test-group "the bare . functor stays a record"
+    (let ((l (make-term '|.| (vector 1 '()))))
+      (test-assert "not a pair" (not (pair? l)))
+      (test-assert "not equal to the native cell"
+                   (not (equal?/chr l (list 1))))))
+
+  (test-group "match-term and get-arg"
+    (let ((l (list 1 2)))
+      (test-assert "cons/2" (match-term l cons-f 2))
+      (test-assert "not cons/1" (not (match-term l cons-f 1)))
+      (test-assert "nil/0" (match-term '() nil-s 0))
+      (test-assert "nil is not the bare []"
+                   (not (match-term '() (string->symbol "[]") 0)))
+      (test-eqv "head" 1 (get-arg l 0))
+      (test-equal "tail" '(2) (get-arg l 1))))
+
+  (test-group "unify binds through pairs"
+    (let* ((s (fresh)) (x (make-var s)) (t (make-var s)))
+      (let-values (((ok obs) (unify (cons x t) (list 1 2 3))))
+        (test-assert "succeeds" ok)
+        (test-eqv "head" 1 (deref x))
+        (test-equal "tail" '(2 3) (deref t)))))
+
+  (test-group "unify fails on length mismatch"
+    (let-values (((ok obs) (unify (list 1 2) (list 1))))
+      (test-assert "fails" (not ok))))
+
+  (test-group "nil unifies only with nil"
+    (let-values (((ok obs) (unify '() '())))
+      (test-assert "nil = nil" ok))
+    (let-values (((ok obs) (unify '() nil-s)))
+      (test-assert "nil is not the symbol" (not ok))))
+
+  (test-group "unifiable? on pairs leaves no binding"
+    (let* ((s (fresh)) (x (make-var s)))
+      (test-assert "unifiable" (unifiable? (list x 2) (list 1 2)))
+      (test-eq "x still unbound" x (deref x))))
+
+  (test-group "equal?/chr on pairs"
+    (test-assert "equal" (equal?/chr (list 1 'a) (list 1 'a)))
+    (test-assert "different" (not (equal?/chr (list 1 'a) (list 1 'b))))
+    (test-assert "nil" (equal?/chr '() '())))
+
+  (test-group "a pair and its record spelling have the same key"
+    (test-equal "ground keys agree"
+                (ground-key (list 1 2))
+                (list 'term cons-f '(num . 1)
+                      (list 'term cons-f '(num . 2) (cons 'atom nil-s))))
+    (test-equal "nil keys as the nil atom" (cons 'atom nil-s) (ground-key '()))
+    (let* ((s (fresh)) (x (make-var s)))
+      (test-assert "partial list is not ground" (not (ground-key (cons 1 x))))))
+
+  (test-group "atoms"
+    (test-assert "nil is an atom" (chr-atom? '()))
+    (test-eq "nil's name" nil-s (atom->symbol '()))
+    (test-eq "back to nil" '() (symbol->atom nil-s))
+    (test-eq "other symbols unchanged" 'a (symbol->atom 'a))))
+
 (test-end "var")

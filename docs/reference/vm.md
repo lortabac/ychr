@@ -919,7 +919,9 @@ A backend must implement the following runtime capabilities.
 
 - Construction (`make-term`), structural matching (`bmatch-term`),
   argument extraction (`get-arg`); representation is backend-specific
-  (tagged arrays, objects, tuples).
+  (tagged arrays, objects, tuples). A backend may give some functors a
+  native form: the Scheme runtime stores `prelude:'.'/2` as a pair and
+  the atom `prelude:[]` as `'()`, so CHR lists are Scheme lists.
 
 ### Constraint store
 

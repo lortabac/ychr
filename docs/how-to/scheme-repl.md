@@ -106,6 +106,56 @@ ychr gen-driver -g cake examples/bakery.chr > build/run.scm
 
 The goal may not contain a lambda (`YCHR-50004`); pass `fun name/arity`.
 
+## Lists
+
+A CHR list is a plain Scheme list, so you can pass one in and use one
+that comes out. Take this program, saved as `/tmp/lst.chr`:
+
+```prolog
+:- module(lst, [total/2, upto/2]).
+:- use_module(library(lists)).
+:- chr_constraint total/2, upto/2.
+
+total(L, R) <=> R is sum_list(L).
+upto(N, L) <=> L is range(1, N).
+```
+
+Compile it with `-n lst`, then:
+
+```scheme
+(import (ychr) (ychr generated lst))
+(define s (open-session lst))
+(tell s total/2 '(1 2 3) 'R)
+```
+
+```
+R = 6
+```
+
+A list that comes back may still go through bound logical variables
+(here `l` itself). `deep-deref` follows them all and gives a plain list:
+
+```scheme
+(define l (make-var s))
+(begin (upto/2 s 4 l) (deep-deref l))
+(apply + (deep-deref l))
+```
+
+```
+(1 2 3 4)
+10
+```
+
+Notes:
+
+- The empty list `[]` is `'()`. It is still an atom to CHR
+  (`atom([])` is true); `chr-atom?` is the runtime's test.
+- `tell` only turns *top-level* uppercase symbols into variables. In
+  `'(A B)` the `A` and `B` are atoms.
+- Elements are CHR values: atoms are symbols, but a qualified one is
+  mangled (`mod:foo` is `mod__foo`), and other compounds are opaque
+  records (`term?`, `term-functor`, `term-args`).
+
 ## Multiple programs in one session
 
 ```scheme
