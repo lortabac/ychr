@@ -180,27 +180,30 @@ typeDefs :: SchemeTypesOptions -> Selected -> [Def]
 typeDefs opts s =
   concatMap (ctorDefs opts s.def) s.visible ++ typePredicate s
 
--- | @T?@: true for any constructor of the type, exported or not. Left
--- out when the type has one constructor of the same name, whose @C?@ is
--- the same procedure, and for an opaque type, which has no
--- constructors.
+-- | @T-type?@: true for any constructor of the type, exported or not.
+-- None for an opaque type, which has no constructors.
+--
+-- The @-type@ suffix keeps it apart from every constructor predicate:
+-- an encoded constructor name never holds a @-@, so @C?@ can't be
+-- @T-type?@, whatever the two are called.
 typePredicate :: Selected -> [Def]
 typePredicate s = case typeConstructors s.def of
   [] -> []
-  [c] | ctorIdent c == tIdent, c `elem` s.visible -> []
   cs ->
     [ Def
-        { ident = tIdent <> "?",
+        { ident = tIdent <> "-type?",
           origin = "type predicate of " <> describeType s.def,
           form =
             define
-              (tIdent <> "?")
+              (tIdent <> "-type?")
               ["v"]
-              (letDeref "v" (rnrs "or" (map (`ctorTest` SAtom "d") cs)))
+              (letDeref "v" (anyOf (map (`ctorTest` SAtom "d") cs)))
         }
     ]
   where
     tIdent = encodeAliasComponent (baseName s.def.name)
+    anyOf [t] = t
+    anyOf ts = rnrs "or" ts
 
 ctorDefs :: SchemeTypesOptions -> TypeDefinition -> DataConstructor -> [Def]
 ctorDefs opts td c

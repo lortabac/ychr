@@ -66,7 +66,7 @@ points.chr`, this script
 (define a (make-var s))
 (points:area/2 s (make-rect 2.0 3.0) a)
 (display (deref a)) (newline)
-(display (shape? empty)) (newline)
+(display (shape-type? empty)) (newline)
 ```
 
 prints, under Chez Scheme (`scheme --libdirs scheme:out --libexts .sls
@@ -90,20 +90,20 @@ For a constructor `C` of type `T`:
 | `(C-i t)` | Argument `i` (from 1) of a constructor without labels. |
 | `(C-with-L t v)` | A copy of `t` with label `L` set to `v`, like `set_field`. Labelled arguments only. |
 | `C` | A nullary constructor: the atom itself. With `C?`, no other definitions. |
-| `(T? v)` | `v` is a term of any constructor of `T`, exported or not. |
+| `(T-type? v)` | `v` is a term of any constructor of `T`, exported or not. |
 
-When a type has one constructor with the type's own name, `T?` and
-`C?` are one procedure, defined once. An opaque type and a built-in type
-get no definitions.
+The type predicate has its own suffix so it never clashes with a
+constructor predicate: in `:- chr_type t ---> t(int) ; u.`, `t?` tests
+for the constructor `t` and `t-type?` for the type. An opaque type and a
+built-in type get no definitions.
 
 Names come from the source names, never from the runtime's mangled
 functors. A character that is not allowed in an identifier is escaped
 the same way the backend escapes constraint aliases.
 
 **Collisions are errors** (YCHR-50006): two definitions with one name,
-for example the same constructor name in two types, or a type `t` with a
-constructor `t` and another constructor (both want `t?`). The generator
-never renames.
+for example the same constructor name in two types. The generator never
+renames.
 
 The library itself imports `(rnrs)` and `(ychr var)` with a prefix, so
 any name is fine inside it. Your code may not be: common constructors

@@ -35,7 +35,7 @@ ROUND_TRIP = """
 (let ((p (make-var s)))
   (rt:mk/1 s p)
   (check "point?" (point? p))
-  (check "shape? is false" (not (shape? p)))
+  (check "shape-type? is false" (not (shape-type? p)))
   (check "x" (eqv? 3 (point-x p)))
   (check "y is shallow" (pair? (point-y p)))
   (check "y deep" (equal? '(4) (deep-deref (point-y p)))))
@@ -54,8 +54,9 @@ ROUND_TRIP = """
 (check "rect-2" (eqv? 2.0 (rect-2 (make-rect 1.0 2.0))))
 (check "big-9" (eqv? 9 (big-9 (make-big 1 2 3 4 5 6 7 8 9))))
 (check "empty?" (empty? empty))
-(check "shape?" (and (shape? empty) (shape? (make-rect 1.0 2.0))
-                     (not (shape? (make-point 1 2)))))
+(check "shape-type?" (and (shape-type? empty) (shape-type? (make-rect 1.0 2.0))
+                          (not (shape-type? (make-point 1 2)))))
+(check "point-type?" (point-type? (make-point 1 2)))
 (display "ok")
 """
 
