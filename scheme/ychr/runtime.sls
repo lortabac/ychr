@@ -1175,15 +1175,17 @@
       (walk t)
       (fold-right %cons (%nil) (reverse result))))
 
-  ;;; compound_to_list — also accepts a symbol (the runtime form of a
-  ;;; 0-arity compound), returning a singleton list.
+  ;;; compound_to_list — also accepts an atom (the runtime form of a
+  ;;; 0-arity compound), returning a singleton list. The functor goes
+  ;;; through `symbol->atom`, so a `prelude__[]` functor comes out as
+  ;;; nil and not as a second spelling of it.
   (define (%compound-to-list c)
     (cond
       ((chr-atom? c) (%cons c (%nil)))
       ((term? c)
        (let ((f (term-functor c)) (a (term-args c)))
          (let loop ((i (- (vector-length a) 1)) (acc (%nil)))
-           (if (< i 0) (%cons f acc)
+           (if (< i 0) (%cons (symbol->atom f) acc)
                (loop (- i 1) (%cons (vector-ref a i) acc))))))
       (else
        (%arg-error "compound_to_list" (list c)
