@@ -153,8 +153,9 @@ Notes:
 - `tell` only turns *top-level* uppercase symbols into variables. In
   `'(A B)` the `A` and `B` are atoms.
 - Elements are CHR values: atoms are symbols, but a qualified one is
-  mangled (`mod:foo` is `mod__foo`), and other compounds are opaque
-  records (`term?`, `term-functor`, `term-args`).
+  mangled (`mod:foo` is `mod__foo`). To build and read values of a
+  `chr_type`, generate a library for it with `ychr scheme-types`
+  ([Scheme libraries for `chr_type`s](../reference/scheme-types.md)).
 
 ## Multiple programs in one session
 

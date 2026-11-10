@@ -505,4 +505,88 @@
     (test-eq "back to nil" '() (symbol->atom nil-s))
     (test-eq "other symbols unchanged" 'a (symbol->atom 'a))))
 
+;;; --------------------------------------------------------------------------
+;;; Flat compounds: one record type per arity up to K, a vector above
+;;; --------------------------------------------------------------------------
+
+(test-group "flat-compounds"
+  (define (args-up-to n)
+    (let ((v (make-vector n)))
+      (do ((i 0 (+ i 1))) ((= i n) v) (vector-set! v i (* 10 (+ i 1))))))
+
+  (test-eqv "K is 8" 8 compound-max-flat-arity)
+
+  (test-group "round trip at every arity"
+    (do ((n 1 (+ n 1))) ((> n 12))
+      (let* ((args (args-up-to n)) (t (make-term 'f args)))
+        (test-assert "term?" (term? t))
+        (test-assert "compound?" (compound? t))
+        (test-eq "functor" 'f (term-functor t))
+        (test-eqv "arity" n (term-arity t))
+        (test-equal "args" args (term-args t))
+        (do ((i 0 (+ i 1))) ((= i n))
+          (test-eqv "arg" (vector-ref args i) (term-arg t i)))
+        (test-assert "match-term" (match-term t 'f n))
+        (test-assert "match-term other arity"
+                     (not (match-term t 'f (+ n 1)))))))
+
+  (test-group "boundary K and K + 1"
+    (let ((k (make-term 'f (args-up-to 8)))
+          (k1 (make-term 'f (args-up-to 9))))
+      (test-assert "K is flat" (compound8? k))
+      (test-assert "K is not compound*" (not (compound*? k)))
+      (test-assert "K + 1 is compound*" (compound*? k1))
+      (test-eqv "K + 1 vector" 9 (vector-length (compound*-args k1)))))
+
+  (test-group "one representation per arity"
+    (test-assert "arity 2" (compound2? (make-term 'f (vector 1 2))))
+    (test-assert "arity 3" (compound3? (make-term 'f (vector 1 2 3))))
+    (test-assert "make-compound2 equals make-term"
+                 (equal?/chr (make-compound2 'f 1 2)
+                             (make-term 'f (vector 1 2)))))
+
+  (test-group "nullary make-term is an empty compound*"
+    ;; As the reference's `VTerm t []` for a nullary constraint.
+    (let ((t (make-term 'f (vector))))
+      (test-assert "compound*" (compound*? t))
+      (test-eqv "arity" 0 (term-arity t))
+      (test-assert "not the atom" (not (equal?/chr t 'f)))))
+
+  (test-group "unify across shapes"
+    (let* ((s (fresh)) (x (make-var s)))
+      (test-assert "compound3 vs compound3, other functor"
+                   (not (let-values (((ok obs)
+                                      (unify (make-term 'f (vector 1 2 3))
+                                             (make-term 'g (vector 1 2 3)))))
+                          ok)))
+      (test-assert "compound3 vs compound2"
+                   (not (let-values (((ok obs)
+                                      (unify (make-term 'f (vector 1 2 3))
+                                             (make-term 'f (vector 1 2)))))
+                          ok)))
+      (test-assert "K + 1 binds"
+                   (let-values (((ok obs)
+                                 (unify (make-term 'f (args-up-to 9))
+                                        (make-term 'f (vector 10 20 30 40 50 60
+                                                              70 80 x)))))
+                     ok))
+      (test-eqv "x bound" 90 (deref x))
+      (test-assert "equal?/chr K + 1"
+                   (equal?/chr (make-term 'f (args-up-to 9))
+                               (make-term 'f (args-up-to 9))))
+      (test-assert "unifiable? compound3 vs compound2"
+                   (not (unifiable? (make-term 'f (vector 1 2 3))
+                                    (make-term 'f (vector 1 2)))))))
+
+  (test-group "term-map"
+    (do ((n 1 (+ n 1))) ((> n 10))
+      (let ((t (term-map (lambda (a) (+ a 1)) (make-term 'f (args-up-to n)))))
+        (test-eqv "arity" n (term-arity t))
+        (test-eqv "first arg" 11 (term-arg t 0)))))
+
+  (test-group "get-arg on a bound variable"
+    (let* ((s (fresh)) (x (make-var s)))
+      (unify x (make-term 'f (vector 1 2 3 4)))
+      (test-eqv "arg 3" 4 (get-arg x 3)))))
+
 (test-end "var")

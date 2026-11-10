@@ -1,0 +1,11 @@
+% A nullary constraint in write_store_to_list is a nullary compound, not
+% an atom, on both backends: it does not unify with the atom.
+:- module(write_store_nullary, [go/2]).
+
+:- use_module(library(meta)).
+
+:- chr_constraint go/2.
+:- chr_constraint flag/0.
+
+go(R, Q) <=> flag, L is write_store_to_list(), L = [C],
+    P is compound_to_list(C), P = [_, _, X], R is atom(X), Q = X.

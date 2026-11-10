@@ -38,7 +38,8 @@
           (only (ychr generated bench_list) bench_list bench_list:go/2)
           (only (ychr generated bench_maplist) bench_maplist
             bench_maplist:go/2)
-          (only (ychr generated bench_sum) bench_sum bench_sum:go/2))
+          (only (ychr generated bench_sum) bench_sum bench_sum:go/2)
+          (only (ychr generated bench_terms) bench_terms bench_terms:go/2))
 
   ;; ------------------------------------------------------------------
   ;; Measurement policy
@@ -81,15 +82,18 @@
             (/ (fold-left + 0 sorted) n)
             (list-ref sorted (- n 1)))))
 
-  (define (measure now ticks-per-sec thunk)
-    (let loop ((i 0) (ts '()) (elapsed 0.0))
+  ;; The stats row, plus the mean bytes allocated per iteration when
+  ;; `alloc` (a thunk giving the total bytes allocated so far) is given.
+  (define (measure now ticks-per-sec thunk alloc)
+    (let loop ((i 0) (ts '()) (elapsed 0.0) (b0 (and alloc (alloc))))
       (if (and (>= i min-iters) (or (>= elapsed budget-ms) (>= i max-iters)))
-          (stats (reverse ts))
+          (append (stats (reverse ts))
+                  (list (and alloc (div (- (alloc) b0) i))))
           (let* ((t0 (now))
                  (ignored (thunk))
                  (t1 (now))
                  (ms (to-ms ticks-per-sec (- t1 t0))))
-            (loop (+ i 1) (cons ms ts) (+ elapsed ms))))))
+            (loop (+ i 1) (cons ms ts) (+ elapsed ms) b0)))))
 
   ;; Live constraints of one type in a session. The store is append-only,
   ;; so the snapshot's count includes killed constraints; a store-size
@@ -184,19 +188,28 @@
           (let* ((s (bench_sum)) (a (make-var s)))
             (bench_sum:go/2 s 2000 a)
             (deref a)))
-        (lambda (r) (equal? r 2001000)))))
+        (lambda (r) (equal? r 2001000)))
+      ;; Compound terms of arity 1-4 and 9: construction, head matching
+      ;; and argument reads. The case for the term representation.
+      (make-bench-case "terms" "bench_terms:go(500,R)"
+        (lambda ()
+          (let* ((s (bench_terms)) (a (make-var s)))
+            (bench_terms:go/2 s 500 a)
+            (deref a)))
+        (lambda (r) (equal? r 2379750)))))
 
   ;; ------------------------------------------------------------------
   ;; Driver
   ;; ------------------------------------------------------------------
 
-  (define (header)
+  (define (header alloc)
     (display (pad-right "case" 16))
     (display (pad-left "n" 8))
     (display (pad-left "min ms" 11))
     (display (pad-left "median ms" 12))
     (display (pad-left "mean ms" 11))
     (display (pad-left "max ms" 11))
+    (when alloc (display (pad-left "bytes/iter" 12)))
     (display "  check  goal")
     (newline))
 
@@ -237,7 +250,7 @@
           ((member (car only) valid) (unknown-only (cdr only) valid))
           (else (car only))))
 
-  (define (run-one c now ticks-per-sec)
+  (define (run-one c now ticks-per-sec alloc)
     (let ((name (bench-case-name c))
           (thunk (bench-case-thunk c))
           (check (bench-case-check c)))
@@ -248,13 +261,15 @@
                  (newline)
                  #f))
         (do ((i 0 (+ i 1))) ((= i warmup)) (thunk))
-        (let ((row (measure now ticks-per-sec thunk)))
+        (let ((row (measure now ticks-per-sec thunk alloc)))
           (display (pad-right name 16))
           (display (pad-left (number->string (list-ref row 0)) 8))
           (display (pad-left (num (list-ref row 1)) 11))
           (display (pad-left (num (list-ref row 2)) 12))
           (display (pad-left (num (list-ref row 3)) 11))
           (display (pad-left (num (list-ref row 4)) 11))
+          (when alloc
+            (display (pad-left (number->string (list-ref row 5)) 12)))
           ;; The check runs once, untimed, after the measurement.
           (let ((ok (if check (check (thunk)) #t)))
             (display (if ok "  ok    " "  FAIL  "))
@@ -262,7 +277,14 @@
             (newline)
             ok)))))
 
-  (define (run-all argv now ticks-per-sec)
+  ;; `alloc` is optional: a thunk giving the total bytes allocated so
+  ;; far, which adds a bytes-per-iteration column (Chez passes one).
+  (define run-all
+    (case-lambda
+      ((argv now ticks-per-sec) (run-all* argv now ticks-per-sec #f))
+      ((argv now ticks-per-sec alloc) (run-all* argv now ticks-per-sec alloc))))
+
+  (define (run-all* argv now ticks-per-sec alloc)
     (let* ((script (if (pair? argv) (car argv) "run-all"))
            (parsed (parse-args (cdr argv)))
            (quick (list-ref parsed 0))
@@ -295,12 +317,12 @@
                (set! min-iters 1)
                (set! max-iters 2000)
                (set! warmup 1)))
-         (header)
+         (header alloc)
          (let ((failed
                 (fold-left
                  (lambda (n c)
                    (if (or (null? only) (member (bench-case-name c) only))
-                       (if (run-one c now ticks-per-sec) n (+ n 1))
+                       (if (run-one c now ticks-per-sec alloc) n (+ n 1))
                        n))
                  0 all)))
            (if (= failed 0) 0 1))))))

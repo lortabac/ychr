@@ -5,6 +5,9 @@
 ;;; reading, which is what a benchmark wants; the accessors live in
 ;;; `(chezscheme)` and are imported with `only` because importing that
 ;;; library next to `(rnrs)` fails with a multiple-definitions error.
+;;; `sstats-bytes` of `(statistics)` is the total allocated so far, which
+;;; gives the harness its bytes/iter column. (`bytes-allocated` is the
+;;; live heap, which drops at a collection.)
 ;;;
 ;;; Run it through the Makefile:
 ;;;
@@ -20,7 +23,8 @@
 ;;; options before it, and passes the bare `--` through to
 ;;; `command-line`, which the harness ignores.)
 (import (rnrs base) (rnrs io simple) (rnrs programs)
-        (only (chezscheme) current-time time-second time-nanosecond)
+        (only (chezscheme) current-time time-second time-nanosecond
+              statistics sstats-bytes)
         (bench harness))
 
 (define (chez-now)
@@ -28,4 +32,6 @@
     (+ (* (time-second t) 1000000000) (time-nanosecond t))))
 
 (display "YCHR Scheme benchmarks [Chez Scheme]") (newline)
-(exit (run-all (command-line) chez-now 1000000000))
+(define (chez-bytes) (sstats-bytes (statistics)))
+
+(exit (run-all (command-line) chez-now 1000000000 chez-bytes))

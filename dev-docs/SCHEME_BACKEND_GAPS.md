@@ -249,18 +249,34 @@ contracts from the invariant side.
   by the REPL); one `YCHR-REPL-OK` or `YCHR-REPL-ERR <escaped>` frame per
   query goes to stderr.
 - **Lists are native.** A `prelude__.`/2 cell is a Scheme pair and the
-  atom `prelude__[]` is `'()`; every other compound is a `compound` record
-  (`scheme/ychr/var.sls`). The backend emits `cons`, `'()`, `pair?` and
+  atom `prelude__[]` is `'()`; every other compound is a flat record (next
+  item). The backend emits `cons`, `'()`, `pair?` and
   `null?` for these (`makeTermSExpr`, `compileAtom`, `matchTermSExpr`), and
   the runtime's `make-term` builds a pair for that functor too, so a cons
-  cell has one spelling. `term?`/`term-functor`/`term-args` treat a pair as
-  a 2-ary `prelude__.` term, so generic code needs no pair case; hot paths
-  test `pair?` first because `term-args` allocates a vector for a pair.
+  cell has one spelling. `term?`/`term-functor`/`term-arity`/`term-arg`
+  treat a pair as a 2-ary `prelude__.` term, so generic code needs no pair
+  case.
   Since `'()` is not a symbol, code that asks "is this an atom" must use
   `chr-atom?`, and code that builds an atom from a name must use
   `symbol->atom`. Only the canonical spellings map: the bare `.`/2 and
   `[]` the string reader builds stay a record and a symbol, distinct
   values as they are on the Haskell side.
+- **Flat compounds.** A compound of arity 1..8 is a record of one sealed
+  type per arity (`compound1` … `compound8`, functor and arguments as
+  fields); above 8 it is a `compound*` holding the functor and a vector
+  (`scheme/ychr/var.sls`). There is no common parent type: Guile checks a
+  parent type by walking the ancestry, about ten times the cost of a
+  sealed check, so `compound?` and `compound-functor` test the nine sealed
+  types instead. The backend emits
+  `make-compoundN` and `match-termN` when the arity is known
+  (`makeTermSExpr`, `matchTermSExpr`, `flatMaxArity`), `get-arg` stays
+  generic. Runtime code reads arguments with `term-arity`/`term-arg` or
+  rebuilds with `term-map`; `term-args` builds a fresh vector and is for
+  cold paths only. On Chez a term of arity 1–2 is 32 bytes (was 48–64)
+  and of arity 3–4 is 48 bytes (was 64–80). The record types are
+  nongenerative (`ychr:compound2:1` and so on, plus `ychr:var:1`), so a ground term written with Chez's
+  `fasl-write` reads back in another process (`test/scheme/test_fasl.py`).
+  Bump a uid's suffix when its layout changes.
 - **Query-scope dynamic tell.** `%tell-term` special-cases the compiler's
   `<query>` scope: it resolves the goal through the program's exports
   (`resolve-export` + the session's goals table), as the Haskell

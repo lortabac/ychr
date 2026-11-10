@@ -56,6 +56,8 @@ import YCHR.Internal.Display
     renameWarningCode,
     resolveErrorCode,
     runtimeErrorCode,
+    schemeTypesCollisionCode,
+    schemeTypesModuleCode,
     typeCheckErrorCode,
   )
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
@@ -206,6 +208,8 @@ standaloneCodes =
     entry "lambdasInLiveQueryCode" lambdasInLiveQueryCode,
     entry "lambdasInSchemeDriverCode" lambdasInSchemeDriverCode,
     entry "fileReadErrorCode" fileReadErrorCode,
+    entry "schemeTypesCollisionCode" schemeTypesCollisionCode,
+    entry "schemeTypesModuleCode" schemeTypesModuleCode,
     entry "goalNotAConstraintCode" goalNotAConstraintCode,
     entry "runtimeErrorCode" runtimeErrorCode
   ]

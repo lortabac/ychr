@@ -1437,4 +1437,58 @@
                                 (list 'tell_m__c2 'tell_n__c2))
                 (error-message (lambda () (%tell-term s "prelude" 'c 1 2))))))
 
+;;; --------------------------------------------------------------------------
+;;; Flat compounds through the runtime: =.., deep-deref, copy_term
+;;; --------------------------------------------------------------------------
+
+(test-group "flat compounds in the runtime"
+  (define (args-up-to n)
+    (let ((v (make-vector n)))
+      (do ((i 0 (+ i 1))) ((= i n) v) (vector-set! v i (+ i 1)))))
+
+  (test-group "=.. round trip at every arity"
+    (do ((n 1 (+ n 1))) ((> n 11))
+      (let* ((t (make-term 'f (args-up-to n)))
+             (l (%compound-to-list t))
+             (back (%list-to-compound l)))
+        (test-eqv "list length" (+ n 1) (length l))
+        (test-eq "head" 'f (car l))
+        (test-assert "back" (equal?/chr t back))
+        (test-eqv "arity" n (term-arity back)))))
+
+  (test-group "deep-deref of nested flat compounds"
+    (let* ((s (fresh-session))
+           (x (make-var s)) (y (make-var s))
+           (t (make-term 'g (vector x (make-term 'h (vector 1 y 3))
+                                    (make-term 'k (args-up-to 9))))))
+      (%unify s x (make-term 'p (vector y)))
+      (%unify s y 7)
+      (let ((d (deep-deref t)))
+        (test-assert "no variables left" (%ground? d))
+        (test-assert "equal"
+                     (equal?/chr
+                      d
+                      (make-term 'g (vector (make-term 'p (vector 7))
+                                            (make-term 'h (vector 1 7 3))
+                                            (make-term 'k (args-up-to 9)))))))))
+
+  (test-group "copy_term keeps sharing in a flat compound"
+    (let* ((s (fresh-session)) (x (make-var s))
+           (c (%copy-term s (make-term 'f (vector x 1 x)))))
+      (test-assert "fresh var" (var? (get-arg c 0)))
+      (test-assert "not the original" (not (eq? x (get-arg c 0))))
+      (test-eq "shared" (get-arg c 0) (get-arg c 2)))))
+
+;; `is` evaluates nested calls left to right, as the interpreter does.
+(test-group "deep-eval argument order"
+  (let* ((s (fresh-session)) (seen '()))
+    (register-evaluable! s 'user__pair 3 (lambda (s a b c) (list a b c)))
+    (register-evaluable! s 'user__tick 1
+                         (lambda (s a) (set! seen (cons a seen)) a))
+    (deep-eval-value s (make-term 'user__pair
+                                  (vector (make-term 'user__tick (vector 1))
+                                          (make-term 'user__tick (vector 2))
+                                          (make-term 'user__tick (vector 3)))))
+    (test-equal "order" '(1 2 3) (reverse seen))))
+
 (test-end "runtime")

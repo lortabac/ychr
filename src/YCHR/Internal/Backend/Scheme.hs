@@ -26,6 +26,8 @@ module YCHR.Internal.Backend.Scheme
     makeTermSExpr,
     isValidSchemeIdentifier,
     qualifiedAliasIdentifier,
+    encodeAliasComponent,
+    flatMaxArity,
     HostCallTarget (..),
     hostCallTarget,
   )
@@ -1234,19 +1236,36 @@ compileAtom s
   | s == nilAtom = SList [SAtom "quote", SList []]
   | otherwise = compileSymbol s
 
+-- | The largest arity with a flat record type in the runtime (K in
+-- @scheme\/ychr\/var.sls@, @compound-max-flat-arity@). Keep the two in sync.
+flatMaxArity :: Int
+flatMaxArity = 8
+
 -- | A compound term with the given functor and compiled arguments: a
--- pair for a cons cell, a @make-term@ call for anything else.
+-- pair for a cons cell, a flat @make-compoundN@ record up to
+-- 'flatMaxArity', and @make-compound*@ with a vector above it. The
+-- compiler never emits a nullary 'MakeTerm'; @make-term@ handles one.
 makeTermSExpr :: Text -> [SExpr] -> SExpr
 makeTermSExpr f [h, t] | f == consFunctor = SList [SAtom "cons", h, t]
-makeTermSExpr f args =
-  SList [SAtom "make-term", compileSymbol f, SList (SAtom "vector" : args)]
+makeTermSExpr f args
+  | n >= 1 && n <= flatMaxArity =
+      SList (SAtom ("make-compound" <> T.pack (show n)) : compileSymbol f : args)
+  | n > flatMaxArity =
+      SList [SAtom "make-compound*", compileSymbol f, SList (SAtom "vector" : args)]
+  | otherwise =
+      SList [SAtom "make-term", compileSymbol f, SList [SAtom "vector"]]
+  where
+    n = length args
 
 -- | A 'BMatchTerm' test. A cons cell or nil is a plain @pair?@ or
--- @null?@ test; anything else goes through @match-term@.
+-- @null?@ test, a flat arity is @match-termN@, and anything else goes
+-- through @match-term@.
 matchTermSExpr :: SExpr -> Text -> Word -> SExpr
 matchTermSExpr e f arity
   | f == consFunctor && arity == 2 = SList [SAtom "pair?", SList [SAtom "deref", e]]
   | f == nilAtom && arity == 0 = SList [SAtom "null?", SList [SAtom "deref", e]]
+  | arity >= 1 && fromIntegral arity <= flatMaxArity =
+      SList [SAtom ("match-term" <> T.pack (show arity)), e, compileSymbol f]
   | otherwise =
       SList [SAtom "match-term", e, compileSymbol f, SInt (fromIntegral arity)]
 
