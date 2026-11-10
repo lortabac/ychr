@@ -562,7 +562,7 @@ def test_gen_driver_nested_goal_var_declaration(ychr_bin, project_root, tmp_path
     quoted = driver("gdn:go(quote(p(1, X)), R)")
     assert "(X (make-var %s))" in quoted
     assert "(R (make-var %s))" in quoted
-    assert "(make-term (quote p) (vector 1 X))" in quoted
+    assert "(make-compound2 (quote p) 1 X)" in quoted
     assert "(cons (quote X) X)" in quoted
 
     # A host-call argument takes a different branch of the variable

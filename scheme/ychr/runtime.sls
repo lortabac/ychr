@@ -7,6 +7,12 @@
     make-var var? var-id deref unify unifiable? equal?/chr
     make-term term? term-functor term-args chr-atom? atom->symbol symbol->atom
     match-term get-arg add-observer! ground-key get-var-id
+    term-arity term-arg term-map compound? compound-functor
+    make-compound1 make-compound2 make-compound3 make-compound4
+    make-compound5 make-compound6 make-compound7 make-compound8
+    make-compound*
+    match-term1 match-term2 match-term3 match-term4
+    match-term5 match-term6 match-term7 match-term8
     ;; From (ychr store)
     make-store-by-type create-constraint store-constraint
     kill-constraint alive-constraint?
@@ -340,15 +346,16 @@
       (cond
         ((term? d)
          (let* ((functor (term-functor d))
-                (args (term-args d))
-                (n (vector-length args))
+                (n (term-arity d))
                 (proc (evaluable-key-proc s functor n)))
            (if proc
-               (let ((eval-args (make-vector n)))
-                 (do ((i 0 (+ i 1))) ((= i n))
-                   (vector-set! eval-args i
-                                (deep-argument s (vector-ref args i))))
-                 (apply proc s (vector->list eval-args)))
+               ;; Left to right, as the interpreter does: an argument
+               ;; can raise or have effects.
+               (let loop ((i 0) (rev '()))
+                 (if (= i n)
+                     (apply proc s (reverse rev))
+                     (loop (+ i 1)
+                           (cons (deep-argument s (term-arg d i)) rev))))
                ;; Match the Haskell interpreter's message format:
                ;; "is: functor is not evaluable: <functor>/<arity>"
                ;; (single concatenated string, no separate detail).
@@ -369,15 +376,16 @@
       (cond
         ((term? d)
          (let* ((functor (term-functor d))
-                (args (term-args d))
-                (n (vector-length args))
+                (n (term-arity d))
                 (proc (evaluable-key-proc s functor n)))
            (if proc
-               (let ((eval-args (make-vector n)))
-                 (do ((i 0 (+ i 1))) ((= i n))
-                   (vector-set! eval-args i
-                                (deep-argument s (vector-ref args i))))
-                 (apply proc s (vector->list eval-args)))
+               ;; Left to right, as the interpreter does: an argument
+               ;; can raise or have effects.
+               (let loop ((i 0) (rev '()))
+                 (if (= i n)
+                     (apply proc s (reverse rev))
+                     (loop (+ i 1)
+                           (cons (deep-argument s (term-arg d i)) rev))))
                (deep-data s d))))
         (else d))))
 
@@ -389,12 +397,7 @@
     (let ((d (deref v)))
       (cond
         ((term? d)
-         (let* ((args (term-args d))
-                (n (vector-length args))
-                (out (make-vector n)))
-           (do ((i 0 (+ i 1))) ((= i n))
-             (vector-set! out i (deep-data s (vector-ref args i))))
-           (make-term (term-functor d) out)))
+         (term-map (lambda (a) (deep-data s a)) d))
         (else d))))
 
   ;; The procedure the deep evaluator calls for a (functor, arity)
@@ -627,7 +630,7 @@
       (cond
         ((and (symbol? d) (not (list-functor? d))) (dispatch d '()))
         ((and (term? d) (not (list-functor? (term-functor d))))
-         (dispatch (term-functor d) (vector->list (term-args d))))
+         (dispatch (term-functor d) (term-arg-list d)))
         ((%unbound? d)
          (%chr-inst-error
           (string-append
@@ -684,12 +687,12 @@
   ;; alone, exactly as `get-arg` handed them to the callee.
   (define (callable-invocation d n)
     (let ((functor (term-functor d))
-          (fields (term-args d)))
+          (k (term-arity d)))
       (cond
         ((and (eq? functor '/)
-              (= (vector-length fields) 2))
-         (let ((ident (deref (vector-ref fields 0)))
-               (arity (deref (vector-ref fields 1))))
+              (= k 2))
+         (let ((ident (deref (term-arg d 0)))
+               (arity (deref (term-arg d 1))))
            ;; `exact-integer?` is R7RS; this runtime is R6RS.
            (if (and (symbol? ident)
                     (integer? arity)
@@ -698,11 +701,13 @@
                (cons (make-callable-key functor ident n) '())
                #f)))
         ((and (eq? functor '__closure)
-              (>= (vector-length fields) 2))
-         (let ((ident (deref (vector-ref fields 0))))
+              (>= k 2))
+         (let ((ident (deref (term-arg d 0))))
            (if (symbol? ident)
                (cons (make-callable-key functor ident n)
-                     (list-tail (vector->list fields) 2))
+                     (let loop ((i (- k 1)) (acc '()))
+                       (if (< i 2) acc
+                           (loop (- i 1) (cons (term-arg d i) acc)))))
                #f)))
         (else #f))))
 
@@ -724,15 +729,13 @@
   (define (dynamic-funref-key s d n)
     (and (term? d)
          (eq? (term-functor d) 'fun)
-         (let ((fields (term-args d)))
-           (and (= (vector-length fields) 1)
-                (let ((inner (deref (vector-ref fields 0))))
+         (and (= (term-arity d) 1)
+                (let ((inner (deref (term-arg d 0))))
                   (and (term? inner)
                        (eq? (term-functor inner) '/)
-                       (let ((inner-fields (term-args inner)))
-                         (and (= (vector-length inner-fields) 2)
-                              (let ((ident (deref (vector-ref inner-fields 0)))
-                                    (declared (deref (vector-ref inner-fields 1))))
+                       (and (= (term-arity inner) 2)
+                              (let ((ident (deref (term-arg inner 0)))
+                                    (declared (deref (term-arg inner 1))))
                                 (and (symbol? ident)
                                      (integer? declared)
                                      (exact? declared)
@@ -742,7 +745,7 @@
                                              s ident declared)))
                                        (and flat
                                             (make-callable-key
-                                             '/ (string->symbol flat) n)))))))))))))
+                                             '/ (string->symbol flat) n)))))))))))
 
   ;; Prelude host-call table for `deep-eval-value`. Mirrors the
   ;; bare-name entries in Haskell's `baseHostCallRegistry`
@@ -1135,10 +1138,10 @@
       (cond ((var? d) #f)
             ((pair? d) (and (%ground? (car d)) (%ground? (cdr d))))
             ((term? d)
-             (let ((a (term-args d)))
+             (let ((n (term-arity d)))
                (let loop ((i 0))
-                 (if (>= i (vector-length a)) #t
-                     (and (%ground? (vector-ref a i))
+                 (if (= i n) #t
+                     (and (%ground? (term-arg d i))
                           (loop (+ i 1)))))))
             (else #t))))
 
@@ -1156,7 +1159,7 @@
     (or (pair? v)
         (and (term? v)
              (eq? (term-functor v) bare-cons)
-             (= (vector-length (term-args v)) 2))))
+             (= (term-arity v) 2))))
 
   ;;; term_variables
   (define (%term-variables t)
@@ -1169,9 +1172,9 @@
                      (set! seen (cons id seen))
                      (set! result (cons d result)))))
                 ((term? d)
-                 (let ((a (term-args d)))
-                   (do ((i 0 (+ i 1))) ((= i (vector-length a)))
-                     (walk (vector-ref a i))))))))
+                 (let ((n (term-arity d)))
+                   (do ((i 0 (+ i 1))) ((= i n))
+                     (walk (term-arg d i))))))))
       (walk t)
       (fold-right %cons (%nil) (reverse result))))
 
@@ -1183,10 +1186,10 @@
     (cond
       ((chr-atom? c) (%cons c (%nil)))
       ((term? c)
-       (let ((f (term-functor c)) (a (term-args c)))
-         (let loop ((i (- (vector-length a) 1)) (acc (%nil)))
+       (let ((f (term-functor c)))
+         (let loop ((i (- (term-arity c) 1)) (acc (%nil)))
            (if (< i 0) (%cons (symbol->atom f) acc)
-               (loop (- i 1) (%cons (vector-ref a i) acc))))))
+               (loop (- i 1) (%cons (term-arg c i) acc))))))
       (else
        (%arg-error "compound_to_list" (list c)
                    (string-append "compound_to_list: expected 1 compound"
@@ -1337,6 +1340,12 @@
                 (decode-mangled-name
                  (substring mangled (+ sep 2) (string-length mangled)))))))
 
+  ;;; The arguments of a term as a fresh list, without the vector
+  ;;; `term-args` would build first.
+  (define (term-arg-list d)
+    (let loop ((i (- (term-arity d) 1)) (acc '()))
+      (if (< i 0) acc (loop (- i 1) (cons (term-arg d i) acc)))))
+
   ;;; Deep-dereference a value: `deref` at the top, then recursively in
   ;;; every compound's arguments, the port of `deepDeref` in
   ;;; `YCHR.Internal.Meta`. An unbound variable is left in place, so the
@@ -1345,8 +1354,7 @@
     (let ((d (deref v)))
       (cond
         ((pair? d) (cons (deep-deref (car d)) (deep-deref (cdr d))))
-        ((term? d)
-         (make-term (term-functor d) (deep-deref-args (term-args d))))
+        ((term? d) (term-map deep-deref d))
         (else d))))
 
   (define (deep-deref-args args)
@@ -1524,7 +1532,7 @@
     (let ((d (deref v)))
       (if (and (term? d)
                (eq? (term-functor d) semicolon-functor)
-               (= (vector-length (term-args d)) 2))
+               (= (term-arity d) 2))
           (let ((alts (semicolon-alts d)))
             (require-tell-proc s who 'search__alt 1)
             (let ((built (%list-from-list alts)))
@@ -1541,7 +1549,7 @@
     (let ((d (deref v)))
       (if (and (term? d)
                (eq? (term-functor d) semicolon-functor)
-               (= (vector-length (term-args d)) 2))
+               (= (term-arity d) 2))
           (cons (get-arg d 0) (semicolon-alts (get-arg d 1)))
           (list d))))
 
@@ -1559,7 +1567,7 @@
                     ((symbol? d) d)
                     (else #f))))
       (if f
-          (let* ((args (if (term? d) (vector->list (term-args d)) '()))
+          (let* ((args (if (term? d) (term-arg-list d) '()))
                  (arity (length args))
                  (resolved (resolve-goal s scope who f arity)))
             (list resolved arity args))
@@ -1669,7 +1677,9 @@
              (unless (hashtable-contains? seen (var-id d))
                (hashtable-set! seen (var-id d) #t)
                (set! vars (cons d vars))))
-            ((term? d) (vector-for-each walk (term-args d))))))
+            ((term? d)
+             (do ((i 0 (+ i 1))) ((= i (term-arity d)))
+               (walk (term-arg d i)))))))
       (for-each (lambda (g) (for-each walk (car (cddr g)))) goals)
       (reverse vars)))
 
@@ -1812,11 +1822,10 @@
   (define (resolve-value v)
     (let ((d (deref v)))
       (if (term? d)
-          (let* ((args (term-args d))
-                 (n (vector-length args))
+          (let* ((n (term-arity d))
                  (out (make-vector n)))
             (do ((i 0 (+ i 1))) ((= i n))
-              (vector-set! out i (resolve-value (vector-ref args i))))
+              (vector-set! out i (resolve-value (term-arg d i))))
             (make-term (term-functor d) out))
           d)))
 
@@ -2062,7 +2071,7 @@
   (define (read-step v)
     (let ((d (deref v)))
       (if (and (term? d)
-               (= (vector-length (term-args d)) 1)
+               (= (term-arity d) 1)
                (memq (term-functor d)
                      (list step-continue step-stop step-commit)))
           (cons (cond ((eq? (term-functor d) step-continue) 'continue)
@@ -2108,11 +2117,6 @@
              (let ((h (loop (car d))))
                (cons h (loop (cdr d)))))
             ((term? d)
-             (let* ((args (term-args d))
-                    (n (vector-length args))
-                    (new-args (make-vector n)))
-               (do ((i 0 (+ i 1))) ((= i n))
-                 (vector-set! new-args i (loop (vector-ref args i))))
-               (make-term (term-functor d) new-args)))
+             (term-map loop d))
             (else d))))))
 )

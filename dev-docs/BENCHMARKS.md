@@ -77,7 +77,7 @@ any case raised or failed its result check.
 
 ### Cases
 
-Four cases reuse golden programs exactly as `bench/Main.hs` does, three are
+Four cases reuse golden programs exactly as `bench/Main.hs` does, four are
 benchmark-only programs under `bench/scheme/`, and `session` is a synthetic
 baseline that tells no goal. Every goal uses integers and fresh variables
 only, so no runtime list or atom has to be encoded into Scheme by hand.
@@ -92,6 +92,11 @@ only, so no runtime list or atom has to be encoded into Scheme by hand.
 | `list_sum` | `bench_list:go(500,R)` | lists, `is` deep eval | 2.32 | 0.06 |
 | `maplist` | `bench_maplist:go(500,R)` | `'$call'` dispatch | 3.93 | 0.10 |
 | `sum` | `bench_sum:go(2000,R)` | non-tail user-function recursion, equation dispatch, arithmetic helpers | 3.69 | 0.06 |
+| `terms` | `bench_terms:go(500,R)` | compound terms of arity 1–4 and 9: build, head match, argument reads | 2.30 | 0.19 |
+
+Under Chez the table has one more column, `bytes/iter`: the mean bytes
+allocated per iteration, from `(sstats-bytes (statistics))`. The Guile
+launcher does not pass a counter, so its run leaves the column out.
 
 `session` is the cost every other case pays a *library-specific* part of: a
 library that registers many evaluables and callables costs more to open than
@@ -123,7 +128,7 @@ above come from the previous revision of this table (for `fib`,
 the change. They are machine- and implementation-specific and are **not**
 golden-tested; only the result checks are asserted, and every case has one:
 `session` must return a session, `guard` 5, `fib(20)` 6765, `list_sum`
-124750, `maplist` 41541750, `sum(2000)` 2001000, `graph` the three expected
+124750, `maplist` 41541750, `sum(2000)` 2001000, `terms` 2379750, `graph` the three expected
 `found`/`none` results, and `leq_closure` the 190 live `leq` constraints the
 20-node closure must leave. A case that has silently stopped doing its work
 fails its check rather than posting a suspiciously good time. Case sizes

@@ -1,0 +1,36 @@
+% Benchmark program: compound terms, exercised by
+% `bench/scheme/bench/harness.sls` through the `terms` case.
+%
+% `build(N)` makes N groups of five terms of arity 1, 2, 3, 4 and 9, so
+% both flat records and the vector form above K are covered. `total`
+% walks the list, matches each term in a function head and reads its
+% arguments. The result is 19 * N * (N + 1) / 2: 2379750 at N = 500,
+% which is the value the harness checks.
+:- module(bench_terms, [go/2]).
+
+:- chr_type t ---> a(int) ; b(int, int) ; c(int, int, int)
+                 ; d(int, int, int, int)
+                 ; e(int, int, int, int, int, int, int, int, int).
+
+:- chr_constraint go/2.
+
+:- function build(int) -> list(t).
+
+build(0) -> [].
+build(N) -> [a(N), b(N, N), c(N, N, N), d(N, N, N, N),
+             e(N, N, N, N, N, N, N, N, N) | build(N - 1)].
+
+:- function weight(t) -> int.
+
+weight(a(X)) -> X.
+weight(b(X, Y)) -> X + Y.
+weight(c(X, Y, Z)) -> X + Y + Z.
+weight(d(X, Y, Z, W)) -> X + Y + Z + W.
+weight(e(A, B, C, D, E, F, G, H, I)) -> A + B + C + D + E + F + G + H + I.
+
+:- function total(list(t), int) -> int.
+
+total([], Acc) -> Acc.
+total([T | Ts], Acc) -> total(Ts, Acc + weight(T)).
+
+go(N, R) <=> R is total(build(N), 0).

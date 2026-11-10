@@ -252,11 +252,11 @@
         ((string? d) (vector 'text d))
         ((symbol? d) (atom->pexpr d))
         ((null? d) (vector 'atom "[]"))
-        ((closure? d) (source->pexpr aliases (vector-ref (term-args d) 1)))
+        ((closure? d) (source->pexpr aliases (term-arg d 1)))
         ((term? d)
          (let ((f (term-functor d))
                (args (map (lambda (a) (value->pexpr aliases a))
-                          (vector->list (term-args d)))))
+                          (term-arg-list d))))
            (cond
              ;; Canonicalized nil, in the bare and the mangled spelling.
              ((and (nil-functor? f) (null? args)) (vector 'atom "[]"))
@@ -266,11 +266,16 @@
              (else (name->pexpr f args)))))
         (else (vector 'opaque d)))))
 
+  ;; The arguments of a term, as a list.
+  (define (term-arg-list d)
+    (let loop ((i (- (term-arity d) 1)) (acc '()))
+      (if (< i 0) acc (loop (- i 1) (cons (term-arg d i) acc)))))
+
   ;; A closure: `__closure`(Identity, SourceForm, Capture ...).
   (define (closure? d)
     (and (term? d)
          (eq? (term-functor d) '__closure)
-         (>= (vector-length (term-args d)) 2)))
+         (>= (term-arity d) 2)))
 
   ;; Mirror of `unquoteToPExpr`: the source form was quoted, so an
   ;; unqualified atom that looks like a variable (uppercase- or
@@ -285,7 +290,7 @@
         ((term? d)
          (let ((f (term-functor d))
                (args (map (lambda (a) (source->pexpr aliases a))
-                          (vector->list (term-args d)))))
+                          (term-arg-list d))))
            (if (cons-functor? f)
                (vector 'compound "." args)
                (source-name->pexpr f args))))

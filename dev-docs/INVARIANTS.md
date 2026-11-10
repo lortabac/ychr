@@ -1008,6 +1008,26 @@ walk:
 The second is pinned by a case in `test/YCHR/Interpreter/SlotsTest.hs`, so a
 change to the reading has to be deliberate.
 
+### Scheme compound representation — `scheme/ychr/var.sls`
+
+`make-term` is the only generic constructor and keeps these; the backend's
+`makeTermSExpr` keeps them for terms of known arity:
+
+1. A compound of arity n <= K (8, `compound-max-flat-arity`, mirrored by
+   `flatMaxArity` in `Backend/Scheme.hs`) is a `compoundn`, never a
+   `compound*`. A `compound*` has more than K arguments (or none, see 2).
+   `make-compound*` is exported, so a caller can break this; nothing in
+   the tree does.
+2. A nullary term is an atom (a symbol, or `'()`). One exception: a
+   nullary constraint in `write_store_to_list` is an empty `compound*`,
+   mirroring the reference's `VTerm t []`. Invariant 1 does not cover it.
+3. `prelude__.`/2 is never a compound; it is always a pair.
+4. Arguments are stored as given: a field may hold a variable, bound or
+   unbound. Readers dereference.
+
+1 is what lets unification and `match-termN` compare record types instead
+of arities.
+
 ### Scheme runtime ABI
 
 `src/YCHR/Internal/Backend/Scheme.hs` bakes in many assumptions the Scheme
