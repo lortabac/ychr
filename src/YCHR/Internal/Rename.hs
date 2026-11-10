@@ -64,6 +64,11 @@ module YCHR.Internal.Rename
     -- * Configuration
     RenameInputs (..),
     defaultRenameInputs,
+
+    -- * Type exports
+    TypeEntry (..),
+    typeExportEntry,
+    typeKey,
   )
 where
 

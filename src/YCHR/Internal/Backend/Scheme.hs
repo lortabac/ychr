@@ -26,6 +26,8 @@ module YCHR.Internal.Backend.Scheme
     makeTermSExpr,
     isValidSchemeIdentifier,
     qualifiedAliasIdentifier,
+    encodeAliasComponent,
+    flatMaxArity,
     HostCallTarget (..),
     hostCallTarget,
   )

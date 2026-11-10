@@ -95,6 +95,7 @@ import YCHR.Internal.Runtime.Session
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
 import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.TypeCheck.Render (typeModule)
+import YCHR.Internal.TypeExports (isCtorExportedByParent)
 import YCHR.Internal.Types
   ( BoundSig,
     DataConstructor (..),
@@ -1065,48 +1066,6 @@ ctorMatchesQN :: DataConstructor -> QualifiedName -> Bool
 ctorMatchesQN c qn = case c.conName of
   Qualified m n -> m == qn.moduleName && n == qn.baseName
   Unqualified _ -> False
-
--- | Is the given data constructor visible through its parent type's
--- module export list? @:info@ uses this to refuse direct queries on
--- hidden constructors while still listing them inside the parent
--- type's declaration body (when the user asks about the type or
--- another visible constructor of the same type).
---
--- The rule mirrors 'YCHR.Internal.Rename.exporterAllowance': a module with no
--- @:- module(_, [...])@ exports everything; an explicit
--- @type(T\/A)@ entry exports every constructor; @type(T\/A, [C1,
--- C2])@ exports only the listed names; and a type missing from the
--- export list exports no constructors at all.
-isCtorExportedByParent ::
-  CompiledProgram -> TypeDefinition -> DataConstructor -> Bool
-isCtorExportedByParent prog td c =
-  let tn = typeBaseName td
-      ta = length td.typeVars
-      cn = ctorBaseName c
-      parentModule = case td.name of
-        Qualified m _ -> Just m
-        Unqualified _ -> Nothing
-   in case parentModule >>= findModule prog of
-        Nothing -> True
-        Just m -> case m.exports of
-          Nothing -> True
-          Just (Parsed.AnnP exports _ _) ->
-            case [ cs
-                 | Parsed.TypeExportDecl
-                     (Parsed.TypeExportDeclBody tn' ta' cs) <-
-                     exports,
-                   tn' == tn,
-                   ta' == ta
-                 ] of
-              (Nothing : _) -> True
-              (Just xs : _) -> cn `elem` xs
-              [] -> False
-
-findModule :: CompiledProgram -> Text -> Maybe CollectedModule
-findModule prog modName =
-  case [m | m <- prog.allModules, m.name == modName] of
-    (m : _) -> Just m
-    [] -> Nothing
 
 -- | Print the result of an @:info@ query. The qualified name and the
 -- declaration form are printed on consecutive lines for each match;

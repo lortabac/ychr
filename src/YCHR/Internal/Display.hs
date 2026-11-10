@@ -32,6 +32,8 @@ module YCHR.Internal.Display
     lambdasInLiveQueryCode,
     lambdasInSchemeDriverCode,
     fileReadErrorCode,
+    schemeTypesCollisionCode,
+    schemeTypesModuleCode,
     runtimeErrorCode,
     goalNotAConstraintCode,
   )
@@ -51,6 +53,7 @@ import System.Console.ANSI
   )
 import Text.Parsec.Error qualified as PE
 import Text.Parsec.Pos (SourcePos, sourceColumn, sourceLine, sourceName)
+import YCHR.Internal.Backend.SchemeTypes (SchemeTypesError (..))
 import YCHR.Internal.Collect (BareImportHint (..), CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.Compile.Pipeline
@@ -541,6 +544,14 @@ lambdasInSchemeDriverCode = ErrorCode 50004
 -- | 5xxxx — a source file could not be read.
 fileReadErrorCode :: ErrorCode
 fileReadErrorCode = ErrorCode 50005
+
+-- | 5xxxx — `ychr scheme-types` would define two things under one name.
+schemeTypesCollisionCode :: ErrorCode
+schemeTypesCollisionCode = ErrorCode 50006
+
+-- | 5xxxx — `ychr scheme-types` cannot tell which module to generate for.
+schemeTypesModuleCode :: ErrorCode
+schemeTypesModuleCode = ErrorCode 50007
 
 -- | 20013 — @ychr run -g GOAL@ received a goal that is not a single
 -- declared constraint (bare expression, conjunction, function call,
@@ -2255,3 +2266,74 @@ instance Display Error where
               node = Just (T.unpack frame.sourceCode),
               context = []
             }
+
+instance Display SchemeTypesError where
+  displayMsg (TypesNameCollision n origins loc) =
+    displayMsgWithSrcLoc
+      MsgBlock
+        { code = schemeTypesCollisionCode,
+          severity = SevError,
+          message =
+            withHint
+              ( "`ychr scheme-types`: the Scheme name `"
+                  ++ T.unpack n
+                  ++ "` would be defined more than once: "
+                  ++ intercalate "; " (map T.unpack origins)
+              )
+              "rename a type, constructor or label; the generator never renames",
+          loc = loc,
+          label = Nothing,
+          node = Nothing,
+          context = []
+        }
+  displayMsg (TypesUnknownModule m loaded) =
+    displayMsgWithSrcLoc
+      MsgBlock
+        { code = schemeTypesModuleCode,
+          severity = SevError,
+          message =
+            "`ychr scheme-types`: no module `"
+              ++ T.unpack m
+              ++ "` is loaded"
+              ++ loadedList loaded,
+          loc = P.dummyLoc,
+          label = Nothing,
+          node = Nothing,
+          context = []
+        }
+  displayMsg (TypesModuleNotGiven ms) =
+    displayMsgWithSrcLoc
+      MsgBlock
+        { code = schemeTypesModuleCode,
+          severity = SevError,
+          message =
+            withHint
+              ( "`ychr scheme-types`: the input files declare "
+                  ++ ( if null ms
+                         then "no module"
+                         else "several modules: " ++ intercalate ", " (map T.unpack ms)
+                     )
+              )
+              "name the module with -m MODULE",
+          loc = P.dummyLoc,
+          label = Nothing,
+          node = Nothing,
+          context = []
+        }
+  displayMsg TypesPrelude =
+    displayMsgWithSrcLoc
+      MsgBlock
+        { code = schemeTypesModuleCode,
+          severity = SevError,
+          message =
+            "`ychr scheme-types`: the prelude's types are native Scheme values"
+              ++ " (booleans, lists), not records; there is nothing to generate",
+          loc = P.dummyLoc,
+          label = Nothing,
+          node = Nothing,
+          context = []
+        }
+
+loadedList :: [T.Text] -> String
+loadedList [] = ""
+loadedList ms = " (loaded: " ++ intercalate ", " (map T.unpack ms) ++ ")"

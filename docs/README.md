@@ -29,6 +29,7 @@ Conventions for these pages: [`dev-docs/DOC_CONVENTIONS.md`](../dev-docs/DOC_CON
 - [Haskell DSL](reference/dsl.md)
 - [Haskell conversion](reference/convert.md) — `ToTerm`/`FromTerm`, typed queries, host functions.
 - [Abstract VM](reference/vm.md) — for backend implementors.
+- [Scheme libraries for `chr_type`s](reference/scheme-types.md) — `ychr scheme-types`.
 - Standard library: [`libraries/`](../libraries/). The prelude is always
   imported; the others need `:- use_module(library(name))`.
 - CLI: `ychr --help`.

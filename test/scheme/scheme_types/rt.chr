@@ -1,0 +1,25 @@
+% Fixture for test/scheme/test_scheme_types.py: values built in Scheme
+% with the library `ychr scheme-types` generates go through these rules.
+:- module(rt, [type(point/2), type(shape/0),
+               which/2, mk/1, getx/2, setx/3, gety/2, sety/3, getr/2]).
+
+:- chr_type point(X, Y) ---> point(x :: X, y :: Y).
+:- chr_type shape ---> circle(r :: float) ; rect(float, float) ; empty
+                     ; big(int, int, int, int, int, int, int, int, int).
+
+:- chr_constraint which/2, mk/1, getx/2, setx/3, gety/2, sety/3, getr/2.
+
+% Head matching on every representation.
+which(circle(_), R) <=> R = 1.
+which(rect(_, _), R) <=> R = 2.
+which(empty, R) <=> R = 3.
+which(big(_, _, _, _, _, _, _, _, I), R) <=> R = I.
+
+% A term whose fields are bound after it is built.
+mk(P) <=> P = point(X, Y), X = 3, Y = [Y1], Y1 = 4.
+
+getx(P, R) <=> R is get_field(x, P).
+setx(P, V, R) <=> R is set_field(x, P, V).
+gety(P, R) <=> R is get_field(y, P).
+sety(P, V, R) <=> R is set_field(y, P, V).
+getr(C, R) <=> R is get_field(r, C).

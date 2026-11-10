@@ -15,6 +15,13 @@ import System.IO.Error (ioeGetFileName)
 import YCHR.Embedded (loadResources)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
+import YCHR.Internal.Backend.SchemeTypes
+  ( SchemeTypesOptions (..),
+    SchemeTypesOutput (..),
+    defaultLibraryName,
+    generateSchemeTypes,
+    selectModule,
+  )
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg, renderSplices)
 import YCHR.Internal.Pretty (prettyBindings)
@@ -67,6 +74,18 @@ data GenDriverOpts = GenDriverOpts
     dumpSplices :: Bool
   }
 
+data SchemeTypesOpts = SchemeTypesOpts
+  { moduleName :: Maybe String,
+    outputDir :: FilePath,
+    library :: Maybe String,
+    schema :: Bool,
+    allTypes :: Bool,
+    checked :: Bool,
+    werror :: Bool,
+    noCheck :: Bool,
+    dumpSplices :: Bool
+  }
+
 data ReplOpts = ReplOpts
   { quiet :: Bool,
     werror :: Bool,
@@ -85,6 +104,7 @@ data Command
   | Run RunOpts [FilePath]
   | Compile CompileOpts [FilePath]
   | GenDriver GenDriverOpts [FilePath]
+  | SchemeTypes SchemeTypesOpts [FilePath]
   | Check CheckOpts [FilePath]
 
 filesArg :: Parser [FilePath]
@@ -202,6 +222,41 @@ genDriverParser =
         )
     <*> filesArg
 
+schemeTypesParser :: Parser Command
+schemeTypesParser =
+  SchemeTypes
+    <$> ( SchemeTypesOpts
+            <$> optional
+              ( strOption
+                  ( short 'm'
+                      <> long "module"
+                      <> metavar "MODULE"
+                      <> help "Module to generate for (default: the only module in FILES)"
+                  )
+              )
+            <*> strOption
+              ( long "output-dir"
+                  <> short 'd'
+                  <> metavar "DIR"
+                  <> help "Output directory"
+                  <> value "."
+              )
+            <*> optional
+              ( strOption
+                  ( long "library"
+                      <> metavar "\"(NAME ...)\""
+                      <> help "Library name (default: (ychr types MODULE))"
+                  )
+              )
+            <*> switch (long "schema" <> help "Also write the schema file")
+            <*> switch (long "all" <> help "Include every type, not only exported ones")
+            <*> switch (long "checked" <> help "Accessors check the constructor")
+            <*> werrorFlag
+            <*> noCheckFlag
+            <*> dumpSplicesFlag
+        )
+    <*> filesArg
+
 checkParser :: Parser Command
 checkParser =
   Check
@@ -254,6 +309,14 @@ commandParser =
               )
           )
         <> command
+          "scheme-types"
+          ( info
+              (schemeTypesParser <**> helper)
+              ( progDesc
+                  "Generate a Scheme library for a module's chr_types"
+              )
+          )
+        <> command
           "check"
           (info (checkParser <**> helper) (progDesc "Type-check the program"))
     )
@@ -288,6 +351,7 @@ main = do
     Run opts files -> runGoal resources opts files
     Compile opts files -> runCompile resources opts files
     GenDriver opts files -> runGenDriver resources opts files
+    SchemeTypes opts files -> runSchemeTypes resources opts files
     Check opts files -> runCheck resources opts files
 
 -- | Load the two resources the CLI runs on. Both providers hand back
@@ -432,6 +496,55 @@ runGenDriver resources opts files =
         Just err -> putStr (displayMsg (err :: Error))
         Nothing -> hPutStr stderr ("Error: " ++ displayException exc ++ "\n")
       exitFailure
+
+runSchemeTypes :: Resources -> SchemeTypesOpts -> [FilePath] -> IO ()
+runSchemeTypes resources opts files =
+  withCompiled resources files $ \prog warnings -> do
+    dumpSplicesIf opts.dumpSplices prog
+    printWarnings warnings
+    typeWarnings <- typeCheckUnless opts.noCheck resources prog
+    exitOnWerror opts.werror (warnings ++ typeWarnings)
+    modName <- case selectModule prog files (T.pack <$> opts.moduleName) of
+      Left err -> putStr (displayMsg err) >> exitFailure
+      Right m -> pure m
+    libName <- case opts.library of
+      Nothing -> pure (defaultLibraryName modName)
+      Just l -> case parseLibraryName l of
+        Just segs -> pure segs
+        Nothing -> do
+          hPutStr
+            stderr
+            ( "Error: --library "
+                ++ show l
+                ++ " is not a library name: write it as \"(name ...)\", with\n"
+                ++ "       every part a valid Scheme identifier.\n"
+            )
+          exitFailure
+    let options =
+          SchemeTypesOptions
+            { moduleName = modName,
+              libraryName = libName,
+              allTypes = opts.allTypes,
+              checked = opts.checked
+            }
+    case generateSchemeTypes options prog of
+      Left errs -> do
+        mapM_ (putStr . displayMsg) errs
+        exitFailure
+      Right out -> do
+        let base = foldl (</>) opts.outputDir (map T.unpack libName)
+        writeOutputFile (base ++ ".sls") out.library
+        when opts.schema $ writeOutputFile (base ++ ".schema.scm") out.schema
+        schemeRuntimeNote
+  where
+    parseLibraryName l =
+      let t = T.strip (T.pack l)
+       in case T.stripPrefix (T.pack "(") t >>= T.stripSuffix (T.pack ")") of
+            Just inner
+              | segs@(_ : _) <- T.words inner,
+                all isValidSchemeIdentifier segs ->
+                  Just segs
+            _ -> Nothing
 
 runCheck :: Resources -> CheckOpts -> [FilePath] -> IO ()
 runCheck resources opts files =

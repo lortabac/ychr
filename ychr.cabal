@@ -282,6 +282,7 @@ test-suite ychr-tests
     other-modules:    YCHR.CollectTest
                     , YCHR.CompileTest
                     , YCHR.Backend.SchemeTest
+                    , YCHR.Backend.SchemeTypesTest
                     , YCHR.ConvertTest
                     , YCHR.ErrorCodeTest
                     , YCHR.RunTest
@@ -394,6 +395,7 @@ library
     -- 'Internal' namespace is the contract; import at your own risk.
     exposed-modules:  YCHR.Internal.Backend.Scheme
                     , YCHR.Internal.Backend.SchemeDriver
+                    , YCHR.Internal.Backend.SchemeTypes
                     , YCHR.Internal.Collect
                     , YCHR.Internal.Collected
                     , YCHR.Internal.Constructors
@@ -432,6 +434,7 @@ library
                     , YCHR.Internal.Rename.Types
                     , YCHR.Internal.StdLib
                     , YCHR.Internal.Types
+                    , YCHR.Internal.TypeExports
                     , YCHR.Internal.TypeCheck
                     , YCHR.Internal.TypeCheck.Encode
                     , YCHR.Internal.TypeCheck.Error
