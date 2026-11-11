@@ -182,11 +182,24 @@
 
   (define (type-slot n) (if (or (= n 0) (> n compound-max-flat-arity)) 0 n))
 
+  ;;; The last functor asked for in each slot, and its entry: building
+  ;;; many terms of one functor skips the table.
+  (define last-functors (make-vector (+ compound-max-flat-arity 1) #f))
+  (define last-entries (make-vector (+ compound-max-flat-arity 1) #f))
+
   ;;; The cached `#(rtd constructor predicate)` of functor `f` at arity
   ;;; `n`. The constructor takes the arguments (a vector for `compound*`).
   (define (compound-type f n)
-    (let* ((k (type-slot n))
-           (tbl (vector-ref compound-types k)))
+    (let ((k (type-slot n)))
+      (if (eq? (vector-ref last-functors k) f)
+          (vector-ref last-entries k)
+          (let ((e (compound-type/table f k)))
+            (vector-set! last-functors k f)
+            (vector-set! last-entries k e)
+            e))))
+
+  (define (compound-type/table f k)
+    (let ((tbl (vector-ref compound-types k)))
       (or (hashtable-ref tbl f #f)
           (let* ((uid (string->symbol
                        (string-append "ychr:c" (if (= k 0) "*" (number->string k))
@@ -318,13 +331,25 @@
 
   ;;; The same functor over `(f arg)` for every argument, without an
   ;;; intermediate vector for a flat term. `f` is called left to right.
+  ;;; The fast paths rebuild with the term's own functor, so they never
+  ;;; turn a record into a pair: nothing builds a `prelude__.` record.
   (define (term-map f t)
-    (if (pair? t)
-        (let* ((h (f (car t))) (tl (f (cdr t)))) (cons h tl))
-        (let* ((n (term-arity t)) (v (make-vector n)))
-          (do ((i 0 (+ i 1))) ((= i n))
-            (vector-set! v i (f (term-arg t i))))
-          (make-term (compound-functor t) v))))
+    (define (ctor n) (compound-constructor (compound-functor t) n))
+    (cond
+      ((pair? t) (let* ((h (f (car t))) (tl (f (cdr t)))) (cons h tl)))
+      ((compound2? t)
+       (let* ((x1 (f (compound2-a1 t))) (x2 (f (compound2-a2 t))))
+         ((ctor 2) x1 x2)))
+      ((compound1? t) ((ctor 1) (f (compound1-a1 t))))
+      ((compound3? t)
+       (let* ((x1 (f (compound3-a1 t))) (x2 (f (compound3-a2 t)))
+              (x3 (f (compound3-a3 t))))
+         ((ctor 3) x1 x2 x3)))
+      (else
+       (let* ((n (term-arity t)) (v (make-vector n)))
+         (do ((i 0 (+ i 1))) ((= i n))
+           (vector-set! v i (f (term-arg t i))))
+         (make-term (compound-functor t) v)))))
 
   ;;; `match-term` at a fixed arity, by functor: dereference, then a
   ;;; parent test and the type's name. Generated libraries use the

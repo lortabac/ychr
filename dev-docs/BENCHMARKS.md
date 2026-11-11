@@ -77,7 +77,7 @@ any case raised or failed its result check.
 
 ### Cases
 
-Four cases reuse golden programs exactly as `bench/Main.hs` does, four are
+Four cases reuse golden programs exactly as `bench/Main.hs` does, five are
 benchmark-only programs under `bench/scheme/`, and `session` is a synthetic
 baseline that tells no goal. Every goal uses integers and fresh variables
 only, so no runtime list or atom has to be encoded into Scheme by hand.
@@ -95,6 +95,7 @@ they read terms through a types library (see below).
 | `maplist` | `bench_maplist:go(500,R)` | `'$call'` dispatch | 3.93 | 0.10 |
 | `sum` | `bench_sum:go(2000,R)` | non-tail user-function recursion, equation dispatch, arithmetic helpers | 3.69 | 0.06 |
 | `terms` | `bench_terms:go(500,R)` | compound terms of arity 1–4 and 9: build, head match, argument reads | 2.30 | 0.19 |
+| `copy` | `bench_copy:go(500,R)` | `copy_term/1` over 2000 terms of arity 1–3 and 9: terms rebuilt by the runtime's generic code | 17.4 | 0.21 |
 | `build/V`, `size/V`, `rewrite/V` | — | an expression tree (371366 nodes) built, counted and rebuilt from Scheme through a types library: `native` records, the `deref` library of `ychr scheme-types`, or its `ground` one | — | see below |
 
 The `build/*`, `size/*` and `rewrite/*` cases tell no goal. They run
@@ -153,7 +154,7 @@ above come from the previous revision of this table (for `fib`,
 the change. They are machine- and implementation-specific and are **not**
 golden-tested; only the result checks are asserted, and every case has one:
 `session` must return a session, `guard` 5, `fib(20)` 6765, `list_sum`
-124750, `maplist` 41541750, `sum(2000)` 2001000, `terms` 2379750, the `build/*`, `size/*` and `rewrite/*` cases 371366 nodes, `graph` the three expected
+124750, `maplist` 41541750, `sum(2000)` 2001000, `terms` 2379750, `copy` 1503000, the `build/*`, `size/*` and `rewrite/*` cases 371366 nodes, `graph` the three expected
 `found`/`none` results, and `leq_closure` the 190 live `leq` constraints the
 20-node closure must leave. A case that has silently stopped doing its work
 fails its check rather than posting a suspiciously good time. Case sizes

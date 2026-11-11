@@ -36,7 +36,9 @@ import Data.Text qualified as T
 import YCHR.Internal.Backend.Scheme
   ( encodeAliasComponent,
     flatMaxArity,
+    functorTypeUid,
     isValidSchemeIdentifier,
+    staticFunctorType,
   )
 import YCHR.Internal.Collected (CollectedModule (..))
 import YCHR.Internal.Compile.Names (encodeIdentifier, vmName)
@@ -176,31 +178,13 @@ reexport i o src = Def {ident = i, origin = o, form = SList [], from = Just src}
 -- numbered, by functor.
 type Statics = Map.Map Text Int
 
--- | Whether a constructor gets a static record type: a flat arity and
--- a functor that can be written as an identifier, since it is the
--- type's name. The others look their type up at load. The functor must
--- be qualified (@m__f@): the records library imports @(rnrs)@ without a
--- prefix and binds the functor, so a bare @list@ would clash.
+-- | Whether a constructor gets a static record type, and its uid: see
+-- 'staticFunctorType'. The others look their type up at load.
 hasStatic :: DataConstructor -> Bool
-hasStatic c =
-  n >= 1
-    && n <= flatMaxArity
-    && "__" `T.isInfixOf` f
-    && isValidSchemeIdentifier f
-    && isValidSchemeIdentifier (staticUid c)
-  where
-    n = length (conArgs c)
-    f = (vmName c.conName).unName
+hasStatic c = staticFunctorType (vmName c.conName).unName (length (conArgs c))
 
--- | The uid of the constructor's record type. The same string as
--- `compound-type` in scheme/ychr/var.sls builds, so both give one type.
 staticUid :: DataConstructor -> Text
-staticUid c =
-  "ychr:c"
-    <> T.pack (show (length (conArgs c)))
-    <> ":"
-    <> (vmName c.conName).unName
-    <> ":1"
+staticUid c = functorTypeUid (vmName c.conName).unName (length (conArgs c))
 
 staticOf :: Statics -> DataConstructor -> Maybe Int
 staticOf st c = Map.lookup (vmName c.conName).unName st

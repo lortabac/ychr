@@ -40,6 +40,7 @@
             bench_maplist:go/2)
           (only (ychr generated bench_sum) bench_sum bench_sum:go/2)
           (only (ychr generated bench_terms) bench_terms bench_terms:go/2)
+          (only (ychr generated bench_copy) bench_copy bench_copy:go/2)
           (prefix (bench expr-native) n:)
           (prefix (ychr types bench_expr) d:)
           (prefix (ychr ground-types bench_expr) g:))
@@ -280,7 +281,15 @@
           (let* ((s (bench_terms)) (a (make-var s)))
             (bench_terms:go/2 s 500 a)
             (deref a)))
-        (lambda (r) (equal? r 2379750))))
+        (lambda (r) (equal? r 2379750)))
+      ;; copy_term/1 over 2000 terms of arity 1-3 and 9: terms rebuilt
+      ;; at run time by the runtime's generic code (`term-map`).
+      (make-bench-case "copy" "bench_copy:go(500,R)"
+        (lambda ()
+          (let* ((s (bench_copy)) (a (make-var s)))
+            (bench_copy:go/2 s 500 a)
+            (deref a)))
+        (lambda (r) (equal? r 1503000))))
      (expr-cases "native" n-build n-size n-rewrite)
      (expr-cases "deref" d-build d-size d-rewrite)
      (expr-cases "ground" g-build g-size g-rewrite)))

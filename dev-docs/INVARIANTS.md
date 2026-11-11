@@ -1027,8 +1027,9 @@ them for terms of known arity:
    unbound. Readers dereference.
 5. A compound's record type is the child `compound-type` returns for its
    functor and arity: built through `make-term`, `compound-constructor`,
-   the by-functor `make-compoundN`, or a `scheme-types` records library,
-   which defines the same uid. Nothing else creates a child, so one
+   the by-functor `make-compoundN`, or a static `define-record-type` in a
+   generated library or a `scheme-types` records library, which use the
+   same uid (`functorTypeUid` in `Backend/Scheme.hs`). Nothing else creates a child, so one
    functor and arity has one type, and its name is the functor.
 
 1 and 5 are what let unification compare two record types instead of

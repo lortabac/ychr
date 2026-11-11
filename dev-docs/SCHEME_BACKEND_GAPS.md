@@ -270,21 +270,27 @@ contracts from the invariant side.
   functor covers every arity, and the vector length is the arity.
   `compound-type` makes a child the first time it is asked for and
   caches it; its uid is fixed by functor and arity (`ychr:c2:m__f:1`),
-  so every library and process gets the same type. `compound?`,
-  `term-arity` and `term-arg` test the parents; `term-functor` reads the
-  type's name; unification compares the two record types.
-  The backend binds each functor's constructor and predicate once per
-  library at load (`compound-constructor`, `compound-predicate`, emitted
-  by `hoistFunctorTypes`) and calls them; a query does the same in a
-  `let`, and a driver goes through the by-functor `make-compoundN`.
-  `get-arg` stays generic. `ychr scheme-types` goes one step further: a
-  records library defines each constructor's type with
-  `define-record-type`, under the same uid, so Chez inlines its
-  predicate and constructor into the client. A closure from
-  `record-predicate` is not inlined, and was about twice as slow on the
-  `size/ground` benchmark. Guile only accepts that static definition in a
-  library that imports `(rnrs)` without a prefix (its expansion uses
-  plain `quote`), hence the separate library.
+  so every library and process gets the same type. It keeps the last
+  functor asked for per arity, so a run of terms of one functor skips
+  the table. `compound?`, `term-arity` and `term-arg` test the parents;
+  `term-functor` reads the type's name; unification compares the two
+  record types; `term-map` rebuilds arities 1–3 without a vector.
+  A generated library defines the type of each functor it builds or
+  tests with `define-record-type`, under the same uid
+  (`hoistFunctorTypes`, `functorDefinitions`), so Chez inlines the
+  constructor and predicate. That needs a functor that is an identifier
+  and holds `__` (`m__f`, `__closure`; no imported name does), of arity
+  1–8, since the functor is the record name; a
+  functor used at several arities (`__closure`) is static at its first
+  one only. The others, and a query, look their constructor and
+  predicate up once (`compound-constructor`, `compound-predicate`); a
+  driver goes through the by-functor `make-compoundN`. `get-arg` stays
+  generic. A looked-up closure is not inlined: it made `size/ground`
+  about twice as slow and the `terms` benchmark 7–9% slower, which is
+  why the static definitions exist. `ychr scheme-types` writes its
+  static definitions in a separate records library: Guile only accepts
+  one in a library that imports `(rnrs)` without a prefix (its expansion
+  uses plain `quote`), and the types library imports it with one.
   On Chez a term is the size of a native record of the same arity: 16
   bytes less than before at odd arities. Guile checks a parent type by
   walking the ancestry, about 4.5 times a sealed check, so generic term
