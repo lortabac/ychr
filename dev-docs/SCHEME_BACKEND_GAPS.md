@@ -53,6 +53,41 @@ never as the vmName `host__-/2`. Locked by the Haskell golden cases in
 `test/golden/is_non_evaluable_error/`, and on the Scheme side by
 `scheme/test/test-runtime.scm`'s `host functor deep-eval` group.
 
+## Record types are never freed
+
+Open. Each functor and arity a process ever sees gets its own record type
+("Flat compounds" below), and nothing frees it: the type, its uid, its
+constructor and predicate, and the `compound-type` table entry stay for the
+life of the process, even when no term of that functor is left. On the
+Haskell runtime, and on the Scheme runtime before this design, a functor
+was only a symbol in a field, which the collector can drop.
+
+This is per distinct functor, not per term. Measured on Chez 10.3 with
+100000 new functors, each built once and dropped:
+
+| | per new functor |
+|---|---|
+| memory kept | about 680 bytes |
+| time for its first term | 3.3 µs (0.3 µs before) |
+| a term of a known functor, 100000 registered | 0.77 µs (0.31 µs before) |
+
+Most programs are not affected: their functors come from the program and
+from data with a fixed vocabulary, so the set is small and paid for once.
+The risk is code that makes functor names from data and keeps running:
+`list_to_compound` or `=..` building `f1`, `f2`, …, `read_term_from_string`
+on open-ended input, or a long REPL session doing the same. A million
+distinct functors keep about 680 MB.
+
+Ideas, none tried yet:
+
+- Weak or ephemeron tables, so an unused type can go. R6RS has none (Chez
+  has ephemeron tables, Guile weak tables), and it is not known whether
+  Chez's uid registry would let a nongenerative type go.
+- A fallback representation, with the functor in a field, for functors no
+  compiled code names. It must still match and unify with a type defined
+  later for the same functor (a library or REPL query loaded afterwards),
+  which is what one type per functor was meant to avoid.
+
 ## Host calls left out of `*prelude-host-calls*`
 
 The table mirrors the Haskell registries (`baseHostCallRegistry`,

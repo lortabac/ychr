@@ -1032,6 +1032,10 @@ them for terms of known arity:
    same uid (`functorTypeUid` in `Backend/Scheme.hs`). Nothing else creates a child, so one
    functor and arity has one type, and its name is the functor.
 
+5 has a cost: the types it creates are never freed, so a process that
+keeps making new functors grows without bound (see "Record types are never
+freed" in `SCHEME_BACKEND_GAPS.md`).
+
 1 and 5 are what let unification compare two record types instead of
 functors and arities.
 
