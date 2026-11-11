@@ -14,6 +14,7 @@
           term-arity
           term-arg
           term-map
+          ground?
           compound?
           compound-functor
           compound-max-flat-arity
@@ -645,13 +646,28 @@
            (and kh kt (list 'term cons-functor kh kt))))
         ((term? d)
          (let ((n (term-arity d)))
-           (let loop ((i 0) (keys '()) (ground? #t))
+           (let loop ((i 0) (keys '()) (all-keys? #t))
              (if (= i n)
-                 (and ground?
+                 (and all-keys?
                       (cons 'term (cons (term-functor d) (reverse keys))))
                  (let ((k (value-key (term-arg d i) oid)))
-                   (loop (+ i 1) (cons k keys) (and ground? (if k #t #f))))))))
+                   (loop (+ i 1) (cons k keys) (and all-keys? (if k #t #f))))))))
         (else #f))))
+
+  ;;; `(ground? t)`: no variable occurs in `t`, bound or not. Unlike
+  ;;; `%ground?` (the host call behind `ground/1`) it does not
+  ;;; dereference: a bound variable counts as not ground, because a
+  ;;; ground library from `ychr scheme-types --ground` would not
+  ;;; dereference it either. Walks pairs and compounds.
+  (define (ground? t)
+    (cond ((var? t) #f)
+          ((pair? t) (and (ground? (car t)) (ground? (cdr t))))
+          ((compound? t)
+           (let ((n (term-arity t)))
+             (let loop ((i 0))
+               (or (= i n)
+                   (and (ground? (term-arg t i)) (loop (+ i 1)))))))
+          (else #t)))
 
   ;;; Var ID extraction
   (define (get-var-id v)

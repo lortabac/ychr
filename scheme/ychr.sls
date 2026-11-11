@@ -19,7 +19,7 @@
     ;; --- (ychr runtime): vars, terms, unification --------------------
     make-var var? var-id deref unify unifiable? equal?/chr
     make-term term? term-functor term-args chr-atom? atom->symbol symbol->atom
-    match-term get-arg deep-deref term-arity term-arg
+    match-term get-arg deep-deref term-arity term-arg ground?
     ;; --- (ychr runtime): constraint store ----------------------------
     alive-constraint? constraint-id constraint-arg constraint-type
     id-equal? is-constraint-type? kill-constraint

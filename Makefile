@@ -242,6 +242,9 @@ scheme-bench-compile: build
 	  echo "  compile $$src -> (ychr generated $$name)"; \
 	  $(YCHR) compile -t scheme -n $$name -d $(SCHEME_BENCH_DIR) $$src >/dev/null || exit 1; \
 	done
+	@echo "  scheme-types bench/scheme/bench_expr.chr (plain and --ground)"
+	@$(YCHR) scheme-types -d $(SCHEME_BENCH_DIR) bench/scheme/bench_expr.chr >/dev/null || exit 1
+	@$(YCHR) scheme-types --ground -d $(SCHEME_BENCH_DIR) bench/scheme/bench_expr.chr >/dev/null || exit 1
 
 bench-scheme: scheme-bench-compile
 	$(GUILE) --r6rs --no-auto-compile \

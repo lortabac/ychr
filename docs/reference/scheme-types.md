@@ -9,11 +9,16 @@ that describes the same types, for tools outside YCHR.
 The library imports only `(rnrs)` and `(ychr var)`, so it loads without
 the compiled program.
 
+There are two variants. The default one dereferences, so it works on
+terms straight from a CHR session. The ground one (`--ground`) does not,
+so it is faster but only takes ground terms. See [Ground
+libraries](#ground-libraries).
+
 ## Usage
 
 ```
 ychr scheme-types FILES... [-m MODULE] [-d DIR] [--library "(NAME ...)"]
-                  [--schema] [--all] [--checked]
+                  [--schema] [--all] [--checked] [--ground]
                   [--no-check] [--Werror] [--dump-splices]
 ```
 
@@ -21,10 +26,11 @@ ychr scheme-types FILES... [-m MODULE] [-d DIR] [--library "(NAME ...)"]
 |---|---|
 | `-m`, `--module` | The module to generate for. Not needed when `FILES` declare one module. |
 | `-d`, `--output-dir` | Output directory (default `.`). |
-| `--library` | The library name. Default `(ychr types MODULE)`. The file goes to `DIR/` plus the name's parts, so `(ychr types points)` is `DIR/ychr/types/points.sls`. |
+| `--library` | The library name. Default `(ychr types MODULE)`, or `(ychr ground-types MODULE)` with `--ground`. The file goes to `DIR/` plus the name's parts, so `(ychr types points)` is `DIR/ychr/types/points.sls`. |
 | `--schema` | Also write the schema, next to the library, as `….schema.scm`. |
 | `--all` | Every type the module declares, with every constructor. By default only exported types are included, with the constructors the export list shows (`type(T/N)` or `type(T/N, [C, …])`). |
-| `--checked` | Accessors check the constructor (see [Accessors](#accessors)). |
+| `--checked` | Accessors check the constructor (see [Accessors](#accessors)). With `--ground`, everything also checks for variables. |
+| `--ground` | The ground variant: no dereferencing (see [Ground libraries](#ground-libraries)). |
 
 `--no-check`, `--Werror` and `--dump-splices` work as for `ychr
 compile`. The prelude is refused: its `bool` and `list` are native
@@ -85,7 +91,7 @@ For a constructor `C` of type `T`:
 | Definition | Meaning |
 |---|---|
 | `(make-C a …)` | Builds the term. |
-| `(C? v)` | `v` dereferences to a `C` term. |
+| `(C? v)` | `v` dereferences to a `C` term (ground variant: `v` is a `C` term). |
 | `(C-L t)` | The argument labelled `L`. |
 | `(C-i t)` | Argument `i` (from 1) of a constructor without labels. |
 | `(C-with-L t v)` | A copy of `t` with label `L` set to `v`, like `set_field`. Labelled arguments only. |
@@ -108,7 +114,8 @@ renames.
 The library itself imports `(rnrs)` and `(ychr var)` with a prefix, so
 any name is fine inside it. Your code may not be: common constructors
 give names that `(rnrs)` or `(ychr)` also export, such as `error?` and
-`make-error` for `error(E)`, `null?`, `pair?`, `var?` or `term?`. Chez
+`make-error` for `error(E)`, `null?`, `pair?`, `var?`, `term?` or
+`ground?`. Chez
 refuses such an import. Import the generated library with `(prefix …)`,
 or leave the clashing names out with `(except …)`. The same goes for
 several generated libraries used together.
@@ -118,20 +125,83 @@ YCHR-50007 means `-m` names no loaded module or the prelude, or no
 
 ## Accessors
 
-- **Dereferenced.** An accessor dereferences the term and the
-  argument, so it never returns a bound variable. An unbound one is
-  returned as is.
-- **Shallow.** An argument that is a list or a compound may still hold
-  variables deeper down. Call the runtime's `deep-deref` once on
-  structures that come from CHR.
-- **Fast.** Each accessor reads its field directly; there is no
-  dispatch on the arity.
-- **Unchecked by default.** An accessor applied to another constructor
-  is an error from the record system when the arity differs, and a wrong
-  field otherwise. With `--checked`, every accessor tests `C?` first and
-  raises an `assertion-violation` naming the accessor and the value.
+- **Dereferenced** (default variant only). An accessor dereferences the
+  term and the argument, so it never returns a bound variable. An
+  unbound one is returned as is. The ground variant dereferences
+  nothing.
+- **Shallow** (both). An argument that is a list or a compound may
+  still hold variables deeper down. Call the runtime's `deep-deref` once
+  on structures that come from CHR.
+- **Fast** (both). Each accessor reads its field directly; there is no
+  dispatch on the arity. The ground variant reads one field and nothing
+  else.
+- **Unchecked by default** (both). An accessor applied to another
+  constructor is an error from the record system when the arity
+  differs, and a wrong field otherwise. With `--checked`, every accessor
+  tests `C?` first and raises an `assertion-violation` naming the
+  accessor and the value. The ground variant with `--checked` also
+  checks for variables (see below).
 - Constructors do not check argument types, and type parameters change
   nothing in the code. Lists are native Scheme lists.
+
+## Ground libraries
+
+`--ground` writes a library with the same exported names and the same
+meaning, minus the `deref`s: a predicate tests `v` itself, an accessor
+reads the field and returns it, an update copies `t` itself. Terms are
+the same flat compounds, so a term built with one variant is fine for
+the other, for CHR and for `fasl-write`. To switch, change the import.
+
+Use it when your Scheme code only sees ground terms: terms it built
+itself, terms read with `fasl-read`, or terms from CHR after
+`deep-deref`. Reading a tree is then several times faster (the `size/*`
+and `rewrite/*` cases of `make bench-scheme-chez` compare it with the
+default variant and with native records).
+
+**Contract.** Every term you pass is ground where the procedure reads
+it: the term is not a variable, and neither is the field an accessor
+returns. A *bound* variable counts as a variable here, since nothing
+dereferences it. If you break the contract, you get what any wrong
+argument to an unchecked accessor gives: a predicate answers `#f` for a
+variable, and an accessor fails in the record system or returns the
+variable.
+
+**Checked.** With `--ground --checked`, on top of the `C?` test of
+`--checked`:
+
+- a predicate, an accessor or an update given a variable raises an
+  `assertion-violation` naming the procedure and the value;
+- an accessor whose field is a variable raises the same, naming the
+  accessor and the term.
+
+The checks are shallow, like the accessors. To check a whole term, use
+`ground?`.
+
+**`(ground? t)`**, from `(ychr var)` (also exported by `(ychr runtime)`
+and `(ychr)`): `#t` if no variable occurs in `t`, bound or unbound.
+Pairs and compounds are walked; any other value is ground. It does not
+dereference, so a term fresh from CHR is usually not ground until you
+call `deep-deref`. Call it in debug builds on terms that cross from CHR
+into code that uses a ground library.
+
+With the program of the example above:
+
+```scheme
+(import (rnrs) (ychr) (ychr generated points) (ychr ground-types points))
+(define s (open-session points))
+(define a (make-var s))
+(points:area/2 s (make-rect 2.0 3.0) a)
+(display (list (ground? a) (ground? (deep-deref a)) (deep-deref a))) (newline)
+(define p (make-point 1 (make-circle 2.0)))
+(display (list (ground? p) (point-x p) (circle-r (point-y p)))) (newline)
+```
+
+prints, under Chez Scheme:
+
+```
+(#f #t 6.0)
+(#t 1 2.0)
+```
 
 ## Schema
 
@@ -162,6 +232,6 @@ YCHR-50007 means `-m` names no loaded module or the prelude, or no
 
 The runtime's term records are nongenerative, so on Chez a ground term
 written with `fasl-write` reads back in another process, and the
-generated predicates and accessors accept it. Serialize ground terms
+generated predicates and accessors of both variants accept it. Serialize ground terms
 only (call `deep-deref` first): a variable has no meaning outside its
 session.

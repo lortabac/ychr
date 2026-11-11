@@ -991,7 +991,10 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   are flat records, one sealed type per arity up to 8 ("Flat compounds"
   there). `ychr scheme-types` (`YCHR.Internal.Backend.SchemeTypes`)
   writes, for one module, a library of constructors, predicates and
-  accessors over those records plus an optional schema; see
+  accessors over those records plus an optional schema; with
+  `--ground` the library dereferences nothing, for clients that only
+  handle ground terms, and `(ychr var)` exports `ground?` to check
+  them; see
   [`docs/reference/scheme-types.md`](../docs/reference/scheme-types.md).
   `ychr repl --repl-backend=chez` uses the same runtime for its Scheme
   backend. Haskell keeps the query front end: `Compile.compileQueryGoals`

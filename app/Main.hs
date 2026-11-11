@@ -81,6 +81,7 @@ data SchemeTypesOpts = SchemeTypesOpts
     schema :: Bool,
     allTypes :: Bool,
     checked :: Bool,
+    ground :: Bool,
     werror :: Bool,
     noCheck :: Bool,
     dumpSplices :: Bool
@@ -245,12 +246,16 @@ schemeTypesParser =
               ( strOption
                   ( long "library"
                       <> metavar "\"(NAME ...)\""
-                      <> help "Library name (default: (ychr types MODULE))"
+                      <> help
+                        ( "Library name (default: (ychr types MODULE), or "
+                            ++ "(ychr ground-types MODULE) with --ground)"
+                        )
                   )
               )
             <*> switch (long "schema" <> help "Also write the schema file")
             <*> switch (long "all" <> help "Include every type, not only exported ones")
             <*> switch (long "checked" <> help "Accessors check the constructor")
+            <*> switch (long "ground" <> help "No dereferencing: for ground terms only")
             <*> werrorFlag
             <*> noCheckFlag
             <*> dumpSplicesFlag
@@ -508,7 +513,7 @@ runSchemeTypes resources opts files =
       Left err -> putStr (displayMsg err) >> exitFailure
       Right m -> pure m
     libName <- case opts.library of
-      Nothing -> pure (defaultLibraryName modName)
+      Nothing -> pure (defaultLibraryName opts.ground modName)
       Just l -> case parseLibraryName l of
         Just segs -> pure segs
         Nothing -> do
@@ -525,7 +530,8 @@ runSchemeTypes resources opts files =
             { moduleName = modName,
               libraryName = libName,
               allTypes = opts.allTypes,
-              checked = opts.checked
+              checked = opts.checked,
+              ground = opts.ground
             }
     case generateSchemeTypes options prog of
       Left errs -> do

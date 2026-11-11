@@ -39,7 +39,10 @@
           (only (ychr generated bench_maplist) bench_maplist
             bench_maplist:go/2)
           (only (ychr generated bench_sum) bench_sum bench_sum:go/2)
-          (only (ychr generated bench_terms) bench_terms bench_terms:go/2))
+          (only (ychr generated bench_terms) bench_terms bench_terms:go/2)
+          (prefix (bench expr-native) n:)
+          (prefix (ychr types bench_expr) d:)
+          (prefix (ychr ground-types bench_expr) g:))
 
   ;; ------------------------------------------------------------------
   ;; Measurement policy
@@ -121,11 +124,92 @@
     (number->string (inexact (/ (round (* 100 x)) 100))))
 
   ;; ------------------------------------------------------------------
+  ;; Expression trees read through a types library
+  ;;
+  ;; The same client code over three libraries with one interface: the
+  ;; one `ychr scheme-types` writes (`deref`), the one it writes with
+  ;; `--ground` (`ground`), and native records (`native`, the
+  ;; reference). The macro spells each procedure name out, so every call
+  ;; goes straight to the library's binding, as in a real client.
+  ;; ------------------------------------------------------------------
+
+  (define-syntax define-expr-client
+    (syntax-rules ()
+      ((_ (build size rewrite)
+          (make-lit lit? lit-1) (make-neg neg? neg-1)
+          (make-add add? add-1 add-2) (make-mul mul? mul-1 mul-2)
+          (make-ifz ifz? ifz-1 ifz-2 ifz-3))
+       (begin
+         ;; A tree of depth `d`, the shape picked by `d mod 5`.
+         (define (build d)
+           (if (= d 0)
+               (make-lit 1)
+               (case (mod d 5)
+                 ((0) (make-neg (build (- d 1))))
+                 ((1) (make-add (build (- d 1)) (build (- d 1))))
+                 ((2) (make-mul (build (- d 1)) (make-lit d)))
+                 ((3) (make-ifz (make-lit 0) (build (- d 1)) (make-lit d)))
+                 (else (make-add (build (- d 1)) (build (- d 1)))))))
+         ;; Node count.
+         (define (size e)
+           (cond ((lit? e) 1)
+                 ((neg? e) (+ 1 (size (neg-1 e))))
+                 ((add? e) (+ 1 (size (add-1 e)) (size (add-2 e))))
+                 ((mul? e) (+ 1 (size (mul-1 e)) (size (mul-2 e))))
+                 ((ifz? e) (+ 1 (size (ifz-1 e)) (size (ifz-2 e))
+                              (size (ifz-3 e))))
+                 (else (error 'size "not an expr" e))))
+         ;; A new tree, with add and mul swapped.
+         (define (rewrite e)
+           (cond ((lit? e) (make-lit (lit-1 e)))
+                 ((neg? e) (make-neg (rewrite (neg-1 e))))
+                 ((add? e) (make-mul (rewrite (add-1 e)) (rewrite (add-2 e))))
+                 ((mul? e) (make-add (rewrite (mul-1 e)) (rewrite (mul-2 e))))
+                 ((ifz? e) (make-ifz (rewrite (ifz-1 e)) (rewrite (ifz-2 e))
+                                     (rewrite (ifz-3 e))))
+                 (else (error 'rewrite "not an expr" e))))))))
+
+  (define-expr-client (n-build n-size n-rewrite)
+    (n:make-lit n:lit? n:lit-1) (n:make-neg n:neg? n:neg-1)
+    (n:make-add n:add? n:add-1 n:add-2) (n:make-mul n:mul? n:mul-1 n:mul-2)
+    (n:make-ifz n:ifz? n:ifz-1 n:ifz-2 n:ifz-3))
+  (define-expr-client (d-build d-size d-rewrite)
+    (d:make-lit d:lit? d:lit-1) (d:make-neg d:neg? d:neg-1)
+    (d:make-add d:add? d:add-1 d:add-2) (d:make-mul d:mul? d:mul-1 d:mul-2)
+    (d:make-ifz d:ifz? d:ifz-1 d:ifz-2 d:ifz-3))
+  (define-expr-client (g-build g-size g-rewrite)
+    (g:make-lit g:lit? g:lit-1) (g:make-neg g:neg? g:neg-1)
+    (g:make-add g:add? g:add-1 g:add-2) (g:make-mul g:mul? g:mul-1 g:mul-2)
+    (g:make-ifz g:ifz? g:ifz-1 g:ifz-2 g:ifz-3))
+
+  (define expr-depth 40)
+  (define expr-nodes 371366)
+
+  ;; build/V, size/V and rewrite/V for one library. The tree the last two
+  ;; walk is built once, outside the timing.
+  (define (expr-cases v build size rewrite)
+    (let ((tree #f))
+      (define (the-tree)
+        (unless tree (set! tree (build expr-depth)))
+        tree)
+      (define (nodes? n) (and (= n expr-nodes) (= n (size (the-tree)))))
+      (list
+        (make-bench-case (string-append "build/" v) "expr tree, depth 40"
+          (lambda () (build expr-depth))
+          (lambda (t) (nodes? (size t))))
+        (make-bench-case (string-append "size/" v) "expr tree, depth 40"
+          (lambda () (size (the-tree))) nodes?)
+        (make-bench-case (string-append "rewrite/" v) "expr tree, depth 40"
+          (lambda () (rewrite (the-tree)))
+          (lambda (t) (nodes? (size t)))))))
+
+  ;; ------------------------------------------------------------------
   ;; The benchmark programs
   ;; ------------------------------------------------------------------
 
   (define (cases)
-    (list
+    (append
+     (list
       ;; Session creation alone. Every other case pays a library-specific
       ;; part of this cost, so subtract it only as a rough indication.
       (make-bench-case "session" "(session creation)"
@@ -196,7 +280,10 @@
           (let* ((s (bench_terms)) (a (make-var s)))
             (bench_terms:go/2 s 500 a)
             (deref a)))
-        (lambda (r) (equal? r 2379750)))))
+        (lambda (r) (equal? r 2379750))))
+     (expr-cases "native" n-build n-size n-rewrite)
+     (expr-cases "deref" d-build d-size d-rewrite)
+     (expr-cases "ground" g-build g-size g-rewrite)))
 
   ;; ------------------------------------------------------------------
   ;; Driver

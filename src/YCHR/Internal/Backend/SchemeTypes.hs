@@ -13,6 +13,10 @@
 -- Each accessor knows its constructor's arity, so it reads the field
 -- with the arity-specific record accessor (@compound2-a1@), with no
 -- dispatch.
+--
+-- With 'ground' set, nothing is dereferenced: the caller promises that
+-- the terms are ground. With 'checked' too, a variable where a ground
+-- library reads raises instead.
 module YCHR.Internal.Backend.SchemeTypes
   ( SchemeTypesOptions (..),
     SchemeTypesOutput (..),
@@ -60,8 +64,11 @@ data SchemeTypesOptions = SchemeTypesOptions
     libraryName :: [Text],
     -- | Every declared type, not only the exported ones.
     allTypes :: Bool,
-    -- | Accessors check the constructor and raise on a mismatch.
-    checked :: Bool
+    -- | Accessors check the constructor and raise on a mismatch. With
+    -- 'ground', every procedure also raises on a variable.
+    checked :: Bool,
+    -- | The ground variant: no @deref@ anywhere.
+    ground :: Bool
   }
 
 data SchemeTypesOutput = SchemeTypesOutput
@@ -103,9 +110,11 @@ selectModule prog files requested = case requested of
     loaded = map (.name) prog.allModules
     fromFiles = [m.name | m <- prog.allModules, m.nameLoc.file `elem` files]
 
--- | @(ychr types MODULE)@, with the module name made an identifier.
-defaultLibraryName :: Text -> [Text]
-defaultLibraryName m = ["ychr", "types", encodeAliasComponent m]
+-- | @(ychr types MODULE)@, or @(ychr ground-types MODULE)@ for the
+-- ground variant, with the module name made an identifier.
+defaultLibraryName :: Bool -> Text -> [Text]
+defaultLibraryName g m =
+  ["ychr", if g then "ground-types" else "types", encodeAliasComponent m]
 
 -- ---------------------------------------------------------------------------
 -- Selection
@@ -178,7 +187,7 @@ generateSchemeTypes opts prog = case collisions of
 
 typeDefs :: SchemeTypesOptions -> Selected -> [Def]
 typeDefs opts s =
-  concatMap (ctorDefs opts s.def) s.visible ++ typePredicate s
+  concatMap (ctorDefs opts s.def) s.visible ++ typePredicate opts s
 
 -- | @T-type?@: true for any constructor of the type, exported or not.
 -- None for an opaque type, which has no constructors.
@@ -186,8 +195,8 @@ typeDefs opts s =
 -- The @-type@ suffix keeps it apart from every constructor predicate:
 -- an encoded constructor name never holds a @-@, so @C?@ can't be
 -- @T-type?@, whatever the two are called.
-typePredicate :: Selected -> [Def]
-typePredicate s = case typeConstructors s.def of
+typePredicate :: SchemeTypesOptions -> Selected -> [Def]
+typePredicate opts s = case typeConstructors s.def of
   [] -> []
   cs ->
     [ Def
@@ -197,7 +206,9 @@ typePredicate s = case typeConstructors s.def of
             define
               (tIdent <> "-type?")
               ["v"]
-              (letDeref "v" (anyOf (map (`ctorTest` SAtom "d") cs)))
+              ( varCheck opts (tIdent <> "-type?") "v" $
+                  letTerm opts "v" (\d -> anyOf (map (`ctorTest` d) cs))
+              )
         }
     ]
   where
@@ -247,9 +258,13 @@ ctorDefs opts td c
       Def
         { ident = e <> "?",
           origin = "predicate of " <> what,
-          form = define (e <> "?") ["v"] (letDeref "v" (ctorTest c (SAtom "d")))
+          form =
+            define
+              (e <> "?")
+              ["v"]
+              (varCheck opts (e <> "?") "v" (letTerm opts "v" (ctorTest c)))
         }
-    -- The raw field @i@ (0-based) of a dereferenced term @d@.
+    -- The raw field @i@ (0-based) of a term @d@ that is not a variable.
     field d i
       | n <= flatMaxArity =
           SList
@@ -285,13 +300,15 @@ ctorDefs opts td c
                 define
                   nm
                   ["p"]
-                  (guarded nm (deref (field (deref (SAtom "p")) i)))
+                  ( varCheck opts nm "p" $
+                      guarded nm (readField opts nm (field (termOf opts "p") i))
+                  )
             }
     update :: Int -> Maybe Text -> [Def]
     update _ Nothing = []
     update i (Just l) =
       let nm = e <> "-with-" <> encodeIdentifier l
-          args = [if j == i then SAtom "v" else field (SAtom "d") j | j <- [0 .. n - 1]]
+          args d = [if j == i then SAtom "v" else field d j | j <- [0 .. n - 1]]
        in [ Def
               { ident = nm,
                 origin = "update of label " <> l <> " of " <> what,
@@ -299,11 +316,13 @@ ctorDefs opts td c
                   define
                     nm
                     ["p", "v"]
-                    (guarded nm (letDeref "p" (build args)))
+                    ( varCheck opts nm "p" $
+                        guarded nm (letTerm opts "p" (build . args))
+                    )
               }
           ]
 
--- | The test that a dereferenced value @d@ is constructor @c@.
+-- | The test that a value @d@ that is not a variable is constructor @c@.
 ctorTest :: DataConstructor -> SExpr -> SExpr
 ctorTest c d
   | n == 0 = rnrs "eq?" [d, sym f]
@@ -426,10 +445,53 @@ define n ps body = rnrs "define" [SList (map SAtom (n : ps)), body]
 deref :: SExpr -> SExpr
 deref e = SList [SAtom "ychr:deref", e]
 
--- | @(let ((d (deref v))) body)@.
-letDeref :: Text -> SExpr -> SExpr
-letDeref v body =
-  rnrs "let" [SList [SList [SAtom "d", deref (SAtom v)]], body]
+-- | @(let ((d (deref v))) body)@, or @body@ over @v@ itself in ground
+-- mode.
+letTerm :: SchemeTypesOptions -> Text -> (SExpr -> SExpr) -> SExpr
+letTerm opts v body
+  | opts.ground = body (SAtom v)
+  | otherwise =
+      rnrs "let" [SList [SList [SAtom "d", deref (SAtom v)]], body (SAtom "d")]
+
+-- | @(deref v)@, or @v@ in ground mode.
+termOf :: SchemeTypesOptions -> Text -> SExpr
+termOf opts v
+  | opts.ground = SAtom v
+  | otherwise = deref (SAtom v)
+
+-- | In ground mode with 'checked': @body@, unless the argument @v@ of
+-- procedure @nm@ is a variable. Otherwise just @body@.
+varCheck :: SchemeTypesOptions -> Text -> Text -> SExpr -> SExpr
+varCheck opts nm v body
+  | opts.ground && opts.checked = notVar nm (SAtom v) (SAtom v) body
+  | otherwise = body
+
+-- | A field an accessor of procedure @nm@ returns. Normally
+-- dereferenced. In ground mode returned as is, after a check that it is
+-- not a variable when 'checked' is set.
+readField :: SchemeTypesOptions -> Text -> SExpr -> SExpr
+readField opts nm e
+  | not opts.ground = deref e
+  | opts.checked =
+      rnrs
+        "let"
+        [ SList [SList [SAtom "x", e]],
+          notVar nm (SAtom "x") (SAtom "p") (SAtom "x")
+        ]
+  | otherwise = e
+
+-- | @body@, unless @v@ is a variable: then an @assertion-violation@ of
+-- @nm@ that shows @shown@.
+notVar :: Text -> SExpr -> SExpr -> SExpr -> SExpr
+notVar nm v shown body =
+  rnrs
+    "if"
+    [ SList [SAtom "ychr:var?", v],
+      rnrs
+        "assertion-violation"
+        [sym nm, SString "variable in a ground term", shown],
+      body
+    ]
 
 -- | A quoted symbol, or @string->symbol@ when it is not a valid
 -- identifier.
