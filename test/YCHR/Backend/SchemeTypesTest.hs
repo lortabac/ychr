@@ -19,6 +19,9 @@ tests =
     [ testCase "library text: labels, positions, nullary, allowlist" $ do
         out <- generate defaultOpts shapesSource
         out.library @?= T.unlines expectedLibrary,
+      testCase "records library text" $ do
+        out <- generate defaultOpts shapesSource
+        out.records @?= T.unlines expectedRecords,
       testCase "schema text" $ do
         out <- generate defaultOpts shapesSource
         out.schema @?= T.unlines expectedSchema,
@@ -26,7 +29,7 @@ tests =
         out <- generate defaultOpts {allTypes = True} shapesSource
         mapM_
           (assertInfix out.library)
-          [ "(rnrs:define (make-rect x1 x2) ",
+          [ "(rename (r:%mk2 make-rect))",
             "(rnrs:define (rect-2 p) ",
             "(rnrs:define hid (rnrs:quote shapes__hid))",
             "(rnrs:define (hidden-type? v) "
@@ -43,8 +46,9 @@ tests =
         out <- generate defaultOpts {moduleName = "big", allTypes = True} bigSource
         assertInfix
           out.library
-          ( "(ychr:make-compound* (rnrs:quote big__nine) (rnrs:vector x1 "
-              <> "x2 x3 x4 x5 x6 x7 x8 x9))"
+          ( "(rnrs:define make-nine (rnrs:let ((k (ychr:compound-constructor "
+              <> "(rnrs:quote big__nine) 9))) (rnrs:lambda (x1 x2 x3 x4 x5 x6 "
+              <> "x7 x8 x9) (k (rnrs:vector x1 x2 x3 x4 x5 x6 x7 x8 x9)))))"
           )
         assertInfix
           out.library
@@ -55,16 +59,14 @@ tests =
         out <- generate defaultOpts shapesSource
         assertInfix
           out.library
-          ( "(rnrs:define (make-point x1 x2) (ychr:make-compound2 "
-              <> "(rnrs:quote shapes__point) x1 x2))"
-          ),
+          "(rename (r:%mk0 make-point))",
       testCase "names that are not identifiers" $ do
         out <- generate defaultOpts {moduleName = "odd", allTypes = True} oddSource
         -- Escaped like constraint aliases; the functor keeps its spelling.
         assertInfix
           out.library
-          ( "(rnrs:define (make-x__u20__y x1) (ychr:make-compound1 "
-              <> "(rnrs:string->symbol \"odd__x y\") x1))"
+          ( "(rnrs:define make-x__u20__y (ychr:compound-constructor "
+              <> "(rnrs:string->symbol \"odd__x y\") 1))"
           )
         assertInfix out.library "(rnrs:define (x__u20__y-a__u2d__b p) "
         assertInfix out.library "(rnrs:define (__u39__lives? v) "
@@ -119,9 +121,7 @@ tests =
           (assertInfix out.library)
           [ "(rnrs:define (point? v) (rnrs:if (ychr:var? v) "
               <> "(rnrs:assertion-violation (rnrs:quote point?) "
-              <> "\"variable in a ground term\" v) (rnrs:and "
-              <> "(ychr:compound2? v) (rnrs:eq? (ychr:compound2-functor v) "
-              <> "(rnrs:quote shapes__point)))))",
+              <> "\"variable in a ground term\" v) (r:%p0 v)))",
             "(rnrs:define (point-x p) (rnrs:if (ychr:var? p) "
               <> "(rnrs:assertion-violation (rnrs:quote point-x) "
               <> "\"variable in a ground term\" p) (rnrs:if (point? p) "
@@ -133,7 +133,7 @@ tests =
             "(rnrs:define (point-with-x p v) (rnrs:if (ychr:var? p) "
               <> "(rnrs:assertion-violation (rnrs:quote point-with-x) "
               <> "\"variable in a ground term\" p) (rnrs:if (point? p) "
-              <> "(ychr:make-compound2 (rnrs:quote shapes__point) v "
+              <> "(r:%mk0 v "
               <> "(ychr:compound2-a2 p)) (rnrs:assertion-violation "
               <> "(rnrs:quote point-with-x) \"not a point\" p))))",
             "(rnrs:define (shape-type? v) (rnrs:if (ychr:var? v) "
@@ -209,11 +209,16 @@ collides name m src = do
     isIt (TypesNameCollision n _ _) = n == name
     isIt _ = False
 
--- | The @(export …)@ line of a generated library.
-exportLine :: SchemeTypesOutput -> Text
+-- | The names a generated library exports, in order. A re-export
+-- @(rename (r:%p0 c?))@ counts as @c?@.
+exportLine :: SchemeTypesOutput -> [Text]
 exportLine out = case filter ("  (export " `T.isPrefixOf`) (T.lines out.library) of
-  [l] -> l
+  [l] -> names (T.words (T.dropEnd 1 (T.drop (T.length "  (export ") l)))
   _ -> error "no export line"
+  where
+    names ("(rename" : _ : n : rest) = T.dropEnd 2 n : names rest
+    names (n : rest) = n : names rest
+    names [] = []
 
 assertInfix :: Text -> Text -> IO ()
 assertInfix hay needle =
@@ -254,18 +259,16 @@ expectedLibrary =
         <> "not edit."
     ),
     "(library (ychr types shapes)",
-    ( "  (export make-point point? point-x point-y point-with-x "
-        <> "point-with-y point-type? make-circle circle? circle-r "
-        <> "circle-with-r empty empty? shape-type? make-tag tag? tag-1 "
-        <> "tag-type?)"
+    ( "  (export (rename (r:%mk0 make-point)) point? point-x point-y "
+        <> "point-with-x point-with-y point-type? (rename (r:%mk1 "
+        <> "make-circle)) circle? circle-r circle-with-r empty empty? "
+        <> "shape-type? (rename (r:%mk3 make-tag)) tag? tag-1 tag-type?)"
     ),
-    "  (import (prefix (rnrs) rnrs:) (prefix (ychr var) ychr:))",
-    ( "  (rnrs:define (make-point x1 x2) (ychr:make-compound2 "
-        <> "(rnrs:quote shapes__point) x1 x2))"
+    ( "  (import (prefix (rnrs) rnrs:) (prefix (ychr var) ychr:) "
+        <> "(prefix (ychr types shapes records) r:))"
     ),
     ( "  (rnrs:define (point? v) (rnrs:let ((d (ychr:deref v))) "
-        <> "(rnrs:and (ychr:compound2? d) (rnrs:eq? "
-        <> "(ychr:compound2-functor d) (rnrs:quote shapes__point)))))"
+        <> "(r:%p0 d)))"
     ),
     ( "  (rnrs:define (point-x p) (ychr:deref (ychr:compound2-a1 "
         <> "(ychr:deref p))))"
@@ -274,54 +277,39 @@ expectedLibrary =
         <> "(ychr:deref p))))"
     ),
     ( "  (rnrs:define (point-with-x p v) (rnrs:let ((d (ychr:deref "
-        <> "p))) (ychr:make-compound2 (rnrs:quote shapes__point) v "
-        <> "(ychr:compound2-a2 d))))"
+        <> "p))) (r:%mk0 v (ychr:compound2-a2 d))))"
     ),
     ( "  (rnrs:define (point-with-y p v) (rnrs:let ((d (ychr:deref "
-        <> "p))) (ychr:make-compound2 (rnrs:quote shapes__point) "
-        <> "(ychr:compound2-a1 d) v)))"
+        <> "p))) (r:%mk0 (ychr:compound2-a1 d) v)))"
     ),
     ( "  (rnrs:define (point-type? v) (rnrs:let ((d (ychr:deref v))) "
-        <> "(rnrs:and (ychr:compound2? d) (rnrs:eq? "
-        <> "(ychr:compound2-functor d) (rnrs:quote shapes__point)))))"
-    ),
-    ( "  (rnrs:define (make-circle x1) (ychr:make-compound1 "
-        <> "(rnrs:quote shapes__circle) x1))"
+        <> "(r:%p0 d)))"
     ),
     ( "  (rnrs:define (circle? v) (rnrs:let ((d (ychr:deref v))) "
-        <> "(rnrs:and (ychr:compound1? d) (rnrs:eq? "
-        <> "(ychr:compound1-functor d) (rnrs:quote shapes__circle)))))"
+        <> "(r:%p1 d)))"
     ),
     ( "  (rnrs:define (circle-r p) (ychr:deref (ychr:compound1-a1 "
         <> "(ychr:deref p))))"
     ),
     ( "  (rnrs:define (circle-with-r p v) (rnrs:let ((d (ychr:deref "
-        <> "p))) (ychr:make-compound1 (rnrs:quote shapes__circle) v)))"
+        <> "p))) (r:%mk1 v)))"
     ),
     "  (rnrs:define empty (rnrs:quote shapes__empty))",
     ( "  (rnrs:define (empty? v) (rnrs:let ((d (ychr:deref v))) "
         <> "(rnrs:eq? d (rnrs:quote shapes__empty))))"
     ),
     ( "  (rnrs:define (shape-type? v) (rnrs:let ((d (ychr:deref v))) "
-        <> "(rnrs:or (rnrs:and (ychr:compound1? d) (rnrs:eq? "
-        <> "(ychr:compound1-functor d) (rnrs:quote shapes__circle))) "
-        <> "(rnrs:and (ychr:compound2? d) (rnrs:eq? "
-        <> "(ychr:compound2-functor d) (rnrs:quote shapes__rect))) "
-        <> "(rnrs:eq? d (rnrs:quote shapes__empty)))))"
+        <> "(rnrs:or (r:%p1 d) (r:%p2 d) (rnrs:eq? d (rnrs:quote "
+        <> "shapes__empty)))))"
     ),
-    ( "  (rnrs:define (make-tag x1) (ychr:make-compound1 (rnrs:quote "
-        <> "shapes__tag) x1))"
-    ),
-    ( "  (rnrs:define (tag? v) (rnrs:let ((d (ychr:deref v))) "
-        <> "(rnrs:and (ychr:compound1? d) (rnrs:eq? "
-        <> "(ychr:compound1-functor d) (rnrs:quote shapes__tag)))))"
+    ( "  (rnrs:define (tag? v) (rnrs:let ((d (ychr:deref v))) (r:%p3 "
+        <> "d)))"
     ),
     ( "  (rnrs:define (tag-1 p) (ychr:deref (ychr:compound1-a1 "
         <> "(ychr:deref p))))"
     ),
     ( "  (rnrs:define (tag-type? v) (rnrs:let ((d (ychr:deref v))) "
-        <> "(rnrs:and (ychr:compound1? d) (rnrs:eq? "
-        <> "(ychr:compound1-functor d) (rnrs:quote shapes__tag)))))"
+        <> "(r:%p3 d)))"
     ),
     ")"
   ]
@@ -332,62 +320,35 @@ expectedGroundLibrary =
         <> "not edit."
     ),
     "(library (ychr ground-types shapes)",
-    ( "  (export make-point point? point-x point-y point-with-x "
-        <> "point-with-y point-type? make-circle circle? circle-r "
-        <> "circle-with-r empty empty? shape-type? make-tag tag? tag-1 "
-        <> "tag-type?)"
+    ( "  (export (rename (r:%mk0 make-point)) (rename (r:%p0 point?)) "
+        <> "point-x point-y point-with-x point-with-y point-type? "
+        <> "(rename (r:%mk1 make-circle)) (rename (r:%p1 circle?)) "
+        <> "circle-r circle-with-r empty empty? shape-type? (rename "
+        <> "(r:%mk3 make-tag)) (rename (r:%p3 tag?)) tag-1 tag-type?)"
     ),
-    "  (import (prefix (rnrs) rnrs:) (prefix (ychr var) ychr:))",
-    ( "  (rnrs:define (make-point x1 x2) (ychr:make-compound2 "
-        <> "(rnrs:quote shapes__point) x1 x2))"
-    ),
-    ( "  (rnrs:define (point? v) (rnrs:and (ychr:compound2? v) "
-        <> "(rnrs:eq? (ychr:compound2-functor v) (rnrs:quote "
-        <> "shapes__point))))"
+    ( "  (import (prefix (rnrs) rnrs:) (prefix (ychr var) ychr:) "
+        <> "(prefix (ychr ground-types shapes records) r:))"
     ),
     "  (rnrs:define (point-x p) (ychr:compound2-a1 p))",
     "  (rnrs:define (point-y p) (ychr:compound2-a2 p))",
-    ( "  (rnrs:define (point-with-x p v) (ychr:make-compound2 "
-        <> "(rnrs:quote shapes__point) v (ychr:compound2-a2 p)))"
+    ( "  (rnrs:define (point-with-x p v) (r:%mk0 v (ychr:compound2-a2 "
+        <> "p)))"
     ),
-    ( "  (rnrs:define (point-with-y p v) (ychr:make-compound2 "
-        <> "(rnrs:quote shapes__point) (ychr:compound2-a1 p) v))"
+    ( "  (rnrs:define (point-with-y p v) (r:%mk0 (ychr:compound2-a1 "
+        <> "p) v))"
     ),
-    ( "  (rnrs:define (point-type? v) (rnrs:and (ychr:compound2? v) "
-        <> "(rnrs:eq? (ychr:compound2-functor v) (rnrs:quote "
-        <> "shapes__point))))"
-    ),
-    ( "  (rnrs:define (make-circle x1) (ychr:make-compound1 "
-        <> "(rnrs:quote shapes__circle) x1))"
-    ),
-    ( "  (rnrs:define (circle? v) (rnrs:and (ychr:compound1? v) "
-        <> "(rnrs:eq? (ychr:compound1-functor v) (rnrs:quote "
-        <> "shapes__circle))))"
-    ),
+    "  (rnrs:define (point-type? v) (r:%p0 v))",
     "  (rnrs:define (circle-r p) (ychr:compound1-a1 p))",
-    ( "  (rnrs:define (circle-with-r p v) (ychr:make-compound1 "
-        <> "(rnrs:quote shapes__circle) v))"
-    ),
+    "  (rnrs:define (circle-with-r p v) (r:%mk1 v))",
     "  (rnrs:define empty (rnrs:quote shapes__empty))",
-    "  (rnrs:define (empty? v) (rnrs:eq? v (rnrs:quote shapes__empty)))",
-    ( "  (rnrs:define (shape-type? v) (rnrs:or (rnrs:and "
-        <> "(ychr:compound1? v) (rnrs:eq? (ychr:compound1-functor v) "
-        <> "(rnrs:quote shapes__circle))) (rnrs:and (ychr:compound2? v) "
-        <> "(rnrs:eq? (ychr:compound2-functor v) (rnrs:quote "
-        <> "shapes__rect))) (rnrs:eq? v (rnrs:quote shapes__empty))))"
+    ( "  (rnrs:define (empty? v) (rnrs:eq? v (rnrs:quote "
+        <> "shapes__empty)))"
     ),
-    ( "  (rnrs:define (make-tag x1) (ychr:make-compound1 (rnrs:quote "
-        <> "shapes__tag) x1))"
-    ),
-    ( "  (rnrs:define (tag? v) (rnrs:and (ychr:compound1? v) "
-        <> "(rnrs:eq? (ychr:compound1-functor v) (rnrs:quote "
-        <> "shapes__tag))))"
+    ( "  (rnrs:define (shape-type? v) (rnrs:or (r:%p1 v) (r:%p2 v) "
+        <> "(rnrs:eq? v (rnrs:quote shapes__empty))))"
     ),
     "  (rnrs:define (tag-1 p) (ychr:compound1-a1 p))",
-    ( "  (rnrs:define (tag-type? v) (rnrs:and (ychr:compound1? v) "
-        <> "(rnrs:eq? (ychr:compound1-functor v) (rnrs:quote "
-        <> "shapes__tag))))"
-    ),
+    "  (rnrs:define (tag-type? v) (r:%p3 v))",
     ")"
   ]
 
@@ -397,15 +358,15 @@ expectedGroundCheckedLibrary =
         <> "edit."
     ),
     "(library (ychr ground-types gc)",
-    "  (export make-c c? c-a c-with-a n n? t-type?)",
-    "  (import (prefix (rnrs) rnrs:) (prefix (ychr var) ychr:))",
-    ( "  (rnrs:define (make-c x1) (ychr:make-compound1 (rnrs:quote "
-        <> "gc__c) x1))"
+    ( "  (export (rename (r:%mk0 make-c)) c? c-a c-with-a n n? "
+        <> "t-type?)"
+    ),
+    ( "  (import (prefix (rnrs) rnrs:) (prefix (ychr var) ychr:) "
+        <> "(prefix (ychr ground-types gc records) r:))"
     ),
     ( "  (rnrs:define (c? v) (rnrs:if (ychr:var? v) "
         <> "(rnrs:assertion-violation (rnrs:quote c?) \"variable in a "
-        <> "ground term\" v) (rnrs:and (ychr:compound1? v) (rnrs:eq? "
-        <> "(ychr:compound1-functor v) (rnrs:quote gc__c)))))"
+        <> "ground term\" v) (r:%p0 v)))"
     ),
     ( "  (rnrs:define (c-a p) (rnrs:if (ychr:var? p) "
         <> "(rnrs:assertion-violation (rnrs:quote c-a) \"variable in a "
@@ -417,9 +378,9 @@ expectedGroundCheckedLibrary =
     ),
     ( "  (rnrs:define (c-with-a p v) (rnrs:if (ychr:var? p) "
         <> "(rnrs:assertion-violation (rnrs:quote c-with-a) \"variable in "
-        <> "a ground term\" p) (rnrs:if (c? p) (ychr:make-compound1 "
-        <> "(rnrs:quote gc__c) v) (rnrs:assertion-violation (rnrs:quote "
-        <> "c-with-a) \"not a c\" p))))"
+        <> "a ground term\" p) (rnrs:if (c? p) (r:%mk0 v) "
+        <> "(rnrs:assertion-violation (rnrs:quote c-with-a) \"not a c\" "
+        <> "p))))"
     ),
     "  (rnrs:define n (rnrs:quote gc__n))",
     ( "  (rnrs:define (n? v) (rnrs:if (ychr:var? v) "
@@ -428,9 +389,35 @@ expectedGroundCheckedLibrary =
     ),
     ( "  (rnrs:define (t-type? v) (rnrs:if (ychr:var? v) "
         <> "(rnrs:assertion-violation (rnrs:quote t-type?) \"variable in "
-        <> "a ground term\" v) (rnrs:or (rnrs:and (ychr:compound1? v) "
-        <> "(rnrs:eq? (ychr:compound1-functor v) (rnrs:quote gc__c))) "
-        <> "(rnrs:eq? v (rnrs:quote gc__n)))))"
+        <> "a ground term\" v) (rnrs:or (r:%p0 v) (rnrs:eq? v (rnrs:quote "
+        <> "gc__n)))))"
+    ),
+    ")"
+  ]
+
+expectedRecords :: [Text]
+expectedRecords =
+  [ ( ";;;; Generated by `ychr scheme-types` from module shapes. Do "
+        <> "not edit."
+    ),
+    "(library (ychr types shapes records)",
+    "  (export %mk0 %p0 %mk1 %p1 %mk2 %p2 %mk3 %p3)",
+    "  (import (rnrs) (only (ychr var) compound2 compound1))",
+    ( "  (define-record-type (shapes__point %mk0 %p0) (parent "
+        <> "compound2) (sealed #t) (nongenerative "
+        <> "ychr:c2:shapes__point:1))"
+    ),
+    ( "  (define-record-type (shapes__circle %mk1 %p1) (parent "
+        <> "compound1) (sealed #t) (nongenerative "
+        <> "ychr:c1:shapes__circle:1))"
+    ),
+    ( "  (define-record-type (shapes__rect %mk2 %p2) (parent "
+        <> "compound2) (sealed #t) (nongenerative "
+        <> "ychr:c2:shapes__rect:1))"
+    ),
+    ( "  (define-record-type (shapes__tag %mk3 %p3) (parent "
+        <> "compound1) (sealed #t) (nongenerative "
+        <> "ychr:c1:shapes__tag:1))"
     ),
     ")"
   ]

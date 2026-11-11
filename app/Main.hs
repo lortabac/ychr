@@ -540,6 +540,7 @@ runSchemeTypes resources opts files =
       Right out -> do
         let base = foldl (</>) opts.outputDir (map T.unpack libName)
         writeOutputFile (base ++ ".sls") out.library
+        writeOutputFile (base </> "records.sls") out.records
         when opts.schema $ writeOutputFile (base ++ ".schema.scm") out.schema
         schemeRuntimeNote
   where

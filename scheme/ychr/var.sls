@@ -18,9 +18,12 @@
           compound?
           compound-functor
           compound-max-flat-arity
-          compound1-functor compound2-functor compound3-functor
-          compound4-functor compound5-functor compound6-functor
-          compound7-functor compound8-functor compound*-functor
+          compound-type compound-constructor compound-predicate
+          match-compound*
+          ;; The parent record types, for `define-record-type` in a
+          ;; `scheme-types` records library.
+          compound1 compound2 compound3 compound4
+          compound5 compound6 compound7 compound8
           make-compound1 compound1? compound1-a1
           make-compound2 compound2? compound2-a1 compound2-a2
           make-compound3 compound3? compound3-a1 compound3-a2 compound3-a3
@@ -87,11 +90,12 @@
   ;;; `prelude__.`(H, T) is a pair and the nil atom `prelude__[]` is
   ;;; `'()`. Every other compound is a `compound` record.
   ;;;
-  ;;; Every other compound is flat: one sealed record type per arity
-  ;;; 1..K, with the functor and the arguments as fields, and
-  ;;; `compound*` with the functor and a vector for arity > K. A term has one representation only: arity n <= K is
-  ;;; always a `compoundn`, so two terms of the same functor and arity
-  ;;; always have the same record type. A nullary term is an atom; the
+  ;;; Every other compound is flat: its record type is a child of
+  ;;; `compoundn` (the arguments as fields) for arity n <= K, or of
+  ;;; `compound*` (a vector) above K. The child is per functor and
+  ;;; carries the functor as its name (see "Per-functor types"). A term
+  ;;; has one representation only, so two terms of the same functor and
+  ;;; arity always have the same record type. A nullary term is an atom; the
   ;;; one exception is the empty `compound*` `make-term` builds for a
   ;;; nullary constraint in `write_store_to_list`.
   ;;;
@@ -114,61 +118,118 @@
   ;;; `flatMaxArity` in src/YCHR/Internal/Backend/Scheme.hs.
   (define compound-max-flat-arity 8)
 
-  (define-record-type (compound1 make-compound1 compound1?)
-    (sealed #t) (nongenerative ychr:compound1:1)
-    (fields (immutable functor compound1-functor) (immutable a1 compound1-a1)))
+  (define-record-type (compound1 %make-compound1 compound1?)
+    (nongenerative ychr:compound1:2)
+    (fields (immutable a1 compound1-a1)))
 
-  (define-record-type (compound2 make-compound2 compound2?)
-    (sealed #t) (nongenerative ychr:compound2:1)
-    (fields (immutable functor compound2-functor) (immutable a1 compound2-a1) (immutable a2 compound2-a2)))
+  (define-record-type (compound2 %make-compound2 compound2?)
+    (nongenerative ychr:compound2:2)
+    (fields (immutable a1 compound2-a1) (immutable a2 compound2-a2)))
 
-  (define-record-type (compound3 make-compound3 compound3?)
-    (sealed #t) (nongenerative ychr:compound3:1)
-    (fields (immutable functor compound3-functor) (immutable a1 compound3-a1) (immutable a2 compound3-a2) (immutable a3 compound3-a3)))
+  (define-record-type (compound3 %make-compound3 compound3?)
+    (nongenerative ychr:compound3:2)
+    (fields (immutable a1 compound3-a1) (immutable a2 compound3-a2) (immutable a3 compound3-a3)))
 
-  (define-record-type (compound4 make-compound4 compound4?)
-    (sealed #t) (nongenerative ychr:compound4:1)
-    (fields (immutable functor compound4-functor) (immutable a1 compound4-a1) (immutable a2 compound4-a2) (immutable a3 compound4-a3) (immutable a4 compound4-a4)))
+  (define-record-type (compound4 %make-compound4 compound4?)
+    (nongenerative ychr:compound4:2)
+    (fields (immutable a1 compound4-a1) (immutable a2 compound4-a2) (immutable a3 compound4-a3) (immutable a4 compound4-a4)))
 
-  (define-record-type (compound5 make-compound5 compound5?)
-    (sealed #t) (nongenerative ychr:compound5:1)
-    (fields (immutable functor compound5-functor) (immutable a1 compound5-a1) (immutable a2 compound5-a2) (immutable a3 compound5-a3) (immutable a4 compound5-a4) (immutable a5 compound5-a5)))
+  (define-record-type (compound5 %make-compound5 compound5?)
+    (nongenerative ychr:compound5:2)
+    (fields (immutable a1 compound5-a1) (immutable a2 compound5-a2) (immutable a3 compound5-a3) (immutable a4 compound5-a4) (immutable a5 compound5-a5)))
 
-  (define-record-type (compound6 make-compound6 compound6?)
-    (sealed #t) (nongenerative ychr:compound6:1)
-    (fields (immutable functor compound6-functor) (immutable a1 compound6-a1) (immutable a2 compound6-a2) (immutable a3 compound6-a3) (immutable a4 compound6-a4) (immutable a5 compound6-a5) (immutable a6 compound6-a6)))
+  (define-record-type (compound6 %make-compound6 compound6?)
+    (nongenerative ychr:compound6:2)
+    (fields (immutable a1 compound6-a1) (immutable a2 compound6-a2) (immutable a3 compound6-a3) (immutable a4 compound6-a4) (immutable a5 compound6-a5) (immutable a6 compound6-a6)))
 
-  (define-record-type (compound7 make-compound7 compound7?)
-    (sealed #t) (nongenerative ychr:compound7:1)
-    (fields (immutable functor compound7-functor) (immutable a1 compound7-a1) (immutable a2 compound7-a2) (immutable a3 compound7-a3) (immutable a4 compound7-a4) (immutable a5 compound7-a5) (immutable a6 compound7-a6) (immutable a7 compound7-a7)))
+  (define-record-type (compound7 %make-compound7 compound7?)
+    (nongenerative ychr:compound7:2)
+    (fields (immutable a1 compound7-a1) (immutable a2 compound7-a2) (immutable a3 compound7-a3) (immutable a4 compound7-a4) (immutable a5 compound7-a5) (immutable a6 compound7-a6) (immutable a7 compound7-a7)))
 
-  (define-record-type (compound8 make-compound8 compound8?)
-    (sealed #t) (nongenerative ychr:compound8:1)
-    (fields (immutable functor compound8-functor) (immutable a1 compound8-a1) (immutable a2 compound8-a2) (immutable a3 compound8-a3) (immutable a4 compound8-a4) (immutable a5 compound8-a5) (immutable a6 compound8-a6) (immutable a7 compound8-a7) (immutable a8 compound8-a8)))
+  (define-record-type (compound8 %make-compound8 compound8?)
+    (nongenerative ychr:compound8:2)
+    (fields (immutable a1 compound8-a1) (immutable a2 compound8-a2) (immutable a3 compound8-a3) (immutable a4 compound8-a4) (immutable a5 compound8-a5) (immutable a6 compound8-a6) (immutable a7 compound8-a7) (immutable a8 compound8-a8)))
 
-  (define-record-type (compound* make-compound* compound*?)
-    (sealed #t) (nongenerative ychr:compound*:1)
-    (fields (immutable functor compound*-functor) (immutable args compound*-args)))
+  (define-record-type (compound* %make-compound* compound*?)
+    (nongenerative ychr:compound*:2)
+    (fields (immutable args compound*-args)))
 
-  ;;; Any compound record. Sealed types only: Guile checks a parent type
-  ;;; (and reads a parent's field) by walking the child's ancestry,
-  ;;; which costs about ten sealed checks, so there is no common parent.
+  ;;; Per-functor types
+  ;;;
+  ;;; The types above are parents. Each functor and arity gets its own
+  ;;; sealed child type, with no fields, named after the functor: the
+  ;;; functor is the type's name, not a field. Arities above K share
+  ;;; one child per functor under `compound*`; the vector length is the
+  ;;; arity, as before.
+  ;;;
+  ;;; A child is made the first time it is asked for, and cached. Its
+  ;;; uid is fixed by the functor and the arity, so every library and
+  ;;; process gets the same type (fasl relies on it too). Always make
+  ;;; one through `compound-type`: Chez keeps the name of the first
+  ;;; type with a uid, so the name must be the functor every time.
+  (define compound-parents
+    (vector (record-type-descriptor compound*)
+            (record-type-descriptor compound1) (record-type-descriptor compound2)
+            (record-type-descriptor compound3) (record-type-descriptor compound4)
+            (record-type-descriptor compound5) (record-type-descriptor compound6)
+            (record-type-descriptor compound7) (record-type-descriptor compound8)))
+
+  ;;; Slot 0 is `compound*`, slots 1..K the flat arities.
+  (define compound-types
+    (let ((v (make-vector (+ compound-max-flat-arity 1))))
+      (do ((i 0 (+ i 1))) ((> i compound-max-flat-arity) v)
+        (vector-set! v i (make-eq-hashtable)))))
+
+  (define (type-slot n) (if (or (= n 0) (> n compound-max-flat-arity)) 0 n))
+
+  ;;; The cached `#(rtd constructor predicate)` of functor `f` at arity
+  ;;; `n`. The constructor takes the arguments (a vector for `compound*`).
+  (define (compound-type f n)
+    (let* ((k (type-slot n))
+           (tbl (vector-ref compound-types k)))
+      (or (hashtable-ref tbl f #f)
+          (let* ((uid (string->symbol
+                       (string-append "ychr:c" (if (= k 0) "*" (number->string k))
+                                      ":" (symbol->string f) ":1")))
+                 (rtd (make-record-type-descriptor
+                       f (vector-ref compound-parents k) uid #t #f '#()))
+                 (e (vector rtd
+                            (record-constructor
+                             (make-record-constructor-descriptor rtd #f #f))
+                            (record-predicate rtd))))
+            (hashtable-set! tbl f e)
+            e))))
+
+  ;;; For generated code, which binds these once per functor at load.
+  (define (compound-constructor f n) (vector-ref (compound-type f n) 1))
+  (define (compound-predicate f n) (vector-ref (compound-type f n) 2))
+
+  ;;; The constructors by functor, for code that builds terms outside a
+  ;;; generated library. One table lookup per term.
+  (define (make-compound1 f a) ((compound-constructor f 1) a))
+  (define (make-compound2 f a b) ((compound-constructor f 2) a b))
+  (define (make-compound3 f a b c) ((compound-constructor f 3) a b c))
+  (define (make-compound4 f a b c d) ((compound-constructor f 4) a b c d))
+  (define (make-compound5 f a b c d e) ((compound-constructor f 5) a b c d e))
+  (define (make-compound6 f a b c d e g)
+    ((compound-constructor f 6) a b c d e g))
+  (define (make-compound7 f a b c d e g h)
+    ((compound-constructor f 7) a b c d e g h))
+  (define (make-compound8 f a b c d e g h i)
+    ((compound-constructor f 8) a b c d e g h i))
+  ;;; Always a `compound*`, whatever the length (0 picks that slot).
+  (define (make-compound* f args) ((compound-constructor f 0) args))
+
+  ;;; Any compound record: a child of one of the parents. On Guile a
+  ;;; parent check walks the child's ancestry, so it costs more than a
+  ;;; sealed check; Chez checks a parent in about the same time.
   (define (compound? v)
     (or (compound2? v) (compound1? v) (compound3? v) (compound4? v)
         (compound5? v) (compound6? v) (compound7? v) (compound8? v)
         (compound*? v)))
 
-  (define (compound-functor t)
-    (cond
-      ((compound2? t) (compound2-functor t))
-      ((compound1? t) (compound1-functor t))
-      ((compound3? t) (compound3-functor t))
-      ((compound4? t) (compound4-functor t))
-      ((compound5? t) (compound5-functor t))
-      ((compound6? t) (compound6-functor t))
-      ((compound7? t) (compound7-functor t))
-      ((compound8? t) (compound8-functor t))
-      (else (compound*-functor t))))
+  ;;; The functor: the name of the term's own type.
+  (define (compound-functor t) (record-type-name (record-rtd t)))
 
   (define (term? v) (or (pair? v) (compound? v)))
 
@@ -236,99 +297,70 @@
   (define (make-term functor args)
     (let ((n (vector-length args)))
       (define (a i) (vector-ref args i))
-      (case n
-        ;; Only `write_store_to_list` gets here, for a nullary
-        ;; constraint: the reference builds a nullary compound there
-        ;; (`VTerm t []`), not an atom, so this is one too.
-        ((0) (make-compound* functor args))
-        ((1) (make-compound1 functor (a 0)))
-        ((2) (if (eq? functor cons-functor)
-                 (cons (a 0) (a 1))
-                 (make-compound2 functor (a 0) (a 1))))
-        ((3) (make-compound3 functor (a 0) (a 1) (a 2)))
-        ((4) (make-compound4 functor (a 0) (a 1) (a 2) (a 3)))
-        ((5) (make-compound5 functor (a 0) (a 1) (a 2) (a 3) (a 4)))
-        ((6) (make-compound6 functor (a 0) (a 1) (a 2) (a 3) (a 4) (a 5)))
-        ((7) (make-compound7 functor (a 0) (a 1) (a 2) (a 3) (a 4) (a 5)
-                             (a 6)))
-        ((8) (make-compound8 functor (a 0) (a 1) (a 2) (a 3) (a 4) (a 5)
-                             (a 6) (a 7)))
-        (else (make-compound* functor args)))))
+      (if (and (= n 2) (eq? functor cons-functor))
+          (cons (a 0) (a 1))
+          (let ((ctor (compound-constructor functor n)))
+            (case n
+              ((1) (ctor (a 0)))
+              ((2) (ctor (a 0) (a 1)))
+              ((3) (ctor (a 0) (a 1) (a 2)))
+              ((4) (ctor (a 0) (a 1) (a 2) (a 3)))
+              ((5) (ctor (a 0) (a 1) (a 2) (a 3) (a 4)))
+              ((6) (ctor (a 0) (a 1) (a 2) (a 3) (a 4) (a 5)))
+              ((7) (ctor (a 0) (a 1) (a 2) (a 3) (a 4) (a 5) (a 6)))
+              ((8) (ctor (a 0) (a 1) (a 2) (a 3) (a 4) (a 5) (a 6) (a 7)))
+              ;; Above K, or nullary: a `compound*`. Only
+              ;; `write_store_to_list` builds a nullary one, for a
+              ;; nullary constraint: the reference builds a nullary
+              ;; compound there (`VTerm t []`), not an atom, so this is
+              ;; one too.
+              (else (ctor args)))))))
 
   ;;; The same functor over `(f arg)` for every argument, without an
   ;;; intermediate vector for a flat term. `f` is called left to right.
   (define (term-map f t)
-    (cond
-      ((pair? t) (let* ((h (f (car t))) (tl (f (cdr t)))) (cons h tl)))
-      ((compound2? t)
-       (let* ((x1 (f (compound2-a1 t))) (x2 (f (compound2-a2 t))))
-         (make-compound2 (compound2-functor t) x1 x2)))
-      ((compound1? t)
-       (make-compound1 (compound1-functor t) (f (compound1-a1 t))))
-      ((compound3? t)
-       (let* ((x1 (f (compound3-a1 t))) (x2 (f (compound3-a2 t)))
-              (x3 (f (compound3-a3 t))))
-         (make-compound3 (compound3-functor t) x1 x2 x3)))
-      (else
-       (let* ((n (term-arity t)) (v (make-vector n)))
-         (do ((i 0 (+ i 1))) ((= i n))
-           (vector-set! v i (f (term-arg t i))))
-         (make-term (compound-functor t) v)))))
+    (if (pair? t)
+        (let* ((h (f (car t))) (tl (f (cdr t)))) (cons h tl))
+        (let* ((n (term-arity t)) (v (make-vector n)))
+          (do ((i 0 (+ i 1))) ((= i n))
+            (vector-set! v i (f (term-arg t i))))
+          (make-term (compound-functor t) v))))
 
-  ;;; `match-term` at a fixed arity, for generated code: dereference, then
-  ;;; one sealed record test and a functor comparison.
+  ;;; `match-term` at a fixed arity, by functor: dereference, then a
+  ;;; parent test and the type's name. Generated libraries use the
+  ;;; functor's own predicate instead (`compound-predicate`).
   (define (match-term1 v f)
-    (let ((d (deref v))) (and (compound1? d) (eq? (compound1-functor d) f))))
+    (let ((d (deref v))) (and (compound1? d) (eq? (compound-functor d) f))))
   (define (match-term2 v f)
-    (let ((d (deref v))) (and (compound2? d) (eq? (compound2-functor d) f))))
+    (let ((d (deref v))) (and (compound2? d) (eq? (compound-functor d) f))))
   (define (match-term3 v f)
-    (let ((d (deref v))) (and (compound3? d) (eq? (compound3-functor d) f))))
+    (let ((d (deref v))) (and (compound3? d) (eq? (compound-functor d) f))))
   (define (match-term4 v f)
-    (let ((d (deref v))) (and (compound4? d) (eq? (compound4-functor d) f))))
+    (let ((d (deref v))) (and (compound4? d) (eq? (compound-functor d) f))))
   (define (match-term5 v f)
-    (let ((d (deref v))) (and (compound5? d) (eq? (compound5-functor d) f))))
+    (let ((d (deref v))) (and (compound5? d) (eq? (compound-functor d) f))))
   (define (match-term6 v f)
-    (let ((d (deref v))) (and (compound6? d) (eq? (compound6-functor d) f))))
+    (let ((d (deref v))) (and (compound6? d) (eq? (compound-functor d) f))))
   (define (match-term7 v f)
-    (let ((d (deref v))) (and (compound7? d) (eq? (compound7-functor d) f))))
+    (let ((d (deref v))) (and (compound7? d) (eq? (compound-functor d) f))))
   (define (match-term8 v f)
-    (let ((d (deref v))) (and (compound8? d) (eq? (compound8-functor d) f))))
+    (let ((d (deref v))) (and (compound8? d) (eq? (compound-functor d) f))))
+
+  ;;; Above K: the functor's predicate `p`, then the arity.
+  (define (match-compound* v p n)
+    (let ((d (deref v)))
+      (and (p d) (= (vector-length (compound*-args d)) n))))
 
   ;;; Two compounds with the same functor and arity; #f when `d1` or
-  ;;; `d2` is not a compound. With one representation per arity, the
-  ;;; arity check is a record-type check for flat terms.
+  ;;; `d2` is not a compound. With one type per functor and arity, that
+  ;;; is one type comparison (plus the length above K).
   (define (same-shape? d1 d2)
-    (cond
-      ((compound2? d1)
-       (and (compound2? d2)
-            (eq? (compound2-functor d1) (compound2-functor d2))))
-      ((compound1? d1)
-       (and (compound1? d2)
-            (eq? (compound1-functor d1) (compound1-functor d2))))
-      ((compound3? d1)
-       (and (compound3? d2)
-            (eq? (compound3-functor d1) (compound3-functor d2))))
-      ((compound4? d1)
-       (and (compound4? d2)
-            (eq? (compound4-functor d1) (compound4-functor d2))))
-      ((compound5? d1)
-       (and (compound5? d2)
-            (eq? (compound5-functor d1) (compound5-functor d2))))
-      ((compound6? d1)
-       (and (compound6? d2)
-            (eq? (compound6-functor d1) (compound6-functor d2))))
-      ((compound7? d1)
-       (and (compound7? d2)
-            (eq? (compound7-functor d1) (compound7-functor d2))))
-      ((compound8? d1)
-       (and (compound8? d2)
-            (eq? (compound8-functor d1) (compound8-functor d2))))
-      ((compound*? d1)
-       (and (compound*? d2)
-            (eq? (compound*-functor d1) (compound*-functor d2))
-            (= (vector-length (compound*-args d1))
-               (vector-length (compound*-args d2)))))
-      (else #f)))
+    (and (record? d1) (record? d2)
+         (eq? (record-rtd d1) (record-rtd d2))
+         (compound? d1)
+         (or (not (compound*? d1))
+             (= (vector-length (compound*-args d1))
+                (vector-length (compound*-args d2))))))
 
   ;;; Atoms. An atom is a symbol, or `'()` for the nil atom.
   ;;; `atom->symbol` gives an atom's name as a symbol; `symbol->atom` is

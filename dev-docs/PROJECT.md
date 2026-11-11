@@ -988,8 +988,9 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   CHR lists are native Scheme lists (pairs and `'()`), so lists pass
   between CHR and Scheme code unchanged; see
   `dev-docs/SCHEME_BACKEND_GAPS.md` ("Lists are native"). Other compounds
-  are flat records, one sealed type per arity up to 8 ("Flat compounds"
-  there). `ychr scheme-types` (`YCHR.Internal.Backend.SchemeTypes`)
+  are flat records, one sealed type per functor and arity, each a child
+  of a parent type per arity up to 8; the functor is the type's name
+  ("Flat compounds" there). `ychr scheme-types` (`YCHR.Internal.Backend.SchemeTypes`)
   writes, for one module, a library of constructors, predicates and
   accessors over those records plus an optional schema; with
   `--ground` the library dereferences nothing, for clients that only

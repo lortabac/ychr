@@ -261,22 +261,38 @@ contracts from the invariant side.
   `symbol->atom`. Only the canonical spellings map: the bare `.`/2 and
   `[]` the string reader builds stay a record and a symbol, distinct
   values as they are on the Haskell side.
-- **Flat compounds.** A compound of arity 1..8 is a record of one sealed
-  type per arity (`compound1` … `compound8`, functor and arguments as
-  fields); above 8 it is a `compound*` holding the functor and a vector
-  (`scheme/ychr/var.sls`). There is no common parent type: Guile checks a
-  parent type by walking the ancestry, about ten times the cost of a
-  sealed check, so `compound?` and `compound-functor` test the nine sealed
-  types instead. The backend emits
-  `make-compoundN` and `match-termN` when the arity is known
-  (`makeTermSExpr`, `matchTermSExpr`, `flatMaxArity`), `get-arg` stays
-  generic. Runtime code reads arguments with `term-arity`/`term-arg` or
-  rebuilds with `term-map`; `term-args` builds a fresh vector and is for
-  cold paths only. On Chez a term of arity 1–2 is 32 bytes (was 48–64)
-  and of arity 3–4 is 48 bytes (was 64–80). The record types are
-  nongenerative (`ychr:compound2:1` and so on, plus `ychr:var:1`), so a ground term written with Chez's
-  `fasl-write` reads back in another process (`test/scheme/test_fasl.py`).
-  Bump a uid's suffix when its layout changes.
+- **Flat compounds.** A compound of arity 1..8 is a record whose type
+  is a child of `compound1` … `compound8` (the arguments as fields);
+  above 8 its type is a child of `compound*` (a vector of arguments). The
+  child type is per functor: sealed, no fields of its own, and named
+  after the functor, so the functor is the type's name and not a field
+  (`scheme/ychr/var.sls`, "Per-functor types"). Above 8 one child per
+  functor covers every arity, and the vector length is the arity.
+  `compound-type` makes a child the first time it is asked for and
+  caches it; its uid is fixed by functor and arity (`ychr:c2:m__f:1`),
+  so every library and process gets the same type. `compound?`,
+  `term-arity` and `term-arg` test the parents; `term-functor` reads the
+  type's name; unification compares the two record types.
+  The backend binds each functor's constructor and predicate once per
+  library at load (`compound-constructor`, `compound-predicate`, emitted
+  by `hoistFunctorTypes`) and calls them; a query does the same in a
+  `let`, and a driver goes through the by-functor `make-compoundN`.
+  `get-arg` stays generic. `ychr scheme-types` goes one step further: a
+  records library defines each constructor's type with
+  `define-record-type`, under the same uid, so Chez inlines its
+  predicate and constructor into the client. A closure from
+  `record-predicate` is not inlined, and was about twice as slow on the
+  `size/ground` benchmark. Guile only accepts that static definition in a
+  library that imports `(rnrs)` without a prefix (its expansion uses
+  plain `quote`), hence the separate library.
+  On Chez a term is the size of a native record of the same arity: 16
+  bytes less than before at odd arities. Guile checks a parent type by
+  walking the ancestry, about 4.5 times a sealed check, so generic term
+  code is slower there. The parents are nongenerative
+  (`ychr:compound2:2` and so on, plus `ychr:var:1`), so a ground term
+  written with Chez's `fasl-write` reads back in another process
+  (`test/scheme/test_fasl.py`). Bump a uid's suffix when its layout
+  changes.
 - **Query-scope dynamic tell.** `%tell-term` special-cases the compiler's
   `<query>` scope: it resolves the goal through the program's exports
   (`resolve-export` + the session's goals table), as the Haskell

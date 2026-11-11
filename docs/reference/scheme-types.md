@@ -6,8 +6,12 @@ Scheme code uses it to build and read CHR values without knowing how
 the runtime stores them. It can also write a schema: one s-expression
 that describes the same types, for tools outside YCHR.
 
-The library imports only `(rnrs)` and `(ychr var)`, so it loads without
-the compiled program.
+Next to it goes a small records library, `(… MODULE records)`, which
+the main one imports. It defines the record type of each constructor
+with 1 to 8 arguments, so a test for such a constructor is a single
+record-type test that the Scheme compiler can inline. Other
+constructors find their type when the library loads. Ship both files. Both import only `(rnrs)` and `(ychr var)`, so they load
+without the compiled program.
 
 There are two variants. The default one dereferences, so it works on
 terms straight from a CHR session. The ground one (`--ground`) does not,
@@ -26,7 +30,7 @@ ychr scheme-types FILES... [-m MODULE] [-d DIR] [--library "(NAME ...)"]
 |---|---|
 | `-m`, `--module` | The module to generate for. Not needed when `FILES` declare one module. |
 | `-d`, `--output-dir` | Output directory (default `.`). |
-| `--library` | The library name. Default `(ychr types MODULE)`, or `(ychr ground-types MODULE)` with `--ground`. The file goes to `DIR/` plus the name's parts, so `(ychr types points)` is `DIR/ychr/types/points.sls`. |
+| `--library` | The library name. Default `(ychr types MODULE)`, or `(ychr ground-types MODULE)` with `--ground`. The file goes to `DIR/` plus the name's parts, so `(ychr types points)` is `DIR/ychr/types/points.sls`. The records library goes to `DIR/ychr/types/points/records.sls`. |
 | `--schema` | Also write the schema, next to the library, as `….schema.scm`. |
 | `--all` | Every type the module declares, with every constructor. By default only exported types are included, with the constructors the export list shows (`type(T/N)` or `type(T/N, [C, …])`). |
 | `--checked` | Accessors check the constructor (see [Accessors](#accessors)). With `--ground`, everything also checks for variables. |
@@ -56,6 +60,7 @@ area(empty, A) <=> A = 0.0.
 ```
 $ ychr scheme-types --schema -d out points.chr
 out/ychr/types/points.sls
+out/ychr/types/points/records.sls
 out/ychr/types/points.schema.scm
 ```
 

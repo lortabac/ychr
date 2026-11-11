@@ -103,19 +103,21 @@ one interface: `bench/scheme/bench/expr-native.sls` (one sealed record
 type per constructor, the reference), and the two libraries `ychr
 scheme-types` writes for `bench/scheme/bench_expr.chr`, without and with
 `--ground`. They measure what dereferencing costs a client that reads
-ground terms. Medians on Chez over three rounds, collector on:
+ground terms. Medians on Chez over five rounds, collector on, with the
+functor in the record type (see "Flat compounds" in
+`SCHEME_BACKEND_GAPS.md`):
 
 | | native | deref | ground |
 |---|---|---|---|
-| `build` | 1.4 ms | 2.0 ms | 2.0 ms |
-| `size` | 0.76 ms | 3.9 ms | 0.84 ms |
-| `rewrite` | 1–2.6 ms (noisy) | 8.0 ms | 3.6–4.0 ms |
+| `build` | 1.48 ms | 1.41 ms | 1.41 ms |
+| `size` | 0.78 ms | 3.98 ms | 0.83 ms |
+| `rewrite` | 1.4–2.6 ms (noisy) | 6.51 ms | 2.18 ms |
 
-The ground library is within ~10% of native records on a read-only
-walk. `rewrite` keeps more of a gap (40% or more, above the 25% the
-ground-mode spec aimed for): a term carries a functor word that
-a native record does not, so it allocates ~50% more (12.6 MB against
-8.4 MB per iteration) and the collector runs more.
+Terms now take as much memory as native records (6.6 MB per `build`,
+8.4 MB per `rewrite`), and the ground library reads them at native
+speed. Before the change, when the functor was a field, the same runs
+gave `build` 2.2 ms and `rewrite` 4.0 ms for the ground library, with
+9.1 MB and 12.6 MB allocated; `size` is unchanged.
 
 Under Chez the table has one more column, `bytes/iter`: the mean bytes
 allocated per iteration, from `(sstats-bytes (statistics))`. The Guile

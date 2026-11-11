@@ -8,6 +8,7 @@
     make-term term? term-functor term-args chr-atom? atom->symbol symbol->atom
     match-term get-arg add-observer! ground-key get-var-id
     term-arity term-arg term-map ground? compound? compound-functor
+    compound-constructor compound-predicate match-compound*
     make-compound1 make-compound2 make-compound3 make-compound4
     make-compound5 make-compound6 make-compound7 make-compound8
     make-compound*
