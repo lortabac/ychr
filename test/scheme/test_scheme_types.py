@@ -5,6 +5,9 @@ types to a separate library. Scheme code builds values with the
 generated constructors, passes them through CHR rules and reads them
 back with the generated accessors. Runs on Guile, and on Chez when it is
 installed; on Chez the values also go through fasl across processes.
+
+The ground variant (`--ground`, library `(ychr ground-types rt)`) gets the
+same round trips, plus its checked variant and the `ground?` predicate.
 """
 
 import os
@@ -97,6 +100,91 @@ FASL_READ = """
         (display "FAIL"))))
 """
 
+GROUND = """
+(import (rnrs) (ychr runtime) (ychr generated rt)
+        (prefix (ychr types rt) d:) (ychr ground-types rt))
+(define s (rt))
+(define (check name ok)
+  (unless ok (display "FAIL ") (display name) (newline) (exit 1)))
+(define (ask proc . args)
+  (let ((r (make-var s)))
+    (apply proc s (append args (list r)))
+    (deref r)))
+
+;; Built with the ground library: matched by rule heads, read by the
+;; dereferencing library.
+(check "circle" (eqv? 1 (ask rt:which/2 (make-circle 1.5))))
+(check "rect" (eqv? 2 (ask rt:which/2 (make-rect 1.0 2.0))))
+(check "empty" (eqv? 3 (ask rt:which/2 empty)))
+(check "big" (eqv? 9 (ask rt:which/2 (make-big 1 2 3 4 5 6 7 8 9))))
+(let ((p (point-with-x (make-point 1 2) 10)))
+  (check "deref lib reads" (and (d:point? p) (eqv? 10 (d:point-x p))
+                                (eqv? 2 (d:point-y p)))))
+(check "deref lib big" (eqv? 9 (d:big-9 (make-big 1 2 3 4 5 6 7 8 9))))
+
+;; From CHR, after deep-deref.
+(let ((p (make-var s)))
+  (rt:mk/1 s p)
+  (let ((g (deep-deref p)))
+    (check "ground? after deep-deref" (ground? g))
+    (check "point?" (point? g))
+    (check "x" (eqv? 3 (point-x g)))
+    (check "y" (equal? '(4) (point-y g)))))
+
+;; Predicates and accessors.
+(check "rect-2" (eqv? 2.0 (rect-2 (make-rect 1.0 2.0))))
+(check "big-9" (eqv? 9 (big-9 (make-big 1 2 3 4 5 6 7 8 9))))
+(check "empty?" (empty? empty))
+(check "shape-type?" (and (shape-type? empty) (shape-type? (make-rect 1.0 2.0))
+                          (not (shape-type? (make-point 1 2)))))
+(check "update keeps y" (eqv? 8 (point-y (point-with-x (make-point 7 8) 9))))
+(check "unchecked predicate on a variable" (not (point? (make-var s))))
+
+;; ground?
+(define (bound x) (let ((v (make-var s))) (unify v x) v))
+(check "ground? atoms" (and (ground? 'a) (ground? 1) (ground? 2.5) (ground? "s")
+                            (ground? '()) (ground? #t) (ground? empty)))
+(check "ground? lists" (ground? '(1 (2 3) "x")))
+(check "ground? compounds"
+       (and (ground? (make-circle 1.0)) (ground? (make-point 1 (list 2 3)))
+            (ground? (make-big 1 2 3 4 5 6 7 8 (make-rect 1.0 2.0)))))
+(check "ground? unbound" (not (ground? (make-var s))))
+(check "ground? bound" (not (ground? (bound 1))))
+(check "ground? unbound deep"
+       (not (ground? (make-point 1 (list 2 (make-circle (make-var s)))))))
+(check "ground? bound deep"
+       (not (ground? (make-big 1 2 3 4 5 6 7 8 (list (bound 1))))))
+(check "ground? bound in a pair" (not (ground? (cons 1 (bound '())))))
+(display "ok")
+"""
+
+GROUND_CHECKED = """
+(import (rnrs) (ychr runtime) (ychr generated rt) (ychr ground-types rt))
+(define s (rt))
+(define (who thunk)
+  (guard (e ((assertion-violation? e) (condition-who e)))
+    (thunk)
+    'no-error))
+(define (bound x) (let ((v (make-var s))) (unify v x) v))
+(display
+ (list (who (lambda () (point? (make-var s))))
+       (who (lambda () (shape-type? (make-var s))))
+       (who (lambda () (point-x (make-var s))))
+       (who (lambda () (point-with-x (make-var s) 1)))
+       (who (lambda () (point-x (make-point (make-var s) 2))))
+       (who (lambda () (point-x (bound (make-point 1 2)))))
+       (who (lambda () (point-x (make-point (bound 1) 2))))
+       (who (lambda () (point-x (make-circle 1.0))))
+       (who (lambda () (point-x (make-point 1 2))))))
+"""
+
+GROUND_CHECKED_EXPECTED = (
+    "(point? shape-type? point-x point-with-x point-x point-x point-x "
+    "point-x no-error)"
+)
+
+GROUND_FASL_READ = FASL_READ.replace("(ychr types rt)", "(ychr ground-types rt)")
+
 
 @pytest.fixture(scope="module")
 def libs(ychr_bin, project_root, tmp_path_factory):
@@ -107,6 +195,9 @@ def libs(ychr_bin, project_root, tmp_path_factory):
     for args in (
         ["compile", "-t", "scheme", "-n", "rt", "-d", str(program), FIXTURE],
         ["scheme-types", "-d", str(types), FIXTURE],
+        ["scheme-types", "--ground", "-d", str(types), FIXTURE],
+        ["scheme-types", "--ground", "--checked", "-d", str(out / "checked"),
+         FIXTURE],
     ):
         r = subprocess.run(
             [ychr_bin, args[0], "--Werror", *args[1:]],
@@ -115,7 +206,8 @@ def libs(ychr_bin, project_root, tmp_path_factory):
             cwd=project_root,
         )
         assert r.returncode == 0, r.stdout + r.stderr
-    return {"program": str(program), "types": str(types)}
+    return {"program": str(program), "types": str(types),
+            "checked": str(out / "checked")}
 
 
 def run_guile(guile_bin, dirs, script, tmp_path, *args):
@@ -191,4 +283,40 @@ def test_fasl_generated_accessors_chez(libs, project_root, tmp_path):
     w = run_chez(dirs, FASL_WRITE, tmp_path, "w.sps", data)
     assert w.returncode == 0, w.stderr
     r = run_chez(dirs, FASL_READ, tmp_path, "r.sps", data)
+    assert r.returncode == 0 and r.stdout == "ok", r.stdout + r.stderr
+
+
+def test_ground_guile(guile_bin, libs, project_root, tmp_path):
+    dirs = [os.path.join(project_root, "scheme"), libs["program"], libs["types"]]
+    r = run_guile(guile_bin, dirs, GROUND, tmp_path)
+    assert r.returncode == 0 and r.stdout == "ok", r.stdout + r.stderr
+
+
+def test_ground_chez(libs, project_root, tmp_path):
+    dirs = [os.path.join(project_root, "scheme"), libs["program"], libs["types"]]
+    r = run_chez(dirs, GROUND, tmp_path, "ground.sps")
+    assert r.returncode == 0 and r.stdout == "ok", r.stdout + r.stderr
+
+
+def test_ground_checked_guile(guile_bin, libs, project_root, tmp_path):
+    dirs = [os.path.join(project_root, "scheme"), libs["program"], libs["checked"]]
+    r = run_guile(guile_bin, dirs, GROUND_CHECKED, tmp_path)
+    assert r.returncode == 0 and r.stdout == GROUND_CHECKED_EXPECTED, (
+        r.stdout + r.stderr)
+
+
+def test_ground_checked_chez(libs, project_root, tmp_path):
+    dirs = [os.path.join(project_root, "scheme"), libs["program"], libs["checked"]]
+    r = run_chez(dirs, GROUND_CHECKED, tmp_path, "checked.sps")
+    assert r.returncode == 0 and r.stdout == GROUND_CHECKED_EXPECTED, (
+        r.stdout + r.stderr)
+
+
+def test_ground_fasl_chez(libs, project_root, tmp_path):
+    # Written with the dereferencing library, read with the ground one.
+    dirs = [os.path.join(project_root, "scheme"), libs["types"]]
+    data = str(tmp_path / "values.fasl")
+    w = run_chez(dirs, FASL_WRITE, tmp_path, "w.sps", data)
+    assert w.returncode == 0, w.stderr
+    r = run_chez(dirs, GROUND_FASL_READ, tmp_path, "r.sps", data)
     assert r.returncode == 0 and r.stdout == "ok", r.stdout + r.stderr

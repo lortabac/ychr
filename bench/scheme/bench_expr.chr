@@ -1,0 +1,9 @@
+% Benchmark types: an expression tree read from Scheme through the
+% libraries `ychr scheme-types` writes, with and without `--ground`.
+% Used by the `build/*`, `size/*` and `rewrite/*` cases of
+% `bench/scheme/bench/harness.sls`; `bench/scheme/bench/expr-native.sls`
+% is the same interface over native records, for reference.
+:- module(bench_expr, [type(expr/0)]).
+
+:- chr_type expr ---> lit(int) ; neg(expr) ; add(expr, expr)
+                    ; mul(expr, expr) ; ifz(expr, expr, expr).

@@ -81,6 +81,8 @@ Four cases reuse golden programs exactly as `bench/Main.hs` does, four are
 benchmark-only programs under `bench/scheme/`, and `session` is a synthetic
 baseline that tells no goal. Every goal uses integers and fresh variables
 only, so no runtime list or atom has to be encoded into Scheme by hand.
+The nine `build/*`, `size/*` and `rewrite/*` cases tell no goal either:
+they read terms through a types library (see below).
 
 | case | goal | exercises | Guile ms | Chez ms |
 |------|------|-----------|----------|---------|
@@ -93,6 +95,27 @@ only, so no runtime list or atom has to be encoded into Scheme by hand.
 | `maplist` | `bench_maplist:go(500,R)` | `'$call'` dispatch | 3.93 | 0.10 |
 | `sum` | `bench_sum:go(2000,R)` | non-tail user-function recursion, equation dispatch, arithmetic helpers | 3.69 | 0.06 |
 | `terms` | `bench_terms:go(500,R)` | compound terms of arity 1–4 and 9: build, head match, argument reads | 2.30 | 0.19 |
+| `build/V`, `size/V`, `rewrite/V` | — | an expression tree (371366 nodes) built, counted and rebuilt from Scheme through a types library: `native` records, the `deref` library of `ychr scheme-types`, or its `ground` one | — | see below |
+
+The `build/*`, `size/*` and `rewrite/*` cases tell no goal. They run
+the same client code (a macro in the harness) over three libraries with
+one interface: `bench/scheme/bench/expr-native.sls` (one sealed record
+type per constructor, the reference), and the two libraries `ychr
+scheme-types` writes for `bench/scheme/bench_expr.chr`, without and with
+`--ground`. They measure what dereferencing costs a client that reads
+ground terms. Medians on Chez over three rounds, collector on:
+
+| | native | deref | ground |
+|---|---|---|---|
+| `build` | 1.4 ms | 2.0 ms | 2.0 ms |
+| `size` | 0.76 ms | 3.9 ms | 0.84 ms |
+| `rewrite` | 1–2.6 ms (noisy) | 8.0 ms | 3.6–4.0 ms |
+
+The ground library is within ~10% of native records on a read-only
+walk. `rewrite` keeps more of a gap (40% or more, above the 25% the
+ground-mode spec aimed for): a term carries a functor word that
+a native record does not, so it allocates ~50% more (12.6 MB against
+8.4 MB per iteration) and the collector runs more.
 
 Under Chez the table has one more column, `bytes/iter`: the mean bytes
 allocated per iteration, from `(sstats-bytes (statistics))`. The Guile
@@ -128,7 +151,7 @@ above come from the previous revision of this table (for `fib`,
 the change. They are machine- and implementation-specific and are **not**
 golden-tested; only the result checks are asserted, and every case has one:
 `session` must return a session, `guard` 5, `fib(20)` 6765, `list_sum`
-124750, `maplist` 41541750, `sum(2000)` 2001000, `terms` 2379750, `graph` the three expected
+124750, `maplist` 41541750, `sum(2000)` 2001000, `terms` 2379750, the `build/*`, `size/*` and `rewrite/*` cases 371366 nodes, `graph` the three expected
 `found`/`none` results, and `leq_closure` the 190 live `leq` constraints the
 20-node closure must leave. A case that has silently stopped doing its work
 fails its check rather than posting a suspiciously good time. Case sizes
