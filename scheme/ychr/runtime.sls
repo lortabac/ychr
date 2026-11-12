@@ -985,9 +985,14 @@
         (%arg-error "arithmetic host call" (list a b)
                     (string-append "arithmetic host call: expected 2"
                                    " numeric arguments of same type, got 2"))))
-  (define (%add a b) (%arith2 + a b))
-  (define (%sub a b) (%arith2 - a b))
-  (define (%mul a b) (%arith2 * a b))
+  ;;; Two fixnums skip the generic test: the common case, and small
+  ;;; enough for the host compiler to inline at the call.
+  (define (%add a b)
+    (if (and (fixnum? a) (fixnum? b)) (+ a b) (%arith2 + a b)))
+  (define (%sub a b)
+    (if (and (fixnum? a) (fixnum? b)) (- a b) (%arith2 - a b)))
+  (define (%mul a b)
+    (if (and (fixnum? a) (fixnum? b)) (* a b) (%arith2 * a b)))
   (define (%fdiv a b)
     (if (and (number? a) (number? b))
         (/ a b)
@@ -1013,10 +1018,14 @@
                    (string-append "comparison host call: expected 2 int,"
                                   " float or string arguments of the same"
                                   " type, got 2")))))
-  (define (%lt a b) (%cmp2 string<? < a b))
-  (define (%gt a b) (%cmp2 string>? > a b))
-  (define (%le a b) (%cmp2 string<=? <= a b))
-  (define (%ge a b) (%cmp2 string>=? >= a b))
+  (define (%lt a b)
+    (if (and (fixnum? a) (fixnum? b)) (fx<? a b) (%cmp2 string<? < a b)))
+  (define (%gt a b)
+    (if (and (fixnum? a) (fixnum? b)) (fx>? a b) (%cmp2 string>? > a b)))
+  (define (%le a b)
+    (if (and (fixnum? a) (fixnum? b)) (fx<=? a b) (%cmp2 string<=? <= a b)))
+  (define (%ge a b)
+    (if (and (fixnum? a) (fixnum? b)) (fx>=? a b) (%cmp2 string>=? >= a b)))
 
   ;;; Strings
   (define (%str-concat a b)
