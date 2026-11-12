@@ -291,7 +291,7 @@
 
   (define (make-evaluable-key functor arity) (cons functor arity))
   (define (evaluable-key-hash k)
-    (+ (* 31 (symbol-hash (car k))) (cdr k)))
+    (fxxor (symbol-hash (car k)) (cdr k)))
   (define (evaluable-key-eq? a b)
     (and (eq? (car a) (car b)) (= (cdr a) (cdr b))))
 
