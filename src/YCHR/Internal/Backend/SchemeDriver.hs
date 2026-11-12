@@ -23,6 +23,7 @@ import YCHR.Internal.Backend.Scheme
     hostCallTarget,
     makeTermSExpr,
     qualifiedAliasIdentifier,
+    resultNeverVar,
   )
 import YCHR.Internal.Compile (funcProcName)
 import YCHR.Internal.Compile.Names (typeRuntimeName, vmName)
@@ -106,6 +107,22 @@ generateDriver moduleName qn args =
                   ++ body
                   ++ ["))"]
 
+-- | A host-call argument, dereferenced. The @deref@ is left out when
+-- the argument can't be a variable: a literal, an atom, or a host call
+-- whose result never is one. Mirrors @derefS@ in
+-- "YCHR.Internal.Backend.Scheme".
+derefArg :: R.Expr -> Text
+derefArg a
+  | neverVar a = exprToScheme a
+  | otherwise = "(deref " <> exprToScheme a <> ")"
+  where
+    neverVar (R.IntExpr _) = True
+    neverVar (R.FloatExpr _) = True
+    neverVar (R.TextExpr _) = True
+    neverVar (R.CtorExpr _ []) = True
+    neverVar (R.HostExpr f _) = resultNeverVar (hostCallTarget f).procedure
+    neverVar _ = False
+
 -- | Convert an 'R.Expr' to a Scheme expression. Mirrors the dispatch
 -- in 'YCHR.Internal.Compile.compileExpr' / 'YCHR.Internal.Backend.Scheme.compileValExpr':
 -- 'CallExpr' becomes a function call, 'HostExpr' a call to the runtime
@@ -153,7 +170,7 @@ exprToScheme (R.CallExpr qn args) =
    in "(" <> funcName.unName <> " %s " <> T.intercalate " " argExprs <> ")"
 exprToScheme (R.HostExpr f args) =
   let target = hostCallTarget f
-      argExprs = ["(deref " <> exprToScheme a <> ")" | a <- args]
+      argExprs = map derefArg args
       allArgs
         | target.takesSession = "%s" : argExprs
         | otherwise = argExprs

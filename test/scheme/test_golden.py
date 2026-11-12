@@ -252,17 +252,22 @@ def test_gen_driver_host_call_mapping(ychr_bin, project_root, tmp_path):
 
     arith = driver("gdhc:go(host:'+'(1, 2), R)")
     assert "host__" not in arith
-    assert "(%add (deref 1) (deref 2))" in arith
+    assert "(%add 1 2)" in arith
+
+    # A variable argument is dereferenced; a literal or a call that
+    # returns a number is not.
+    nested = driver("gdhc:go(host:'+'(R, host:'+'(1, 2)), R)")
+    assert "(%add (deref R) (%add 1 2))" in nested
 
     # `copy_term` needs the session threaded as the procedure's first
     # argument; without it the driver calls `%copy-term` at arity 1.
     session = driver("gdhc:go(host:copy_term(1), R)")
-    assert "(%copy-term %s (deref 1))" in session
+    assert "(%copy-term %s 1)" in session
 
     # `write_term_to_string` is mapped but needs no session — the
     # reference primitive only renders — so it must *not* thread `%s`.
     writer = driver("gdhc:go(host:write_term_to_string(1), R)")
-    assert "(%write-term-to-string (deref 1))" in writer
+    assert "(%write-term-to-string 1)" in writer
 
     # `print_store` and `write_store_to_list` have no user-visible
     # argument but read the store, so they thread the session like
@@ -275,7 +280,7 @@ def test_gen_driver_host_call_mapping(ychr_bin, project_root, tmp_path):
     # An unmapped name passes through verbatim, exactly as the compiled
     # library emits it.
     unmapped = driver("gdhc:go(host:my_add(1, 2), R)")
-    assert "(my_add (deref 1) (deref 2))" in unmapped
+    assert "(my_add 1 2)" in unmapped
 
 
 def test_meta_print_end_to_end(ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path):

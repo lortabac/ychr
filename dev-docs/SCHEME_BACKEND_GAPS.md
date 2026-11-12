@@ -351,6 +351,27 @@ contracts from the invariant side.
   read as current terms: its types have the old parents, and Chez
   raises "incompatible record type" when the same functor's type is
   asked for with the new one.
+- **No wrapper that can do nothing.** The backend builds `deref`,
+  `%bool-from-value` and `equal?/chr` calls through `derefS`,
+  `boolFromValueS` and `equalS` (`Backend/Scheme.hs`), which leave the
+  call out when it cannot change the result:
+  - `(deref e)` is `e` when `e` is a literal, another `deref`, or a call
+    of a runtime procedure that returns a number, a string or a boolean
+    (`plainResultProcs`, `booleanProcs`).
+  - `(%bool-from-value e)` is `e` when `e` is `#t`, `#f` or a call in
+    `booleanProcs`.
+  - `(equal?/chr a LIT)` is `(eqv? (deref a) LIT)` for a number, boolean
+    or symbol literal on either side, which is what `equal*` does for
+    those. This covers both `BEqual` and the `==` host call.
+
+  A procedure may be added to one of the two sets only if it can never
+  return a variable (or, for `booleanProcs`, anything but a boolean);
+  raising is fine. A `Foreach` index condition goes through `equalS`
+  too, and a driver leaves the `deref` out the same way (`derefArg` in
+  `Backend/SchemeDriver.hs`).
+  On Chez, three interleaved rounds: `sum` about 30%
+  faster (0.07 to 0.05 ms), `fib` 12% (1.14 to 1.01 ms), `terms` about
+  10%, `copy` about 4%, the others unchanged.
 - **Query-scope dynamic tell.** `%tell-term` special-cases the compiler's
   `<query>` scope: it resolves the goal through the program's exports
   (`resolve-export` + the session's goals table), as the Haskell

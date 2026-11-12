@@ -944,7 +944,8 @@
   ;;; pays for it.
   ;;;
   ;;; Invariant: every caller receives *dereferenced* arguments —
-  ;;; `compileHostCallWith` wraps each one in `deref`, and
+  ;;; `compileHostCallWith` wraps each one in `deref` unless it can't
+  ;;; be a variable (a literal, say), and
   ;;; `deep-eval-value` derefs as it walks. `%unbound?` derefs again,
   ;;; so classification is right either way, but a caller that skipped
   ;;; the deref would fail the type test on a *bound* variable and
