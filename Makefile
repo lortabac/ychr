@@ -226,7 +226,8 @@ SCHEME_BENCH_CASES = \
 	bench_list:bench/scheme/bench_list.chr \
 	bench_maplist:bench/scheme/bench_maplist.chr \
 	bench_sum:bench/scheme/bench_sum.chr \
-	bench_terms:bench/scheme/bench_terms.chr
+	bench_terms:bench/scheme/bench_terms.chr \
+	bench_copy:bench/scheme/bench_copy.chr
 
 # Depends on `build`, so that resolving the binary and compiling the
 # programs cannot race a concurrent `cabal build` under `make -j`.

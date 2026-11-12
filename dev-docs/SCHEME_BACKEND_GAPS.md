@@ -53,6 +53,41 @@ never as the vmName `host__-/2`. Locked by the Haskell golden cases in
 `test/golden/is_non_evaluable_error/`, and on the Scheme side by
 `scheme/test/test-runtime.scm`'s `host functor deep-eval` group.
 
+## Record types are never freed
+
+Open. Each functor and arity a process ever sees gets its own record type
+("Flat compounds" below), and nothing frees it: the type, its uid, its
+constructor and predicate, and the `compound-type` table entry stay for the
+life of the process, even when no term of that functor is left. On the
+Haskell runtime, and on the Scheme runtime before this design, a functor
+was only a symbol in a field, which the collector can drop.
+
+This is per distinct functor, not per term. Measured on Chez 10.3 with
+100000 new functors, each built once and dropped:
+
+| | per new functor |
+|---|---|
+| memory kept | about 680 bytes |
+| time for its first term | 3.3 µs (0.3 µs before) |
+| a term of a known functor, 100000 registered | 0.77 µs (0.31 µs before) |
+
+Most programs are not affected: their functors come from the program and
+from data with a fixed vocabulary, so the set is small and paid for once.
+The risk is code that makes functor names from data and keeps running:
+`list_to_compound` or `=..` building `f1`, `f2`, …, `read_term_from_string`
+on open-ended input, or a long REPL session doing the same. A million
+distinct functors keep about 680 MB.
+
+Ideas, none tried yet:
+
+- Weak or ephemeron tables, so an unused type can go. R6RS has none (Chez
+  has ephemeron tables, Guile weak tables), and it is not known whether
+  Chez's uid registry would let a nongenerative type go.
+- A fallback representation, with the functor in a field, for functors no
+  compiled code names. It must still match and unify with a type defined
+  later for the same functor (a library or REPL query loaded afterwards),
+  which is what one type per functor was meant to avoid.
+
 ## Host calls left out of `*prelude-host-calls*`
 
 The table mirrors the Haskell registries (`baseHostCallRegistry`,
@@ -261,22 +296,44 @@ contracts from the invariant side.
   `symbol->atom`. Only the canonical spellings map: the bare `.`/2 and
   `[]` the string reader builds stay a record and a symbol, distinct
   values as they are on the Haskell side.
-- **Flat compounds.** A compound of arity 1..8 is a record of one sealed
-  type per arity (`compound1` … `compound8`, functor and arguments as
-  fields); above 8 it is a `compound*` holding the functor and a vector
-  (`scheme/ychr/var.sls`). There is no common parent type: Guile checks a
-  parent type by walking the ancestry, about ten times the cost of a
-  sealed check, so `compound?` and `compound-functor` test the nine sealed
-  types instead. The backend emits
-  `make-compoundN` and `match-termN` when the arity is known
-  (`makeTermSExpr`, `matchTermSExpr`, `flatMaxArity`), `get-arg` stays
-  generic. Runtime code reads arguments with `term-arity`/`term-arg` or
-  rebuilds with `term-map`; `term-args` builds a fresh vector and is for
-  cold paths only. On Chez a term of arity 1–2 is 32 bytes (was 48–64)
-  and of arity 3–4 is 48 bytes (was 64–80). The record types are
-  nongenerative (`ychr:compound2:1` and so on, plus `ychr:var:1`), so a ground term written with Chez's
-  `fasl-write` reads back in another process (`test/scheme/test_fasl.py`).
-  Bump a uid's suffix when its layout changes.
+- **Flat compounds.** A compound of arity 1..8 is a record whose type
+  is a child of `compound1` … `compound8` (the arguments as fields);
+  above 8 its type is a child of `compound*` (a vector of arguments). The
+  child type is per functor: sealed, no fields of its own, and named
+  after the functor, so the functor is the type's name and not a field
+  (`scheme/ychr/var.sls`, "Per-functor types"). Above 8 one child per
+  functor covers every arity, and the vector length is the arity.
+  `compound-type` makes a child the first time it is asked for and
+  caches it; its uid is fixed by functor and arity (`ychr:c2:m__f:1`),
+  so every library and process gets the same type. It keeps the last
+  functor asked for per arity, so a run of terms of one functor skips
+  the table. `compound?`, `term-arity` and `term-arg` test the parents;
+  `term-functor` reads the type's name; unification compares the two
+  record types; `term-map` rebuilds arities 1–3 without a vector.
+  A generated library defines the type of each functor it builds or
+  tests with `define-record-type`, under the same uid
+  (`hoistFunctorTypes`, `functorDefinitions`), so Chez inlines the
+  constructor and predicate. That needs a functor that is an identifier
+  and holds `__` (`m__f`, `__closure`; no imported name does), of arity
+  1–8, since the functor is the record name; a
+  functor used at several arities (`__closure`) is static at its first
+  one only. The others, and a query, look their constructor and
+  predicate up once (`compound-constructor`, `compound-predicate`); a
+  driver goes through the by-functor `make-compoundN`. `get-arg` stays
+  generic. A looked-up closure is not inlined: it made `size/ground`
+  about twice as slow and the `terms` benchmark 7–9% slower, which is
+  why the static definitions exist. `ychr scheme-types` writes its
+  static definitions in a separate records library: Guile only accepts
+  one in a library that imports `(rnrs)` without a prefix (its expansion
+  uses plain `quote`), and the types library imports it with one.
+  On Chez a term is the size of a native record of the same arity: 16
+  bytes less than before at odd arities. Guile checks a parent type by
+  walking the ancestry, about 4.5 times a sealed check, so generic term
+  code is slower there. The parents are nongenerative
+  (`ychr:compound2:2` and so on, plus `ychr:var:1`), so a ground term
+  written with Chez's `fasl-write` reads back in another process
+  (`test/scheme/test_fasl.py`). Bump a uid's suffix when its layout
+  changes.
 - **Query-scope dynamic tell.** `%tell-term` special-cases the compiler's
   `<query>` scope: it resolves the goal through the program's exports
   (`resolve-export` + the session's goals table), as the Haskell

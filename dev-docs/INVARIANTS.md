@@ -1011,11 +1011,12 @@ change to the reading has to be deliberate.
 ### Scheme compound representation — `scheme/ychr/var.sls`
 
 `make-term` is the only generic constructor and keeps these; the backend's
-`makeTermSExpr` keeps them for terms of known arity:
+`makeTermTyped` (libraries and queries) and `makeTermSExpr` (drivers) keep
+them for terms of known arity:
 
 1. A compound of arity n <= K (8, `compound-max-flat-arity`, mirrored by
-   `flatMaxArity` in `Backend/Scheme.hs`) is a `compoundn`, never a
-   `compound*`. A `compound*` has more than K arguments (or none, see 2).
+   `flatMaxArity` in `Backend/Scheme.hs`) has a child of `compoundn` as
+   its type, never a child of `compound*`. A `compound*` has more than K arguments (or none, see 2).
    `make-compound*` is exported, so a caller can break this; nothing in
    the tree does.
 2. A nullary term is an atom (a symbol, or `'()`). One exception: a
@@ -1024,9 +1025,19 @@ change to the reading has to be deliberate.
 3. `prelude__.`/2 is never a compound; it is always a pair.
 4. Arguments are stored as given: a field may hold a variable, bound or
    unbound. Readers dereference.
+5. A compound's record type is the child `compound-type` returns for its
+   functor and arity: built through `make-term`, `compound-constructor`,
+   the by-functor `make-compoundN`, or a static `define-record-type` in a
+   generated library or a `scheme-types` records library, which use the
+   same uid (`functorTypeUid` in `Backend/Scheme.hs`). Nothing else creates a child, so one
+   functor and arity has one type, and its name is the functor.
 
-1 is what lets unification and `match-termN` compare record types instead
-of arities.
+5 has a cost: the types it creates are never freed, so a process that
+keeps making new functors grows without bound (see "Record types are never
+freed" in `SCHEME_BACKEND_GAPS.md`).
+
+1 and 5 are what let unification compare two record types instead of
+functors and arities.
 
 ### Scheme runtime ABI
 

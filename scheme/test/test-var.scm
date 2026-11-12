@@ -589,4 +589,40 @@
       (unify x (make-term 'f (vector 1 2 3 4)))
       (test-eqv "arg 3" 4 (get-arg x 3)))))
 
+;; One record type per functor and arity, whoever builds the term.
+(test-group "functor types"
+  (let ((rtd (lambda (t) (record-rtd t))))
+    (test-assert "make-term and the constructor share a type"
+      (eq? (rtd (make-term 'f (vector 1 2)))
+           (rtd ((compound-constructor 'f 2) 3 4))))
+    (test-assert "make-compound2 too"
+      (eq? (rtd (make-compound2 'f 1 2)) (rtd (make-term 'f (vector 5 6)))))
+    (test-assert "term-map keeps the type"
+      (let ((t (make-term 'g (vector 1 2 3))))
+        (eq? (rtd t) (rtd (term-map (lambda (x) x) t)))))
+    (test-assert "another arity is another type"
+      (not (eq? (rtd (make-term 'f (vector 1))) (rtd (make-term 'f (vector 1 2))))))
+    (test-eq "the functor is the type's name" 'h
+      (term-functor (make-term 'h (vector 1))))
+    (test-eq "an odd functor name" (string->symbol "x y")
+      (term-functor (make-term (string->symbol "x y") (vector 1 2 3))))
+    (test-eq "arity above K" 'big
+      (term-functor (make-term 'big (vector 1 2 3 4 5 6 7 8 9))))
+    (test-assert "predicate"
+      (and ((compound-predicate 'f 2) (make-term 'f (vector 1 2)))
+           (not ((compound-predicate 'f 2) (make-term 'g (vector 1 2))))
+           (not ((compound-predicate 'f 2) (make-term 'f (vector 1))))))
+    (test-assert "compound* of two arities: not the same shape"
+      (let-values (((ok obs) (unify (make-term 'f (vector 1 2 3 4 5 6 7 8 9))
+                                    (make-term 'f (vector 1 2 3 4 5 6 7 8 9 10)))))
+        (not ok)))
+    (test-assert "match-compound*"
+      (and (match-compound* (make-term 'f (vector 1 2 3 4 5 6 7 8 9))
+                            (compound-predicate 'f 9) 9)
+           (not (match-compound* (make-term 'f (vector 1 2 3 4 5 6 7 8 9 10))
+                                 (compound-predicate 'f 9) 9))))
+    (test-assert "match-term2 by functor"
+      (and (match-term2 (make-term 'f (vector 1 2)) 'f)
+           (not (match-term2 (make-term 'f (vector 1 2)) 'g))))))
+
 (test-end "var")

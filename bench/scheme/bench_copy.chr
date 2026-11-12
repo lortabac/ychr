@@ -1,0 +1,37 @@
+% Benchmark program: `copy_term/1`, exercised by
+% `bench/scheme/bench/harness.sls` through the `copy` case.
+%
+% It builds N groups of terms of arity 1, 2, 3 and 9 (all but the
+% first holding one free variable), copies the list with copy_term/1,
+% then sums the
+% copy. Copying rebuilds every term at run time, through the runtime's
+% generic term code (`term-map`, `make-term`), not through code the
+% compiler emitted. The result is 12 * N * (N + 1) / 2: 1503000 at
+% N = 500, which is the value the harness checks.
+:- module(bench_copy, [go/2]).
+
+:- chr_type t(X) ---> a(int) ; b(int, X) ; c(int, int, X)
+                    ; e(int, int, int, int, int, int, int, int, X).
+
+:- chr_constraint go/2.
+
+:- function build(int, any) -> list(t(any)).
+
+build(0, _) -> [].
+build(N, V) -> [a(N), b(N, V), c(N, N, V), e(N, N, N, N, N, N, N, N, V)
+               | build(N - 1, V)].
+
+:- function weight(t(any)) -> int.
+
+weight(a(X)) -> X.
+weight(b(X, _)) -> X.
+weight(c(X, Y, _)) -> X + Y.
+weight(e(A, B, C, D, E, F, G, H, _)) -> A + B + C + D + E + F + G + H.
+
+:- function total(list(t(any))) -> int.
+
+total([]) -> 0.
+total([T | Ts]) -> weight(T) + total(Ts).
+
+go(N, R) <=> R is total(copy_term(build(N, _))).
+
