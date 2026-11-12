@@ -155,7 +155,7 @@
           ;; procedures `%apply-closure` calls for that
           ;; closure. Generated libraries fill this in via
           ;; @register-callable!@.
-          (make-hashtable equal-hash equal?)
+          (make-hashtable callable-key-hash callable-key-eq?)
           ;; Dynamic tell dispatch table: keys are
           ;; ("scope" functor arity) lists; values are the tell
           ;; procedures `%tell-term` calls. Generated libraries
@@ -470,13 +470,27 @@
   ;; designates it: the closure term's functor, its identity field (a
   ;; flattened function name for a function reference, a lambda
   ;; identifier for a lifted lambda) and the arity the callable was
-  ;; declared at. Keys are `(functor identity arity)` lists, hashed with
-  ;; `equal-hash`/`equal?` — symbols compare by name under both, so a
-  ;; key built here matches one built by `register-callable!`. Mirrors
+  ;; declared at. Keys are `(functor identity arity)` lists, hashed and
+  ;; compared field by field (`callable-key-hash`, `callable-key-eq?`),
+  ;; so a key built here matches one built by `register-callable!`. Mirrors
   ;; the Haskell runtime's `CallableKey` table
   ;; (`YCHR.Internal.Runtime.Monad.CallableRegistry`).
   (define (make-callable-key functor identity arity)
     (list functor identity arity))
+
+  ;; The table's hash and equality, like `evaluable-key-hash` above:
+  ;; cheaper than `equal-hash` on a list, and `%apply-closure` does one
+  ;; lookup per call. The identity is a symbol in every key built here;
+  ;; the fallbacks keep any other key working.
+  (define (callable-key-hash k)
+    (let ((identity (cadr k)))
+      (if (symbol? identity)
+          (fxxor (symbol-hash identity) (caddr k))
+          (equal-hash k))))
+  (define (callable-key-eq? a b)
+    (and (eq? (car a) (car b))
+         (let ((x (cadr a)) (y (cadr b))) (or (eq? x y) (equal? x y)))
+         (eqv? (caddr a) (caddr b))))
 
   ;; Register a procedure to invoke when `%apply-closure` is handed a
   ;; closure whose key matches. The procedure must accept
@@ -512,31 +526,59 @@
   ;; renamer to resolve the name. `dynamic-funref-key` resolves that name
   ;; against the same callables table, so a dynamically constructed
   ;; reference is callable exactly like one the string reader produced.
-  (define (%apply-closure s closure . args)
-    (let* ((d (deref closure))
-           (n (length args))
-           (hit (and (term? d) (callable-invocation d n))))
-      (cond
-        (hit
-         (let* ((key (car hit))
-                (captures (cdr hit))
-                (proc (hashtable-ref (session-callables s) key #f)))
+  ;;
+  ;; One and two arguments have their own clauses: no argument list,
+  ;; and a closure with no captures is called directly.
+  (define %apply-closure
+    (case-lambda
+      ((s closure a)
+       (let* ((d (deref closure))
+              (hit (and (term? d) (callable-invocation d 1))))
+         (if (and hit (null? (cdr hit)))
+             (let ((proc (hashtable-ref (session-callables s) (car hit) #f)))
+               (if proc
+                   (proc s a)
+                   (%chr-error "call: no matching closure")))
+             (apply-closure* s d 1 hit (list a)))))
+      ((s closure a b)
+       (let* ((d (deref closure))
+              (hit (and (term? d) (callable-invocation d 2))))
+         (if (and hit (null? (cdr hit)))
+             (let ((proc (hashtable-ref (session-callables s) (car hit) #f)))
+               (if proc
+                   (proc s a b)
+                   (%chr-error "call: no matching closure")))
+             (apply-closure* s d 2 hit (list a b)))))
+      ((s closure . args)
+       (let* ((d (deref closure))
+              (n (length args)))
+         (apply-closure* s d n (and (term? d) (callable-invocation d n))
+                         args)))))
+
+  ;; The general case. `d` is the dereferenced closure, `hit` what
+  ;; `callable-invocation` said about it at `n` arguments.
+  (define (apply-closure* s d n hit args)
+    (cond
+      (hit
+       (let* ((key (car hit))
+              (captures (cdr hit))
+              (proc (hashtable-ref (session-callables s) key #f)))
+         (if proc
+             (apply proc s (append captures args))
+             (%chr-error "call: no matching closure"))))
+      ((dynamic-funref-key s d n)
+       =>
+       (lambda (key)
+         (let ((proc (hashtable-ref (session-callables s) key #f)))
            (if proc
-               (apply proc s (append captures args))
-               (%chr-error "call: no matching closure"))))
-        ((dynamic-funref-key s d n)
-         =>
-         (lambda (key)
-           (let ((proc (hashtable-ref (session-callables s) key #f)))
-             (if proc
-                 (apply proc s args)
-                 (%chr-error "call: no matching closure")))))
-        ((%unbound? d)
-         (%chr-inst-error
-          (string-append
-           "'$call': closure argument is not sufficiently instantiated"
-           " (unbound variable)")))
-        (else (%chr-error "call: no matching closure")))))
+               (apply proc s args)
+               (%chr-error "call: no matching closure")))))
+      ((%unbound? d)
+       (%chr-inst-error
+        (string-append
+         "'$call': closure argument is not sufficiently instantiated"
+         " (unbound variable)")))
+      (else (%chr-error "call: no matching closure"))))
 
   ;;; --- Dynamic tell dispatch for `tell/N` ---
 
