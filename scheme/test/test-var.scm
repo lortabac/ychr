@@ -589,40 +589,113 @@
       (unify x (make-term 'f (vector 1 2 3 4)))
       (test-eqv "arg 3" 4 (get-arg x 3)))))
 
-;; One record type per functor and arity, whoever builds the term.
-(test-group "functor types"
+;; A typed functor (its name holds `__`) has one record type per arity,
+;; whoever builds the term.
+(test-group "typed functor types"
   (let ((rtd (lambda (t) (record-rtd t))))
     (test-assert "make-term and the constructor share a type"
-      (eq? (rtd (make-term 'f (vector 1 2)))
-           (rtd ((compound-constructor 'f 2) 3 4))))
+      (eq? (rtd (make-term 'm__f (vector 1 2)))
+           (rtd ((compound-constructor 'm__f 2) 3 4))))
     (test-assert "make-compound2 too"
-      (eq? (rtd (make-compound2 'f 1 2)) (rtd (make-term 'f (vector 5 6)))))
+      (eq? (rtd (make-compound2 'm__f 1 2)) (rtd (make-term 'm__f (vector 5 6)))))
     (test-assert "term-map keeps the type"
-      (let ((t (make-term 'g (vector 1 2 3))))
+      (let ((t (make-term 'm__g (vector 1 2 3))))
         (eq? (rtd t) (rtd (term-map (lambda (x) x) t)))))
     (test-assert "another arity is another type"
-      (not (eq? (rtd (make-term 'f (vector 1))) (rtd (make-term 'f (vector 1 2))))))
-    (test-eq "the functor is the type's name" 'h
-      (term-functor (make-term 'h (vector 1))))
-    (test-eq "an odd functor name" (string->symbol "x y")
-      (term-functor (make-term (string->symbol "x y") (vector 1 2 3))))
-    (test-eq "arity above K" 'big
-      (term-functor (make-term 'big (vector 1 2 3 4 5 6 7 8 9))))
+      (not (eq? (rtd (make-term 'm__f (vector 1)))
+                (rtd (make-term 'm__f (vector 1 2))))))
+    (test-assert "another functor is another type"
+      (not (eq? (rtd (make-term 'm__f (vector 1 2)))
+                (rtd (make-term 'm__g (vector 1 2))))))
+    (test-eq "the functor is the type's name" 'm__h
+      (term-functor (make-term 'm__h (vector 1))))
+    (test-eq "an odd functor name" (string->symbol "m__x y")
+      (term-functor (make-term (string->symbol "m__x y") (vector 1 2 3))))
+    (test-eq "arity above K" 'm__big
+      (term-functor (make-term 'm__big (vector 1 2 3 4 5 6 7 8 9))))
     (test-assert "predicate"
-      (and ((compound-predicate 'f 2) (make-term 'f (vector 1 2)))
-           (not ((compound-predicate 'f 2) (make-term 'g (vector 1 2))))
-           (not ((compound-predicate 'f 2) (make-term 'f (vector 1))))))
+      (and ((compound-predicate 'm__f 2) (make-term 'm__f (vector 1 2)))
+           (not ((compound-predicate 'm__f 2) (make-term 'm__g (vector 1 2))))
+           (not ((compound-predicate 'm__f 2) (make-term 'm__f (vector 1))))))
     (test-assert "compound* of two arities: not the same shape"
-      (let-values (((ok obs) (unify (make-term 'f (vector 1 2 3 4 5 6 7 8 9))
-                                    (make-term 'f (vector 1 2 3 4 5 6 7 8 9 10)))))
+      (let-values (((ok obs) (unify (make-term 'm__f (vector 1 2 3 4 5 6 7 8 9))
+                                    (make-term 'm__f (vector 1 2 3 4 5 6 7 8 9 10)))))
         (not ok)))
     (test-assert "match-compound*"
-      (and (match-compound* (make-term 'f (vector 1 2 3 4 5 6 7 8 9))
-                            (compound-predicate 'f 9) 9)
-           (not (match-compound* (make-term 'f (vector 1 2 3 4 5 6 7 8 9 10))
-                                 (compound-predicate 'f 9) 9))))
+      (and (match-compound* (make-term 'm__f (vector 1 2 3 4 5 6 7 8 9))
+                            (compound-predicate 'm__f 9) 9)
+           (not (match-compound* (make-term 'm__f (vector 1 2 3 4 5 6 7 8 9 10))
+                                 (compound-predicate 'm__f 9) 9))))
+    (test-assert "match-term2 by functor"
+      (and (match-term2 (make-term 'm__f (vector 1 2)) 'm__f)
+           (not (match-term2 (make-term 'm__f (vector 1 2)) 'm__g))))))
+
+;; Bare functors (no `__`) share one record type per arity; the functor
+;; is a field. So a new functor name costs no new type.
+(test-group "bare functor types"
+  (let ((rtd (lambda (t) (record-rtd t)))
+        (args (lambda (n)
+                (let ((v (make-vector n)))
+                  (do ((i 0 (+ i 1))) ((= i n) v) (vector-set! v i (+ i 1)))))))
+    (do ((n 1 (+ n 1))) ((> n 10))
+      (let ((f (make-term 'f (args n))) (g (make-term 'g (args n))))
+        (test-assert "two functors, one type" (eq? (rtd f) (rtd g)))
+        (test-eq "functor" 'f (term-functor f))
+        (test-eqv "arity" n (term-arity f))
+        (test-eqv "last arg" n (term-arg f (- n 1)))
+        (test-assert "match-term"
+          (and (match-term f 'f n) (not (match-term f 'g n))
+               (not (match-term f 'f (+ n 1)))))
+        (test-assert "equal to itself rebuilt"
+          (equal?/chr f (make-term 'f (args n))))
+        (test-assert "not equal to another functor" (not (equal?/chr f g)))
+        (test-assert "does not unify with another functor"
+          (let-values (((ok obs) (unify f g))) (not ok)))
+        (test-assert "not unifiable with another functor"
+          (not (unifiable? f g)))
+        (test-assert "not equal to a typed functor"
+          (not (equal?/chr f (make-term 'm__f (args n)))))
+        (test-assert "predicate"
+          (and ((compound-predicate 'f n) f)
+               (not ((compound-predicate 'f n) g))
+               (not ((compound-predicate 'f n) (make-term 'm__f (args n))))))
+        (test-assert "constructor"
+          (equal?/chr f (if (> n 8)
+                            ((compound-constructor 'f n) (args n))
+                            (apply (compound-constructor 'f n)
+                                   (vector->list (args n))))))
+        (test-assert "term-map keeps the functor"
+          (equal?/chr f (term-map (lambda (x) x) f)))
+        (test-assert "ground key"
+          (and (equal? (ground-key f) (ground-key (make-term 'f (args n))))
+               (not (equal? (ground-key f) (ground-key g)))))))
+    (test-assert "another arity is another type"
+      (not (eq? (rtd (make-term 'f (vector 1))) (rtd (make-term 'f (vector 1 2))))))
+    (test-assert "typed and bare differ"
+      (not (eq? (rtd (make-term 'f (vector 1 2)))
+                (rtd (make-term 'm__f (vector 1 2))))))
+    (test-assert "make-compound2"
+      (equal?/chr (make-compound2 'f 1 2) (make-term 'f (vector 1 2))))
     (test-assert "match-term2 by functor"
       (and (match-term2 (make-term 'f (vector 1 2)) 'f)
-           (not (match-term2 (make-term 'f (vector 1 2)) 'g))))))
+           (not (match-term2 (make-term 'f (vector 1 2)) 'g))))
+    (test-assert "match-compound*"
+      (and (match-compound* (make-term 'f (args 9)) (compound-predicate 'f 9) 9)
+           (not (match-compound* (make-term 'f (args 10))
+                                 (compound-predicate 'f 9) 9))
+           (not (match-compound* (make-term 'g (args 9))
+                                 (compound-predicate 'f 9) 9))))
+    (test-assert "compound* of two arities: not the same shape"
+      (let-values (((ok obs) (unify (make-term 'f (args 9))
+                                    (make-term 'f (args 10)))))
+        (not ok)))
+    (test-eq "an odd functor name" (string->symbol "x y")
+      (term-functor (make-term (string->symbol "x y") (vector 1 2 3))))
+    (test-eq "a single underscore is bare" 'a_b
+      (term-functor (make-term 'a_b (vector 1))))
+    (test-assert "a single underscore shares the bare type"
+      (eq? (rtd (make-term 'a_b (vector 1))) (rtd (make-term 'f (vector 1)))))
+    (test-eqv "nullary compound*" 0 (term-arity (make-term 'f (vector))))
+    (test-eq "nullary compound* functor" 'f (term-functor (make-term 'f (vector))))))
 
 (test-end "var")

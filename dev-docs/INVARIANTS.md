@@ -1025,19 +1025,26 @@ them for terms of known arity:
 3. `prelude__.`/2 is never a compound; it is always a pair.
 4. Arguments are stored as given: a field may hold a variable, bound or
    unbound. Readers dereference.
-5. A compound's record type is the child `compound-type` returns for its
-   functor and arity: built through `make-term`, `compound-constructor`,
-   the by-functor `make-compoundN`, or a static `define-record-type` in a
-   generated library or a `scheme-types` records library, which use the
-   same uid (`functorTypeUid` in `Backend/Scheme.hs`). Nothing else creates a child, so one
-   functor and arity has one type, and its name is the functor.
+5. The functor's name alone picks the record type. A *typed* functor,
+   one whose name holds `__` (`m__f`, `__closure`), has its own child
+   per arity, named after it: the child `compound-type` returns, built
+   through `make-term`, `compound-constructor`, the by-functor
+   `make-compoundN`, or a static `define-record-type` in a generated
+   library or a `scheme-types` records library, which use the same uid
+   (`functorTypeUid` in `Backend/Scheme.hs`). A *bare* functor (any
+   other name) uses the shared child `dynN` of its arity and keeps the
+   functor in that type's one field. Nothing else creates a child, so
+   one functor and arity has one type. `staticFunctorType` in
+   `Backend/Scheme.hs` only accepts names that hold `__`, so a static
+   definition is always of a typed functor.
 
-5 has a cost: the types it creates are never freed, so a process that
-keeps making new functors grows without bound (see "Record types are never
-freed" in `SCHEME_BACKEND_GAPS.md`).
+5 has a cost: a typed functor's type is never freed. Typed names are
+those of declared things, so a program has a fixed set of them; bare
+functors, which is what data usually brings, cost nothing each (see
+"Record types are never freed" in `SCHEME_BACKEND_GAPS.md`).
 
 1 and 5 are what let unification compare two record types instead of
-functors and arities.
+functors and arities (plus the functor field when the type is a `dynN`).
 
 ### Scheme runtime ABI
 

@@ -2,7 +2,7 @@
 
 The term record types are nongenerative (scheme/ychr/var.sls), so a
 ground term written by one process reads back in another one as the
-same record types. One process writes, a second one reads and checks.
+same record types, for typed functors (`m__f`) and bare ones (`f`). One process writes, a second one reads and checks.
 Chez only: fasl is Chez-specific. Skipped when Chez is not installed.
 """
 
@@ -26,7 +26,12 @@ TERMS = """
                             "s" 'a 1.5
                             (make-term 'm__k (args 10)))))
    (let loop ((n 8) (acc '()))
-     (if (= n 0) acc (loop (- n 1) (cons (make-term 'm__f (args n)) acc))))))
+     (if (= n 0) acc (loop (- n 1) (cons (make-term 'm__f (args n)) acc))))
+   ;; Bare functors: one shared type per arity, the functor in a field.
+   (list (make-term 'f (args 1))
+         (make-term 'f (args 2))
+         (make-term 'g (vector (make-term 'h (args 3)) 'a))
+         (make-term 'f (args 9)))))
 """
 
 WRITER = """
@@ -48,6 +53,10 @@ READER = """
                (for-all equal?/chr got (terms))
                (for-all term? got)
                (compound*? (list-ref got 1))
+               (match-term (list-ref got 11) 'f 1)
+               (match-term (list-ref got 12) 'f 2)
+               (not (match-term (list-ref got 12) 'g 2))
+               (match-term (list-ref got 14) 'f 9)
                (let loop ((i 3) (n 1))
                  (or (> n 8)
                      (let ((t (list-ref got i)))

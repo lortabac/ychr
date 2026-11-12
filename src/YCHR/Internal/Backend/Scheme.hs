@@ -1395,7 +1395,10 @@ functorDefinition u =
 -- | Whether a functor at an arity can have its record type defined
 -- statically: a flat arity, and a functor that is an identifier, since
 -- it becomes the record name, and holds @__@ (@m__f@, @__closure@). No
--- name the generated code imports holds @__@, so it can't clash.
+-- name the generated code imports holds @__@, so it can't clash. The
+-- @__@ test is also the runtime's rule: scheme/ychr/var.sls gives a
+-- functor its own record type only if its name holds @__@, so dropping
+-- the test here would define a type the runtime never uses.
 staticFunctorType :: Text -> Int -> Bool
 staticFunctorType f n =
   n >= 1
