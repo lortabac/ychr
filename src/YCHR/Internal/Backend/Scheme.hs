@@ -32,6 +32,7 @@ module YCHR.Internal.Backend.Scheme
     functorTypeUid,
     HostCallTarget (..),
     hostCallTarget,
+    resultNeverVar,
   )
 where
 
@@ -1118,11 +1119,9 @@ foreachInner lbl sv conds body =
    in SList [SAtom "when", guard, innerBody]
   where
     compileCondition (IndexCondition (ArgIndex i) e) =
-      SList
-        [ SAtom "equal?/chr",
-          SList [SAtom "constraint-arg", SAtom sv, SInt (fromIntegral i)],
-          compileValExpr e
-        ]
+      equalS
+        (SList [SAtom "constraint-arg", SAtom sv, SInt (fromIntegral i)])
+        (compileValExpr e)
 
 -- ---------------------------------------------------------------------------
 -- Expression compilation
@@ -1188,7 +1187,7 @@ compileBoolExpr (BOr a b) = SList [SAtom "or", compileBoolExpr a, compileBoolExp
 compileBoolExpr (BMatchTerm e (Name f) arity) =
   matchTermTyped (compileValExpr e) f arity
 compileBoolExpr (BEqual a b) =
-  SList [SAtom "equal?/chr", compileValExpr a, compileValExpr b]
+  equalS (compileValExpr a) (compileValExpr b)
 compileBoolExpr (BIdEqual a b) =
   SList [SAtom "id-equal?", compileIdExpr a, compileIdExpr b]
 compileBoolExpr (BAlive e) =
@@ -1210,7 +1209,7 @@ compileBoolExpr (BNotInHistory (RuleId rid) ids) =
 compileBoolExpr (BUnify a b) =
   SList [SAtom "%unify", SAtom "%s", compileValExpr a, compileValExpr b]
 compileBoolExpr (BFromVal e) =
-  SList [SAtom "%bool-from-value", compileValExpr e]
+  boolFromValueS (compileValExpr e)
 compileBoolExpr (BEvalDeep e) = compileBoolEvalDeep e
 compileBoolExpr (BSoftGuard e) = softGuardForm (compileBoolExpr e)
 
@@ -1280,8 +1279,8 @@ makeTermSExpr f args
 -- through @match-term@.
 matchTermSExpr :: SExpr -> Text -> Word -> SExpr
 matchTermSExpr e f arity
-  | f == consFunctor && arity == 2 = SList [SAtom "pair?", SList [SAtom "deref", e]]
-  | f == nilAtom && arity == 0 = SList [SAtom "null?", SList [SAtom "deref", e]]
+  | f == consFunctor && arity == 2 = SList [SAtom "pair?", derefS e]
+  | f == nilAtom && arity == 0 = SList [SAtom "null?", derefS e]
   | arity >= 1 && fromIntegral arity <= flatMaxArity =
       SList [SAtom ("match-term" <> T.pack (show arity)), e, compileSymbol f]
   | otherwise =
@@ -1306,7 +1305,7 @@ matchTermTyped e f arity
   | f == consFunctor && arity == 2 = matchTermSExpr e f arity
   | f == nilAtom && arity == 0 = matchTermSExpr e f arity
   | arity >= 1 && n <= flatMaxArity =
-      SList [functorType "predicate" f n, SList [SAtom "deref", e]]
+      SList [functorType "predicate" f n, derefS e]
   | arity >= 1 =
       SList [SAtom "match-compound*", e, functorType "predicate" f n, SInt (fromIntegral n)]
   | otherwise = matchTermSExpr e f arity
@@ -1395,7 +1394,10 @@ functorDefinition u =
 -- | Whether a functor at an arity can have its record type defined
 -- statically: a flat arity, and a functor that is an identifier, since
 -- it becomes the record name, and holds @__@ (@m__f@, @__closure@). No
--- name the generated code imports holds @__@, so it can't clash.
+-- name the generated code imports holds @__@, so it can't clash. The
+-- @__@ test is also the runtime's rule: scheme/ychr/var.sls gives a
+-- functor its own record type only if its name holds @__@, so dropping
+-- the test here would define a type the runtime never uses.
 staticFunctorType :: Text -> Int -> Bool
 staticFunctorType f n =
   n >= 1
@@ -1552,11 +1554,13 @@ compileHostCall = compileHostCallWith compileValExpr
 compileHostCallWith :: (ValExpr -> SExpr) -> Name -> [ValExpr] -> SExpr
 compileHostCallWith compile (Name n) args =
   let target = hostCallTarget n
-      derefedArgs = map (\a -> SList [SAtom "deref", compile a]) args
+      derefedArgs = map (derefS . compile) args
       allArgs
         | target.takesSession = SAtom "%s" : derefedArgs
         | otherwise = derefedArgs
-   in SList (SAtom target.procedure : allArgs)
+   in case (target.procedure, allArgs) of
+        ("equal?/chr", [a, b]) -> equalS a b
+        _ -> SList (SAtom target.procedure : allArgs)
 
 -- | Compile an EvalDeep expression. Like the standard expression
 -- compiler, but Var references are dereferenced (following binding
@@ -1595,14 +1599,126 @@ compileBoolEvalDeep (BOr a b) =
 compileBoolEvalDeep (BMatchTerm e (Name f) arity) =
   matchTermTyped (compileEvalDeep e) f arity
 compileBoolEvalDeep (BEqual a b) =
-  SList [SAtom "equal?/chr", compileEvalDeep a, compileEvalDeep b]
+  equalS (compileEvalDeep a) (compileEvalDeep b)
 compileBoolEvalDeep (BUnify a b) =
   SList [SAtom "%unify", SAtom "%s", compileEvalDeep a, compileEvalDeep b]
 compileBoolEvalDeep (BFromVal e) =
-  SList [SAtom "%bool-from-value", compileEvalDeep e]
+  boolFromValueS (compileEvalDeep e)
 compileBoolEvalDeep (BEvalDeep e) = compileBoolEvalDeep e
 compileBoolEvalDeep (BSoftGuard e) = softGuardForm (compileBoolEvalDeep e)
 compileBoolEvalDeep e = compileBoolExpr e
+
+-- ---------------------------------------------------------------------------
+-- Wrappers that can do nothing
+-- ---------------------------------------------------------------------------
+
+-- | @(deref e)@, or @e@ itself when it can't be a bound variable: then
+-- @deref@ would return it unchanged.
+derefS :: SExpr -> SExpr
+derefS e
+  | neverBoundVar e = e
+  | otherwise = SList [SAtom "deref", e]
+
+-- | An expression whose value is never a bound variable: a literal, a
+-- @deref@, or a call of a runtime procedure that returns a number, a
+-- string or a boolean (or raises).
+neverBoundVar :: SExpr -> Bool
+neverBoundVar e = case e of
+  SList [SAtom "deref", _] -> True
+  SList (SAtom f : _) | resultNeverVar f -> True
+  _ -> isLiteral e
+
+-- | Whether a call of this runtime procedure can never return a
+-- variable. For the driver generator, which builds text.
+resultNeverVar :: Text -> Bool
+resultNeverVar f = f `Set.member` plainResultProcs || f `Set.member` booleanProcs
+
+-- | A literal as 'compileLiteral' writes it.
+isLiteral :: SExpr -> Bool
+isLiteral e = case e of
+  SInt _ -> True
+  SFloat _ -> True
+  SString _ -> True
+  SAtom "#t" -> True
+  SAtom "#f" -> True
+  SList [SAtom "quote", _] -> True
+  SList [SAtom "string->symbol", SString _] -> True
+  _ -> False
+
+-- | A literal @eqv?@ compares the way @equal?\/chr@ does: a number, a
+-- boolean or a symbol. Not a string, and not nil (@'()@ is fine for
+-- @eqv?@ too, but keep the set to what 'compileSymbol' and the number
+-- literals write).
+eqvLiteral :: SExpr -> Bool
+eqvLiteral e = case e of
+  SInt _ -> True
+  SFloat _ -> True
+  SAtom "#t" -> True
+  SAtom "#f" -> True
+  SList [SAtom "quote", SAtom _] -> True
+  SList [SAtom "string->symbol", SString _] -> True
+  _ -> False
+
+-- | @(equal?\/chr a b)@. Against a number, boolean or symbol literal
+-- that is @eqv?@ on the dereferenced other side, which is what
+-- @equal*@ in scheme\/ychr\/var.sls does for these.
+equalS :: SExpr -> SExpr -> SExpr
+equalS a b
+  | eqvLiteral b = SList [SAtom "eqv?", derefS a, b]
+  | eqvLiteral a = SList [SAtom "eqv?", a, derefS b]
+  | otherwise = SList [SAtom "equal?/chr", a, b]
+
+-- | @(%bool-from-value e)@, or @e@ itself when it is always a boolean.
+boolFromValueS :: SExpr -> SExpr
+boolFromValueS e = case e of
+  SAtom "#t" -> e
+  SAtom "#f" -> e
+  SList (SAtom f : _) | f `Set.member` booleanProcs -> e
+  _ -> SList [SAtom "%bool-from-value", e]
+
+-- | Runtime procedures that return a boolean or raise. Keyed on the
+-- emitted name, so a host name written verbatim (@host:'integer?'@) is
+-- covered too. That holds because a generated library imports only
+-- @(rnrs)@ and @(ychr runtime)@.
+booleanProcs :: Set.Set Text
+booleanProcs =
+  Set.fromList
+    [ "%lt",
+      "%gt",
+      "%le",
+      "%ge",
+      "equal?/chr",
+      "eqv?",
+      "%unbound?",
+      "%nonvar?",
+      "%ground?",
+      "%unifiable?",
+      "var?",
+      "flonum?",
+      "integer?",
+      "chr-atom?",
+      "boolean?",
+      "string?"
+    ]
+
+-- | Runtime procedures that return a number or a string, or raise.
+plainResultProcs :: Set.Set Text
+plainResultProcs =
+  Set.fromList
+    [ "%add",
+      "%sub",
+      "%mul",
+      "%fdiv",
+      "%idiv",
+      "%imod",
+      "%irem",
+      "%int-to-float",
+      "%float-to-int",
+      "%str-concat",
+      "%str-length",
+      "%str-upper",
+      "%str-lower"
+    ]
 
 -- | Lower 'BSoftGuard' to an R6RS @guard@ that turns an
 -- insufficient-instantiation condition into @#f@ and re-raises

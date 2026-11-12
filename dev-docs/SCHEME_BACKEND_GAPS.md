@@ -55,38 +55,39 @@ never as the vmName `host__-/2`. Locked by the Haskell golden cases in
 
 ## Record types are never freed
 
-Open. Each functor and arity a process ever sees gets its own record type
-("Flat compounds" below), and nothing frees it: the type, its uid, its
-constructor and predicate, and the `compound-type` table entry stay for the
-life of the process, even when no term of that functor is left. On the
-Haskell runtime, and on the Scheme runtime before this design, a functor
-was only a symbol in a field, which the collector can drop.
+Mostly closed. Open only for qualified functors made at run time.
 
-This is per distinct functor, not per term. Measured on Chez 10.3 with
-100000 new functors, each built once and dropped:
+A functor whose name holds `__` (`m__f`, `__closure`) gets its own
+record type per arity ("Flat compounds" below), and nothing frees it:
+the type, its uid, its constructor and predicate, and the
+`compound-type` table entry stay for the life of the process. The uid is
+what pins it. Measured on Chez 10.3: a nongenerative type with no table
+entry at all still keeps about 560 bytes, and an ephemeron table does
+not help. A generative type in an ephemeron table is freed, but it can't
+be written with fasl and can't be the type a library defines statically.
 
-| | per new functor |
-|---|---|
-| memory kept | about 680 bytes |
-| time for its first term | 3.3 µs (0.3 µs before) |
-| a term of a known functor, 100000 registered | 0.77 µs (0.31 µs before) |
+So only those names get a type. Any other functor (`foo`, and what
+`list_to_compound`, `=..` or `read_term_from_string` usually build)
+shares one record type per arity, with the functor in a field. Measured
+on Chez 10.3 with 100000 new functors, each built once and dropped:
 
-Most programs are not affected: their functors come from the program and
-from data with a fixed vocabulary, so the set is small and paid for once.
-The risk is code that makes functor names from data and keeps running:
-`list_to_compound` or `=..` building `f1`, `f2`, …, `read_term_from_string`
-on open-ended input, or a long REPL session doing the same. A million
-distinct functors keep about 680 MB.
+| | bare (`f1`, `f2`, …) | qualified (`m__f1`, …) |
+|---|---|---|
+| memory kept per functor, before | 642 bytes | 656 bytes |
+| memory kept per functor, now | 0 | 656 bytes |
+| time for its first term, before | 6.8 µs | 4.8 µs |
+| time for its first term, now | 0.2 µs | 4.3 µs |
 
-Ideas, none tried yet:
+What it costs: a bare term has one more field, so it is 16 bytes bigger
+at odd arities (Chez rounds a record to 16 bytes; even arities are the
+same size). Generic code is as fast as before on both kinds.
 
-- Weak or ephemeron tables, so an unused type can go. R6RS has none (Chez
-  has ephemeron tables, Guile weak tables), and it is not known whether
-  Chez's uid registry would let a nongenerative type go.
-- A fallback representation, with the functor in a field, for functors no
-  compiled code names. It must still match and unify with a type defined
-  later for the same functor (a library or REPL query loaded afterwards),
-  which is what one type per functor was meant to avoid.
+What is left: a program that keeps reading new *qualified* names
+(`m:f1(…)`, `m:f2(…)`, …) from open-ended input still grows, about 656
+bytes per name. Qualified names normally come from declarations, so this
+needs data that invents module-qualified functors. Closing it would take
+a registry of the functors loaded libraries define, plus a way to deal
+with a library loaded after terms of its functor exist. Not planned.
 
 ## Host calls left out of `*prelude-host-calls*`
 
@@ -298,27 +299,39 @@ contracts from the invariant side.
   values as they are on the Haskell side.
 - **Flat compounds.** A compound of arity 1..8 is a record whose type
   is a child of `compound1` … `compound8` (the arguments as fields);
-  above 8 its type is a child of `compound*` (a vector of arguments). The
-  child type is per functor: sealed, no fields of its own, and named
-  after the functor, so the functor is the type's name and not a field
-  (`scheme/ychr/var.sls`, "Per-functor types"). Above 8 one child per
-  functor covers every arity, and the vector length is the arity.
-  `compound-type` makes a child the first time it is asked for and
-  caches it; its uid is fixed by functor and arity (`ychr:c2:m__f:1`),
-  so every library and process gets the same type. It keeps the last
-  functor asked for per arity, so a run of terms of one functor skips
-  the table. `compound?`, `term-arity` and `term-arg` test the parents;
-  `term-functor` reads the type's name; unification compares the two
-  record types; `term-map` rebuilds arities 1–3 without a vector.
-  A generated library defines the type of each functor it builds or
-  tests with `define-record-type`, under the same uid
+  above 8 its type is a child of `compound*` (a vector of arguments).
+  The functor's name picks the child (`scheme/ychr/var.sls`, "Functor
+  types"), and nothing else does, so every library, process and fasl
+  file agrees:
+  - *Typed*, a name that holds `__` (`m__f`, `__closure`): a child per
+    functor, sealed, no fields of its own, named after the functor, so
+    the functor is the type's name and not a field. Above 8 one child
+    per functor covers every arity, and the vector length is the arity.
+    `compound-type` makes a child the first time it is asked for and
+    caches it; its uid is fixed by functor and arity
+    (`ychr:c2:m__f:1`). It keeps the last functor asked for per arity,
+    so a run of terms of one functor skips the table.
+  - *Bare*, any other name: the shared child `dyn1` … `dyn8` or `dyn*`
+    of its arity, sealed, with the functor in one extra field. All nine
+    are named `ychr:dyn`, which is how `compound-functor` tells them
+    from a typed child. No table, nothing kept per functor (see "Record
+    types are never freed" above for why).
+
+  `compound?`, `term-arity` and `term-arg` test the parents;
+  `term-functor` reads the type's name, or the field of a bare term;
+  unification compares the two record types, and the functors too when
+  the type is a bare one; `term-map` rebuilds arities 1–3 without a
+  vector.
+  A generated library defines the type of each typed functor it builds
+  or tests with `define-record-type`, under the same uid
   (`hoistFunctorTypes`, `functorDefinitions`), so Chez inlines the
   constructor and predicate. That needs a functor that is an identifier
-  and holds `__` (`m__f`, `__closure`; no imported name does), of arity
+  and holds `__` (no imported name does), of arity
   1–8, since the functor is the record name; a
   functor used at several arities (`__closure`) is static at its first
   one only. The others, and a query, look their constructor and
-  predicate up once (`compound-constructor`, `compound-predicate`); a
+  predicate up once (`compound-constructor`, `compound-predicate`; for a
+  bare functor these are closures over the shared type); a
   driver goes through the by-functor `make-compoundN`. `get-arg` stays
   generic. A looked-up closure is not inlined: it made `size/ground`
   about twice as slow and the `terms` benchmark 7–9% slower, which is
@@ -326,14 +339,39 @@ contracts from the invariant side.
   static definitions in a separate records library: Guile only accepts
   one in a library that imports `(rnrs)` without a prefix (its expansion
   uses plain `quote`), and the types library imports it with one.
-  On Chez a term is the size of a native record of the same arity: 16
-  bytes less than before at odd arities. Guile checks a parent type by
+  On Chez a typed term is the size of a native record of the same
+  arity; a bare one has one more field. Guile checks a parent type by
   walking the ancestry, about 4.5 times a sealed check, so generic term
-  code is slower there. The parents are nongenerative
-  (`ychr:compound2:2` and so on, plus `ychr:var:1`), so a ground term
-  written with Chez's `fasl-write` reads back in another process
-  (`test/scheme/test_fasl.py`). Bump a uid's suffix when its layout
-  changes.
+  code is slower there. The parents and the bare types are nongenerative
+  (`ychr:compound2:3`, `ychr:dyn2:1` and so on, plus `ychr:var:1`), so a
+  ground term written with Chez's `fasl-write` reads back in another
+  process (`test/scheme/test_fasl.py`). Bump a uid's suffix when its
+  layout changes. The parents went from `:2` to `:3` when bare functors
+  moved to the shared types, so a file written before that is not
+  read as current terms: its types have the old parents, and Chez
+  raises "incompatible record type" when the same functor's type is
+  asked for with the new one.
+- **No wrapper that can do nothing.** The backend builds `deref`,
+  `%bool-from-value` and `equal?/chr` calls through `derefS`,
+  `boolFromValueS` and `equalS` (`Backend/Scheme.hs`), which leave the
+  call out when it cannot change the result:
+  - `(deref e)` is `e` when `e` is a literal, another `deref`, or a call
+    of a runtime procedure that returns a number, a string or a boolean
+    (`plainResultProcs`, `booleanProcs`).
+  - `(%bool-from-value e)` is `e` when `e` is `#t`, `#f` or a call in
+    `booleanProcs`.
+  - `(equal?/chr a LIT)` is `(eqv? (deref a) LIT)` for a number, boolean
+    or symbol literal on either side, which is what `equal*` does for
+    those. This covers both `BEqual` and the `==` host call.
+
+  A procedure may be added to one of the two sets only if it can never
+  return a variable (or, for `booleanProcs`, anything but a boolean);
+  raising is fine. A `Foreach` index condition goes through `equalS`
+  too, and a driver leaves the `deref` out the same way (`derefArg` in
+  `Backend/SchemeDriver.hs`).
+  On Chez, three interleaved rounds: `sum` about 30%
+  faster (0.07 to 0.05 ms), `fib` 12% (1.14 to 1.01 ms), `terms` about
+  10%, `copy` about 4%, the others unchanged.
 - **Query-scope dynamic tell.** `%tell-term` special-cases the compiler's
   `<query>` scope: it resolves the goal through the program's exports
   (`resolve-export` + the session's goals table), as the Haskell
