@@ -3,6 +3,7 @@
 module YCHR.Runtime.VarTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.List (sort)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import YCHR.Internal.Runtime.Monad (Chr)
@@ -17,6 +18,7 @@ import YCHR.Internal.Runtime.Var
     matchTerm,
     newVar,
     unifiable,
+    unifiableWithOccursCheck,
     unify,
   )
 import YCHR.TestHelpers (runChrEmpty)
@@ -30,6 +32,7 @@ tests =
     [ unifyTests,
       unifiableTests,
       unifiableRollbackTests,
+      occursCheckTests,
       equalTests,
       observerTests,
       derefTests,
@@ -289,6 +292,88 @@ unifiableRollbackTests =
         liftIO $ mid @?= Nothing
         eq <- equal x (VInt 7)
         liftIO $ eq @?= True
+    ]
+
+-- | 'unifiableWithOccursCheck' gives the expected answer and leaves the
+-- given variables as it found them.
+assertOc :: [Value] -> Value -> Value -> Bool -> Chr ()
+assertOc vars a b expected = do
+  before <- traverse getVarId vars
+  r <- unifiableWithOccursCheck a b
+  liftIO $ r @?= expected
+  after <- traverse getVarId vars
+  liftIO $ before @?= after
+
+-- | A term of the given arity whose last argument is @x@, nested one
+-- level down so the occurrence is not at the top.
+deepIn :: Int -> Value -> Value
+deepIn n x = makeTerm "t" (replicate (n - 1) (VInt 0) ++ [makeTerm "g" [x]])
+
+occursCheckTests :: TestTree
+occursCheckTests =
+  testGroup
+    "unifiableWithOccursCheck"
+    [ testCase "X vs f(X)" $ runChrEmpty $ do
+        x <- newVar
+        assertOc [x] x (makeTerm "f" [x]) False,
+      testCase "f(X) vs X (symmetric)" $ runChrEmpty $ do
+        x <- newVar
+        assertOc [x] (makeTerm "f" [x]) x False,
+      testCase "X vs [a | X]" $ runChrEmpty $ do
+        x <- newVar
+        assertOc [x] x (makeTerm "." [VAtom "a", x]) False,
+      testCase "f(X, Y) vs f(Y, g(X))" $ runChrEmpty $ do
+        x <- newVar
+        y <- newVar
+        assertOc [x, y] (makeTerm "f" [x, y]) (makeTerm "f" [y, makeTerm "g" [x]]) False,
+      testCase "f(X, X) vs f(Y, g(Y))" $ runChrEmpty $ do
+        x <- newVar
+        y <- newVar
+        assertOc [x, y] (makeTerm "f" [x, x]) (makeTerm "f" [y, makeTerm "g" [y]]) False,
+      testCase "X vs Y" $ runChrEmpty $ do
+        x <- newVar
+        y <- newVar
+        assertOc [x, y] x y True,
+      testCase "X vs X" $ runChrEmpty $ do
+        x <- newVar
+        assertOc [x] x x True,
+      testCase "f(X) vs f(g(Y))" $ runChrEmpty $ do
+        x <- newVar
+        y <- newVar
+        assertOc [x, y] (makeTerm "f" [x]) (makeTerm "f" [makeTerm "g" [y]]) True,
+      testCase "f(a) vs f(b)" $
+        runChrEmpty $
+          assertOc [] (makeTerm "f" [VAtom "a"]) (makeTerm "f" [VAtom "b"]) False,
+      testCase "Functor and arity mismatch" $ runChrEmpty $ do
+        assertOc [] (makeTerm "f" [VInt 1]) (makeTerm "g" [VInt 1]) False
+        assertOc [] (makeTerm "f" [VInt 1]) (makeTerm "f" [VInt 1, VInt 2]) False,
+      testCase "Constants" $ runChrEmpty $ do
+        assertOc [] (VFloat 1.5) (VFloat 1.5) True
+        assertOc [] (VInt 1) (VFloat 1.0) False
+        assertOc [] (VText "a") (VAtom "a") False,
+      testCase "Alias chain made before the call: W = V, W vs f(V)" $ runChrEmpty $ do
+        v <- newVar
+        w <- newVar
+        _ <- unify w v
+        assertOc [v] w (makeTerm "f" [v]) False,
+      testCase "Deep occurrence at arity 1, 8 and 9" $ runChrEmpty $ do
+        x <- newVar
+        mapM_ (\n -> assertOc [x] x (deepIn n x) False) [1, 8, 9]
+        mapM_ (\n -> assertOc [x] x (deepIn n (VInt 1)) True) [1, 8, 9],
+      testCase "Occurrence in a list tail" $ runChrEmpty $ do
+        x <- newVar
+        let lst = makeTerm "." [VInt 1, makeTerm "." [VInt 2, x]]
+        assertOc [x] x lst False,
+      testCase "Observers are not touched, on both answers" $ do
+        (ok, obs) <- runChrEmpty $ do
+          x <- newVar
+          addObserver (SuspensionId 1) x
+          addObserver (SuspensionId 2) x
+          _ <- unifiableWithOccursCheck x (VInt 1)
+          _ <- unifiableWithOccursCheck x (makeTerm "f" [x])
+          unify x (VInt 1)
+        assertBool "unify succeeds" ok
+        sort obs @?= [SuspensionId 1, SuspensionId 2]
     ]
 
 equalTests :: TestTree

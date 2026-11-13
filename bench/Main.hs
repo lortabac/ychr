@@ -74,7 +74,11 @@ benchmarkPrograms =
     "aggregates_sum",
     "aggregates_many",
     "aggregates_no_match",
-    "aggregates_takemin_many"
+    "aggregates_takemin_many",
+    -- unifiable_with_occurs_check/2 against unifiable/2 on the same
+    -- type-shaped terms: what the occurs walk costs.
+    "bench_unifiable",
+    "bench_unifiable_oc"
   ]
 
 goldenDir :: FilePath

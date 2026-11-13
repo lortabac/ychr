@@ -54,7 +54,14 @@ import YCHR.Internal.Runtime.Error
   )
 import YCHR.Internal.Runtime.Monad (Chr, HostCallFn (..), HostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
-import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unifiable)
+import YCHR.Internal.Runtime.Var
+  ( deref,
+    equal,
+    getVarId,
+    newVar,
+    unifiable,
+    unifiableWithOccursCheck,
+  )
 import YCHR.Internal.VM (Name (..))
 
 -- ---------------------------------------------------------------------------
@@ -82,6 +89,7 @@ baseHostCallRegistry =
       (Name "int_to_float", toFloatFn),
       (Name "float_to_int", toIntFn),
       (Name "unifiable", unifiableHost),
+      (Name "unifiable_with_occurs_check", unifiableOcHost),
       (Name "string_concat", stringConcat),
       (Name "string_length", stringLength),
       (Name "string_upper", stringUpper),
@@ -155,6 +163,12 @@ baseHostCallRegistry =
       args ->
         runtimeErrorS $
           "unifiable host call: expected 2 arguments, got " ++ show (length args)
+    unifiableOcHost = HostCallFn $ \case
+      [a, b] -> VBool <$> unifiableWithOccursCheck a b
+      args ->
+        runtimeErrorS $
+          "unifiable_with_occurs_check host call: expected 2 arguments, got "
+            ++ show (length args)
     valEq = HostCallFn $ \case
       [a, b] -> VBool <$> equal a b
       args ->

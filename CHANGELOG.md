@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- New prelude function `unifiable_with_occurs_check/2`: like
+  `unifiable/2`, but `X` vs `f(X)` is `false`. It binds nothing and
+  never raises, so `unifiable_with_occurs_check(A, B) | A = B` is a
+  unification that fails cleanly and never builds a cyclic term. See
+  language.md §Testing unification first.
+
+- Scheme backend: equal floats now unify. `X = 1.5, X = 1.5` used to
+  fail, and `unifiable(1.5, 1.5)` was `false`.
+
 - `ychr compile -t scheme` and `ychr gen-driver` take `--import SPEC`
   (repeatable), an R6RS import set added to the generated code. A
   `host:` call to your own Scheme procedure now loads on Chez. See

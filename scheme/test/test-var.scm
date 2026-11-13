@@ -698,4 +698,88 @@
     (test-eqv "nullary compound*" 0 (term-arity (make-term 'f (vector))))
     (test-eq "nullary compound* functor" 'f (term-functor (make-term 'f (vector))))))
 
+;;; --------------------------------------------------------------------------
+;;; unifiable-oc?: unifiable? plus an occurs check
+;;; --------------------------------------------------------------------------
+
+;; Is `v` still unbound after the check?
+(define (unbound? v) (var? (deref v)))
+
+;; A term of arity n with `x` nested one level down in its last slot.
+(define (deep-in f n x)
+  (let ((v (make-vector n 0)))
+    (vector-set! v (- n 1) (make-term f (vector x)))
+    (make-term f v)))
+
+(test-group "unifiable-oc?"
+  (let ((s (fresh)))
+    (let ((x (make-var s)) (y (make-var s)))
+      (test-eq "X vs f(X)" #f (unifiable-oc? x (make-term 'f (vector x))))
+      (test-eq "f(X) vs X" #f (unifiable-oc? (make-term 'f (vector x)) x))
+      (test-eq "X vs [a | X]" #f (unifiable-oc? x (cons 'a x)))
+      (test-eq "f(X, Y) vs f(Y, g(X))" #f
+        (unifiable-oc? (make-term 'f (vector x y))
+                       (make-term 'f (vector y (make-term 'g (vector x))))))
+      (test-eq "X vs Y" #t (unifiable-oc? x y))
+      (test-eq "X vs X" #t (unifiable-oc? x x))
+      (test-eq "f(X) vs f(g(Y))" #t
+        (unifiable-oc? (make-term 'f (vector x))
+                       (make-term 'f (vector (make-term 'g (vector y))))))
+      (test-eq "f(a) vs f(b)" #f
+        (unifiable-oc? (make-term 'f (vector 'a)) (make-term 'f (vector 'b))))
+      (test-eq "functor mismatch" #f
+        (unifiable-oc? (make-term 'f (vector 1)) (make-term 'g (vector 1))))
+      (test-eq "arity mismatch" #f
+        (unifiable-oc? (make-term 'f (vector 1)) (make-term 'f (vector 1 2))))
+      (test-assert "X still unbound" (unbound? x))
+      (test-assert "Y still unbound" (unbound? y)))
+
+    (test-group "deep occurrences, bare and typed, arity 1, 8, 9"
+      (let ((x (make-var s)))
+        (for-each
+          (lambda (f)
+            (for-each
+              (lambda (n)
+                (test-eq "occurs" #f (unifiable-oc? x (deep-in f n x)))
+                (test-eq "does not occur" #t
+                  (unifiable-oc? x (deep-in f n 1))))
+              '(1 8 9)))
+          '(f m__t))
+        (test-eq "list tail" #f (unifiable-oc? x (list* 1 2 x)))
+        (test-assert "X still unbound" (unbound? x))))
+
+    (test-group "alias chain made before the call"
+      (let ((v (make-var s)) (w (make-var s)))
+        (unify w v)
+        (test-eq "W vs f(V)" #f (unifiable-oc? w (make-term 'f (vector v))))
+        (test-assert "V still unbound" (unbound? v))
+        (unify v 9)
+        (test-eqv "alias kept" 9 (deref w))))
+
+    (test-group "observers are not touched"
+      (let ((x (make-var s)))
+        (add-observer! 1 x)
+        (add-observer! 2 x)
+        (unifiable-oc? x 1)
+        (unifiable-oc? x (make-term 'f (vector x)))
+        (let-values (((ok obs) (unify x 1)))
+          (test-assert "succeeds" ok)
+          (test-equal "same observers" '(1 2) (list-sort < obs)))))))
+
+;;; --------------------------------------------------------------------------
+;;; Floats: equal flonums unify
+;;; --------------------------------------------------------------------------
+
+(test-group "floats"
+  (test-eq "unifiable? 1.5 1.5" #t (unifiable? 1.5 1.5))
+  (test-eq "unifiable-oc? 1.5 1.5" #t (unifiable-oc? 1.5 1.5))
+  (test-eq "unifiable? 1 1.0" #f (unifiable? 1 1.0))
+  (test-eq "unifiable? \"a\" a" #f (unifiable? "a" 'a))
+  (let-values (((ok obs) (unify 1.5 1.5)))
+    (test-assert "unify 1.5 1.5" ok))
+  (let-values (((ok obs) (unify 2.0 2.0)))
+    (test-assert "unify 2.0 2.0" ok))
+  (let-values (((ok obs) (unify 1 1.0)))
+    (test-assert "unify 1 1.0 fails" (not ok))))
+
 (test-end "var")

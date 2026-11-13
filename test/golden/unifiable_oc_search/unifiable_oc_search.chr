@@ -1,0 +1,25 @@
+% unifiable_with_occurs_check/2 inside a search: same answers, and the
+% search still undoes each branch.
+:- module(unifiable_oc_search, [probe/4, try/3, branch/3, pick/2, type(tm/0)]).
+:- use_module(library(search)).
+
+:- chr_type tm ---> a ; f(any) ; g(any).
+
+:- chr_constraint probe(any, any, any, any), try(any, any, any), branch(any, any, any),
+   check(any, any, any), try_oc(any, any), pick(any, any),
+   later(any, any).
+
+% For each X, can Y unify with f(X)? Not when X holds Y.
+probe(X, Y, R, Rs) <=> Rs is findall([X, R], quote(branch(X, Y, R))).
+branch(X, Y, R) <=> choose(X, [a, f(Y), g(Y)]), check(X, Y, R).
+check(X, Y, R) <=> nonvar(X) | R is unifiable_with_occurs_check(Y, f(X)).
+
+% try_unify with an occurs check: a cyclic answer is a dead branch.
+try_oc(X, Y) <=> unifiable_with_occurs_check(X, Y) | X = Y.
+try_oc(_, _) <=> fail.
+
+try(X, Y, Rs) <=> Rs is findall([X, Y], quote(pick(X, Y))).
+% `later` waits for choose to bind X. Checking first and letting choose
+% bind X = f(Y) afterwards would build a cycle with plain `=`.
+pick(X, Y) <=> choose(X, [a, f(Y)]), later(X, Y).
+later(X, Y) <=> nonvar(X) | try_oc(Y, f(X)).

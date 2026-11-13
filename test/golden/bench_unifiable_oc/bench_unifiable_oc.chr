@@ -1,0 +1,32 @@
+% Benchmark: unifiable_with_occurs_check/2 on a type-shaped pair of
+% terms (depth 5, about 20 nodes, three shared variables), checked N
+% times. bench_unifiable is the same with unifiable/2, as a baseline.
+:- module(bench_unifiable_oc, [go/5, type(ty/0)]).
+
+:- chr_type ty ---> t_int ; t_bool ; arrow(any, any) ; list_t(any)
+                  ; pair_t(any, any).
+
+:- chr_constraint go(int, any, any, any, any).
+
+:- function lhs(any, any, any) -> any.
+lhs(X, Y, Z) ->
+    arrow(pair_t(X, list_t(Y)),
+          arrow(list_t(pair_t(t_int, X)),
+                arrow(Y, pair_t(t_bool, list_t(Z))))).
+
+:- function rhs(any) -> any.
+rhs(W) ->
+    arrow(pair_t(t_int, list_t(W)),
+          arrow(list_t(pair_t(t_int, t_int)),
+                arrow(list_t(t_bool), pair_t(t_bool, W)))).
+
+:- function b2i(bool) -> int.
+b2i(true) -> 1.
+b2i(false) -> 0.
+
+:- function count(int, any, any, int) -> int.
+count(0, _, _, Acc) -> Acc.
+count(N, A, B, Acc) when N > 0 ->
+    count(N - 1, A, B, Acc + b2i(unifiable_with_occurs_check(A, B))).
+
+go(N, X, Y, Z, R) <=> R is count(N, lhs(X, Y, Z), rhs(_), 0).

@@ -1,0 +1,39 @@
+% The guard idiom for type unification:
+%   unify(A, B, Ctx) <=> unifiable_with_occurs_check(A, B) | A = B.
+% A failed unify binds nothing and reports one type error. A good one
+% binds through the body `=`, which wakes what observes the variables.
+:- module(unifiable_oc_guard, [clash/2, occurs/2, ok/2, type(ty/0), type(ctx/0), type(res/0)]).
+
+:- chr_type ty ---> t_int ; t_bool ; arrow(list(any), any).
+:- chr_type ctx ---> c1 ; c2 ; c3.
+:- chr_type res ---> woke.
+
+:- chr_constraint unify(any, any, any), type_error(any, any, any),
+   errs(int), errs_out(any), watch(any), out(any),
+   clash(any, any), occurs(any, any), ok(any, any).
+
+unify(A, B, _) <=> unifiable_with_occurs_check(A, B) | A = B.
+unify(A, B, Ctx) <=> type_error(Ctx, A, B).
+
+% Count the type errors.
+type_error(_, _, _), errs(N) <=> errs(N + 1).
+errs(N), errs_out(E) <=> E = N.
+
+% A partial match: [X] could match [t_bool], but t_int is not t_bool.
+% X must stay unbound.
+clash(X, E) <=>
+    errs(0),
+    unify(arrow([X], t_int), arrow([t_bool], t_bool), c1),
+    errs_out(E).
+
+% X = arrow([X], t_int) would be a cyclic type.
+occurs(X, E) <=>
+    errs(0),
+    unify(X, arrow([X], t_int), c2),
+    errs_out(E).
+
+% On success the body `=` binds X and wakes watch(X).
+watch(X) \ out(R) <=> nonvar(X) | R = woke.
+ok(X, R) <=>
+    watch(X), out(R),
+    unify(arrow([X], t_int), arrow([t_bool], t_int), c3).

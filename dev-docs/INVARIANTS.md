@@ -146,7 +146,8 @@ removable when closed.
   something a caller cannot cause today.
 
   The exported `deref :: Value -> Chr Value` is untouched — it is
-  public API with many external callers. `unifiable`'s trail keeps raw
+  public API with many external callers. `unifiable`'s trail (shared
+  with `unifiableWithOccursCheck`, which is the same walk) keeps raw
   `VarState` read/restore, which is fine inside the one module allowed
   to touch the constructors: `Var.hs` no longer re-exports `VarState
   (..)`, and `Runtime/Types.hs` — which must keep exporting them, since

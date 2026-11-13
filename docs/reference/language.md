@@ -671,7 +671,8 @@ does not delay:
 - an *ignored* argument (`fst(pair(A, _)) -> A.` on `pair(1, U)`, `U`
   unbound);
 - data construction (`quote(...)`, constructor application, `=`);
-- primitives total on unbound values — `==`, `\==`, `unifiable`, the type
+- primitives total on unbound values — `==`, `\==`, `unifiable`,
+  `unifiable_with_occurs_check`, the type
   predicates (`var`, `nonvar`, `ground`, `integer`, `atom`, …),
   `term_variables`, `copy_term`.
 
@@ -701,7 +702,7 @@ arguments, so for them "an unbound argument on the failure path" means
 | `compound_to_list`, `list_to_compound` | instantiation failure |
 | `name_base` | instantiation failure |
 | `read_term_from_string` | instantiation failure |
-| `==`, `\==`, `unifiable` | answers normally (never raises) |
+| `==`, `\==`, `unifiable`, `unifiable_with_occurs_check` | answers normally (never raises) |
 | `var`, `nonvar`, `ground`, `integer`, `float`, `atom`, `boolean`, `string` | answers normally (never raises) |
 | `term_variables`, `copy_term` | answers normally (never raises) |
 
@@ -925,6 +926,38 @@ test(R) <=> R = double(YY).                      % R bound to compound 'double(Y
 
 Use [`is`](#the-is-operator) to evaluate. The same policy applies in
 rule bodies and queries.
+
+`=` has no occurs check: `X = f(X)` succeeds and builds a cyclic term.
+Printing it, `copy_term` and later unifications over it may not
+terminate. On failure `=` is an error (`YCHR-60001`), and outside a
+search the bindings it made before the failing part stay.
+
+### Testing unification first
+
+`unifiable(X, Y)` and `unifiable_with_occurs_check(X, Y)` (both in the
+prelude, both `(any, any) -> bool`) answer whether `X = Y` would
+succeed. They bind nothing, wake nothing and never raise, on either
+answer, so they work in guards, in `is` and in function bodies.
+
+`unifiable_with_occurs_check` also says `false` when the only unifier
+would be cyclic: `X` vs `f(X)`, `X` vs `[a | X]`, and `f(X, Y)` vs
+`f(Y, g(X))` are all `false`. When it says `true`, an `X = Y` right
+after it succeeds and builds no cycle. It is the check a
+Hindley–Milner type checker wants:
+
+```prolog
+unify(A, B, Ctx) <=> unifiable_with_occurs_check(A, B) | A = B.
+unify(A, B, Ctx) <=> type_error(Ctx, A, B).
+```
+
+A failed `unify` leaves both sides as they were. The guard binds
+nothing, so the constraints watching `A` and `B` are woken by the body
+`=`, not by the guard.
+
+Its arguments must be acyclic. If a plain `=` already built a cycle,
+the answer is unspecified and the call may not terminate, as with
+`copy_term`. So once you use it, send every unification of those terms
+through it (or use `=` only to bind a fresh variable).
 
 ## The `\==` operator
 

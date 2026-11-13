@@ -4,7 +4,7 @@
     ;; Session
     make-session session? make-counters
     ;; From (ychr var)
-    make-var var? var-id deref unify unifiable? equal?/chr
+    make-var var? var-id deref unify unifiable? unifiable-oc? equal?/chr
     make-term term? term-functor term-args chr-atom? atom->symbol symbol->atom
     match-term get-arg add-observer! ground-key get-var-id
     term-arity term-arg term-map ground? compound? compound-functor
@@ -32,7 +32,7 @@
     ;; From (ychr reactivation)
     enqueue! drain-queue!
     ;; Helpers for generated code
-    %unify %unifiable? %nonvar? %unbound? %chr-error %chr-inst-error
+    %unify %unifiable? %unifiable-oc? %nonvar? %unbound? %chr-error %chr-inst-error
     chr-inst? %bool-from-value
     %print %write %writeln %panic %ground?
     %term-variables %compound-to-list %list-to-compound
@@ -840,6 +840,8 @@
       (h 'var 1 (lambda (s v) (var? v)))
       (h 'nonvar 1 (lambda (s v) (%nonvar? v)))
       (h 'unifiable 2 (lambda (s a b) (%unifiable? a b)))
+      (h 'unifiable_with_occurs_check 2
+         (lambda (s a b) (%unifiable-oc? a b)))
       (h 'ground 1 (lambda (s v) (%ground? v)))
       ;; Strings
       (h 'string_concat 2 (lambda (s a b) (%str-concat a b)))
@@ -902,6 +904,7 @@
 
   ;;; Non-mutating unifiability check
   (define (%unifiable? v1 v2) (unifiable? v1 v2))
+  (define (%unifiable-oc? v1 v2) (unifiable-oc? v1 v2))
 
   ;;; Type predicates
   (define (%nonvar? v) (not (var? v)))

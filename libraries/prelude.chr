@@ -32,6 +32,7 @@
     fun int_to_float/1,
     fun float_to_int/1,
     fun unifiable/2,
+    fun unifiable_with_occurs_check/2,
     fun term_variables/1,
     fun compound_to_list/1,
     fun list_to_compound/1,
@@ -159,6 +160,7 @@
     (float_to_int(float) -> int),
     (copy_term(A) -> A),
     (unifiable(any, any) -> bool),
+    (unifiable_with_occurs_check(any, any) -> bool),
     term_variables/1,
     (compound_to_list(any) -> list(any)),
     (list_to_compound(list(any)) -> any),
@@ -270,6 +272,10 @@ ground(X) -> host:ground(X).
 
 % Whether the two terms could unify. Binds nothing.
 unifiable(X, Y) -> host:unifiable(X, Y).
+
+% Like unifiable/2, but a variable never unifies with a term that
+% contains it: X vs f(X) is false. Binds nothing.
+unifiable_with_occurs_check(X, Y) -> host:unifiable_with_occurs_check(X, Y).
 
 % The unbound variables in a term, as a list.
 term_variables(T) -> host:term_variables(T).

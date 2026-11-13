@@ -23,11 +23,12 @@
 -- bound has to be restored alongside that variable, or unwinding leaves
 -- it pointing at a value the branch was supposed to have taken back.
 --
--- 'YCHR.Internal.Runtime.Var.unifiable' is the one deliberate
--- exception. It reverts its own hypothetical writes from a private
--- micro-trail before returning, so they must not reach the shared one;
--- its walk uses a non-compressing deref precisely so that the private
--- trail is its only writer.
+-- 'YCHR.Internal.Runtime.Var.unifiable' (and its occurs-check twin,
+-- which shares the walk) is the one deliberate exception. It reverts
+-- its own hypothetical writes from a private micro-trail before
+-- returning, so they must not reach the shared one; its walk uses a
+-- non-compressing deref precisely so that the private trail is its
+-- only writer.
 module YCHR.Internal.Runtime.Trail
   ( -- * Recording
     recordVarWrite,

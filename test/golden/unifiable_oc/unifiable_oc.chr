@@ -1,0 +1,35 @@
+% unifiable_with_occurs_check/2: like unifiable/2, but a variable
+% never unifies with a term that contains it. Each case puts the answer
+% in R. The float cases also pin that equal floats unify on Scheme.
+:- module(unifiable_oc, [t/4, type(tag/0)]).
+
+:- chr_type tag ---> x_fx ; fx_x ; x_list_tail ; x_deep_list_tail ; cross ; x_y ; x_x ; fx_fgy ; fa_fb ; functor_mismatch ; arity_mismatch ; alias_chain ; deep1 ; deep8 ; deep9 ; deep9_no ; float_eq ; int_float ; string_atom ; unifiable_float ; unify_float ; plain_unifiable_no_oc.
+
+:- chr_type tm ---> a ; b ; f(any) ; g(any) ; ff(any, any) ; t1(any)
+   ; t8(any, any, any, any, any, any, any, any)
+   ; t9(any, any, any, any, any, any, any, any, any).
+
+:- chr_constraint t(tag, any, any, any).
+
+t(x_fx, X, Y, R) <=> R is unifiable_with_occurs_check(X, f(X)).
+t(fx_x, X, Y, R) <=> R is unifiable_with_occurs_check(f(X), X).
+t(x_list_tail, X, Y, R) <=> R is unifiable_with_occurs_check(X, [a | X]).
+t(x_deep_list_tail, X, Y, R) <=> R is unifiable_with_occurs_check(X, [a, b | X]).
+t(cross, X, Y, R) <=> R is unifiable_with_occurs_check(ff(X, Y), ff(Y, g(X))).
+t(x_y, X, Y, R) <=> R is unifiable_with_occurs_check(X, Y).
+t(x_x, X, Y, R) <=> R is unifiable_with_occurs_check(X, X).
+t(fx_fgy, X, Y, R) <=> R is unifiable_with_occurs_check(f(X), f(g(Y))).
+t(fa_fb, X, Y, R) <=> R is unifiable_with_occurs_check(f(a), f(b)).
+t(functor_mismatch, X, Y, R) <=> R is unifiable_with_occurs_check(f(X), g(X)).
+t(arity_mismatch, X, Y, R) <=> R is unifiable_with_occurs_check(quote(h(1, 2)), quote(h(1))).
+t(alias_chain, X, Y, R) <=> W = V, R is unifiable_with_occurs_check(W, f(V)).
+t(deep1, X, Y, R) <=> R is unifiable_with_occurs_check(X, t1(g(X))).
+t(deep8, X, Y, R) <=> R is unifiable_with_occurs_check(X, t8(a, a, a, a, a, a, a, g(X))).
+t(deep9, X, Y, R) <=> R is unifiable_with_occurs_check(X, t9(a, a, a, a, a, a, a, a, g(X))).
+t(deep9_no, X, Y, R) <=> R is unifiable_with_occurs_check(X, t9(a, a, a, a, a, a, a, a, g(Y))).
+t(float_eq, X, Y, R) <=> R is unifiable_with_occurs_check(1.5, 1.5).
+t(int_float, X, Y, R) <=> R is unifiable_with_occurs_check(1, 1.0).
+t(string_atom, X, Y, R) <=> R is unifiable_with_occurs_check("a", a).
+t(unifiable_float, X, Y, R) <=> R is unifiable(1.5, 1.5).
+t(unify_float, X, Y, R) <=> X = 1.5, X = 1.5, R = true.
+t(plain_unifiable_no_oc, X, Y, R) <=> R is unifiable(X, f(X)).

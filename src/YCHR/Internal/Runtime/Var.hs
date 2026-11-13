@@ -20,6 +20,7 @@ module YCHR.Internal.Runtime.Var
     deref,
     unify,
     unifiable,
+    unifiableWithOccursCheck,
     equal,
     makeTerm,
     matchTerm,
@@ -249,7 +250,18 @@ derefNoCompress val = pure val
 -- that the trail is the /only/ writer; see that function for the leak
 -- this avoids. Observer lists are never modified.
 unifiable :: Value -> Value -> Chr Bool
-unifiable a b = do
+unifiable = unifiableWith False
+
+-- | Like 'unifiable', plus an occurs check: a variable is never bound
+-- to a term that contains it, so @X@ vs @f(X)@ is 'False'. The occurs
+-- walk uses 'derefNoCompress' too, so it sees the tentative bindings
+-- made earlier in the same call and writes nothing.
+unifiableWithOccursCheck :: Value -> Value -> Chr Bool
+unifiableWithOccursCheck = unifiableWith True
+
+-- | The walk behind both checks. The flag turns the occurs check on.
+unifiableWith :: Bool -> Value -> Value -> Chr Bool
+unifiableWith occursCheck a b = do
   trailRef <- liftIO $ newIORef []
   result <- uni trailRef a b
   liftIO $ do
@@ -279,8 +291,12 @@ unifiable a b = do
       trailWrite trailRef var1 (Bound v2)
       pure True
     uni' trailRef (VVar var) v = do
-      trailWrite trailRef var (Bound v)
-      pure True
+      occurs <- if occursCheck then occursIn var v else pure False
+      if occurs
+        then pure False
+        else do
+          trailWrite trailRef var (Bound v)
+          pure True
     uni' trailRef v (VVar vr) = uni' trailRef (VVar vr) v
     uni' _ (VInt x) (VInt y) = pure (x == y)
     uni' _ (VFloat x) (VFloat y) = pure (x == y)
@@ -296,6 +312,22 @@ unifiable a b = do
       ok <- uni trailRef x y
       if ok then uniArgs trailRef xs ys else pure False
     uniArgs _ _ _ = pure False
+
+-- | Does the variable occur in the value? Follows bindings without
+-- compressing, so it writes nothing.
+occursIn :: Var -> Value -> Chr Bool
+occursIn (Var ref) = go
+  where
+    go v = do
+      d <- derefNoCompress v
+      case d of
+        VVar (Var r) -> pure (r == ref)
+        VTerm _ args -> anyM args
+        _ -> pure False
+    anyM [] = pure False
+    anyM (x : xs) = do
+      found <- go x
+      if found then pure True else anyM xs
 
 -- | Check equality of two values (ask semantics, Prolog @==@).
 --
