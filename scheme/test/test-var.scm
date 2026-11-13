@@ -745,7 +745,7 @@
                   (unifiable-oc? x (deep-in f n 1))))
               '(1 8 9)))
           '(f m__t))
-        (test-eq "list tail" #f (unifiable-oc? x (list* 1 2 x)))
+        (test-eq "list tail" #f (unifiable-oc? x (cons* 1 2 x)))
         (test-assert "X still unbound" (unbound? x))))
 
     (test-group "alias chain made before the call"
