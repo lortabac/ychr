@@ -6,6 +6,7 @@
           deref
           unify
           unifiable?
+          unifiable-oc?
           equal?/chr
           make-term
           term?
@@ -546,7 +547,7 @@
 
   ;;; Dereferencing without path compression.
   ;;;
-  ;;; Only unifiable? uses this, and it must. That check's own writes
+  ;;; Only unifiable? and unifiable-oc? use this, and they must. That check's own writes
   ;;; are hypothetical and rolled back from a private trail, but a
   ;;; compression write made *through* one of them touches a different
   ;;; cell, is not on that trail, and would survive the rollback --
@@ -603,6 +604,10 @@
          #t))
       ((var? d2)
        (unify* d2 d1 emit!))
+      ;; Same as Haskell's `==` on Double. Must come before the
+      ;; integer? arm, which is true for a whole flonum like 2.0.
+      ((and (flonum? d1) (flonum? d2))
+       (= d1 d2))
       ((and (integer? d1) (integer? d2))
        (eqv? d1 d2))
       ((and (symbol? d1) (symbol? d2))
@@ -638,24 +643,49 @@
   ;;;
   ;;; The walk uses deref/no-compress rather than deref, so that the
   ;;; trail is the only writer; see there.
-  (define (unifiable? v1 v2)
+  (define (unifiable? v1 v2) (unifiable* v1 v2 #f))
+
+  ;;; Same, plus an occurs check: a var is never bound to a term that
+  ;;; contains it, so X vs f(X) is #f.
+  (define (unifiable-oc? v1 v2) (unifiable* v1 v2 #t))
+
+  ;;; Does var `v` occur in `t`? Follows bindings without compressing,
+  ;;; so it sees the tentative bindings of the current check and writes
+  ;;; nothing.
+  (define (occurs-in? v t)
+    (let walk ((t t))
+      (let ((d (deref/no-compress t)))
+        (cond
+          ((var? d) (eq? d v))
+          ((pair? d) (or (walk (car d)) (walk (cdr d))))
+          ((compound? d)
+           (let ((n (term-arity d)))
+             (let loop ((i 0))
+               (and (< i n)
+                    (or (walk (term-arg d i)) (loop (+ i 1)))))))
+          (else #f)))))
+
+  (define (unifiable* v1 v2 occurs-check?)
     (let ((trail '()))
       (define (trail! v)
         ;; Record the current var-value so it can be restored later.
         (set! trail (cons (cons v (var-value v)) trail)))
       (define (uni a b)
         (uni* (deref/no-compress a) (deref/no-compress b)))
+      ;; Bind var `v` to `t`. A var-var binding needs no occurs check.
+      (define (bind! v t)
+        (if (and occurs-check? (not (var? t)) (occurs-in? v t))
+            #f
+            (begin
+              (trail! v)
+              (var-value-set! v t)
+              #t)))
       (define (uni* d1 d2)
         (cond
           ((and (var? d1) (var? d2) (eq? d1 d2)) #t)
-          ((var? d1)
-           (trail! d1)
-           (var-value-set! d1 d2)
-           #t)
-          ((var? d2)
-           (trail! d2)
-           (var-value-set! d2 d1)
-           #t)
+          ((var? d1) (bind! d1 d2))
+          ((var? d2) (bind! d2 d1))
+          ((and (flonum? d1) (flonum? d2)) (= d1 d2))
           ((and (integer? d1) (integer? d2)) (eqv? d1 d2))
           ((and (symbol? d1) (symbol? d2)) (eq? d1 d2))
           ((and (boolean? d1) (boolean? d2)) (eq? d1 d2))

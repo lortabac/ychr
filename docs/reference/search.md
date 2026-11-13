@@ -534,6 +534,18 @@ place(X, Y) <=> choose(X, [1, 2, 3]), try_unify(Y, X).
 binding behind, and never raises an instantiation error — an unbound
 operand simply means "yes, these can unify".
 
+For a variant that also rejects cyclic answers, swap in
+`unifiable_with_occurs_check/2` (see [language.md §Testing
+unification first](language.md#testing-unification-first)):
+
+```prolog
+try_unify_oc(X, Y) <=> unifiable_with_occurs_check(X, Y) | X = Y.
+try_unify_oc(_, _) <=> fail.
+```
+
+Then `try_unify_oc(X, f(X))` kills the branch instead of building a
+cyclic term.
+
 `try_unify/2` fails via `fail/0`, so calling it **outside a search**
 is the same error as calling `fail/0` there; the message names
 `fail/0` rather than `try_unify/2`, and the call stack on the error

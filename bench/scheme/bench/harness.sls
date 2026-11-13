@@ -41,6 +41,10 @@
           (only (ychr generated bench_sum) bench_sum bench_sum:go/2)
           (only (ychr generated bench_terms) bench_terms bench_terms:go/2)
           (only (ychr generated bench_copy) bench_copy bench_copy:go/2)
+          (only (ychr generated bench_unifiable) bench_unifiable
+            bench_unifiable:go/5)
+          (only (ychr generated bench_unifiable_oc) bench_unifiable_oc
+            bench_unifiable_oc:go/5)
           (prefix (bench expr-native) n:)
           (prefix (ychr types bench_expr) d:)
           (prefix (ychr ground-types bench_expr) g:))
@@ -289,7 +293,23 @@
           (let* ((s (bench_copy)) (a (make-var s)))
             (bench_copy:go/2 s 500 a)
             (deref a)))
-        (lambda (r) (equal? r 1503000))))
+        (lambda (r) (equal? r 1503000)))
+      ;; unifiable/2 vs unifiable_with_occurs_check/2 on the same
+      ;; type-shaped terms (depth 5, ~20 nodes): the occurs walk's cost.
+      (make-bench-case "unifiable" "bench_unifiable:go(1000,_,_,_,R)"
+        (lambda ()
+          (let* ((s (bench_unifiable)) (a (make-var s)))
+            (bench_unifiable:go/5 s 1000 (make-var s) (make-var s)
+                                  (make-var s) a)
+            (deref a)))
+        (lambda (r) (equal? r 1000)))
+      (make-bench-case "unifiable_oc" "bench_unifiable_oc:go(1000,_,_,_,R)"
+        (lambda ()
+          (let* ((s (bench_unifiable_oc)) (a (make-var s)))
+            (bench_unifiable_oc:go/5 s 1000 (make-var s) (make-var s)
+                                     (make-var s) a)
+            (deref a)))
+        (lambda (r) (equal? r 1000))))
      (expr-cases "native" n-build n-size n-rewrite)
      (expr-cases "deref" d-build d-size d-rewrite)
      (expr-cases "ground" g-build g-size g-rewrite)))

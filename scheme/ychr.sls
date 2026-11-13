@@ -17,14 +17,14 @@
     ;; --- (ychr pretty) -----------------------------------------------
     pretty-term pretty-bindings bindings->string pretty-query-result
     ;; --- (ychr runtime): vars, terms, unification --------------------
-    make-var var? var-id deref unify unifiable? equal?/chr
+    make-var var? var-id deref unify unifiable? unifiable-oc? equal?/chr
     make-term term? term-functor term-args chr-atom? atom->symbol symbol->atom
     match-term get-arg deep-deref term-arity term-arg ground?
     ;; --- (ychr runtime): constraint store ----------------------------
     alive-constraint? constraint-id constraint-arg constraint-type
     id-equal? is-constraint-type? kill-constraint
     ;; --- (ychr runtime): helpers used in goals/scripting -------------
-    %unify %unifiable? %nonvar? %ground? %print %writeln
+    %unify %unifiable? %unifiable-oc? %nonvar? %ground? %print %writeln
     %term-variables %compound-to-list %list-to-compound %copy-term
     %nil %cons
     %int-to-float %float-to-int %idiv %imod %irem)
