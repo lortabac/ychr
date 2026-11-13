@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `ychr compile -t scheme` and `ychr gen-driver` take `--import SPEC`
+  (repeatable), an R6RS import set added to the generated code. A
+  `host:` call to your own Scheme procedure now loads on Chez. See
+  call-host-functions.md §On the Scheme backend.
+
 - Labelled constructor fields: `:- chr_type point(X, Y) ---> point(x :: X, y :: Y).`,
   read and updated with `get_field/2` and `set_field/3`, built with
   `new_record/2`. See language.md §Labelled fields.

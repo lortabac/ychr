@@ -49,11 +49,15 @@ import YCHR.Internal.VM.Types (Name (..))
 -- without knowledge of this goal, so the lifted procedure the lambda
 -- would compile to does not exist there and the library's callables
 -- table has no entry that could reach it. See 'exprToScheme'.
-generateDriver :: Text -> QualifiedName -> [R.Expr] -> Either Error Text
-generateDriver _moduleName _qn args
+--
+-- The first argument is extra R6RS import specs (@--import@), added
+-- after the generated library, so a @host:@ call in the goal can reach
+-- them too.
+generateDriver :: [Text] -> Text -> QualifiedName -> [R.Expr] -> Either Error Text
+generateDriver _imports _moduleName _qn args
   | (lam : _) <- concatMap exprLambdas args =
       Left (LambdasInSchemeDriver (R.exprToTerm lam))
-generateDriver moduleName qn args =
+generateDriver imports moduleName qn args =
   Right $
     let arity = length args
         -- Use the exported friendly alias (e.g. @mod:name/2@) emitted by
@@ -84,7 +88,11 @@ generateDriver moduleName qn args =
         openSession = "(let ((%s (" <> moduleName <> ")))"
      in T.unlines $
           [ "(import (rnrs) (ychr runtime) (ychr pretty)",
-            "        (ychr generated " <> moduleName <> "))",
+            "        (ychr generated "
+              <> moduleName
+              <> ")"
+              <> T.concat [" " <> i | i <- imports]
+              <> ")",
             ""
           ]
             ++ case varNames of

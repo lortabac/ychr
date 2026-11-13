@@ -19,6 +19,7 @@ import YCHR.Internal.Backend.Scheme
   ( QueryPlan (..),
     generateQuery,
     generateScheme,
+    generateSchemeWithImports,
   )
 import YCHR.Internal.Compile (compileQueryGoals)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
@@ -102,7 +103,18 @@ tests =
       testCase "query lambdas are letrec-bound and registered" $ do
         code <- queryCode False "R is '$call'(fun(X) -> X + 1 end, 1)."
         assertInfix "(letrec (" code
-        assertInfix "(register-callable! %s" code
+        assertInfix "(register-callable! %s" code,
+      -- `ychr compile --import`: specs go after (ychr runtime), as written.
+      testCase "extra import specs follow the runtime import" $ do
+        code <- schemeWithImports ["(vhc hosts)", "(only (a b) f)"] leqSource
+        assertInfix
+          "(import (rnrs) (ychr runtime) (vhc hosts) (only (a b) f))"
+          code,
+      testCase "no extra imports leaves the library unchanged" $ do
+        plain <- schemeFor leqSource
+        none <- schemeWithImports [] leqSource
+        assertBool "output differs" (plain == none)
+        assertInfix "(import (rnrs) (ychr runtime))" plain
     ]
 
 -- ---------------------------------------------------------------------------
@@ -135,6 +147,22 @@ schemeFor src = do
   cp <- compileOrFail [("prog.chr", src)]
   pure $
     generateScheme
+      ["ychr", "generated", "test"]
+      cp.symbolTable
+      VMProgram
+        { program = cp.program,
+          exportedSet = cp.exportedSet,
+          symbolTable = cp.symbolTable
+        }
+      cp.opTable
+
+-- | 'schemeFor' with extra import specs.
+schemeWithImports :: [Text] -> Text -> IO Text
+schemeWithImports imports src = do
+  cp <- compileOrFail [("prog.chr", src)]
+  pure $
+    generateSchemeWithImports
+      imports
       ["ychr", "generated", "test"]
       cp.symbolTable
       VMProgram

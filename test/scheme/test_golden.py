@@ -15,6 +15,7 @@ mixed with positive cases); ``discover_cases`` keys on the
 
 import glob
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -575,3 +576,116 @@ def test_gen_driver_nested_goal_var_declaration(ychr_bin, project_root, tmp_path
     host_call = driver("gdn:go(host:'+'(X, 1), R)")
     assert "(X (make-var %s))" in host_call
     assert "(R (make-var %s))" in host_call
+
+
+# `--import`: a `host:` call to a name the runtime doesn't define is a
+# plain Scheme call, so it needs a library to bind it. Chez checks free
+# names when it loads the library, so it is the backend this matters on.
+IMPORT_PROGRAM = """\
+:- module(h, [type(symbol/0), c/2]).
+:- opaque_type symbol.
+:- chr_constraint c(symbol, any).
+
+:- function arrow_name() -> symbol.
+arrow_name() -> host:arrow_name().
+
+c(N, R) <=> N == arrow_name() | R = 1.
+c(_, R) <=> R = 0.
+"""
+
+IMPORT_HOSTS = """\
+(library (vhc hosts)
+  (export arrow_name)
+  (import (rnrs))
+  (define the-arrow (string->symbol "ghc-prim:GHC.Types:tc:->"))
+  (define (arrow_name) the-arrow))
+"""
+
+IMPORT_USE = """\
+(import (rnrs) (ychr) (ychr generated h))
+(define s (open-session h))
+(define (ask name)
+  (let ([r (make-var s)])
+    (h:c/2 s name r)
+    (write (deref r))
+    (newline)))
+(ask (string->symbol "ghc-prim:GHC.Types:tc:->"))
+(ask 'other)
+"""
+
+
+def write_import_fixture(tmp_path):
+    program = tmp_path / "h.chr"
+    program.write_text(IMPORT_PROGRAM)
+    out = tmp_path / "out"
+    (out / "vhc").mkdir(parents=True)
+    (out / "vhc" / "hosts.sls").write_text(IMPORT_HOSTS)
+    return program, out
+
+
+def ychr_run(ychr_bin, project_root, *args):
+    return subprocess.run(
+        [ychr_bin, *args], capture_output=True, text=True, cwd=project_root
+    )
+
+
+def test_import_host_library_chez(ychr_bin, scheme_lib_dir, project_root, tmp_path):
+    chez = os.environ.get("YCHR_SCHEME", "scheme")
+    if shutil.which(chez) is None:
+        pytest.skip(f"no Chez Scheme executable found (tried {chez})")
+    program, out = write_import_fixture(tmp_path)
+    use = tmp_path / "use.sps"
+    use.write_text(IMPORT_USE)
+
+    def compile_and_run(*extra):
+        r = ychr_run(
+            ychr_bin, project_root,
+            "compile", "-t", "scheme", "-n", "h", "-d", str(out), *extra,
+            str(program), "--Werror",
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        return subprocess.run(
+            [chez, "--libdirs", f"{scheme_lib_dir}:{out}", "--libexts", ".sls",
+             "--program", str(use)],
+            capture_output=True, text=True, timeout=300,
+        )
+
+    without = compile_and_run()
+    assert without.returncode != 0
+    assert "arrow_name" in without.stdout + without.stderr
+
+    with_import = compile_and_run("--import", "(vhc hosts)")
+    assert with_import.returncode == 0, with_import.stdout + with_import.stderr
+    assert with_import.stdout == "1\n0\n"
+
+
+def test_import_option_checks(ychr_bin, project_root, tmp_path):
+    program, out = write_import_fixture(tmp_path)
+
+    r = ychr_run(ychr_bin, project_root, "compile", "-t", "vm", "-d", str(out),
+                 "--import", "(vhc hosts)", str(program))
+    assert r.returncode != 0
+    assert "only applies to -t scheme" in r.stderr
+
+    for bad in ["vhc hosts", "(a", "(a) (b)", "(a \")\""]:
+        r = ychr_run(ychr_bin, project_root, "compile", "-t", "scheme",
+                     "-d", str(out), "--import", bad, str(program))
+        assert r.returncode != 0, bad
+        assert "is not an import spec" in r.stderr, bad
+
+    # A paren inside a string doesn't count.
+    r = ychr_run(ychr_bin, project_root, "compile", "-t", "scheme",
+                 "-d", str(out), "--import", '(a ")")', str(program))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+    r = ychr_run(ychr_bin, project_root, "gen-driver", "--import", "(a",
+                 "-g", "h:c(host:arrow_name(), R)", str(program))
+    assert r.returncode != 0
+    assert "is not an import spec" in r.stderr
+
+    r = ychr_run(ychr_bin, project_root, "gen-driver",
+                 "--import", "(vhc hosts)", "--import", "(only (x y) z)",
+                 "-g", "h:c(host:arrow_name(), R)", str(program))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "(ychr generated program) (vhc hosts) (only (x y) z))" in r.stdout
+    assert "(arrow_name)" in r.stdout

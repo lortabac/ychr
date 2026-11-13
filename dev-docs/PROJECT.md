@@ -975,6 +975,10 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 - Haskell interpreter in `src/YCHR/Internal/Runtime/Interpreter.hs`.
 - User-defined functions: parsing, renaming, desugaring, compilation, and interpretation.
 - Scheme backend (`src/YCHR/Internal/Backend/Scheme.hs`) and runtime (`scheme/ychr/`).
+  A `host:` call to a name the runtime doesn't map is emitted as a plain
+  call, so `ychr compile -t scheme` and `gen-driver` take `--import SPEC`
+  (repeatable; `generateSchemeWithImports`) to add the library that binds it.
+  See [`docs/how-to/call-host-functions.md`](../docs/how-to/call-host-functions.md#on-the-scheme-backend).
   Each generated library exports a session thunk (named after the library's
   final segment) plus two identifier aliases per exported constraint:
   qualified (`module:name/arity`, always) and short (`name/arity`, when

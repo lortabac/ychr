@@ -13,7 +13,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
 import System.IO.Error (ioeGetFileName)
 import YCHR.Embedded (loadResources)
-import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
+import YCHR.Internal.Backend.Scheme (generateSchemeWithImports, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Backend.SchemeTypes
   ( SchemeTypesOptions (..),
@@ -62,6 +62,7 @@ data CompileOpts = CompileOpts
   { outputDir :: FilePath,
     baseName :: Maybe String,
     target :: Target,
+    imports :: [String],
     werror :: Bool,
     noCheck :: Bool,
     dumpSplices :: Bool
@@ -69,6 +70,7 @@ data CompileOpts = CompileOpts
 
 data GenDriverOpts = GenDriverOpts
   { goal :: T.Text,
+    imports :: [String],
     werror :: Bool,
     noCheck :: Bool,
     dumpSplices :: Bool
@@ -131,6 +133,51 @@ dumpSplicesFlag =
     ( long "dump-splices"
         <> help "Print clauses spliced in by :- macro_decls to stderr"
     )
+
+-- | @--import SPEC@, repeatable: an R6RS import spec added to the
+-- generated Scheme code, for @host:@ calls to names the runtime doesn't
+-- define. Checked by 'parseImportSpecs'.
+importOption :: Parser [String]
+importOption =
+  many
+    ( strOption
+        ( long "import"
+            <> metavar "SPEC"
+            <> help "R6RS import spec to add to the generated Scheme code (repeatable)"
+        )
+    )
+
+-- | Check the @--import@ values, or print an error and exit. A spec must
+-- be one parenthesized form: balanced parens, the first one closing at
+-- the end. Parens inside strings don't count. It is not parsed further.
+parseImportSpecs :: [String] -> IO [T.Text]
+parseImportSpecs = mapM check
+  where
+    check s =
+      let t = T.strip (T.pack s)
+       in if wellFormed (T.unpack t)
+            then pure t
+            else do
+              hPutStr
+                stderr
+                ( "Error: --import "
+                    ++ show s
+                    ++ " is not an import spec: write one R6RS import set,\n"
+                    ++ "       such as \"(my lib)\" or \"(only (my lib) f)\".\n"
+                )
+              exitFailure
+    wellFormed ('(' : rest) = go (1 :: Int) False rest
+    wellFormed _ = False
+    go depth inStr cs = case cs of
+      [] -> False
+      '\\' : _ : more | inStr -> go depth True more
+      '"' : more -> go depth (not inStr) more
+      _ : more | inStr -> go depth True more
+      '(' : more -> go (depth + 1) False more
+      ')' : more
+        | depth == 1 -> null more
+        | otherwise -> go (depth - 1) False more
+      _ : more -> go depth False more
 
 replBackendReader :: ReadM Repl.ReplBackend
 replBackendReader = eitherReader $ \t -> case t of
@@ -204,6 +251,7 @@ compileParser =
                   <> help "Target (vm, scheme)"
                   <> value TargetVM
               )
+            <*> importOption
             <*> werrorFlag
             <*> noCheckFlag
             <*> dumpSplicesFlag
@@ -217,6 +265,7 @@ genDriverParser =
             <$> fmap
               T.pack
               (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
+            <*> importOption
             <*> werrorFlag
             <*> noCheckFlag
             <*> dumpSplicesFlag
@@ -431,7 +480,13 @@ writeOutputFile outPath contents = do
     Right () -> putStrLn outPath
 
 runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
-runCompile resources opts files =
+runCompile resources opts files = do
+  imports <- parseImportSpecs opts.imports
+  case opts.target of
+    TargetVM | not (null imports) -> do
+      hPutStr stderr "Error: --import only applies to -t scheme.\n"
+      exitFailure
+    _ -> pure ()
   withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
@@ -462,11 +517,14 @@ runCompile resources opts files =
         let libName = [T.pack "ychr", T.pack "generated", name]
             outPath =
               opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
-        writeOutputFile outPath (generateScheme libName prog.symbolTable vmp prog.opTable)
+        writeOutputFile
+          outPath
+          (generateSchemeWithImports imports libName prog.symbolTable vmp prog.opTable)
         schemeRuntimeNote
 
 runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()
-runGenDriver resources opts files =
+runGenDriver resources opts files = do
+  imports <- parseImportSpecs opts.imports
   withCompiled resources files $ \prog warnings -> do
     dumpSplicesIf opts.dumpSplices prog
     printWarnings warnings
@@ -488,7 +546,7 @@ runGenDriver resources opts files =
     -- single Werror decision so a single run reports every warning
     -- before exiting.
     exitOnWerror opts.werror (warnings ++ typeWarnings ++ prepared.warnings)
-    case generateDriver (T.pack "program") queryTell.name queryTell.args of
+    case generateDriver imports (T.pack "program") queryTell.name queryTell.args of
       Left err -> do
         putStr (displayMsg err)
         exitFailure
