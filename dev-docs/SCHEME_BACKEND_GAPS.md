@@ -255,8 +255,9 @@ contracts from the invariant side.
   on every dequeued constraint id, so the liveness check lives in the generated
   lambda rather than the runtime.
 - **Snapshot shape.** `Foreach` destructures two values from the runtime with
-  `(let-values (((%vec %count) CANDIDATES)) …)`; both `store-snapshot` and
-  `candidate-suspensions` return `(values storage count)`.
+  `(let-values (((%vec %count) CANDIDATES)) …)`; `store-snapshot`,
+  `candidate-suspensions` and `candidate-suspensions-among` all return
+  `(values storage count)`.
 - **`If` fall-through.** In the tail compilation an `If` with a `Return` in an
   arm is emitted as `(if c ARM-spliced-before-rest ARM-spliced-before-rest)`,
   so a binder an arm introduces lexically scopes over the statements after the

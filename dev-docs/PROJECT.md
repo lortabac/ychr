@@ -247,6 +247,8 @@ Indexing is on demand, so a store that is too small to profit pays nothing. A ty
 
 The Scheme runtime implements the same optimization with the same interface and the same on-demand threshold (`scheme/ychr/store.sls`, with the keys built by `scheme/ychr/var.sls`). Its store is a vector of growable per-type vectors; the index is a per-type alist from argument position to a bucket map (ground key → store slots) plus a non-ground fallback list, built from information the compiler emits into the generated library (`%make-session`'s second argument, derived from `YCHR.Internal.VM.Index.indexablePositions`; its third is the program's operator table, which `read_term_from_string` parses with, and its fourth the program's constraint type names, which `print_store` and `write_store_to_list` label a stored constraint with). The search driver restores that index together with the store through the trail (`(ychr trail)`): both the index pointer installed when a type crosses the threshold and every entry filed while a search is active, so a branch never answers from slots a restored store no longer has. The generated `Foreach` picks a driver condition with the same two guards as the interpreter: a condition may only be evaluated eagerly at loop entry if it is total (`YCHR.Internal.VM.Index.nonRaising`, whose counterpart over the interpreter's slot AST lives in `YCHR.Internal.Runtime.Interpreter`), and only for a position the store is currently indexing.
 
+When several conditions pass both guards and have ground keys, both runtimes drive the loop from the one with the fewest candidates (key bucket plus fallback set; a tie goes to the earlier condition). Each bucket and fallback set keeps its size, so the comparison costs nothing. Without this, a lookup like `sig(O, N, S) \ lookup(O, N, R)` where every fact shares `O` scans all of them, and a run is quadratic; `test/golden/bench_index_two_keys` is the benchmark for it.
+
 
 ## Compilation Scheme
 
@@ -303,7 +305,7 @@ The paper describes numerous optimizations. Each should be considered individual
 | Optimization | Description | Stage |
 |-------------|-------------|-------|
 | Loop-Invariant Code Motion | Schedule guard tests as early as possible to avoid trashing. | CHR-to-VM compiler |
-| Indexing | Use hash/tree indexes for efficient partner lookup. **Implemented in both runtimes**: each records a per-argument index for every position a `Foreach` condition names (derived from the program), and answers such a lookup from a key bucket plus the position's non-ground fallback set. See `YCHR.Internal.Runtime.Index` and `scheme/ychr/store.sls`. | Runtime (via Foreach index conditions) |
+| Indexing | Use hash/tree indexes for efficient partner lookup. **Implemented in both runtimes**: each records a per-argument index for every position a `Foreach` condition names (derived from the program), and answers such a lookup from a key bucket plus the position's non-ground fallback set, driven by the condition with the fewest candidates. See `YCHR.Internal.Runtime.Index` and `scheme/ychr/store.sls`. | Runtime (via Foreach index conditions) |
 | Join Ordering | Reorder partner lookups to maximize index usage. | CHR-to-VM compiler |
 | Set Semantics | Replace iteration with single lookup when at most one match exists. | CHR-to-VM compiler (may need VM support) |
 | Early Drop | Stop handling active constraint once killed. | CHR-to-VM compiler |

@@ -78,7 +78,8 @@ benchmarkPrograms =
     -- unifiable_with_occurs_check/2 against unifiable/2 on the same
     -- type-shaped terms: what the occurs walk costs.
     "bench_unifiable",
-    "bench_unifiable_oc"
+    "bench_unifiable_oc",
+    "bench_index_two_keys"
   ]
 
 goldenDir :: FilePath

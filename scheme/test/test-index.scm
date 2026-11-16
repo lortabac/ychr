@@ -195,6 +195,61 @@
                     (candidates s 0 0 (ground-key (make-term 'f (vector 'x)))))))))
 
 ;; ---------------------------------------------------------------------------
+;; Several probes
+;; ---------------------------------------------------------------------------
+
+;; A session whose type 0 indexes argument positions 0 and 1.
+(define (two-key-session)
+  (%make-session 1 (list (cons 0 (list 0 1)))))
+
+(define (candidates-among s ctype probes)
+  (let-values (((vec count) (candidate-suspensions-among s ctype probes)))
+    (let loop ((i 0) (acc '()))
+      (if (= i count)
+          (reverse acc)
+          (loop (+ i 1) (cons (snapshot-ref vec i) acc))))))
+
+(test-group "candidate-suspensions-among"
+  (test-group "drives from the position with fewer candidates"
+    (let* ((s (two-key-session))
+           (m (tell! s (create-constraint s 0 (vector 'o 7))))
+           (u (tell! s (create-constraint s 0 (vector 'o (make-var s))))))
+      ;; Every fact shares the first key; only two can match the second.
+      (do ((i 0 (+ i 1)))
+          ((= i 30))
+        (store-constraint s (create-constraint s 0 (vector 'o (+ 100 i)))))
+      (let ((p0 (cons 0 (ground-key 'o)))
+            (p1 (cons 1 (ground-key 7))))
+        (test-equal "small one second" (list m u)
+                    (candidates-among s 0 (list p0 p1)))
+        (test-equal "small one first" (list m u)
+                    (candidates-among s 0 (list p1 p0))))))
+
+  (test-group "a #f key is skipped"
+    (let* ((s (two-key-session))
+           (m (tell! s (create-constraint s 0 (vector 'o 7)))))
+      (do ((i 0 (+ i 1)))
+          ((= i 30))
+        (store-constraint s (create-constraint s 0 (vector 'o (+ 100 i)))))
+      (test-equal "only the usable probe drives" (list m)
+                  (candidates-among s 0 (list (cons 0 #f) (cons 1 (ground-key 7)))))
+      (test-equal "no usable probe: whole bucket" 31
+                  (length (candidates-among s 0 (list (cons 0 #f) (cons 1 #f)))))))
+
+  (test-group "a tie keeps the earlier probe"
+    (let ((s (two-key-session)))
+      (do ((i 0 (+ i 1)))
+          ((= i 32))
+        (store-constraint s (create-constraint s 0 (vector i (mod i 2)))))
+      (let ((evens (candidates-among s 0 (list (cons 1 (ground-key 0))
+                                               (cons 1 (ground-key 1)))))
+            (odds (candidates-among s 0 (list (cons 1 (ground-key 1))
+                                              (cons 1 (ground-key 0))))))
+        (test-equal "first probe: key 0" 0 (constraint-arg (car evens) 1))
+        (test-equal "first probe: key 1" 1 (constraint-arg (car odds) 1))
+        (test-equal "sizes" '(16 16) (list (length evens) (length odds)))))))
+
+;; ---------------------------------------------------------------------------
 ;; Observers
 ;; ---------------------------------------------------------------------------
 

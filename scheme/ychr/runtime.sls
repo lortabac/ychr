@@ -25,7 +25,7 @@
     suspension? suspension-alive? suspension-arg
     suspension-id suspension-type
     ;; Store index (used by generated `Foreach` code)
-    indexed-positions-for candidate-suspensions
+    indexed-positions-for candidate-suspensions candidate-suspensions-among
     index-threshold
     ;; From (ychr history)
     add-history! not-in-history?

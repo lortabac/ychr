@@ -816,6 +816,14 @@ none is encoded:
   Getting the first wrong leaves every suspension stored below the
   threshold unfindable; getting the second wrong loses every candidate.
 
+- **A bucket's `size` is its slot set's size.** `candidateCount` reads
+  only the sizes, to pick which condition drives a lookup and whether
+  the index beats the scan. `insertSlot` is the only writer, and it
+  assumes the slot is new to the bucket (each store files a slot once
+  per position). A wrong size never loses a candidate (the slots are
+  still read from the set), but it can pick a bigger set or skip the
+  index.
+
 What is *deliberately* not trimmed: a kill leaves the index entry in
 place (the iterator's liveness check filters it, exactly as it does for
 a scan), and a suspension whose indexed argument was not fully ground
@@ -861,6 +869,10 @@ matter are:
   suspension — alive, since creating one is not undone — so a later
   lookup would match it (`test/golden/search_index_undo`). The history is
   undone through the trail too (an added entry's deletion).
+
+Each bucket is a `(count . slots)` pair and the fallback list has
+`rest-count`; as on the Haskell side, a count must equal its list's
+length, and `file-entry!` is the only writer (and trails both).
 
 What is deliberately not trimmed is the same as on the Haskell side: a
 kill leaves the bucket entry in place (the iterator's liveness check
