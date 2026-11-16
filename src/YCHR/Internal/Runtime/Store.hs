@@ -24,7 +24,9 @@ module YCHR.Internal.Runtime.Store
     isConstraintType,
     getStoreSnapshot,
     indexedPositionsFor,
+    IndexProbe (..),
     candidateSuspensions,
+    candidateSuspensionsAmong,
     getAllStoredConstraints,
     isSuspAlive,
     suspArg,
@@ -40,12 +42,15 @@ import Data.IORef
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
+import Data.List qualified as List
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import YCHR.Internal.Runtime.Index
   ( GroundKey,
     IndexEntry (..),
     PositionKey (..),
+    candidateCount,
     candidateSlots,
     indexThreshold,
     insertConstraints,
@@ -265,19 +270,38 @@ indexedPositionsFor cType = do
       then Just positions
       else Nothing
 
+-- | An index lookup that a 'Foreach' condition drives: an argument
+-- position and the ground key of the condition's value.
+data IndexProbe = IndexProbe
+  { position :: !Int,
+    key :: !GroundKey
+  }
+
 -- | The stored suspensions of a type that may hold an argument at
 -- position @pos@ 'equal' to a value whose ground key is @key@, in store
--- order.
+-- order. The one-probe case of 'candidateSuspensionsAmong'.
+candidateSuspensions :: ConstraintType -> Int -> GroundKey -> Chr [Suspension]
+candidateSuspensions cType pos key =
+  candidateSuspensionsAmong cType (IndexProbe pos key :| [])
+
+-- | The stored suspensions of a type that may match every probe, in
+-- store order.
 --
 -- This is the lookup half of the paper's /Indexing/ optimization
 -- (§5.3): where 'getStoreSnapshot' hands back the whole type bucket,
--- this hands back the bucket's key plus the position's non-ground
+-- this hands back one probe's key bucket plus that position's non-ground
 -- fallback set — a superset of the suspensions that can match, which
 -- the caller's per-candidate condition check then narrows. Ask only
--- for a @(type, pos)@ pair 'YCHR.Internal.VM.Index.indexablePositions'
+-- for @(type, pos)@ pairs 'YCHR.Internal.VM.Index.indexablePositions'
 -- reports: a position the store was not told to index has no entries,
 -- and an empty answer there would lose every candidate. See
 -- "YCHR.Internal.Runtime.Index".
+--
+-- With several probes, the one with the fewest candidates drives
+-- ('candidateCount'; a tie goes to the earlier probe). Any of them
+-- gives a superset of the matches, so which one drives changes only
+-- how many candidates get checked, and the result is in store order
+-- either way.
 --
 -- A type the store has not indexed — no position of it is ever looked
 -- up, or its bucket has not reached 'indexThreshold' — is answered by
@@ -286,19 +310,22 @@ indexedPositionsFor cType = do
 -- prune to be worth the per-candidate bookkeeping it adds. Between them
 -- those two fallbacks keep the index a win-or-neutral change however
 -- small the store is.
-candidateSuspensions :: ConstraintType -> Int -> GroundKey -> Chr [Suspension]
-candidateSuspensions cType pos key = do
+candidateSuspensionsAmong :: ConstraintType -> NonEmpty IndexProbe -> Chr [Suspension]
+candidateSuspensionsAmong cType (p0 :| ps) = do
   SessionEnv {storeByType, storeIndex} <- ask
   let ConstraintType idx = cType
   snapshot <- liftIO $ IntMap.findWithDefault Seq.empty idx <$> readIORef storeByType
   si <- liftIO $ readIORef storeIndex
-  let slots = candidateSlots cType pos key si
-  if not (typeIndexed cType si) || IntSet.size slots >= Seq.length snapshot
+  let count p = candidateCount cType p.position p.key si
+      pick (best, n) p =
+        let m = count p in if m < n then (p, m) else (best, n)
+      (probe, n0) = List.foldl' pick (p0, count p0) ps
+  if not (typeIndexed cType si) || n0 >= Seq.length snapshot
     then pure (toList snapshot)
     else
       pure
         [ susp
-        | slot <- IntSet.toAscList slots,
+        | slot <- IntSet.toAscList (candidateSlots cType probe.position probe.key si),
           Just susp <- [Seq.lookup slot snapshot]
         ]
 

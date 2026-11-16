@@ -28,7 +28,8 @@
           make-index-positions
           make-store-index
           indexed-positions-for
-          candidate-suspensions)
+          candidate-suspensions
+          candidate-suspensions-among)
   (import (rnrs)
           (ychr session)
           (ychr var)
@@ -133,12 +134,18 @@
   ;;; Both slot lists are kept in descending order, because insertions
   ;;; arrive in ascending slot order and `cons` is the only cheap
   ;;; append; a lookup reverses the merge, which restores store order.
+  ;;;
+  ;;; Each slot list comes with its length, so a lookup can compare
+  ;;; candidate sets without walking them (`candidate-count`). A bucket
+  ;;; is a pair `(count . slots)`; the fallback set's count is
+  ;;; `rest-count`.
   (define-record-type (pos-index %make-pos-index pos-index?)
     (fields (immutable buckets pos-index-buckets)
-            (mutable rest pos-index-rest pos-index-rest-set!)))
+            (mutable rest pos-index-rest pos-index-rest-set!)
+            (mutable rest-count pos-index-rest-count pos-index-rest-count-set!)))
 
   (define (make-pos-index)
-    (%make-pos-index (make-hashtable equal-hash equal?) '()))
+    (%make-pos-index (make-hashtable equal-hash equal?) '() 0))
 
   ;;; The index of one type: an alist from argument position to
   ;;; `pos-index`, holding exactly the positions the program looks up.
@@ -184,23 +191,31 @@
   ;;; filed there by a branch would otherwise outlive it: restoring the
   ;;; growable's count does not reach the index, and the stale slot would
   ;;; hand back the abandoned branch's suspension, which is still alive.
-  ;;; Each write only prepends, so the undo puts the old list back.
+  ;;; Each write only prepends, so the undo puts the old list (and its
+  ;;; count) back.
   (define (file-entry! ti slot pos key)
     (let* ((pi (cdr (assv pos ti)))
            (buckets (pos-index-buckets pi)))
       (if key
-          (let ((old (hashtable-ref buckets key '())))
+          (let ((old (hashtable-ref buckets key #f)))
             (when (trail-active?)
               (trail-push!
                (lambda ()
-                 (if (null? old)
-                     (hashtable-delete! buckets key)
-                     (hashtable-set! buckets key old)))))
-            (hashtable-set! buckets key (cons slot old)))
-          (let ((old (pos-index-rest pi)))
+                 (if old
+                     (hashtable-set! buckets key old)
+                     (hashtable-delete! buckets key)))))
+            (hashtable-set! buckets key
+                            (if old
+                                (cons (+ (car old) 1) (cons slot (cdr old)))
+                                (cons 1 (list slot)))))
+          (let ((old (pos-index-rest pi))
+                (old-count (pos-index-rest-count pi)))
             (when (trail-active?)
-              (trail-push! (lambda () (pos-index-rest-set! pi old))))
-            (pos-index-rest-set! pi (cons slot old))))))
+              (trail-push! (lambda ()
+                             (pos-index-rest-set! pi old)
+                             (pos-index-rest-count-set! pi old-count))))
+            (pos-index-rest-set! pi (cons slot old))
+            (pos-index-rest-count-set! pi (+ old-count 1))))))
 
   ;;; A type that is being indexed from now on must still hold the
   ;;; suspensions stored below the threshold, which were never filed.
@@ -277,6 +292,35 @@
             ((> (car a) (car b)) (loop (cdr a) b (cons (car a) acc)))
             (else (loop a (cdr b) (cons (car b) acc))))))
 
+  ;;; The position index of `pos` in type index `ti`, or `#f`.
+  (define (pos-index-of ti pos)
+    (let ((entry (and ti (assv pos ti))))
+      (and entry (cdr entry))))
+
+  ;;; How many slots a lookup of `key` in position index `pi` yields:
+  ;;; the key's bucket plus the fallback set. Mirrors `candidateCount`
+  ;;; in src/YCHR/Internal/Runtime/Index.hs.
+  (define (candidate-count pi key)
+    (let ((bucket (hashtable-ref (pos-index-buckets pi) key #f)))
+      (+ (if bucket (car bucket) 0) (pos-index-rest-count pi))))
+
+  ;;; The answer for one chosen position index: its key's bucket plus
+  ;;; its fallback set, in store order, or the whole bucket when the
+  ;;; candidate set is not smaller (`n` is the candidate count).
+  (define (candidates-from storage count pi key n)
+    (if (>= n count)
+        (values storage count)
+        (let* ((bucket (hashtable-ref (pos-index-buckets pi) key #f))
+               (slots (merge-ascending (if bucket (cdr bucket) '())
+                                       (pos-index-rest pi)))
+               (v (make-vector n)))
+          (let loop ((i 0) (ss slots))
+            (if (pair? ss)
+                (begin
+                  (vector-set! v i (vector-ref storage (car ss)))
+                  (loop (+ i 1) (cdr ss)))
+                (values v n))))))
+
   ;;; The stored suspensions of a type that may hold an argument at
   ;;; `pos` `equal?/chr` to a value whose ground key is `key`, in store
   ;;; order. This is the lookup half of the optimization: where
@@ -293,23 +337,37 @@
     (let* ((g (vector-ref (session-store-by-type s) ctype))
            (storage (growable-storage g))
            (count (growable-count g))
-           (ti (vector-ref (session-store-index s) ctype))
-           (entry (and ti (assv pos ti)))
-           (pi (and entry (cdr entry))))
+           (pi (pos-index-of (vector-ref (session-store-index s) ctype) pos)))
       (if (not pi)
           (values storage count)
-          (let* ((bucket (hashtable-ref (pos-index-buckets pi) key '()))
-                 (slots (merge-ascending bucket (pos-index-rest pi)))
-                 (n (length slots)))
-            (if (>= n count)
-                (values storage count)
-                (let ((v (make-vector n)))
-                  (let loop ((i 0) (ss slots))
-                    (if (pair? ss)
-                        (begin
-                          (vector-set! v i (vector-ref storage (car ss)))
-                          (loop (+ i 1) (cdr ss)))
-                        (values v n)))))))))
+          (candidates-from storage count pi key (candidate-count pi key)))))
+
+  ;;; Like `candidate-suspensions`, for a loop with several conditions
+  ;;; that could drive the index. `probes` is a list of `(pos . key)`;
+  ;;; a `#f` key (a value that was not ground) is skipped. The probe
+  ;;; with the fewest candidates drives, the earlier one on a tie. Any
+  ;;; probe gives a superset of the matches in store order, so the
+  ;;; choice only changes how many candidates get checked. No usable
+  ;;; probe: the whole bucket. Mirrors `candidateSuspensionsAmong` in
+  ;;; src/YCHR/Internal/Runtime/Store.hs.
+  (define (candidate-suspensions-among s ctype probes)
+    (let* ((g (vector-ref (session-store-by-type s) ctype))
+           (storage (growable-storage g))
+           (count (growable-count g))
+           (ti (vector-ref (session-store-index s) ctype)))
+      (let loop ((ps probes) (best-pi #f) (best-key #f) (best-n 0))
+        (if (null? ps)
+            (if best-pi
+                (candidates-from storage count best-pi best-key best-n)
+                (values storage count))
+            (let* ((key (cdar ps))
+                   (pi (and key (pos-index-of ti (caar ps)))))
+              (if pi
+                  (let ((n (candidate-count pi key)))
+                    (if (or (not best-pi) (< n best-n))
+                        (loop (cdr ps) pi key n)
+                        (loop (cdr ps) best-pi best-key best-n)))
+                  (loop (cdr ps) best-pi best-key best-n)))))))
 
   ;;; -------------------------------------------------------------------
   ;;; Search undo hooks

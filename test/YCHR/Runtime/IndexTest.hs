@@ -14,14 +14,17 @@ import Data.Foldable (toList)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (isSubsequenceOf)
+import Data.List.NonEmpty (NonEmpty (..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import YCHR.Internal.Runtime.Index
 import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
 import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Store
-  ( Suspension (..),
+  ( IndexProbe (..),
+    Suspension (..),
     candidateSuspensions,
+    candidateSuspensionsAmong,
     createConstraint,
     getStoreSnapshot,
     killConstraint,
@@ -60,6 +63,7 @@ tests =
       programTests,
       stateTests,
       candidateTests,
+      amongTests,
       observerTests
     ]
 
@@ -74,7 +78,8 @@ runIndexEnv =
   runChrIn
     emptySessionConfig
       { Config.typeNames = replicate 2 (Unqualified ""),
-        Config.indexPositions = IntMap.fromList [(0, IntSet.singleton 0)]
+        Config.indexPositions =
+          IntMap.fromList [(0, IntSet.singleton 0), (1, IntSet.fromList [0, 1])]
       }
 
 -- | A program whose single procedure has the given body.
@@ -225,6 +230,21 @@ stateTests =
               candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= IntSet.singleton 0
               candidateSlots (ConstraintType 1) 0 (KInt 1) si @?= IntSet.singleton 2
               candidateSlots (ConstraintType 0) 0 (KInt 2) si @?= IntSet.empty,
+      testCase "candidateCount is the bucket plus the fallback set" $
+        let si =
+              insertConstraints
+                (ConstraintType 0)
+                [ IndexEntry 0 [PositionKey 0 (Just (KInt 1))],
+                  IndexEntry 1 [PositionKey 0 Nothing],
+                  IndexEntry 2 [PositionKey 0 (Just (KInt 1))],
+                  IndexEntry 3 [PositionKey 0 (Just (KInt 2))]
+                ]
+                emptyStoreIndex
+         in do
+              candidateCount (ConstraintType 0) 0 (KInt 1) si @?= 3
+              candidateCount (ConstraintType 0) 0 (KInt 2) si @?= 2
+              candidateCount (ConstraintType 0) 0 (KInt 9) si @?= 1
+              candidateCount (ConstraintType 0) 1 (KInt 1) si @?= 0,
       testCase "a type is indexed exactly once a store is filed for it" $
         let empty = emptyStoreIndex
             one =
@@ -332,6 +352,48 @@ candidateTests =
             crossing @?= [s1]
             assertBool "the new store is not a match" (crossingStore `notElem` crossing)
     ]
+
+-- | Lookups ground on two indexed positions of 'ConstraintType' 1.
+amongTests :: TestTree
+amongTests =
+  testGroup
+    "candidateSuspensionsAmong"
+    [ testCase "drives from the position with fewer candidates" $
+        runIndexEnv $ do
+          x <- newVar
+          -- Every fact shares the first key; only two (one of them
+          -- unbound there) can match the second.
+          m <- store2 (VAtom "o") (VInt 7)
+          u <- store2 (VAtom "o") x
+          _ <- mapM (store2 (VAtom "o") . VInt) [100 .. 129]
+          let p0 = IndexProbe 0 (KAtom "o")
+              p1 = IndexProbe 1 (KInt 7)
+          a <- ids <$> candidateSuspensionsAmong (ConstraintType 1) (p0 :| [p1])
+          b <- ids <$> candidateSuspensionsAmong (ConstraintType 1) (p1 :| [p0])
+          liftIO $ do
+            a @?= [m, u]
+            b @?= [m, u],
+      testCase "a tie keeps the earlier probe" $
+        runIndexEnv $ do
+          ss <- mapM (\i -> store2 (VInt i) (VInt (i `mod` 2))) [0 .. 31]
+          -- Two probes with 16 candidates each: the first one drives.
+          let p0 = IndexProbe 1 (KInt 0)
+              p1 = IndexProbe 1 (KInt 1)
+          a <- ids <$> candidateSuspensionsAmong (ConstraintType 1) (p0 :| [p1])
+          b <- ids <$> candidateSuspensionsAmong (ConstraintType 1) (p1 :| [p0])
+          liftIO $ do
+            a @?= [s | (i, s) <- zip [0 :: Int ..] ss, even i]
+            b @?= [s | (i, s) <- zip [0 :: Int ..] ss, odd i]
+    ]
+  where
+    ids = map (.suspId)
+
+-- | Create and store a two-argument constraint of 'ConstraintType' 1.
+store2 :: Value -> Value -> Chr SuspensionId
+store2 a b = do
+  sid <- createConstraint (ConstraintType 1) [a, b]
+  _ <- storeConstraint sid
+  pure sid
 
 -- | Create and store a one-argument constraint of the indexed type.
 store1 :: Value -> Chr SuspensionId

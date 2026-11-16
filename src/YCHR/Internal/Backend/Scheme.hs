@@ -994,14 +994,16 @@ compileBody stmts = compileStmts stmts
 -- The candidate list is 'store-snapshot' — the whole type bucket — unless
 -- one of the loop's index conditions can drive the store index. Which one
 -- may is a run-time question ('indexed-positions-for' answers for a type
--- the store is currently indexing), so the emitted code binds each
--- eligible condition's ground key at loop entry and hands the first one to
--- 'candidate-suspensions'. A condition is eligible when evaluating it is
--- total ('nonRaising'), which is what makes moving its evaluation to loop
--- entry safe, and @indexed-positions-for@ returning @#f@ short-circuits
--- the key bindings, so an unindexed type evaluates no condition and scans
--- the whole bucket. A loop with no eligible condition emits a plain
--- @store-snapshot@ call.
+-- the store is currently indexing), so the emitted code computes each
+-- eligible condition's ground key at loop entry. A condition is eligible
+-- when evaluating it is total ('nonRaising'), which is what makes moving
+-- its evaluation to loop entry safe, and @indexed-positions-for@
+-- returning @#f@ short-circuits the keys, so an unindexed type evaluates
+-- no condition and scans the whole bucket. With one eligible condition
+-- its key goes to 'candidate-suspensions'; with several, all keys go to
+-- 'candidate-suspensions-among', which drives from the one with the
+-- fewest candidates, like the interpreter's 'driverKeys'. A loop with no
+-- eligible condition emits a plain @store-snapshot@ call.
 compileForeach :: Label -> Int -> Name -> [IndexCondition] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
   wrapBreak
@@ -1058,51 +1060,60 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     eligible = [c | c <- conds, nonRaising c.expectedValue]
     candidatesExpr = case eligible of
       [] -> snapshot
-      _ ->
+      [c@(IndexCondition (ArgIndex i) _)] ->
         SList
           [ SAtom "let*",
-            SList (ipBinding : concat (zipWith keyBinding [0 :: Int ..] eligible)),
             SList
-              ( SAtom "cond"
-                  : map keyClause (zip [0 :: Int ..] eligible)
-                  ++ [fallbackClause]
-              )
+              [ ipBinding,
+                SList [SAtom keyName, SList [SAtom "and", SAtom ipName, keyExpr c]]
+              ],
+            SList
+              [ SAtom "cond",
+                SList
+                  [ SAtom keyName,
+                    SList
+                      [ SAtom "candidate-suspensions",
+                        SAtom "%s",
+                        typeArg,
+                        SInt (fromIntegral i),
+                        SAtom keyName
+                      ]
+                  ],
+                fallbackClause
+              ]
+          ]
+      _ ->
+        SList
+          [ SAtom "let",
+            SList [ipBinding],
+            SList
+              [ SAtom "if",
+                SAtom ipName,
+                SList
+                  [ SAtom "candidate-suspensions-among",
+                    SAtom "%s",
+                    typeArg,
+                    SList (SAtom "list" : map probe eligible)
+                  ],
+                snapshot
+              ]
           ]
     ipBinding =
       SList [SAtom ipName, SList [SAtom "indexed-positions-for", SAtom "%s", typeArg]]
-    -- The key of one eligible condition, evaluated only when the store is
-    -- indexing its position. A key found earlier wins: the `not` conjunct
-    -- keeps a later condition from being evaluated at all, matching the
-    -- interpreter's 'driverKey'.
-    keyBinding n (IndexCondition (ArgIndex i) e) =
-      [ SList
-          [ SAtom (keyName n),
-            SList
-              ( SAtom "and"
-                  : priorKey
-                  ++ [ SAtom ipName,
-                       SList [SAtom "memv", SInt (fromIntegral i), SAtom ipName],
-                       SList [SAtom "ground-key", compileValExpr e]
-                     ]
-              )
-          ]
-      ]
-      where
-        priorKey = [SList [SAtom "not", SAtom (keyName (n - 1))] | n > 0]
-    keyClause (n, IndexCondition (ArgIndex i) _) =
+    -- The key of an eligible condition, evaluated only when the store is
+    -- indexing its position, else @#f@.
+    keyExpr (IndexCondition (ArgIndex i) e) =
       SList
-        [ SAtom (keyName n),
-          SList
-            [ SAtom "candidate-suspensions",
-              SAtom "%s",
-              typeArg,
-              SInt (fromIntegral i),
-              SAtom (keyName n)
-            ]
+        [ SAtom "and",
+          SList [SAtom "memv", SInt (fromIntegral i), SAtom ipName],
+          SList [SAtom "ground-key", compileValExpr e]
         ]
+    -- One @(pos . key)@ probe for 'candidate-suspensions-among'.
+    probe c@(IndexCondition (ArgIndex i) _) =
+      SList [SAtom "cons", SInt (fromIntegral i), keyExpr c]
     fallbackClause = SList [SAtom "else", snapshot]
     ipName = "%ip-" <> lbl
-    keyName n = "%key-" <> lbl <> "-" <> T.pack (show n)
+    keyName = "%key-" <> lbl
 
 foreachInner :: Text -> Text -> [IndexCondition] -> [Stmt] -> SExpr
 foreachInner lbl sv conds body =

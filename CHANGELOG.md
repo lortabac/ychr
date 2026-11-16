@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Store index: a rule lookup with several ground conditions on indexed
+  arguments now uses the one with the fewest candidates, not the first.
+  `fact(O, N, V) \ get(O, N, R)` with every fact sharing `O` was
+  quadratic in the number of facts; it is now linear (`ychr run` on
+  `test/golden/bench_index_two_keys` with 40000 facts: 94 s → 1.3 s).
+  Both backends.
+
 - New prelude function `unifiable_with_occurs_check/2`: like
   `unifiable/2`, but `X` vs `f(X)` is `false`. It binds nothing and
   never raises, so `unifiable_with_occurs_check(A, B) | A = B` is a

@@ -1,0 +1,33 @@
+% A lookup ground on two indexed positions of `fact/3`.
+%
+% `get` finds its `fact` partner by both O and N, so the Foreach has two
+% index conditions. Every fact told by `run` shares O, so its bucket is
+% the whole store, while N picks one fact. The lookup must drive from N,
+% or `run(N, R)` is quadratic in N. The benchmark is `run(2000, R)`.
+%
+% Owners and names are integers. The other goals check the answers: `by_owner` has many facts sharing
+% N and few sharing O, and `fallback` has a fact whose N was unbound
+% when it was stored (so it sits in N's fallback set).
+:- module(bench_index_two_keys, [run/2, by_owner/1, fallback/1]).
+
+:- chr_constraint fact/3, get/3, fill/3, fill_owners/3, sum/5,
+    run/2, by_owner/1, fallback/1.
+
+fact(O, N, V) \ get(O, N, R) <=> R = V.
+
+fill(_, I, N) <=> I >= N | true.
+fill(O, I, N) <=> fact(O, I, I), I1 is I + 1, fill(O, I1, N).
+
+fill_owners(_, I, N) <=> I >= N | true.
+fill_owners(K, I, N) <=> fact(I, K, I), I1 is I + 1, fill_owners(K, I1, N).
+
+sum(_, I, N, Acc, R) <=> I >= N | R = Acc.
+sum(O, I, N, Acc, R) <=>
+    get(O, I, V), A1 is Acc + V, I1 is I + 1, sum(O, I1, N, A1, R).
+
+run(N, R) <=> fill(1000000, 0, N), sum(1000000, 0, N, 0, R).
+
+by_owner(R) <=> fill_owners(-1, 0, 40), get(17, -1, R).
+
+fallback(R) <=>
+    fact(1000000, X, 42), fill(1000000, 100, 140), X = 7, get(1000000, 7, R).

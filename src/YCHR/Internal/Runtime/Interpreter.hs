@@ -75,6 +75,7 @@ import Data.IORef
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -114,7 +115,6 @@ import YCHR.Internal.Runtime.Error
     tellUnboundError,
   )
 import YCHR.Internal.Runtime.History (addHistory, notInHistory)
-import YCHR.Internal.Runtime.Index (GroundKey)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     HostCallFn (..),
@@ -133,9 +133,10 @@ import YCHR.Internal.Runtime.Registry
     unit,
   )
 import YCHR.Internal.Runtime.Store
-  ( Suspension (..),
+  ( IndexProbe (..),
+    Suspension (..),
     aliveConstraint,
-    candidateSuspensions,
+    candidateSuspensionsAmong,
     createConstraint,
     getConstraintArg,
     getConstraintType,
@@ -775,32 +776,27 @@ execStmt (SPushFrame frame) = do
 
 -- | The candidate suspension list for a 'Foreach' loop.
 --
--- The default is the whole type bucket. When one of the loop's index
--- conditions can drive a store index, the list narrows to what that
--- condition could select: the bucket for the condition's value plus the
--- position's non-ground fallback set. See "YCHR.Internal.Runtime.Index"
--- for why the narrowed list is still a superset of the matches;
--- 'driverKey' holds the two guards that keep the narrowing invisible to
--- a program's behaviour.
+-- The default is the whole type bucket. When the loop's index
+-- conditions can drive a store index, the list narrows to what the
+-- most selective of them could select: the bucket for its value plus
+-- its position's non-ground fallback set. See
+-- "YCHR.Internal.Runtime.Index" for why the narrowed list is still a
+-- superset of the matches; 'driverKeys' holds the two guards that keep
+-- the narrowing invisible to a program's behaviour.
 foreachCandidates :: ConstraintType -> [SIndexCondition] -> InterpM [Suspension]
 foreachCandidates cType conditions = do
   mIndexed <- liftChr (indexedPositionsFor cType)
   case mIndexed of
     Nothing -> liftChr (toList <$> getStoreSnapshot cType)
     Just indexed -> do
-      mDriver <- driverKey indexed conditions
-      case mDriver of
-        Nothing -> liftChr (toList <$> getStoreSnapshot cType)
-        Just probe -> liftChr (candidateSuspensions cType probe.position probe.key)
+      probes <- driverKeys indexed conditions
+      case probes of
+        [] -> liftChr (toList <$> getStoreSnapshot cType)
+        p : ps -> liftChr (candidateSuspensionsAmong cType (p :| ps))
 
--- | An index lookup that a 'Foreach' condition drives: an argument
--- position and the ground key of the condition's value.
-data IndexProbe = IndexProbe
-  { position :: !Int,
-    key :: !GroundKey
-  }
-
--- | The first index condition that can drive the store index.
+-- | Every index condition that can drive the store index, in order.
+-- 'candidateSuspensionsAmong' drives from the one with the fewest
+-- candidates.
 --
 -- Two guards make the narrowing both sound and unobservable. The
 -- condition's value must be /non-raising/ by construction
@@ -809,20 +805,21 @@ data IndexProbe = IndexProbe
 -- with no candidates evaluates no condition at all. And the value must
 -- dereference to a fully ground term, because only a ground value's key
 -- is stable for the loop's duration. Anything else — including a
--- compound term holding an unbound variable — falls through to the
--- unindexed path, which evaluates the condition per candidate.
-driverKey :: IntSet -> [SIndexCondition] -> InterpM (Maybe IndexProbe)
-driverKey _ [] = pure Nothing
-driverKey indexed (SIndexCondition (ArgIndex pos) expr : rest)
+-- compound term holding an unbound variable — is skipped and left to
+-- the per-candidate check.
+driverKeys :: IntSet -> [SIndexCondition] -> InterpM [IndexProbe]
+driverKeys _ [] = pure []
+driverKeys indexed (SIndexCondition (ArgIndex pos) expr : rest)
   | nonRaising expr,
     -- 'pos' is bounded by the constraint arity, so the conversion is safe.
     IntSet.member (fromIntegral pos) indexed = do
       value <- evalValExpr expr
       mkey <- liftChr (groundKey value)
-      case mkey of
-        Just key -> pure (Just (IndexProbe (fromIntegral pos) key))
-        Nothing -> driverKey indexed rest
-  | otherwise = driverKey indexed rest
+      more <- driverKeys indexed rest
+      pure $ case mkey of
+        Just key -> IndexProbe (fromIntegral pos) key : more
+        Nothing -> more
+  | otherwise = driverKeys indexed rest
 
 -- | Whether evaluating an expression is total.
 --

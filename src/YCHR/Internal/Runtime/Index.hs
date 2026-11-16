@@ -19,6 +19,8 @@
 -- a compound term containing one — goes into that position's
 -- non-ground fallback set (the @rest@ of a 'PosIndex'). A lookup for a
 -- ground key yields the bucket's slots plus the whole fallback set.
+-- When a loop has several ground conditions on indexed positions, the
+-- one with the smallest such set drives ('candidateCount').
 --
 -- Two properties make that superset exact enough to be worth having:
 --
@@ -63,6 +65,8 @@ module YCHR.Internal.Runtime.Index
     floatKey,
 
     -- * Index state
+    Bucket (..),
+    emptyBucket,
     PosIndex (..),
     emptyPosIndex,
     StoreIndex,
@@ -73,6 +77,7 @@ module YCHR.Internal.Runtime.Index
     PositionKey (..),
     insertConstraints,
     candidateSlots,
+    candidateCount,
 
     -- * Derivation from the program
     indexablePositions,
@@ -136,21 +141,39 @@ floatKey x
 -- Index state
 -- ---------------------------------------------------------------------------
 
+-- | A set of store slots and its size. The size is kept so that a
+-- lookup can compare candidate sets without walking them; see
+-- 'candidateCount'. @size == IntSet.size slots@ always.
+data Bucket = Bucket
+  { size :: !Int,
+    slots :: !IntSet
+  }
+  deriving (Show, Eq)
+
+-- | A bucket with no slots.
+emptyBucket :: Bucket
+emptyBucket = Bucket 0 IntSet.empty
+
+-- | Add a slot that is not in the bucket yet. Every slot is filed once
+-- per position, so the size just grows by one.
+insertSlot :: Int -> Bucket -> Bucket
+insertSlot slot b = Bucket (b.size + 1) (IntSet.insert slot b.slots)
+
 -- | What the store knows about one argument position of one constraint
 -- type: a bucket of store slots per ground key, plus the slots whose
 -- value at this position was not fully ground when they were stored.
 data PosIndex = PosIndex
   { -- | Slots filed under each ground key.
-    buckets :: !(Map GroundKey IntSet),
+    buckets :: !(Map GroundKey Bucket),
     -- | Slots whose argument was not fully ground. Every lookup gets
     -- these too.
-    rest :: !IntSet
+    rest :: !Bucket
   }
   deriving (Show, Eq)
 
 -- | An index position that has seen no store yet.
 emptyPosIndex :: PosIndex
-emptyPosIndex = PosIndex Map.empty IntSet.empty
+emptyPosIndex = PosIndex Map.empty emptyBucket
 
 -- | The whole index: constraint type index, then argument position.
 --
@@ -225,9 +248,12 @@ insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
       Just key ->
         p
           { buckets =
-              Map.insertWith IntSet.union key (IntSet.singleton slot) p.buckets
+              Map.alter
+                (Just . insertSlot slot . fromMaybe emptyBucket)
+                key
+                p.buckets
           }
-      Nothing -> p {rest = IntSet.insert slot p.rest}
+      Nothing -> p {rest = insertSlot slot p.rest}
 
 -- | The store slots that may hold a suspension whose argument at
 -- @pos@ is 'equal' to a value with key @key@, in ascending (store)
@@ -238,6 +264,17 @@ insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
 candidateSlots :: ConstraintType -> Int -> GroundKey -> StoreIndex -> IntSet
 candidateSlots cType pos key si = case IntMap.lookup tidx si >>= IntMap.lookup pos of
   Nothing -> IntSet.empty
-  Just p -> IntSet.union (Map.findWithDefault IntSet.empty key p.buckets) p.rest
+  Just p -> IntSet.union (Map.findWithDefault emptyBucket key p.buckets).slots p.rest.slots
+  where
+    ConstraintType tidx = cType
+
+-- | How many slots 'candidateSlots' would return, without building the
+-- set: the key's bucket size plus the fallback set's. A lookup with
+-- several ground conditions uses it to pick the smallest one. Same
+-- precondition as 'candidateSlots'.
+candidateCount :: ConstraintType -> Int -> GroundKey -> StoreIndex -> Int
+candidateCount cType pos key si = case IntMap.lookup tidx si >>= IntMap.lookup pos of
+  Nothing -> 0
+  Just p -> (Map.findWithDefault emptyBucket key p.buckets).size + p.rest.size
   where
     ConstraintType tidx = cType
