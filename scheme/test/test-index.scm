@@ -1,6 +1,7 @@
 (import (rnrs)
         (srfi :64)
-        (ychr runtime))
+        (ychr runtime)
+        (ychr trail))
 
 ;; Tests for the store's per-argument indexes (the paper's Indexing
 ;; optimization). See store.sls and src/YCHR/Internal/Runtime/Index.hs.
@@ -28,17 +29,29 @@
       ((= i n))
     (store-constraint s (create-constraint s 0 (vector arg)))))
 
+;; A lookup answer (five values, see store.sls) as a list, walked the
+;; way the generated loop walks it: merge the two slot vectors.
+(define (answer->list vec bs bn rs rn)
+  (let loop ((i 0) (j 0) (acc '()))
+    (let ((tb (and (< i bn)
+                   (or (>= j rn) (< (vector-ref bs i) (vector-ref rs j))))))
+      (if (or tb (< j rn))
+          (let ((susp (vector-ref vec (cond ((not tb) (vector-ref rs j))
+                                            (bs (vector-ref bs i))
+                                            (else i)))))
+            (if tb
+                (loop (+ i 1) j (cons susp acc))
+                (loop i (+ j 1) (cons susp acc))))
+          (reverse acc)))))
+
 ;; The suspensions a lookup for `key` may return, as a list.
 (define (candidates s ctype pos key)
-  (let-values (((vec count) (candidate-suspensions s ctype pos key)))
-    (let loop ((i 0) (acc '()))
-      (if (= i count)
-          (reverse acc)
-          (loop (+ i 1) (cons (snapshot-ref vec i) acc))))))
+  (call-with-values (lambda () (candidate-suspensions s ctype pos key))
+    answer->list))
 
 (define (candidate-count s ctype pos key)
-  (let-values (((vec count) (candidate-suspensions s ctype pos key)))
-    count))
+  (let-values (((vec bs bn rs rn) (candidate-suspensions s ctype pos key)))
+    (+ bn rn)))
 
 ;; ---------------------------------------------------------------------------
 ;; Keys
@@ -195,6 +208,78 @@
                     (candidates s 0 0 (ground-key (make-term 'f (vector 'x)))))))))
 
 ;; ---------------------------------------------------------------------------
+;; The answer is not a copy
+;; ---------------------------------------------------------------------------
+
+(test-group "lookup answer"
+  (test-group "bucket and fallback interleave in store order"
+    (let ((s (index-session)))
+      (tell-ground-n! s index-threshold 0)
+      (let* ((a (tell! s (create-constraint s 0 (vector (make-var s)))))
+             (b (tell! s (create-constraint s 0 (vector 1))))
+             (c (tell! s (create-constraint s 0 (vector (make-var s)))))
+             (d (tell! s (create-constraint s 0 (vector 1))))
+             (e (tell! s (create-constraint s 0 (vector (make-var s))))))
+        (test-equal "merged" (list a b c d e)
+                    (candidates s 0 0 (ground-key 1))))))
+
+  (test-group "later stores are not seen"
+    (let ((s (index-session)))
+      (tell-ground-n! s index-threshold 0)
+      (let ((a (tell! s (create-constraint s 0 (vector 1))))
+            (u (tell! s (create-constraint s 0 (vector (make-var s))))))
+        (let-values (((vec bs bn rs rn) (candidate-suspensions s 0 0 (ground-key 1))))
+          ;; Enough stores to grow both slot vectors past their capacity.
+          (do ((i 0 (+ i 1))) ((= i 20))
+            (store-constraint s (create-constraint s 0 (vector 1)))
+            (store-constraint s (create-constraint s 0 (vector (make-var s)))))
+          (test-equal "old answer unchanged" (list a u)
+                      (answer->list vec bs bn rs rn))
+          (test-equal "a new lookup sees them" 42
+                      (candidate-count s 0 0 (ground-key 1)))))))
+
+  (test-group "search undo restores the index"
+    (let ((s (index-session)))
+      (tell-ground-n! s index-threshold 0)
+      (let* ((a (tell! s (create-constraint s 0 (vector 1))))
+             (u (tell! s (create-constraint s 0 (vector (make-var s)))))
+             (prev (trail-enter!))
+             (mark (trail-mark)))
+        ;; An existing key, a new key, and the fallback set.
+        (store-constraint s (create-constraint s 0 (vector 1)))
+        (store-constraint s (create-constraint s 0 (vector 2)))
+        (store-constraint s (create-constraint s 0 (vector (make-var s))))
+        (test-equal "inside the branch" 4 (candidate-count s 0 0 (ground-key 1)))
+        (test-equal "new key inside the branch" 3
+                    (candidate-count s 0 0 (ground-key 2)))
+        (trail-unwind! mark)
+        (trail-exit! prev)
+        (test-equal "old key restored" (list a u) (candidates s 0 0 (ground-key 1)))
+        (test-equal "new key gone" (list u) (candidates s 0 0 (ground-key 2))))))
+
+  ;; A loop around a search holds an answer while the branch pushes,
+  ;; is undone, and the next push reuses the same slots.
+  (test-group "a held answer survives a search undo"
+    (let ((s (index-session)))
+      (tell-ground-n! s index-threshold 0)
+      (let ((a (tell! s (create-constraint s 0 (vector 1))))
+            (u (tell! s (create-constraint s 0 (vector (make-var s))))))
+        (let-values (((vec bs bn rs rn) (candidate-suspensions s 0 0 (ground-key 1))))
+          (let* ((prev (trail-enter!))
+                 (mark (trail-mark)))
+            (do ((i 0 (+ i 1))) ((= i 10))
+              (store-constraint s (create-constraint s 0 (vector 1)))
+              (store-constraint s (create-constraint s 0 (vector (make-var s)))))
+            (trail-unwind! mark)
+            (trail-exit! prev))
+          (do ((i 0 (+ i 1))) ((= i 10))
+            (store-constraint s (create-constraint s 0 (vector 1)))
+            (store-constraint s (create-constraint s 0 (vector (make-var s)))))
+          (test-equal "held answer unchanged" (list a u)
+                      (answer->list vec bs bn rs rn))
+          (test-equal "new lookup" 22 (candidate-count s 0 0 (ground-key 1))))))))
+
+;; ---------------------------------------------------------------------------
 ;; Several probes
 ;; ---------------------------------------------------------------------------
 
@@ -203,11 +288,8 @@
   (%make-session 1 (list (cons 0 (list 0 1)))))
 
 (define (candidates-among s ctype probes)
-  (let-values (((vec count) (candidate-suspensions-among s ctype probes)))
-    (let loop ((i 0) (acc '()))
-      (if (= i count)
-          (reverse acc)
-          (loop (+ i 1) (cons (snapshot-ref vec i) acc))))))
+  (call-with-values (lambda () (candidate-suspensions-among s ctype probes))
+    answer->list))
 
 (test-group "candidate-suspensions-among"
   (test-group "drives from the position with fewer candidates"

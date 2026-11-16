@@ -21,7 +21,7 @@
     kill-constraint alive-constraint?
     constraint-id constraint-arg constraint-type
     id-equal? is-constraint-type?
-    store-snapshot snapshot-length snapshot-ref
+    store-snapshot store-scan snapshot-length snapshot-ref
     suspension? suspension-alive? suspension-arg
     suspension-id suspension-type
     ;; Store index (used by generated `Foreach` code)

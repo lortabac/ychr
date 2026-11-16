@@ -1003,45 +1003,103 @@ compileBody stmts = compileStmts stmts
 -- its key goes to 'candidate-suspensions'; with several, all keys go to
 -- 'candidate-suspensions-among', which drives from the one with the
 -- fewest candidates, like the interpreter's 'driverKeys'. A loop with no
--- eligible condition emits a plain @store-snapshot@ call.
+-- eligible condition emits a plain loop over @store-snapshot@.
+--
+-- The lookup answer is not a copy: it is the index's own bucket and
+-- fallback slot vectors, and the loop merges the two in place (see
+-- "lookup answer" in @scheme/ychr/store.sls@).
 compileForeach :: Label -> Int -> Name -> [IndexCondition] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
-  wrapBreak
-    ( SList
-        [ SAtom "let-values",
+  wrapBreak (if null eligible then scanLoop else indexLoop)
+  where
+    loopName = SAtom (foreachName lbl)
+    inner = foreachInner lbl sv conds body
+    v = SAtom
+    call f xs = SList (v f : xs)
+    -- No eligible condition: a plain loop over the whole bucket.
+    scanLoop =
+      SList
+        [ v "let-values",
+          SList [SList [SList [v "%vec", v "%count"], snapshot]],
           SList
-            [ SList
-                [ SList [SAtom "%vec", SAtom "%count"],
-                  candidatesExpr
-                ]
-            ],
-          SList
-            [ SAtom "let",
-              SAtom (foreachName lbl),
-              SList [SList [SAtom "%i", SInt 0]],
+            [ v "let",
+              loopName,
+              SList [SList [v "%i", SInt 0]],
               SList
-                [ SAtom "when",
-                  SList [SAtom "<", SAtom "%i", SAtom "%count"],
+                [ v "when",
+                  call "<" [v "%i", v "%count"],
                   SList
-                    [ SAtom "let",
-                      SList
-                        [ SList
-                            [ SAtom sv,
-                              SList
-                                [ SAtom "vector-ref",
-                                  SAtom "%vec",
-                                  SAtom "%i"
-                                ]
-                            ]
-                        ],
-                      foreachInner lbl sv conds body
+                    [ v "let",
+                      SList [SList [v sv, call "vector-ref" [v "%vec", v "%i"]]],
+                      inner
                     ],
-                  SList [SAtom (foreachName lbl), SList [SAtom "+", SAtom "%i", SInt 1]]
+                  SList [loopName, call "+" [v "%i", SInt 1]]
                 ]
             ]
         ]
-    )
-  where
+    -- A lookup answer is the storage vector plus two ascending slot
+    -- vectors (the bucket, or #f for 0..n-1, and the fallback set),
+    -- each with its count. The loop merges the two with one cursor
+    -- each, taking the smaller slot every step, so nothing is copied.
+    -- The body appears once.
+    slotExpr =
+      call
+        "cond"
+        [ SList [call "not" [v "%tb"], call "vector-ref" [v "%rs", v "%j"]],
+          SList [v "%bs", call "vector-ref" [v "%bs", v "%i"]],
+          SList [v "else", v "%i"]
+        ]
+    indexLoop =
+      SList
+        [ v "let-values",
+          SList [SList [SList [v "%vec", v "%bs", v "%bn", v "%rs", v "%rn"], candidatesExpr]],
+          SList
+            [ v "let",
+              loopName,
+              SList [SList [v "%i", SInt 0], SList [v "%j", SInt 0]],
+              SList
+                [ v "let",
+                  SList
+                    [ SList
+                        [ v "%tb",
+                          call
+                            "and"
+                            [ call "<" [v "%i", v "%bn"],
+                              call
+                                "or"
+                                [ call ">=" [v "%j", v "%rn"],
+                                  call
+                                    "<"
+                                    [ call "vector-ref" [v "%bs", v "%i"],
+                                      call "vector-ref" [v "%rs", v "%j"]
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ],
+                  SList
+                    [ v "when",
+                      call "or" [v "%tb", call "<" [v "%j", v "%rn"]],
+                      SList
+                        [ v "let",
+                          SList
+                            [ SList
+                                [ v sv,
+                                  call "vector-ref" [v "%vec", slotExpr]
+                                ]
+                            ],
+                          inner
+                        ],
+                      call
+                        "if"
+                        [ v "%tb",
+                          SList [loopName, call "+" [v "%i", SInt 1], v "%j"],
+                          SList [loopName, v "%i", call "+" [v "%j", SInt 1]]
+                        ]
+                    ]
+                ]
+            ]
+        ]
     -- 'Break' escapes the whole loop through a call/cc whose parameter is
     -- 'breakName'; a body that never names its own label needs neither
     -- the continuation nor the binding.
@@ -1054,12 +1112,14 @@ compileForeach (Label lbl) ct (Name sv) conds body =
       | otherwise = e
     typeArg = SInt (fromIntegral ct)
     snapshot = SList [SAtom "store-snapshot", SAtom "%s", typeArg]
+    -- The whole bucket, in the five-value form 'indexLoop' reads.
+    scan = SList [SAtom "store-scan", SAtom "%s", typeArg]
     -- Only a total expression may be evaluated eagerly at loop entry; see
     -- 'nonRaising'. The conditions that stay are the only ones an index
     -- could ever be driven by.
     eligible = [c | c <- conds, nonRaising c.expectedValue]
     candidatesExpr = case eligible of
-      [] -> snapshot
+      [] -> scan
       [c@(IndexCondition (ArgIndex i) _)] ->
         SList
           [ SAtom "let*",
@@ -1095,7 +1155,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
                     typeArg,
                     SList (SAtom "list" : map probe eligible)
                   ],
-                snapshot
+                scan
               ]
           ]
     ipBinding =
@@ -1111,7 +1171,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
     -- One @(pos . key)@ probe for 'candidate-suspensions-among'.
     probe c@(IndexCondition (ArgIndex i) _) =
       SList [SAtom "cons", SInt (fromIntegral i), keyExpr c]
-    fallbackClause = SList [SAtom "else", snapshot]
+    fallbackClause = SList [SAtom "else", scan]
     ipName = "%ip-" <> lbl
     keyName = "%key-" <> lbl
 

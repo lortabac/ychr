@@ -325,7 +325,7 @@ candidateSuspensionsAmong cType (p0 :| ps) = do
     else
       pure
         [ susp
-        | slot <- IntSet.toAscList (candidateSlots cType probe.position probe.key si),
+        | slot <- candidateSlots cType probe.position probe.key si,
           Just susp <- [Seq.lookup slot snapshot]
         ]
 

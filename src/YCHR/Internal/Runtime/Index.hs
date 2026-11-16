@@ -261,12 +261,27 @@ insertConstraints cType stores si0 = List.foldl' insertStore si0 stores
 -- actually indexing — one 'indexablePositions' reports /and/
 -- 'typeIndexed' accepts. An unindexed type has no entries, and an empty
 -- answer for it would lose every candidate it holds.
-candidateSlots :: ConstraintType -> Int -> GroundKey -> StoreIndex -> IntSet
+--
+-- The bucket and the fallback set are merged lazily, as the caller walks
+-- the list, so no new set is built. They never share a slot: a slot is
+-- filed once per position, under a key or in the fallback set.
+candidateSlots :: ConstraintType -> Int -> GroundKey -> StoreIndex -> [Int]
 candidateSlots cType pos key si = case IntMap.lookup tidx si >>= IntMap.lookup pos of
-  Nothing -> IntSet.empty
-  Just p -> IntSet.union (Map.findWithDefault emptyBucket key p.buckets).slots p.rest.slots
+  Nothing -> []
+  Just p ->
+    mergeAscending
+      (IntSet.toAscList (Map.findWithDefault emptyBucket key p.buckets).slots)
+      (IntSet.toAscList p.rest.slots)
   where
     ConstraintType tidx = cType
+
+-- | Merge two ascending lists.
+mergeAscending :: [Int] -> [Int] -> [Int]
+mergeAscending [] ys = ys
+mergeAscending xs [] = xs
+mergeAscending xs@(x : xs') ys@(y : ys')
+  | x < y = x : mergeAscending xs' ys
+  | otherwise = y : mergeAscending xs ys'
 
 -- | How many slots 'candidateSlots' would return, without building the
 -- set: the key's bucket size plus the fallback set's. A lookup with

@@ -862,7 +862,8 @@ matter are:
   write is trailed as well: `trail-store-index!` records the per-type
   index vector before `install-type-index!` puts a fresh copy in place
   when a bucket crosses the threshold, and `file-entry!` records the
-  bucket or fallback list it prepends to. The second is not implied by
+  old count of the bucket or fallback vector it appends to (or the new
+  key it adds). The second is not implied by
   the first: a type indexed *before* the search keeps its index object
   across the branch, and an entry left there names a slot past the
   restored count, whose storage cell still holds the abandoned branch's
@@ -870,15 +871,21 @@ matter are:
   lookup would match it (`test/golden/search_index_undo`). The history is
   undone through the trail too (an added entry's deletion).
 
-Each bucket is a `(count . slots)` pair and the fallback list has
-`rest-count`; as on the Haskell side, a count must equal its list's
-length, and `file-entry!` is the only writer (and trails both).
+Each bucket and the fallback set is a growable vector of slots, in
+ascending order, and `file-entry!` is the only writer (and trails it).
+A lookup hands these vectors out as they are, with their counts, and
+the generated loop reads them in place. That is safe only because a
+write never changes a slot below a count already handed out: it
+appends past it, or grows into a fresh vector. A search branch writes
+past the counts at its start, which are at least the counts any loop
+around the search holds, so its undo cannot change what such a loop
+reads either. Compaction (overwriting slots in place) would break this.
 
 What is deliberately not trimmed is the same as on the Haskell side: a
 kill leaves the bucket entry in place (the iterator's liveness check
 filters it, exactly as for a scan), and a suspension whose indexed
 argument was not fully ground when it was stored stays in the position's
-fallback list for good. Both cost memory, never correctness.
+fallback set for good. Both cost memory, never correctness.
 
 Key equality is the other half, and it is defended in
 `scheme/ychr/var.sls`: a key must never be finer than ask-equality
