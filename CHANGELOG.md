@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `ychr scheme-types`: names keep `-` and the other R6RS identifier
+  characters, so `vhc-core` gives `make-vhc-core`, not
+  `make-vhc__u2d__core`; the module `a-b` gives `(ychr types a-b)`.
+  `:`, `/` and non-ASCII are still escaped. The schema is now version
+  2 and lists every exported name in `(scheme …)` entries, so tools
+  don't have to compute them. See scheme-types.md.
+
 - Store: dead constraints no longer pile up. When a type's dead
   constraints outnumber its live ones, the next store of that type
   drops them (not during a search). So a rule that scans a type with

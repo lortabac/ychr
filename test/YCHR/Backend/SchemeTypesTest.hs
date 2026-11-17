@@ -5,6 +5,7 @@
 -- round trips through CHR are in @test/scheme/test_scheme_types.py@.
 module YCHR.Backend.SchemeTypesTest (tests) where
 
+import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
@@ -62,16 +63,83 @@ tests =
           "(rename (r:%mk0 make-point))",
       testCase "names that are not identifiers" $ do
         out <- generate defaultOpts {moduleName = "odd", allTypes = True} oddSource
-        -- Escaped like constraint aliases; the functor keeps its spelling.
+        -- Escaped; the functor keeps its spelling.
         assertInfix
           out.library
           ( "(rnrs:define make-x__u20__y (ychr:compound-constructor "
               <> "(rnrs:string->symbol \"odd__x y\") 1))"
           )
-        assertInfix out.library "(rnrs:define (x__u20__y-a__u2d__b p) "
+        assertInfix out.library "(rnrs:define (x__u20__y-a-b p) "
         assertInfix out.library "(rnrs:define (__u39__lives? v) "
-        -- The schema writes such names as strings.
-        assertInfix out.schema "(constructor \"x y\" \"odd__x y\" (field a-b int))",
+        -- `:`, `/` and non-ASCII are escaped although R6RS allows them.
+        assertInfix out.library "(rnrs:define (x__u3a__y-a__u2f__b p) "
+        assertInfix out.library "(rnrs:define __ue9__ "
+        -- The schema writes such source names as strings, and gives
+        -- the escaped names.
+        assertInfix
+          out.schema
+          ( "(constructor \"x y\" \"odd__x y\" (scheme make-x__u20__y "
+              <> "x__u20__y?)\n      (field a-b int (scheme x__u20__y-a-b "
+              <> "x__u20__y-with-a-b)))"
+          )
+        assertInfix
+          out.schema
+          "(constructor \"9lives\" odd__9lives (scheme __u39__lives __u39__lives?))",
+      testCase "hyphens stay in names" $ do
+        out <- generate defaultOpts {moduleName = "a-b", allTypes = True} hyphenSource
+        mapM_
+          (assertInfix out.library)
+          [ "(library (ychr types a-b)",
+            "(rename (r:%mk0 make-vhc-core))",
+            "(rnrs:define (vhc-core? v) ",
+            "(rnrs:define (vhc-core-eta-tvs p) ",
+            "(rnrs:define (vhc-core-with-eta-tvs p v) ",
+            "(rnrs:define n-a (rnrs:quote a-b__n-a))",
+            "(rnrs:define (vhc-type-type? v) "
+          ]
+        assertInfix
+          out.schema
+          ( "    (constructor vhc-core a-b__vhc-core (scheme make-vhc-core vhc-core?)\n"
+              <> "      (field eta-tvs int (scheme vhc-core-eta-tvs vhc-core-with-eta-tvs)))"
+          ),
+      testCase "schema names are the exported names" $
+        mapM_
+          ( \(o, src) -> do
+              out <- generate o src
+              schemaNames out `sameSet` exportLine out
+          )
+          [ (defaultOpts, shapesSource),
+            (defaultOpts {allTypes = True}, shapesSource),
+            (defaultOpts {ground = True, allTypes = True}, shapesSource),
+            (defaultOpts {moduleName = "a-b", allTypes = True}, hyphenSource),
+            (defaultOpts {moduleName = "odd", allTypes = True}, oddSource),
+            (defaultOpts {moduleName = "big", allTypes = True}, bigSource),
+            (defaultOpts {moduleName = "hid"}, hiddenSource),
+            (defaultOpts {moduleName = "", allTypes = True}, emptySource)
+          ],
+      testCase "the empty name" $ do
+        out <- generate defaultOpts {moduleName = "", allTypes = True} emptySource
+        mapM_
+          (assertInfix out.library)
+          [ "(library (ychr types __empty__)",
+            "(rename (r:%mk0 make-__empty__))",
+            "(rnrs:define (__empty__-1 p) ",
+            "(rnrs:define (__empty__-type? v) "
+          ],
+      testCase "all constructors hidden: the type predicate stays" $ do
+        out <- generate defaultOpts {moduleName = "hid"} hiddenSource
+        assertInfix out.library "(rnrs:define (t-type? v) "
+        assertInfix out.schema "  (type t ()\n    (scheme t-type?)))",
+      testCase "collision: nullary constructor and an accessor" $
+        collides
+          "a-b"
+          "na"
+          ":- module(na, []).\n:- chr_type t ---> 'a-b' ; a(b :: int).\n",
+      testCase "collision: constructor T-type and the type predicate" $
+        collides
+          "t-type?"
+          "tt"
+          ":- module(tt, []).\n:- chr_type t ---> 't-type'(int).\n",
       testCase "collision: one constructor name in two types" $
         collides
           "c?"
@@ -167,7 +235,9 @@ tests =
           [False, True],
       testCase "default library names" $ do
         defaultLibraryName False "m" @?= ["ychr", "types", "m"]
-        defaultLibraryName True "m" @?= ["ychr", "ground-types", "m"],
+        defaultLibraryName True "m" @?= ["ychr", "ground-types", "m"]
+        defaultLibraryName False "a-b" @?= ["ychr", "types", "a-b"]
+        defaultLibraryName False "a/b" @?= ["ychr", "types", "a__u2f__b"],
       testCase "module selection" $ do
         prog <- compileOrFail [("shapes.chr", shapesSource)]
         selectModule prog ["shapes.chr"] Nothing @?= Right "shapes"
@@ -220,6 +290,20 @@ exportLine out = case filter ("  (export " `T.isPrefixOf`) (T.lines out.library)
     names (n : rest) = n : names rest
     names [] = []
 
+-- | Every name in a @(scheme …)@ entry of the schema.
+schemaNames :: SchemeTypesOutput -> [Text]
+schemaNames out = go out.schema
+  where
+    go t = case T.breakOn "(scheme " t of
+      (_, rest)
+        | T.null rest -> []
+        | otherwise ->
+            let (inside, after) = T.breakOn ")" (T.drop (T.length "(scheme ") rest)
+             in T.words inside ++ go after
+
+sameSet :: [Text] -> [Text] -> IO ()
+sameSet a b = sortOn id a @?= sortOn id b
+
 assertInfix :: Text -> Text -> IO ()
 assertInfix hay needle =
   assertBool
@@ -243,7 +327,23 @@ oddSource :: Text
 oddSource =
   T.unlines
     [ ":- module(odd, []).",
-      ":- chr_type t ---> 'x y'('a-b' :: int) ; '9lives'."
+      ":- chr_type t ---> 'x y'('a-b' :: int) ; '9lives'.",
+      ":- chr_type u ---> 'x:y'('a/b' :: int) ; 'é'."
+    ]
+
+hiddenSource :: Text
+hiddenSource =
+  T.unlines [":- module(hid, [type(t/0, [])]).", ":- chr_type t ---> c(int) ; n."]
+
+emptySource :: Text
+emptySource =
+  T.unlines [":- module('', []).", ":- chr_type '' ---> ''(int) ; '-x'."]
+
+hyphenSource :: Text
+hyphenSource =
+  T.unlines
+    [ ":- module('a-b', []).",
+      ":- chr_type 'vhc-type' ---> 'vhc-core'('eta-tvs' :: int) ; 'n-a'."
     ]
 
 bigSource :: Text
@@ -424,15 +524,22 @@ expectedRecords =
 
 expectedSchema :: [Text]
 expectedSchema =
-  [ "(ychr-schema 1",
+  [ "(ychr-schema 2",
     "  (module shapes)",
     "  (library (ychr types shapes))",
     "  (type point (X Y)",
-    "    (constructor point shapes__point (field x X) (field y Y)))",
+    "    (scheme point-type?)",
+    "    (constructor point shapes__point (scheme make-point point?)",
+    "      (field x X (scheme point-x point-with-x))",
+    "      (field y Y (scheme point-y point-with-y))))",
     "  (type shape ()",
-    "    (constructor circle shapes__circle (field r float))",
-    "    (constructor empty shapes__empty))",
+    "    (scheme shape-type?)",
+    "    (constructor circle shapes__circle (scheme make-circle circle?)",
+    "      (field r float (scheme circle-r circle-with-r)))",
+    "    (constructor empty shapes__empty (scheme empty empty?)))",
     "  (type tag ()",
-    "    (constructor tag shapes__tag (field #f int)))",
+    "    (scheme tag-type?)",
+    "    (constructor tag shapes__tag (scheme make-tag tag?)",
+    "      (field #f int (scheme tag-1))))",
     "  (type handle (A) opaque))"
   ]
