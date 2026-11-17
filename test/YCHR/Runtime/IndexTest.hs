@@ -10,7 +10,9 @@ module YCHR.Runtime.IndexTest (tests) where
 
 import Control.Monad (filterM)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (local)
 import Data.Foldable (toList)
+import Data.IORef (newIORef)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet qualified as IntSet
 import Data.List (isSubsequenceOf)
@@ -18,7 +20,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import YCHR.Internal.Runtime.Index
-import YCHR.Internal.Runtime.Monad (Chr, emptySessionConfig)
+import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..), emptySessionConfig)
 import YCHR.Internal.Runtime.Monad qualified as Config (SessionConfig (..))
 import YCHR.Internal.Runtime.Store
   ( IndexProbe (..),
@@ -31,7 +33,7 @@ import YCHR.Internal.Runtime.Store
     storeConstraint,
     suspArg,
   )
-import YCHR.Internal.Runtime.Types (SuspensionId, Value (..))
+import YCHR.Internal.Runtime.Types (SuspensionId, Trail (..), TrailState (..), Value (..))
 import YCHR.Internal.Runtime.Var
   ( addObserver,
     addObserverAndKey,
@@ -64,7 +66,8 @@ tests =
       stateTests,
       candidateTests,
       amongTests,
-      observerTests
+      observerTests,
+      compactionTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -479,4 +482,64 @@ observerTests =
           liftIO $ do
             k @?= Nothing
             obs @?= []
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Compaction
+-- ---------------------------------------------------------------------------
+
+-- | Store @n@ constraints of 'ConstraintType' 0 with argument @i@, then
+-- kill all but the first @keep@. Returns the kept ids in store order.
+storeAndKill :: Int -> Int -> Chr [SuspensionId]
+storeAndKill n keep = do
+  sids <- mapM (\i -> createConstraint (ConstraintType 0) [VInt (fromIntegral i)]) [0 .. n - 1]
+  mapM_ storeConstraint sids
+  mapM_ killConstraint (drop keep sids)
+  pure (take keep sids)
+
+snapshotIds :: Chr [SuspensionId]
+snapshotIds = map (.suspId) . toList <$> getStoreSnapshot (ConstraintType 0)
+
+compactionTests :: TestTree
+compactionTests =
+  testGroup
+    "compaction"
+    [ testCase "a store drops the dead ones" $
+        runIndexEnv $ do
+          kept <- storeAndKill 1000 10
+          new <- createConstraint (ConstraintType 0) [VAtom "x"]
+          _ <- storeConstraint new
+          got <- snapshotIds
+          liftIO $ got @?= kept ++ [new],
+      testCase "not while a search is active" $
+        runIndexEnv $ do
+          tr <- liftIO $ newIORef (TrailState {entries = [], length = 0})
+          local (\e -> e {trail = Just (Trail tr)}) $ do
+            _ <- storeAndKill 100 10
+            new <- createConstraint (ConstraintType 0) [VAtom "x"]
+            _ <- storeConstraint new
+            got <- snapshotIds
+            liftIO $ Prelude.length got @?= 101,
+      testCase "a held snapshot is not touched" $
+        runIndexEnv $ do
+          _ <- storeAndKill 100 10
+          before <- getStoreSnapshot (ConstraintType 0)
+          new <- createConstraint (ConstraintType 0) [VAtom "x"]
+          _ <- storeConstraint new
+          after <- snapshotIds
+          liftIO $ do
+            Prelude.length before @?= 100
+            Prelude.length after @?= 11,
+      testCase "the index is rebuilt" $
+        runIndexEnv $ do
+          kept <- storeAndKill 100 20
+          new <- createConstraint (ConstraintType 0) [VInt 5]
+          _ <- storeConstraint new
+          five <- indexedMatching (ConstraintType 0) (KInt 5)
+          gone <- indexedMatching (ConstraintType 0) (KInt 50)
+          n <- Prelude.length <$> snapshotIds
+          liftIO $ do
+            n @?= 21
+            five @?= [kept !! 5, new]
+            gone @?= []
     ]

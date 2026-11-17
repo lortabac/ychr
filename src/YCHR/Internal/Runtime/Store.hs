@@ -34,7 +34,7 @@ module YCHR.Internal.Runtime.Store
   )
 where
 
-import Control.Monad (when)
+import Control.Monad (filterM, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.Foldable (toList)
@@ -139,6 +139,7 @@ storeConstraint sid = do
       -- of resting on that argument.
       recordFlagWrite susp.stored
       liftIO $ writeIORef susp.stored True
+      compactIfWorth susp.suspType
       SessionEnv {storeByType, storeIndex, indexPositions, inertTypes} <- ask
       let cType = susp.suspType
           idx = cType.unConstraintType
@@ -209,12 +210,51 @@ storeConstraint sid = do
                 modifyIORef' storeIndex (insertConstraints cType stores)
               pure True
 
--- | Kill a constraint (set alive to False).
+-- | Drop the dead suspensions of a type from its store sequence, when
+-- they outnumber the live ones. Called by 'storeConstraint' before it
+-- appends.
+--
+-- The store is append-only and a kill only clears @alive@, so without
+-- this a scan walks every constraint of the type ever stored. A
+-- compaction costs one pass over the sequence and needs more dead
+-- suspensions than live ones, so it is O(1) per kill.
+--
+-- The new sequence keeps the live ones in their old order. The type's
+-- index is dropped, since its slots point into the old sequence; the
+-- store that called us refiles the whole bucket in one pass if it is
+-- still at least 'indexThreshold', like any type crossing it. Running
+-- loops are not affected: they hold the old 'Seq' and the old index,
+-- which are persistent values.
+--
+-- Never while a search is active: a choice-point snapshot and the
+-- search cursor hold slots into the sequence.
+compactIfWorth :: ConstraintType -> Chr ()
+compactIfWorth (ConstraintType idx) = do
+  env <- ask
+  case env.trail of
+    Just _ -> pure ()
+    Nothing -> do
+      dead <- liftIO $ IntMap.findWithDefault 0 idx <$> readIORef env.storeDead
+      when (dead > 0) $ do
+        owned <- liftIO $ IntMap.findWithDefault Seq.empty idx <$> readIORef env.storeByType
+        let n = Seq.length owned
+        when (n >= indexThreshold && dead > n - dead) $ liftIO $ do
+          live <- Seq.fromList <$> filterM (\s -> readIORef s.alive) (toList owned)
+          modifyIORef' env.storeByType (IntMap.insert idx live)
+          modifyIORef' env.storeIndex (IntMap.delete idx)
+          modifyIORef' env.storeDead (IntMap.delete idx)
+
+-- | Kill a constraint (set alive to False). A stored one counts toward
+-- its type's dead count (see 'compactIfWorth').
 killConstraint :: SuspensionId -> Chr ()
 killConstraint sid = do
-  Suspension {alive} <- lookupSusp sid
+  Suspension {suspType, alive, stored} <- lookupSusp sid
+  wasLive <- liftIO $ (&&) <$> readIORef alive <*> readIORef stored
   recordFlagWrite alive
   liftIO $ writeIORef alive False
+  when wasLive $ do
+    SessionEnv {storeDead} <- ask
+    liftIO $ modifyIORef' storeDead (IntMap.insertWith (+) suspType.unConstraintType 1)
 
 -- | Check if a constraint is still alive.
 aliveConstraint :: SuspensionId -> Chr Bool

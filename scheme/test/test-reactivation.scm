@@ -92,7 +92,7 @@
 (test-group "dead-suspensions-are-dropped"
   (let* ((s (a-session 1))
          (dead (fresh-suspension s 1)))
-    (kill-constraint dead)
+    (kill-constraint s dead)
     (enqueue! s (list dead))
     (let ((called #f))
       (drain-queue! s (lambda (sid) (set! called #t)))

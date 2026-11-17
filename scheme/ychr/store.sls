@@ -37,12 +37,15 @@
           (ychr trail))
 
   ;;; Growable vectors (internal)
+  ;;; `dead` is only used by the per-type growables of the store: how
+  ;;; many of its stored suspensions are dead (see `maybe-compact!`).
   (define-record-type (growable %make-growable growable?)
     (fields (mutable storage growable-storage growable-storage-set!)
-            (mutable count growable-count growable-count-set!)))
+            (mutable count growable-count growable-count-set!)
+            (mutable dead growable-dead growable-dead-set!)))
 
   (define (make-growable capacity)
-    (%make-growable (make-vector capacity #f) 0))
+    (%make-growable (make-vector capacity #f) 0 0))
 
   (define (vector-copy!/ychr to at from)
     (do ((i 0 (+ i 1)))
@@ -116,7 +119,8 @@
   ;;; growable vector, which is what makes ascending slot order
   ;;; reproduce the store's iteration order exactly. Slots stay valid
   ;;; because the store is only ever appended to, and its storage vector
-  ;;; only ever grows by copying its prefix. A search branch's writes to
+  ;;; only ever grows by copying its prefix (compaction, below, swaps in a
+  ;;; new vector and drops the type's index). A search branch's writes to
   ;;; the index are undone with the rest of the store (see "Search undo
   ;;; hooks" below).
   ;;; -------------------------------------------------------------------
@@ -417,6 +421,46 @@
                                       (begin (vector-set! new ctype ti) new)
                                       new))))
 
+  ;;; -------------------------------------------------------------------
+  ;;; Compaction
+  ;;;
+  ;;; A kill only clears `alive`, so without this a scan walks every
+  ;;; suspension of the type ever stored. When the dead ones outnumber
+  ;;; the live ones, the type gets a new storage vector with only the
+  ;;; live ones, in their old order. A compaction costs one pass and
+  ;;; needs more dead suspensions than live ones, so it is O(1) per kill.
+  ;;;
+  ;;; Nothing old is written: the growable gets a *new* vector, and the
+  ;;; type's index is dropped (its slots point into the old vector), so a
+  ;;; running loop keeps reading the vectors it captured. The store that
+  ;;; called us refiles the bucket in one pass (`file-backlog!`) if it is
+  ;;; still at least `index-threshold`, like any type crossing it.
+  ;;;
+  ;;; Never while a search is active: the trail holds counts into the
+  ;;; old vector, and the search cursor holds a slot.
+  ;;; -------------------------------------------------------------------
+
+  (define (maybe-compact! s ctype g)
+    (let ((n (growable-count g))
+          (dead (growable-dead g)))
+      (when (and (not (trail-active?))
+                 (>= n index-threshold)
+                 (> dead (- n dead)))
+        (let* ((old (growable-storage g))
+               (new (make-vector (max 16 (* 2 (- n dead))) #f)))
+          (let loop ((i 0) (j 0))
+            (if (< i n)
+                (let ((susp (vector-ref old i)))
+                  (if (suspension-alive? susp)
+                      (begin (vector-set! new j susp) (loop (+ i 1) (+ j 1)))
+                      (loop (+ i 1) j)))
+                (begin
+                  (growable-storage-set! g new)
+                  (growable-count-set! g j)
+                  (growable-dead-set! g 0))))
+          (when (vector-ref (session-store-index s) ctype)
+            (install-type-index! s ctype #f))))))
+
   ;;; Operations
   (define (create-constraint s ctype args)
     (let ((id (session-store-next-id s)))
@@ -461,6 +505,7 @@
       (let* ((ctype (suspension-type susp))
              (g (vector-ref (session-store-by-type s) ctype))
              (positions (vector-ref (session-index-positions s) ctype)))
+        (maybe-compact! s ctype g)
         (if (or (vector-ref (session-inert s) ctype) (null? positions))
             ;; Inert, or no position of this type is ever looked up
             ;; through an index: the pre-index path exactly. An inert
@@ -491,14 +536,25 @@
                     (growable-push! s g susp)
                     (insert-entries! s ctype slot entries))))))))
 
-  (define (kill-constraint susp)
+  (define (kill-constraint s susp)
     ;; Only `alive` is written, matching the reference: `stored` means
     ;; "has been stored", and `check-unwatched` reads the pair so that a
     ;; dead suspension's observer list stops counting. Clearing
     ;; `stored` here as well would make a kill-then-store re-append a
     ;; suspension that is already in the bucket.
-    (when (trail-active?)
-      (trail-push! (lambda () (suspension-alive-set! susp #t))))
+    ;;
+    ;; A stored, live one also counts toward its type's dead count (see
+    ;; `maybe-compact!`); the undo puts the old count back.
+    (if (and (suspension-alive? susp) (suspension-stored? susp))
+        (let* ((g (vector-ref (session-store-by-type s) (suspension-type susp)))
+               (dead (growable-dead g)))
+          (when (trail-active?)
+            (trail-push! (lambda ()
+                           (suspension-alive-set! susp #t)
+                           (growable-dead-set! g dead))))
+          (growable-dead-set! g (+ dead 1)))
+        (when (trail-active?)
+          (trail-push! (lambda () (suspension-alive-set! susp #t)))))
     (suspension-alive-set! susp #f))
 
   (define (alive-constraint? susp)

@@ -824,13 +824,24 @@ none is encoded:
   still read from the set), but it can pick a bigger set or skip the
   index.
 
-What is *deliberately* not trimmed: a kill leaves the index entry in
+What is *deliberately* not trimmed (between compactions, see below): a kill leaves the index entry in
 place (the iterator's liveness check filters it, exactly as it does for
 a scan), and a suspension whose indexed argument was not fully ground
 when it was stored stays in the fallback set for good even after that
 argument is bound. Both cost memory, never correctness, and both keep
 the index append-only — which is what makes it cheap enough to be worth
 having.
+
+- **Compaction replaces, never edits, and never runs in a search.**
+  `compactIfWorth` (called by `storeConstraint`) swaps a type's sequence
+  for one with only its live suspensions once the dead ones outnumber
+  them, and drops the type's index, since its slots point into the old
+  sequence. The same store then refiles the bucket if it is still at
+  least `indexThreshold`. It never runs while `trail` is `Just`: a
+  choice-point snapshot and the search cursor hold slots. A running loop
+  holds the old `Seq` and index, which are persistent values, so it is
+  not affected. `storeDead` is only a trigger: a wrong count costs a
+  compaction too early or too late, never a lost suspension.
 
 ### Scheme store index agrees with the store it describes — `scheme/ychr/store.sls`
 
@@ -879,9 +890,15 @@ write never changes a slot below a count already handed out: it
 appends past it, or grows into a fresh vector. A search branch writes
 past the counts at its start, which are at least the counts any loop
 around the search holds, so its undo cannot change what such a loop
-reads either. Compaction (overwriting slots in place) would break this.
+reads either. Compaction in place (overwriting slots) would break this.
+`maybe-compact!` does not: it gives the growable a *new* storage vector
+holding the live suspensions and drops the type's index, so a loop
+keeps reading the vectors it captured. It never runs while a trail is
+active, since the trail holds counts and the search cursor a slot into
+the old vector. The dead count it reads (`growable-dead`) is bumped by
+`kill-constraint` and trailed with it.
 
-What is deliberately not trimmed is the same as on the Haskell side: a
+What is deliberately not trimmed between compactions is the same as on the Haskell side: a
 kill leaves the bucket entry in place (the iterator's liveness check
 filters it, exactly as for a scan), and a suspension whose indexed
 argument was not fully ground when it was stored stays in the position's

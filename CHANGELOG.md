@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Store: dead constraints no longer pile up. When a type's dead
+  constraints outnumber its live ones, the next store of that type
+  drops them (not during a search). So a rule that scans a type with
+  no index no longer walks every constraint of that type ever stored.
+  Both backends. The
+  Scheme runtime's `kill-constraint` now takes the session:
+  `(kill-constraint s susp)`.
+
 - Store index: a rule lookup with several ground conditions on indexed
   arguments now uses the one with the fewest candidates, not the first.
   `fact(O, N, V) \ get(O, N, R)` with every fact sharing `O` was

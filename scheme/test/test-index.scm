@@ -181,7 +181,7 @@
         (store-constraint s (create-constraint s 0 (vector i))))
       (let ((victim (create-constraint s 0 (vector 5))))
         (store-constraint s victim)
-        (kill-constraint victim)
+        (kill-constraint s victim)
         ;; The iterator's liveness check filters it, exactly as it does
         ;; for a scan; the index itself never trims.
         (test-equal "no index entry is removed" 2
@@ -349,5 +349,62 @@
       (%unify s x 9)
       (drain-queue! s (lambda (id) (set! seen (cons id seen))))
       (test-equal "reactivation enqueued" (list watched) seen))))
+
+;; ---------------------------------------------------------------------------
+;; Compaction
+;; ---------------------------------------------------------------------------
+
+;; Store `n` suspensions of type 0, arg i, then kill all but the
+;; first `keep`. Returns the kept ones in store order.
+(define (store-and-kill! s n keep)
+  (let ((all (let loop ((i 0) (acc '()))
+               (if (= i n)
+                   (reverse acc)
+                   (loop (+ i 1) (cons (tell! s (create-constraint s 0 (vector i))) acc))))))
+    (let loop ((xs all) (i 0) (kept '()))
+      (cond ((null? xs) (reverse kept))
+            ((< i keep) (loop (cdr xs) (+ i 1) (cons (car xs) kept)))
+            (else (kill-constraint s (car xs)) (loop (cdr xs) (+ i 1) kept))))))
+
+(define (snapshot->list s ctype)
+  (let-values (((vec count) (store-snapshot s ctype)))
+    (let loop ((i 0) (acc '()))
+      (if (= i count) (reverse acc) (loop (+ i 1) (cons (vector-ref vec i) acc))))))
+
+(test-group "compaction"
+  (test-group "a store drops the dead ones"
+    (let* ((s (%make-session 1))
+           (kept (store-and-kill! s 1000 10))
+           (last (tell! s (create-constraint s 0 (vector 'x)))))
+      (test-equal "only the live ones, in order"
+                  (append kept (list last)) (snapshot->list s 0))))
+
+  (test-group "not while a search is active"
+    (let* ((s (%make-session 1))
+           (prev (trail-enter!))
+           (mark (trail-mark)))
+      (store-and-kill! s 100 10)
+      (store-constraint s (create-constraint s 0 (vector 'x)))
+      (let-values (((vec count) (store-snapshot s 0)))
+        (test-eqv "nothing dropped" 101 count))
+      (trail-unwind! mark)
+      (trail-exit! prev)))
+
+  (test-group "a held snapshot is not touched"
+    (let* ((s (%make-session 1))
+           (kept (store-and-kill! s 100 10)))
+      (let-values (((vec count) (store-snapshot s 0)))
+        (store-constraint s (create-constraint s 0 (vector 'x)))
+        (test-eqv "same count" 100 count)
+        (test-eqv "same slot 50" 50 (suspension-arg (vector-ref vec 50) 0)))))
+
+  (test-group "the index is rebuilt"
+    (let* ((s (index-session))
+           (kept (store-and-kill! s 100 20))
+           (last (tell! s (create-constraint s 0 (vector 5)))))
+      (test-equal "store compacted" 21 (length (snapshot->list s 0)))
+      (test-equal "key 5" (list (list-ref kept 5) last)
+                  (candidates s 0 0 (ground-key 5)))
+      (test-equal "a killed key" '() (candidates s 0 0 (ground-key 50))))))
 
 (test-end "index")

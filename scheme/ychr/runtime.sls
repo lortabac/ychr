@@ -1850,7 +1850,7 @@
                    ;; forever. The kill is trailed like any other flag
                    ;; write, so the constraint is alive again if this
                    ;; alternative is abandoned.
-                   (kill-constraint susp)
+                   (kill-constraint s susp)
                    ;; Resolved here, inside the branch, and without the
                    ;; export check: a lifted disjunct is a
                    ;; module-internal constraint, so the check that
