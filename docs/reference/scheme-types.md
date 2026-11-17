@@ -103,18 +103,29 @@ For a constructor `C` of type `T`:
 | `C` | A nullary constructor: the atom itself. With `C?`, no other definitions. |
 | `(T-type? v)` | `v` is a term of any constructor of `T`, exported or not. |
 
-The type predicate has its own suffix so it never clashes with a
-constructor predicate: in `:- chr_type t ---> t(int) ; u.`, `t?` tests
-for the constructor `t` and `t-type?` for the type. An opaque type and a
-built-in type get no definitions.
+The type predicate has its own suffix, so in `:- chr_type t ---> t(int)
+; u.`, `t?` tests for the constructor `t` and `t-type?` for the type. An
+opaque type and a built-in type get no definitions.
 
 Names come from the source names, never from the runtime's mangled
-functors. A character that is not allowed in an identifier is escaped
-the same way the backend escapes constraint aliases.
+functors. These characters stay as they are: ASCII letters, digits and
+`! $ % & * < = > ? ^ _ ~ + - . @`. So `vhc-core(eta-tvs :: int)` gives
+`make-vhc-core`, `vhc-core?` and `vhc-core-eta-tvs`, and the module
+`a-b` gives the library `(ychr types a-b)`. Any other character becomes
+`__u` plus its hex code plus `__`: `'x y'` gives `make-x__u20__y`. This
+includes `:` (it would clash with the library's import prefixes), `/`
+(a module name ends up in a file path) and every non-ASCII character,
+which R6RS would allow. A name may not start with a digit or with `+ -
+. @`, so such a first character is escaped too: `'9lives'` gives
+`__u39__lives`. The empty name `''` gives `__empty__`. Other characters
+that stay, like `?` or `*`, can end up in a file name through the module
+name; that is fine on Linux and macOS but not on Windows. The [schema](#schema) lists every generated name, so a
+tool never has to compute them.
 
 **Collisions are errors** (YCHR-50006): two definitions with one name,
-for example the same constructor name in two types. The generator never
-renames.
+for example the same constructor name in two types, a nullary
+constructor `'a-b'` and the label `b` of a constructor `a`, or a
+constructor `'t-type'` in a type `t`. The generator never renames.
 
 The library itself imports `(rnrs)` and `(ychr var)` with a prefix, so
 any name is fine inside it. Your code may not be: common constructors
@@ -211,27 +222,39 @@ prints, under Chez Scheme:
 ## Schema
 
 ```scheme
-(ychr-schema 1
+(ychr-schema 2
   (module points)
   (library (ychr types points))
   (type point (X Y)
-    (constructor point points__point (field x X) (field y Y)))
+    (scheme point-type?)
+    (constructor point points__point (scheme make-point point?)
+      (field x X (scheme point-x point-with-x))
+      (field y Y (scheme point-y point-with-y))))
   (type shape ()
-    (constructor circle points__circle (field r float))
-    (constructor rect points__rect (field #f float) (field #f float))
-    (constructor empty points__empty)))
+    (scheme shape-type?)
+    (constructor circle points__circle (scheme make-circle circle?)
+      (field r float (scheme circle-r circle-with-r)))
+    (constructor rect points__rect (scheme make-rect rect?)
+      (field #f float (scheme rect-1))
+      (field #f float (scheme rect-2)))
+    (constructor empty points__empty (scheme empty empty?))))
 ```
 
-- `1` is the format version.
-- `(type NAME (PARAMS …) CONSTRUCTOR …)`, or `(type NAME (PARAMS …)
-  opaque)`. Only the generated constructors are listed.
-- `(constructor NAME FUNCTOR FIELD …)`: the source name, then the symbol
-  the runtime uses as the term's functor.
-- `(field LABEL TYPE)`: the label is `#f` for an unlabelled argument.
+- `2` is the format version.
+- `(type NAME (PARAMS …) (scheme T-type?) CONSTRUCTOR …)`, or `(type
+  NAME (PARAMS …) opaque)`. Only the generated constructors are listed.
+- `(constructor NAME FUNCTOR (scheme MAKE PREDICATE) FIELD …)`: the
+  source name, the symbol the runtime uses as the term's functor, then
+  the library's names for it. `MAKE` is `make-C`, or for a nullary
+  constructor `C`, the atom itself.
+- `(field LABEL TYPE (scheme ACCESSOR [UPDATE]))`: the label is `#f`
+  for an unlabelled argument, and only a labelled one has an update.
+- The `scheme` entries hold exactly the names the library exports.
 - Types use YCHR's syntax as s-expressions: a type variable is its
   name, an application is a list (`(list A)`). Built-in and prelude
   types are bare; other types are qualified (`pairs:pair`).
-- A name that is not a valid identifier is written as a string.
+- A source name that is not a valid identifier is written as a string.
+  The names in `scheme` entries are always identifiers.
 
 ## Serialization
 

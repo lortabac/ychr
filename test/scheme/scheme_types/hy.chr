@@ -1,0 +1,6 @@
+% Fixture for test/scheme/test_scheme_types.py: hyphens in the module,
+% type, constructor and label names stay in the generated names.
+:- module('a-b', [type('vhc-type'/0)]).
+
+:- chr_type 'vhc-type' ---> 'vhc-core'('eta-tvs' :: int, version :: int)
+                          ; 'n-a'.

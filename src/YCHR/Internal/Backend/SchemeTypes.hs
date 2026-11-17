@@ -27,21 +27,22 @@ module YCHR.Internal.Backend.SchemeTypes
   )
 where
 
+import Data.Char (isAlpha, isAscii, isDigit, ord)
 import Data.List (nub, sortOn)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Numeric (showHex)
 import YCHR.Internal.Backend.Scheme
-  ( encodeAliasComponent,
-    flatMaxArity,
+  ( flatMaxArity,
     functorTypeUid,
     isValidSchemeIdentifier,
     staticFunctorType,
   )
 import YCHR.Internal.Collected (CollectedModule (..))
-import YCHR.Internal.Compile.Names (encodeIdentifier, vmName)
+import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Loc (SourceLoc (..))
@@ -120,7 +121,78 @@ selectModule prog files requested = case requested of
 -- ground variant, with the module name made an identifier.
 defaultLibraryName :: Bool -> Text -> [Text]
 defaultLibraryName g m =
-  ["ychr", if g then "ground-types" else "types", encodeAliasComponent m]
+  ["ychr", if g then "ground-types" else "types", encodeNameStart m]
+
+-- ---------------------------------------------------------------------------
+-- Names
+-- ---------------------------------------------------------------------------
+
+-- | A source name made part of a Scheme identifier. ASCII letters,
+-- digits and @! $ % & * < = > ? ^ _ ~ + - . \@@ stay; any other char
+-- becomes @__u\<hex\>__@. Atoms can't hold @__@, so this is injective.
+--
+-- R6RS allows more, but we escape on purpose: @:@ (the library imports
+-- with @rnrs:@, @ychr:@ and @r:@ prefixes, so @rnrs:define@ would
+-- clash), @/@ (a module name ends up in a file path) and non-ASCII
+-- (keeps the files ASCII).
+encodeName :: Text -> Text
+encodeName = T.concatMap enc
+  where
+    enc c
+      | keep c = T.singleton c
+      | otherwise = escape c
+    keep c = isAscii c && (isAlpha c || isDigit c || c `elem` ("!$%&*<=>?^_~+-.@" :: [Char]))
+
+-- | 'encodeName' for a name at the start of an identifier: a first char
+-- that is not an R6RS @\<initial\>@ (a digit, @+ - . \@@) is escaped too.
+-- The empty name gives @__empty__@, which no atom can spell.
+encodeNameStart :: Text -> Text
+encodeNameStart t = case T.uncons t of
+  Nothing -> "__empty__"
+  Just (c, rest)
+    | isAscii c && (isAlpha c || c `elem` ("!$%&*<=>?^_~" :: [Char])) ->
+        T.singleton c <> encodeName rest
+    | otherwise -> escape c <> encodeName rest
+
+escape :: Char -> Text
+escape c = "__u" <> T.pack (showHex (ord c) "") <> "__"
+
+-- | The names the library exports for a constructor.
+data CtorNames = CtorNames
+  { -- | @make-C@, or @C@ itself for a nullary constructor.
+    value :: Text,
+    -- | @C?@.
+    predicate :: Text,
+    -- | Per argument: the accessor, and the update for a labelled one.
+    fieldNames :: [(Text, Maybe Text)]
+  }
+
+ctorNames :: DataConstructor -> CtorNames
+ctorNames c =
+  CtorNames
+    { value = if n == 0 then e else "make-" <> e,
+      predicate = e <> "?",
+      fieldNames =
+        [ case l of
+            Just lab -> (e <> "-" <> encodeName lab, Just (e <> "-with-" <> encodeName lab))
+            Nothing -> (e <> "-" <> T.pack (show i), Nothing)
+        | (i, l) <- zip [1 :: Int ..] (ctorLabels c)
+        ]
+    }
+  where
+    e = encodeNameStart (baseName c.conName)
+    n = length (conArgs c)
+
+ctorLabels :: DataConstructor -> [Maybe Text]
+ctorLabels c = case c.conFields of
+  Labelled fs -> map (Just . fst) (NE.toList fs)
+  Positional ts -> map (const Nothing) ts
+
+-- | @T-type?@, or nothing for a type with no constructors.
+typePredName :: TypeDefinition -> Maybe Text
+typePredName td = case typeConstructors td of
+  [] -> Nothing
+  _ -> Just (encodeNameStart (baseName td.name) <> "-type?")
 
 -- ---------------------------------------------------------------------------
 -- Selection
@@ -254,32 +326,30 @@ typeDefs opts st s =
 -- | @T-type?@: true for any constructor of the type, exported or not.
 -- None for an opaque type, which has no constructors.
 --
--- The @-type@ suffix keeps it apart from every constructor predicate:
--- an encoded constructor name never holds a @-@, so @C?@ can't be
--- @T-type?@, whatever the two are called.
+-- The @-type@ suffix keeps it apart from the constructor predicates,
+-- except for a constructor called @T-type@: that is a collision.
 typePredicate :: SchemeTypesOptions -> Statics -> Selected -> [Def]
-typePredicate opts st s = case typeConstructors s.def of
-  [] -> []
-  _ ->
+typePredicate opts st s = case typePredName s.def of
+  Nothing -> []
+  Just tp ->
     [ mkDef
-        (tIdent <> "-type?")
+        tp
         ("type predicate of " <> describeType s.def)
         ( defineWith
-            (tIdent <> "-type?")
+            tp
             [ (pn, predicateOf c)
             | (pn, c) <- named,
               length (conArgs c) > 0,
               staticOf st c == Nothing
             ]
             ["v"]
-            ( varCheck opts (tIdent <> "-type?") "v" $
+            ( varCheck opts tp "v" $
                 letTerm opts "v" $ \d ->
                   anyOf [ctorTest c (SAtom pn) d | (pn, c) <- named]
             )
         )
     ]
   where
-    tIdent = encodeAliasComponent (baseName s.def.name)
     named =
       [ (maybe ("p" <> T.pack (show i)) staticPred (staticOf st c), c)
       | (i, c) <- zip [1 :: Int ..] (typeConstructors s.def)
@@ -291,56 +361,52 @@ ctorDefs ::
   SchemeTypesOptions -> Statics -> TypeDefinition -> DataConstructor -> [Def]
 ctorDefs opts st td c
   | n == 0 =
-      [ mkDef e what (SList [SAtom "rnrs:define", SAtom e, sym f]),
+      [ mkDef mk what (SList [SAtom "rnrs:define", SAtom mk, sym f]),
         predicate
       ]
   | otherwise =
       [ case static of
-          Just k -> reexport ("make-" <> e) what (staticCtor k)
-          Nothing -> mkDef ("make-" <> e) what ctorForm,
+          Just k -> reexport mk what (staticCtor k)
+          Nothing -> mkDef mk what ctorForm,
         predicate
       ]
-        ++ zipWith3 accessor [0 :: Int ..] names labels
-        ++ concat (zipWith update [0 :: Int ..] labels)
+        ++ zipWith3 accessor [0 :: Int ..] cn.fieldNames labels
+        ++ concat (zipWith3 update [0 :: Int ..] cn.fieldNames labels)
   where
-    e = ctorIdent c
+    cn = ctorNames c
+    mk = cn.value
+    pn = cn.predicate
     f = (vmName c.conName).unName
     n = length (conArgs c)
     what = "constructor " <> describeCtor c <> " of type " <> describeType td
     params = ["x" <> T.pack (show i) | i <- [1 .. n]]
-    labels = case c.conFields of
-      Labelled fs -> map (Just . fst) (NE.toList fs)
-      Positional _ -> replicate n Nothing
-    names =
-      [ maybe (T.pack (show i)) encodeIdentifier l
-      | (i, l) <- zip [1 :: Int ..] labels
-      ]
+    labels = ctorLabels c
     static = staticOf st c
-    build args = SList (SAtom (maybe ("make-" <> e) staticCtor static) : args)
+    build args = SList (SAtom (maybe mk staticCtor static) : args)
     predicate = case static of
       -- Ground and unchecked: the record type's own predicate.
       Just k
         | opts.ground && not opts.checked ->
-            reexport (e <> "?") ("predicate of " <> what) (staticPred k)
-      _ -> mkDef (e <> "?") ("predicate of " <> what) predForm
+            reexport pn ("predicate of " <> what) (staticPred k)
+      _ -> mkDef pn ("predicate of " <> what) predForm
     ctorForm
       | n <= flatMaxArity =
-          rnrs "define" [SAtom ("make-" <> e), constructorOf c]
+          rnrs "define" [SAtom mk, constructorOf c]
       | otherwise =
           defineWith
-            ("make-" <> e)
+            mk
             [("k", constructorOf c)]
             params
             (SList [SAtom "k", rnrs "vector" (map SAtom params)])
-    predBody p = varCheck opts (e <> "?") "v" (letTerm opts "v" (ctorTest c p))
+    predBody p = varCheck opts pn "v" (letTerm opts "v" (ctorTest c p))
     predForm
-      | n == 0 = define (e <> "?") ["v"] (predBody (SAtom "p"))
-      | Just k <- static = define (e <> "?") ["v"] (predBody (SAtom (staticPred k)))
+      | n == 0 = define pn ["v"] (predBody (SAtom "p"))
+      | Just k <- static = define pn ["v"] (predBody (SAtom (staticPred k)))
       -- Ground and unchecked: the functor's own predicate, as is.
       | opts.ground && not opts.checked && n <= flatMaxArity =
-          rnrs "define" [SAtom (e <> "?"), predicateOf c]
+          rnrs "define" [SAtom pn, predicateOf c]
       | otherwise =
-          defineWith (e <> "?") [("p", predicateOf c)] ["v"] (predBody (SAtom "p"))
+          defineWith pn [("p", predicateOf c)] ["v"] (predBody (SAtom "p"))
     -- The raw field @i@ (0-based) of a term @d@ that is not a variable.
     field d i
       | n <= flatMaxArity =
@@ -356,7 +422,7 @@ ctorDefs opts st td c
       | opts.checked =
           rnrs
             "if"
-            [ SList [SAtom (e <> "?"), SAtom "p"],
+            [ SList [SAtom pn, SAtom "p"],
               body,
               rnrs
                 "assertion-violation"
@@ -366,27 +432,24 @@ ctorDefs opts st td c
                 ]
             ]
       | otherwise = body
-    accessor i l lab =
-      let nm = e <> "-" <> l
-       in Def
-            { ident = nm,
-              origin = case lab of
-                Just t -> "label " <> t <> " of " <> what
-                Nothing -> "argument " <> l <> " of " <> what,
-              form =
-                define
-                  nm
-                  ["p"]
-                  ( varCheck opts nm "p" $
-                      guarded nm (readField opts nm (field (termOf opts "p") i))
-                  ),
-              from = Nothing
-            }
-    update :: Int -> Maybe Text -> [Def]
-    update _ Nothing = []
-    update i (Just l) =
-      let nm = e <> "-with-" <> encodeIdentifier l
-          args d = [if j == i then SAtom "v" else field d j | j <- [0 .. n - 1]]
+    accessor i (nm, _) lab =
+      Def
+        { ident = nm,
+          origin = case lab of
+            Just t -> "label " <> t <> " of " <> what
+            Nothing -> "argument " <> T.pack (show (i + 1)) <> " of " <> what,
+          form =
+            define
+              nm
+              ["p"]
+              ( varCheck opts nm "p" $
+                  guarded nm (readField opts nm (field (termOf opts "p") i))
+              ),
+          from = Nothing
+        }
+    update :: Int -> (Text, Maybe Text) -> Maybe Text -> [Def]
+    update i (_, Just nm) (Just l) =
+      let args d = [if j == i then SAtom "v" else field d j | j <- [0 .. n - 1]]
        in [ Def
               { ident = nm,
                 origin = "update of label " <> l <> " of " <> what,
@@ -400,6 +463,7 @@ ctorDefs opts st td c
                 from = Nothing
               }
           ]
+    update _ _ _ = []
 
 -- | The test that a value @d@ that is not a variable is constructor
 -- @c@, given @p@, the functor's predicate (unused when @c@ is nullary).
@@ -435,9 +499,6 @@ functorProc proc c =
       sym (vmName c.conName).unName,
       SInt (fromIntegral (length (conArgs c)))
     ]
-
-ctorIdent :: DataConstructor -> Text
-ctorIdent c = encodeAliasComponent (baseName c.conName)
 
 -- ---------------------------------------------------------------------------
 -- Rendering
@@ -520,13 +581,17 @@ renderRecords opts cs =
 renderSchema :: SchemeTypesOptions -> [Selected] -> Text
 renderSchema opts selected =
   T.unlines . closeLast $
-    [ "(ychr-schema 1",
+    [ "(ychr-schema 2",
       "  " <> printSExpr (SList [SAtom "module", schemaName opts.moduleName]),
       "  " <> printSExpr (SList [SAtom "library", SList (map SAtom opts.libraryName)])
     ]
       ++ concatMap typeEntry selected
   where
     closeLast ls = init ls ++ [last ls <> ")"]
+    -- An entry: its header line, then its body lines, closed on the
+    -- last line.
+    entry h [] = [h <> ")"]
+    entry h ls = h : closeLast ls
     typeEntry s = case s.def.kind of
       Opaque ->
         [ "  "
@@ -545,21 +610,38 @@ renderSchema opts selected =
                 <> printSExpr (schemaName (baseName s.def.name))
                 <> " "
                 <> printSExpr (params s)
-         in case map (("    " <>) . printSExpr . ctorEntry) s.visible of
-              [] -> [header <> ")"]
-              ctors -> header : init ctors ++ [last ctors <> ")"]
+            body =
+              ["    " <> printSExpr (scheme [tp]) | Just tp <- [typePredName s.def]]
+                ++ concatMap ctorEntry s.visible
+         in entry header body
     params s = SList (map schemaName s.def.typeVars)
+    -- One line for the constructor, one per field.
     ctorEntry c =
+      let cn = ctorNames c
+          header =
+            "    (constructor "
+              <> T.unwords
+                ( map
+                    printSExpr
+                    [ schemaName (baseName c.conName),
+                      schemaName ((vmName c.conName).unName),
+                      scheme [cn.value, cn.predicate]
+                    ]
+                )
+       in entry
+            header
+            ( map
+                (("      " <>) . printSExpr)
+                (zipWith3 field (ctorLabels c) (conArgs c) cn.fieldNames)
+            )
+    field l t (acc, upd) =
       SList
-        ( SAtom "constructor"
-            : schemaName (baseName c.conName)
-            : schemaName ((vmName c.conName).unName)
-            : fields c
-        )
-    fields c = case c.conFields of
-      Positional ts -> [SList [SAtom "field", SAtom "#f", typeSExpr t] | t <- ts]
-      Labelled fs ->
-        [SList [SAtom "field", schemaName l, typeSExpr t] | (l, t) <- NE.toList fs]
+        [ SAtom "field",
+          maybe (SAtom "#f") schemaName l,
+          typeSExpr t,
+          scheme (acc : maybe [] pure upd)
+        ]
+    scheme ns = SList (SAtom "scheme" : map SAtom ns)
 
 -- | A type in YCHR's type syntax as an s-expression. Built-in types and
 -- the prelude's are bare; other user types are @mod:name@.

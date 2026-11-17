@@ -17,6 +17,7 @@ import subprocess
 import pytest
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "scheme_types", "rt.chr")
+HYPHEN = os.path.join(os.path.dirname(__file__), "scheme_types", "hy.chr")
 
 ROUND_TRIP = """
 (import (rnrs) (ychr runtime) (ychr generated rt) (ychr types rt))
@@ -183,6 +184,31 @@ GROUND_CHECKED_EXPECTED = (
     "point-x no-error)"
 )
 
+HYPHEN_USE = """
+(import (rnrs) (ychr LIB a-b))
+(let ((c (vhc-core-with-version (make-vhc-core 1 2) 3)))
+  (if (and (vhc-core? c) (eqv? 1 (vhc-core-eta-tvs c))
+           (eqv? 3 (vhc-core-version c)) (n-a? n-a)
+           (vhc-type-type? c) (vhc-type-type? n-a))
+      (display "ok")
+      (display "FAIL")))
+"""
+
+# Prints the schema's `(scheme ...)` names and the library's exports,
+# both sorted.
+HYPHEN_EXPORTS = """
+(import (chezscheme))
+(define (scheme-names x)
+  (cond ((and (pair? x) (eq? (car x) 'scheme)) (cdr x))
+        ((pair? x) (append (scheme-names (car x)) (scheme-names (cdr x))))
+        (else '())))
+(define (sorted l) (sort (lambda (a b) (string<? (symbol->string a) (symbol->string b))) l))
+(define schema (call-with-input-file (cadr (command-line)) read))
+(eval '(import (ychr LIB a-b)))
+(write (list (sorted (scheme-names schema))
+             (sorted (library-exports '(ychr LIB a-b)))))
+"""
+
 GROUND_FASL_READ = FASL_READ.replace("(ychr types rt)", "(ychr ground-types rt)")
 
 
@@ -320,3 +346,42 @@ def test_ground_fasl_chez(libs, project_root, tmp_path):
     assert w.returncode == 0, w.stderr
     r = run_chez(dirs, GROUND_FASL_READ, tmp_path, "r.sps", data)
     assert r.returncode == 0 and r.stdout == "ok", r.stdout + r.stderr
+
+
+@pytest.fixture(scope="module")
+def hyphen_libs(ychr_bin, project_root, tmp_path_factory):
+    """Both variants of the hyphen fixture's library, with schemas."""
+    out = tmp_path_factory.mktemp("scheme_types_hyphen")
+    for extra in ([], ["--ground"]):
+        r = subprocess.run(
+            [ychr_bin, "scheme-types", "--Werror", "--schema", *extra,
+             "-d", str(out), HYPHEN],
+            capture_output=True, text=True, cwd=project_root,
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+    return str(out)
+
+
+@pytest.mark.parametrize("lib", ["types", "ground-types"])
+def test_hyphen_names_guile(guile_bin, hyphen_libs, project_root, tmp_path, lib):
+    dirs = [os.path.join(project_root, "scheme"), hyphen_libs]
+    r = run_guile(guile_bin, dirs, HYPHEN_USE.replace("LIB", lib), tmp_path)
+    assert r.returncode == 0 and r.stdout == "ok", r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("lib", ["types", "ground-types"])
+def test_hyphen_names_chez(hyphen_libs, project_root, tmp_path, lib):
+    dirs = [os.path.join(project_root, "scheme"), hyphen_libs]
+    r = run_chez(dirs, HYPHEN_USE.replace("LIB", lib), tmp_path, "hy.sps")
+    assert r.returncode == 0 and r.stdout == "ok", r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("lib", ["types", "ground-types"])
+def test_schema_names_are_exports_chez(hyphen_libs, project_root, tmp_path, lib):
+    dirs = [os.path.join(project_root, "scheme"), hyphen_libs]
+    schema = os.path.join(hyphen_libs, "ychr", lib, "a-b.schema.scm")
+    r = run_chez(dirs, HYPHEN_EXPORTS.replace("LIB", lib), tmp_path, "ex.sps",
+                 schema)
+    assert r.returncode == 0, r.stdout + r.stderr
+    names, exports = r.stdout[2:-2].split(") (")
+    assert names == exports and "make-vhc-core" in names, r.stdout
