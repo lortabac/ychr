@@ -181,7 +181,8 @@ are easy to miss:
   that re-raises an escaping condition. No continuation escape crosses
   the host call, so a `dynamic-wind` would add nothing.
 * `stored` is recorded only on the *first, effective* store, and
-  `kill-constraint` writes only `alive` — both matching the reference
+  `kill-constraint` writes only `alive` (plus the type's dead count, for
+  compaction) — both matching the reference
   (`Store.hs`'s `storeConstraint` guards on `unless stored` and
   `killConstraint` never touches the flag). A re-store of an
   already-stored suspension is a no-op that Late Storage emits at the end

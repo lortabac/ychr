@@ -44,6 +44,9 @@
 -- order. Slots stay valid because the store is only ever appended to,
 -- and the index is restored by the same search snapshot as the store it
 -- describes — see @StoreSnapshot@ in "YCHR.Internal.Runtime.Search".
+-- The one exception is compaction
+-- ('YCHR.Internal.Runtime.Store.storeConstraint'), which drops the type's
+-- index along with its dead suspensions and refiles the rest.
 --
 -- == When the index is built
 --

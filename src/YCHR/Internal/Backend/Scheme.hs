@@ -938,7 +938,7 @@ compileStmt (BoolExprStmt e) =
 compileStmt (Store e) =
   SList [SAtom "store-constraint", SAtom "%s", compileIdExpr e]
 compileStmt (Kill e) =
-  SList [SAtom "kill-constraint", compileIdExpr e]
+  SList [SAtom "kill-constraint", SAtom "%s", compileIdExpr e]
 compileStmt (AddHistory (RuleId rid) ids) =
   SList
     [ SAtom "add-history!",

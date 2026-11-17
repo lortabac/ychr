@@ -309,7 +309,9 @@ data SolutionStep
     StepCommit
 
 -- | 0-based position in a constraint type's store sequence. Those
--- sequences are append-only, and 'restoreStoreSnapshot' only ever puts
+-- sequences are append-only while a search runs (no compaction
+-- then; see 'YCHR.Internal.Runtime.Store.storeConstraint'), and
+-- 'restoreStoreSnapshot' only ever puts
 -- back a prefix of the current one, so an index names the same
 -- suspension for as long as the driver holds it.
 newtype StoreSlot = StoreSlot Int

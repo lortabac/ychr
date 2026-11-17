@@ -162,7 +162,8 @@ data SessionEnv = SessionEnv
   { -- | Counter for fresh logical-variable IDs.
     varCounter :: !(IORef VarId),
     -- | Type-indexed store: one append-only sequence per constraint
-    -- type, keyed by the integer wrapped in 'ConstraintType'.
+    -- type, keyed by the integer wrapped in 'ConstraintType'. Dead
+    -- suspensions are dropped now and then (see 'storeDead').
     storeByType :: !(IORef (IntMap (Seq Suspension))),
     -- | Per-argument indexes over 'storeByType': the /Indexing/
     -- optimization of the paper (§5.3), see
@@ -170,6 +171,12 @@ data SessionEnv = SessionEnv
     -- reference, so a search snapshot restores it with the store it
     -- describes.
     storeIndex :: !(IORef StoreIndex),
+    -- | Per type, how many stored suspensions of 'storeByType' are dead.
+    -- 'YCHR.Internal.Runtime.Store.storeConstraint' compacts a type's
+    -- sequence once its dead ones outnumber its live ones. Only read
+    -- outside a search, so a fork's counter may drift (a branch undo
+    -- revives a constraint without lowering it) and nobody minds.
+    storeDead :: !(IORef (IntMap Int)),
     -- | Source names parallel to 'storeByType', indexed by
     -- 'ConstraintType'.
     storeTypeNames :: !(IntMap Types.Name),
@@ -367,6 +374,7 @@ initSessionEnv cfg = do
       ruleNameMap = IntMap.fromList (zip [0 ..] cfg.ruleNames)
   bt <- newIORef emptyStore
   sx <- newIORef emptyStoreIndex
+  sd <- newIORef IntMap.empty
   bi <- newIORef IntMap.empty
   ni <- newIORef 0
   hi <- newIORef Set.empty
@@ -380,6 +388,7 @@ initSessionEnv cfg = do
       { varCounter = vc,
         storeByType = bt,
         storeIndex = sx,
+        storeDead = sd,
         storeTypeNames = typeNameMap,
         indexPositions = cfg.indexPositions,
         inertTypes = IntSet.fromList [i | Types.ConstraintType i <- cfg.inertTypes],
@@ -474,6 +483,9 @@ forkSearchSessionEnv mode env = do
         <*> (newIORef =<< readIORef env.storeIndex)
         <*> (newIORef =<< readIORef env.storeById)
         <*> (newIORef =<< readIORef env.history)
+  -- A fork always has a trail, so it never compacts and never reads
+  -- its dead counts: a fresh counter is enough in both modes.
+  sd <- newIORef IntMap.empty
   rq <- newIORef Seq.empty
   cs <- newIORef []
   pmRef <- newIORef pm
@@ -484,6 +496,7 @@ forkSearchSessionEnv mode env = do
     env
       { storeByType = bt,
         storeIndex = sx,
+        storeDead = sd,
         storeById = bi,
         history = hi,
         reactQueue = rq,

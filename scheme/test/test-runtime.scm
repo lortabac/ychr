@@ -650,7 +650,7 @@
            (x (make-var s)))
       (let ((dead (create-constraint s 0 (vector 1))))
         (store-constraint s dead)
-        (kill-constraint dead))
+        (kill-constraint s dead))
       (store-constraint s (create-constraint s 0 (vector x)))
       (store-constraint s (create-constraint s 1 (vector 2 3)))
       s))
@@ -718,7 +718,7 @@
                 (do ((i 0 (+ i 1))) ((= i 20))
                   (let ((susp (create-constraint s 0 (vector i))))
                     (store-constraint s susp)
-                    (when (= i 7) (kill-constraint susp))))
+                    (when (= i 7) (kill-constraint s susp))))
                 (pretty-term (%write-store-to-list s))))
   ;; The mangled table's `%u` escapes and a base that itself contains a
   ;; `:` both survive the split: only `__` separates module from base.

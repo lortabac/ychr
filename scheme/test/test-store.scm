@@ -56,7 +56,7 @@
     (let ((susp (create-constraint s 0 (vector 42))))
       (store-constraint s susp)
       (test-assert "alive initially" (alive-constraint? susp))
-      (kill-constraint susp)
+      (kill-constraint s susp)
       (test-assert "dead after kill" (not (alive-constraint? susp)))
       (let-values (((vec count) (store-snapshot s 0)))
         (test-eqv "still in store" 1 count)

@@ -1,0 +1,40 @@
+% Dead suspensions are dropped from the store once they outnumber the
+% live ones (store compaction). This kills most `item`s, both in bulk
+% and one at a time, then checks keyed lookups (`has`, indexed on
+% item's argument) and a full scan (`sum_all`) see only the live ones.
+:- module(store_compaction, [run/4, sweep_run/1]).
+
+:- chr_constraint item/1, drop/1, has/2, sum_all/2,
+    fill/2, drop_range/2, churn/2, run/4, sweep/1, sweep_run/1.
+
+drop(I), item(I) <=> true.
+
+item(I) \ has(I, R) <=> R = true.
+has(_, R) <=> R = false.
+
+sum_all(Acc, R), item(I) <=> A is Acc + I, sum_all(A, R).
+sum_all(Acc, R) <=> R = Acc.
+
+fill(I, N) <=> I >= N | true.
+fill(I, N) <=> item(I), I1 is I + 1, fill(I1, N).
+
+drop_range(I, N) <=> I >= N | true.
+drop_range(I, N) <=> drop(I), I1 is I + 1, drop_range(I1, N).
+
+% Tell an item and kill it right away, many times over.
+churn(I, N) <=> I >= N | true.
+churn(I, N) <=> item(I), drop(I), I1 is I + 1, churn(I1, N).
+
+run(R1, R2, R3, S) <=>
+    fill(0, 1000), drop_range(10, 1000), fill(1000, 1010),
+    churn(2000, 3000),
+    has(5, R1), has(500, R2), has(1005, R3), sum_all(0, S).
+
+% Compaction while a loop over `item` runs. `drop_range` leaves 80 dead
+% items and 20 live ones, and stores no item after, so nothing has
+% compacted yet. The active `sweep` then walks the items; its first
+% firing stores an item, which compacts the store mid-loop. The loop
+% must keep its snapshot and still reach items 1..19.
+sweep(N) \ item(I) <=> I < N | J is I + N, item(J).
+
+sweep_run(S) <=> fill(0, 100), drop_range(20, 100), sweep(100), sum_all(0, S).

@@ -231,7 +231,7 @@ firing finds its selected match again.
 
 Indexing is delegated entirely to the runtime. The VM's `Foreach` specifies a constraint type and a set of argument conditions, and the runtime is responsible for finding matching constraints. This keeps the compiler simple and avoids baking indexing strategies into the VM.
 
-The store is a map from constraint type to an append-only sequence of suspensions. Each suspension contains:
+The store is a map from constraint type to an append-only sequence of suspensions. A kill only clears `alive`, so the dead ones stay; when they outnumber the live ones, the next store of that type swaps in a new sequence with only the live ones (in order) and drops the type's index, which the same store refiles. That is O(1) per kill, and never happens during a search, which holds slots into the old sequence. Each suspension contains:
 
 - `type`: the constraint type name
 - `id`: a unique constraint identifier
