@@ -11,6 +11,7 @@
           id-equal?
           is-constraint-type?
           store-snapshot
+          store-scan
           snapshot-length
           snapshot-ref
           suspension?
@@ -131,21 +132,17 @@
   (define index-threshold 16)
 
   ;;; What is known about one argument position of one constraint type.
-  ;;; Both slot lists are kept in descending order, because insertions
-  ;;; arrive in ascending slot order and `cons` is the only cheap
-  ;;; append; a lookup reverses the merge, which restores store order.
-  ;;;
-  ;;; Each slot list comes with its length, so a lookup can compare
-  ;;; candidate sets without walking them (`candidate-count`). A bucket
-  ;;; is a pair `(count . slots)`; the fallback set's count is
-  ;;; `rest-count`.
+  ;;; Each bucket, and the fallback set, is a growable vector of slots.
+  ;;; Slots are filed in ascending order, so each one is already in
+  ;;; store order, and its count is there for free (`candidate-count`).
+  ;;; A lookup hands the vectors out as they are and the loop merges
+  ;;; the two on the fly, so nothing is copied.
   (define-record-type (pos-index %make-pos-index pos-index?)
     (fields (immutable buckets pos-index-buckets)
-            (mutable rest pos-index-rest pos-index-rest-set!)
-            (mutable rest-count pos-index-rest-count pos-index-rest-count-set!)))
+            (immutable rest pos-index-rest)))
 
   (define (make-pos-index)
-    (%make-pos-index (make-hashtable equal-hash equal?) '() 0))
+    (%make-pos-index (make-hashtable equal-hash equal?) (make-growable 4)))
 
   ;;; The index of one type: an alist from argument position to
   ;;; `pos-index`, holding exactly the positions the program looks up.
@@ -191,31 +188,24 @@
   ;;; filed there by a branch would otherwise outlive it: restoring the
   ;;; growable's count does not reach the index, and the stale slot would
   ;;; hand back the abandoned branch's suspension, which is still alive.
-  ;;; Each write only prepends, so the undo puts the old list (and its
-  ;;; count) back.
+  ;;; Each write only appends, so the undo puts the old count back
+  ;;; (`growable-push!` trails it), or drops a key the branch added.
   (define (file-entry! ti slot pos key)
-    (let* ((pi (cdr (assv pos ti)))
-           (buckets (pos-index-buckets pi)))
+    (let ((pi (cdr (assv pos ti))))
       (if key
-          (let ((old (hashtable-ref buckets key #f)))
-            (when (trail-active?)
-              (trail-push!
-               (lambda ()
-                 (if old
-                     (hashtable-set! buckets key old)
-                     (hashtable-delete! buckets key)))))
-            (hashtable-set! buckets key
-                            (if old
-                                (cons (+ (car old) 1) (cons slot (cdr old)))
-                                (cons 1 (list slot)))))
-          (let ((old (pos-index-rest pi))
-                (old-count (pos-index-rest-count pi)))
-            (when (trail-active?)
-              (trail-push! (lambda ()
-                             (pos-index-rest-set! pi old)
-                             (pos-index-rest-count-set! pi old-count))))
-            (pos-index-rest-set! pi (cons slot old))
-            (pos-index-rest-count-set! pi (+ old-count 1))))))
+          (let* ((buckets (pos-index-buckets pi))
+                 (bucket (hashtable-ref buckets key #f)))
+            (if bucket
+                (growable-push! #f bucket slot)
+                ;; A new key: the undo drops the key, so the count
+                ;; written here needs no trail entry of its own.
+                (let ((new (make-growable 4)))
+                  (when (trail-active?)
+                    (trail-push! (lambda () (hashtable-delete! buckets key))))
+                  (vector-set! (growable-storage new) 0 slot)
+                  (growable-count-set! new 1)
+                  (hashtable-set! buckets key new))))
+          (growable-push! #f (pos-index-rest pi) slot))))
 
   ;;; A type that is being indexed from now on must still hold the
   ;;; suspensions stored below the threshold, which were never filed.
@@ -276,22 +266,6 @@
                         (add-observer! susp (vector-ref args i))
                         entries)))))))
 
-  ;;; Merge two descending, disjoint slot lists into one ascending list.
-  ;;;
-  ;;; Tail-recursive on purpose: the merge steps once per candidate and a
-  ;;; bucket can be large, so a non-tail recursion would put the whole
-  ;;; merged length on the stack where the scan this replaces used a flat
-  ;;; loop. Taking the larger head first and consing builds the ascending
-  ;;; prefix directly; whatever is left when one side runs out is
-  ;;; descending and holds only smaller slots, so its reverse is
-  ;;; prepended in one step.
-  (define (merge-ascending a b)
-    (let loop ((a a) (b b) (acc '()))
-      (cond ((null? a) (append (reverse b) acc))
-            ((null? b) (append (reverse a) acc))
-            ((> (car a) (car b)) (loop (cdr a) b (cons (car a) acc)))
-            (else (loop a (cdr b) (cons (car b) acc))))))
-
   ;;; The position index of `pos` in type index `ti`, or `#f`.
   (define (pos-index-of ti pos)
     (let ((entry (and ti (assv pos ti))))
@@ -302,32 +276,54 @@
   ;;; in src/YCHR/Internal/Runtime/Index.hs.
   (define (candidate-count pi key)
     (let ((bucket (hashtable-ref (pos-index-buckets pi) key #f)))
-      (+ (if bucket (car bucket) 0) (pos-index-rest-count pi))))
+      (+ (if bucket (growable-count bucket) 0)
+         (growable-count (pos-index-rest pi)))))
+
+  ;;; A lookup answer is five values:
+  ;;;
+  ;;;   storage  the type's suspension vector
+  ;;;   bslots   a vector of slots into `storage`, or #f for 0..bn-1
+  ;;;   bn       how many of `bslots` to read
+  ;;;   rslots   a second slot vector (the fallback set), or #f
+  ;;;   rn       how many of `rslots` to read
+  ;;;
+  ;;; Both slot vectors are ascending, and the loop merges them, so the
+  ;;; candidates come out in store order. Nothing is copied: these are
+  ;;; the index's own vectors. That is safe because every write only
+  ;;; appends, past the counts handed out here, or into a fresh vector
+  ;;; when a growable grows; so a running loop keeps seeing what was
+  ;;; there when it started. A search branch also only writes past the
+  ;;; counts at its start, which are at least the counts any loop around
+  ;;; the search captured, so its undo never touches what such a loop
+  ;;; reads.
+  (define empty-slots (make-vector 0))
+
+  ;;; The whole bucket of a type, in lookup-answer form.
+  (define (store-scan s ctype)
+    (let ((g (vector-ref (session-store-by-type s) ctype)))
+      (values (growable-storage g) #f (growable-count g) #f 0)))
 
   ;;; The answer for one chosen position index: its key's bucket plus
-  ;;; its fallback set, in store order, or the whole bucket when the
-  ;;; candidate set is not smaller (`n` is the candidate count).
+  ;;; its fallback set, or the whole bucket when the candidate set is
+  ;;; not smaller (`n` is the candidate count).
   (define (candidates-from storage count pi key n)
     (if (>= n count)
-        (values storage count)
-        (let* ((bucket (hashtable-ref (pos-index-buckets pi) key #f))
-               (slots (merge-ascending (if bucket (cdr bucket) '())
-                                       (pos-index-rest pi)))
-               (v (make-vector n)))
-          (let loop ((i 0) (ss slots))
-            (if (pair? ss)
-                (begin
-                  (vector-set! v i (vector-ref storage (car ss)))
-                  (loop (+ i 1) (cdr ss)))
-                (values v n))))))
+        (values storage #f count #f 0)
+        (let ((bucket (hashtable-ref (pos-index-buckets pi) key #f))
+              (rest (pos-index-rest pi)))
+          (values storage
+                  (if bucket (growable-storage bucket) empty-slots)
+                  (if bucket (growable-count bucket) 0)
+                  (growable-storage rest)
+                  (growable-count rest)))))
 
   ;;; The stored suspensions of a type that may hold an argument at
-  ;;; `pos` `equal?/chr` to a value whose ground key is `key`, in store
-  ;;; order. This is the lookup half of the optimization: where
-  ;;; `store-snapshot` hands back the whole type bucket, this hands back
-  ;;; the bucket's key plus the position's non-ground fallback set — a
-  ;;; superset of the matches, which the caller's per-candidate check
-  ;;; then narrows.
+  ;;; `pos` `equal?/chr` to a value whose ground key is `key`, as a
+  ;;; lookup answer (see above). This is the lookup half of the
+  ;;; optimization: where `store-scan` hands back the whole type
+  ;;; bucket, this hands back the key's bucket plus the position's
+  ;;; non-ground fallback set — a superset of the matches, which the
+  ;;; caller's per-candidate check then narrows.
   ;;;
   ;;; A type the store is not indexing is answered by the whole bucket,
   ;;; which is the pre-index behaviour exactly. So is a candidate set
@@ -339,7 +335,7 @@
            (count (growable-count g))
            (pi (pos-index-of (vector-ref (session-store-index s) ctype) pos)))
       (if (not pi)
-          (values storage count)
+          (values storage #f count #f 0)
           (candidates-from storage count pi key (candidate-count pi key)))))
 
   ;;; Like `candidate-suspensions`, for a loop with several conditions
@@ -359,7 +355,7 @@
         (if (null? ps)
             (if best-pi
                 (candidates-from storage count best-pi best-key best-n)
-                (values storage count))
+                (values storage #f count #f 0))
             (let* ((key (cdar ps))
                    (pi (and key (pos-index-of ti (caar ps)))))
               (if pi

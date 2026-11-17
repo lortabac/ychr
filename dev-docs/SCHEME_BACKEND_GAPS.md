@@ -254,10 +254,13 @@ contracts from the invariant side.
   runtime's `drain-queue!` takes `(session, callback)` and calls the callback
   on every dequeued constraint id, so the liveness check lives in the generated
   lambda rather than the runtime.
-- **Snapshot shape.** `Foreach` destructures two values from the runtime with
-  `(let-values (((%vec %count) CANDIDATES)) …)`; `store-snapshot`,
-  `candidate-suspensions` and `candidate-suspensions-among` all return
-  `(values storage count)`.
+- **Snapshot shape.** A `Foreach` with no index condition destructures
+  `(values storage count)` from `store-snapshot`. One with an eligible (total) index
+  condition destructures five values, `(values storage bslots bn rslots rn)`, from
+  `candidate-suspensions`, `candidate-suspensions-among` or `store-scan`: two
+  ascending slot vectors (the key's bucket and the fallback set, read in
+  place, not copied) that the loop merges with two cursors. `bslots` is `#f`
+  for the whole bucket, slots `0..bn-1`.
 - **`If` fall-through.** In the tail compilation an `If` with a `Return` in an
   arm is emitted as `(if c ARM-spliced-before-rest ARM-spliced-before-rest)`,
   so a binder an arm introduces lexically scopes over the statements after the

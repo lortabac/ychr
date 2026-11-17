@@ -9,6 +9,11 @@
   `test/golden/bench_index_two_keys` with 40000 facts: 94 s → 1.3 s).
   Both backends.
 
+- Scheme backend: an indexed rule lookup no longer copies its
+  candidates into a new vector; the loop reads the index in place
+  (`leq_closure` on Chez: −12% time, −26% allocation). The Haskell
+  interpreter no longer builds a merged set either.
+
 - New prelude function `unifiable_with_occurs_check/2`: like
   `unifiable/2`, but `X` vs `f(X)` is `false`. It binds nothing and
   never raises, so `unifiable_with_occurs_check(A, B) | A = B` is a

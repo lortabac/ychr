@@ -196,7 +196,7 @@ stateTests =
                 (ConstraintType 0)
                 [IndexEntry 3 [PositionKey 0 (Just (KInt 1))]]
                 emptyStoreIndex
-         in candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.singleton 3,
+         in candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= [3],
       testCase "an unkeyable value lands in the fallback set of every key" $
         let si =
               insertConstraints
@@ -204,15 +204,15 @@ stateTests =
                 [IndexEntry 4 [PositionKey 0 Nothing]]
                 emptyStoreIndex
          in do
-              candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.singleton 4
-              candidateSlots (ConstraintType 0) 0 (KInt 99) si @?= IntSet.singleton 4,
+              candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= [4]
+              candidateSlots (ConstraintType 0) 0 (KInt 99) si @?= [4],
       testCase "an unindexed position has no entries" $
         let si =
               insertConstraints
                 (ConstraintType 0)
                 [IndexEntry 5 [PositionKey 0 (Just (KInt 1))]]
                 emptyStoreIndex
-         in candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= IntSet.empty,
+         in candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= [],
       testCase "entries accumulate per type and position" $
         let type1 =
               insertConstraints
@@ -226,10 +226,23 @@ stateTests =
                 ]
                 $ type1 emptyStoreIndex
          in do
-              candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.fromList [0, 1]
-              candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= IntSet.singleton 0
-              candidateSlots (ConstraintType 1) 0 (KInt 1) si @?= IntSet.singleton 2
-              candidateSlots (ConstraintType 0) 0 (KInt 2) si @?= IntSet.empty,
+              candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= [0, 1]
+              candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= [0]
+              candidateSlots (ConstraintType 1) 0 (KInt 1) si @?= [2]
+              candidateSlots (ConstraintType 0) 0 (KInt 2) si @?= [],
+      testCase "bucket and fallback set merge in slot order" $
+        let si =
+              insertConstraints
+                (ConstraintType 0)
+                [ IndexEntry 0 [PositionKey 0 Nothing],
+                  IndexEntry 1 [PositionKey 0 (Just (KInt 1))],
+                  IndexEntry 2 [PositionKey 0 Nothing],
+                  IndexEntry 3 [PositionKey 0 (Just (KInt 2))],
+                  IndexEntry 4 [PositionKey 0 (Just (KInt 1))],
+                  IndexEntry 5 [PositionKey 0 Nothing]
+                ]
+                emptyStoreIndex
+         in candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= [0, 1, 2, 4, 5],
       testCase "candidateCount is the bucket plus the fallback set" $
         let si =
               insertConstraints
