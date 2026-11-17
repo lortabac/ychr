@@ -86,7 +86,9 @@ jobs:
           cabal haddock --haddock-for-hackage
 
   test:
-    runs-on: ubuntu-latest
+    # Pinned for Guile 3.0.9. ubuntu-latest now ships 3.0.11, whose
+    # compiler segfaults on the Scheme store's index loop.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -108,6 +110,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y guile-3.0
+          guile-3.0 --version | head -1 | grep -F ' 3.0.9' || { echo "want Guile 3.0.9"; exit 1; }
           python3 -m pip install --upgrade pip
           python3 -m pip install pytest pytest-xdist
 
