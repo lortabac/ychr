@@ -46,8 +46,8 @@ def require_wasm_module():
 
 @pytest.fixture(scope="module")
 def steps():
-    """Run the smoke script once: the module starts cold (and the first
-    type check compiles the checker), so repeating it is expensive."""
+    """Run the smoke script once: the type check takes seconds, so
+    repeating it is expensive."""
     require_wasm_module()
     proc = subprocess.run(
         ["node", SMOKE, expectations.STARTER],

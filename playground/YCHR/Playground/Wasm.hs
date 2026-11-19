@@ -42,10 +42,12 @@ import Foreign.C.Types (CChar)
 import Foreign.Marshal.Alloc (free)
 import Foreign.Ptr (Ptr)
 import System.IO.Unsafe (unsafePerformIO)
+import YCHR.Embedded qualified as Embedded
+import YCHR.Internal.Resources (Resources (Resources))
 import YCHR.Playground
   ( Playground,
     Step (..),
-    initPlayground,
+    newPlayground,
     reload,
     response,
     runReplLine,
@@ -75,7 +77,7 @@ stateRef = unsafePerformIO (newIORef Nothing)
 -- Exports
 -- ---------------------------------------------------------------------------
 
-foreign export ccall "ychr_pg_init" pgInit :: Ptr CChar -> IO (Ptr CChar)
+foreign export ccall "ychr_pg_init" pgInit :: IO (Ptr CChar)
 
 foreign export ccall "ychr_pg_compile" pgCompile :: Ptr CChar -> IO (Ptr CChar)
 
@@ -85,19 +87,16 @@ foreign export ccall "ychr_pg_check" pgCheck :: IO (Ptr CChar)
 
 foreign export ccall "ychr_pg_free" pgFree :: Ptr CChar -> IO ()
 
--- | Load @libraries\/@ and @typechecker\/@ from the root the page passes
--- (the preloaded directories are mounted at @\/@), and make the
--- playground ready. Repeatable, not idempotent: a second call re-parses
--- the standard library and drops whatever program was loaded.
-pgInit :: Ptr CChar -> IO (Ptr CChar)
-pgInit rootPtr = do
-  root <- peekCString rootPtr
-  result <- initPlayground root
-  case result of
-    Left err -> newCString (response statusError (err ++ "\n"))
-    Right pg -> do
-      writeIORef stateRef (Just pg)
-      newCString (response statusOk "ready\n")
+-- | Make the playground ready, on the resources built into the module
+-- (the standard library and the compiled type checker, decoded at build
+-- time by @make resources@). Nothing is read or parsed here. A second
+-- call drops whatever program was loaded.
+pgInit :: IO (Ptr CChar)
+pgInit = do
+  writeIORef stateRef (Just (newPlayground resources))
+  newCString (response statusOk "ready\n")
+  where
+    resources = Resources Embedded.stdlib Embedded.typeCheckerProgram
 
 -- | Compile the editor's text (never type-checking it).
 pgCompile :: Ptr CChar -> IO (Ptr CChar)
@@ -111,8 +110,7 @@ pgQuery linePtr = do
   line <- peekCString linePtr
   withState (\pg -> runReplLine pg (T.pack line))
 
--- | Type-check the loaded program, forcing the type checker on first
--- use. This is the call that blocks for a long time the first time.
+-- | Type-check the loaded program. The slow call: seconds per check.
 pgCheck :: IO (Ptr CChar)
 pgCheck = withState typecheck
 

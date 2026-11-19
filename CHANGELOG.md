@@ -9,6 +9,14 @@ MicroHs `ychr` is faster, by about 20% on the long runs: `check typechecker/*.ch
 stack (`MHS_STACK`), which this version needs to compile the library,
 and the playground is linked with a 16 MB WASM stack.
 
+- Web playground: the standard library and the compiled type checker
+  are built into the WASM module (the `make resources` output), not
+  parsed and compiled in the browser. Start-up goes from ~2 s to
+  ~0.01 s and the first Typecheck from ~11 s to ~5.5 s (Node).
+  `make playground-wasm` now runs `make resources`, so it needs GHC and
+  cabal and takes about six minutes; the bundle has no `ychr-pg.data`;
+  `ychr_pg_init` takes no argument.
+
 - `ychr scheme-types`: names keep `-` and the other R6RS identifier
   characters, so `vhc-core` gives `make-vhc-core`, not
   `make-vhc__u2d__core`; the module `a-b` gives `(ychr types a-b)`.

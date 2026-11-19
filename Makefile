@@ -35,9 +35,9 @@ PYTEST_XDIST ?= $(shell $(PYTEST_PY) -c 'import xdist' 2>/dev/null && printf '%s
 #
 # `make playground-wasm` compiles the ychr library together with the bridge
 # in playground/ to JavaScript and WebAssembly through MicroHs and
-# emscripten, with libraries/ and typechecker/ preloaded into the module's
-# file system. `make playground-serve` then serves playground/ as a static
-# site. See docs/how-to/web-playground.md.
+# emscripten, on the generated resources (`make resources`), so the page
+# parses no library and compiles no checker. `make playground-serve` then
+# serves playground/ as a static site. See docs/how-to/web-playground.md.
 #
 # Emscripten is the only toolchain MicroHs can emit WASM with (it shells out
 # to a C compiler; there is no pure-JavaScript backend), and it is not
@@ -64,7 +64,8 @@ MHS_STACK ?= 2M
 # -sINVOKE_RUN=0: main never runs; JavaScript calls mhs_init() and then the
 # exported functions, which is the flow MicroHs's own tests/ForExp.hs uses.
 # -sSTACK_SIZE: with emscripten's default (64 KB) the MicroHs 0.17 runtime
-# crashes with "memory access out of bounds" while building the checker.
+# crashed with "memory access out of bounds" while building the checker.
+# Not re-tested now that the checker is built in.
 PLAYGROUND_EMCCFLAGS ?= \
 	-O2 \
 	-sSTACK_SIZE=16MB \
@@ -286,7 +287,7 @@ playground-emsdk:
 	  ./emsdk activate $(EMSDK_VERSION) >/dev/null
 	@echo "emscripten $(EMSDK_VERSION) ready in $(EMSDK)"
 
-playground-wasm:
+playground-wasm: resources
 	@if ! command -v emcc >/dev/null 2>&1 && \
 	    ! test -x $(EMSDK)/upstream/emscripten/emcc; then \
 	  echo "emcc not found: run 'make playground-emsdk', or put emscripten on PATH" >&2; \
@@ -297,6 +298,7 @@ playground-wasm:
 	  exit 1; \
 	}
 	@mkdir -p $(PLAYGROUND_BUILD)
+	@rm -f $(PLAYGROUND_BUILD)/ychr-pg.data
 	@cp examples/leq.chr $(PLAYGROUND_BUILD)/starter.chr
 	@for name in $(PLAYGROUND_PRESETS); do \
 	  echo "  preset $$name"; \
@@ -304,10 +306,8 @@ playground-wasm:
 	done
 	. $(EMSDK)/emsdk_env.sh >/dev/null 2>&1 || true; \
 	CC=emcc MHSCONF=unix MHSCCLIBS=-lm MHSCCFLAGS="$(PLAYGROUND_EMCCFLAGS)" \
-	$(MHS) -tenvironment -z \
-	  -isrc -isrc/mhs -i$(PLAYGROUND_DIR) \
-	  -optl --preload-file=libraries@/libraries \
-	  -optl --preload-file=typechecker@/typechecker \
+	$(MHS) +RTS -H$(MHS_HEAP) -K$(MHS_STACK) -RTS -tenvironment -z \
+	  -isrc -isrc/mhs -i$(GENERATED_DIR) -i$(PLAYGROUND_DIR) \
 	  -o$(PLAYGROUND_BUILD)/ychr-pg.js YCHR.Playground.Wasm
 	@echo "built $(PLAYGROUND_BUILD)/ychr-pg.js"
 
