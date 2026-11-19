@@ -95,8 +95,7 @@ async function main() {
     return fs.readFileSync(file, "utf8");
   }
 
-  // The resource root: the preloaded directories are mounted at "/".
-  step("init", "_ychr_pg_init", "/");
+  step("init", "_ychr_pg_init");
   step("compile-starter", "_ychr_pg_compile", starter);
   step("query-ground", "_ychr_pg_query", "leq(1, 1)");
   step("query-bindings", "_ychr_pg_query", "leq(X, 2)");
@@ -107,7 +106,7 @@ async function main() {
   // The loaded program must survive a reload that does not compile.
   step("compile-broken", "_ychr_pg_compile", "this is not a CHR program.");
   step("query-after-failed-reload", "_ychr_pg_query", "leq(1, 1)");
-  // Builds the type checker on first call — the slow step.
+  // The slow step.
   step("check", "_ychr_pg_check");
   for (const preset of [
     "bakery.chr",

@@ -52,7 +52,6 @@
   var busy = false;
   var history = [];
   var historyIndex = 0;
-  var checked = false;
 
   // -------------------------------------------------------------------------
   // Rendering
@@ -340,13 +339,9 @@
         return;
       }
 
-      setStatus(
-        checked ? "type checking…" : "compiling the type checker (first run)…",
-        "busy"
-      );
+      setStatus("type checking…", "busy");
       await paint();
       show("--- Typecheck ---", splitResponse(invoke("_ychr_pg_check")));
-      checked = true;
     } catch (err) {
       bootError("Typecheck failed: " + err);
     } finally {
@@ -504,7 +499,7 @@
         },
       });
       Module._mhs_init();
-      show("--- init ---", splitResponse(invoke("_ychr_pg_init", "/")));
+      show("--- init ---", splitResponse(invoke("_ychr_pg_init")));
       setStatus("ready", "ok");
       // Disabled in the markup until there is something to compile with.
       el.preset.disabled = false;

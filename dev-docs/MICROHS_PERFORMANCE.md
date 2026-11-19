@@ -164,7 +164,8 @@ This `mhs` needs a bigger stack to compile `library ychr` (default:
 
 The built WASM playground also needs a bigger C stack, at run time:
 with emscripten's 64 KB default it crashes ("memory access out of
-bounds") while it builds the checker, so `PLAYGROUND_EMCCFLAGS` has
+bounds") while it builds the checker (measured before the checker was
+built into the module; not re-tested since), so `PLAYGROUND_EMCCFLAGS` has
 `-sSTACK_SIZE=16MB`.
 
 
@@ -640,6 +641,13 @@ spends part of its 0.166 s on the same parse and compile, while compiling a
 1.7 MB literal-data module into four components on five CI compilers would be
 paid at build time. GHC therefore keeps its Template Haskell splice, and
 adopting the generated data there stays open, to be decided on a measurement.
+
+The WASM playground uses the same generated modules since 2026-11-19
+(`make playground-wasm` depends on `make resources`). In Node, start-up
+went from ~2 s (parsing the standard library) to ~0.01 s and the first
+type check from ~11 s to ~5.5 s; later checks are unchanged at ~4 s. The
+bundle no longer ships the library sources, and the WASM build takes
+about six minutes instead of two.
 
 ### C. Interpreter hot path
 

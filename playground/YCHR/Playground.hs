@@ -26,14 +26,15 @@
 -- Type checking is never implicit: 'reload' and 'runReplLine' behave
 -- like the CLI's @--no-check@, and only 'typecheck' forces
 -- 'YCHR.Internal.TypeCheck.typeCheckProgram'. That is deliberate — the
--- checker is itself a CHR program, and compiling it is a one-off cost
--- that dwarfs a program check (see @docs\/how-to\/web-playground.md@).
+-- checker is itself a CHR program, and running it takes seconds in the
+-- browser (see @docs\/how-to\/web-playground.md@).
 module YCHR.Playground
   ( -- * State
     Playground (..),
     Step (..),
 
     -- * Operations
+    newPlayground,
     initPlayground,
     reload,
     runReplLine,
@@ -97,8 +98,8 @@ import YCHR.Run
 -- @:recompile@.
 data Playground = Playground
   { stdlib :: StdLib,
-    -- | The compiled type checker. Lazy: building it is the expensive
-    -- step, and 'reload' and 'runReplLine' never force it.
+    -- | The compiled type checker. Lazy: 'reload' and 'runReplLine'
+    -- never force it.
     checker :: SessionInput,
     loaded :: Maybe CompiledProgram
   }
@@ -110,25 +111,28 @@ data Step = Step
     output :: String
   }
 
+-- | A playground over already-loaded resources, with no program loaded.
+-- The WASM bridge calls this with the resources built into the module.
+newPlayground :: Resources -> Playground
+newPlayground resources =
+  Playground
+    { stdlib = resources.stdlib,
+      checker = resources.typeCheckerProgram,
+      loaded = Nothing
+    }
+
 -- | Load the bundled resources from a source-tree root (@libraries\/@
--- and @typechecker\/@ under it; @\"\/\"@ in the browser, where the two
--- directories are preloaded into the WASM file system).
+-- and @typechecker\/@ under it) and build a playground on them. Used by
+-- the native harness.
 --
 -- Only the standard library is parsed here: the type checker stays a
--- thunk, so a bad checker is reported when the user first presses
--- /Typecheck/ rather than at page load.
+-- thunk, so a bad checker is reported on the first type check.
 initPlayground :: FilePath -> IO (Either String Playground)
 initPlayground root = do
   result <- loadResourcesAt root
   pure $ case result of
     Left err -> Left (T.unpack err)
-    Right resources ->
-      Right
-        Playground
-          { stdlib = resources.stdlib,
-            checker = resources.typeCheckerProgram,
-            loaded = Nothing
-          }
+    Right resources -> Right (newPlayground resources)
 
 -- ---------------------------------------------------------------------------
 -- Responses
