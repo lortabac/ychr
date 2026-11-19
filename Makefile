@@ -58,10 +58,16 @@ MCABAL ?= mcabal
 # generated type-checker module (generated/YCHR/Embedded/Generated/
 # TypeCheck.hs), so `make mhs-build` asks for more.
 MHS_HEAP ?= 200M
+# Stack for mhs while it compiles. Since MicroHs 0.17 the default stack
+# overflows on library ychr, so ask for more.
+MHS_STACK ?= 2M
 # -sINVOKE_RUN=0: main never runs; JavaScript calls mhs_init() and then the
 # exported functions, which is the flow MicroHs's own tests/ForExp.hs uses.
+# -sSTACK_SIZE: with emscripten's default (64 KB) the MicroHs 0.17 runtime
+# crashes with "memory access out of bounds" while building the checker.
 PLAYGROUND_EMCCFLAGS ?= \
 	-O2 \
+	-sSTACK_SIZE=16MB \
 	-sMODULARIZE=1 \
 	-sEXPORT_NAME=createYchr \
 	-sINVOKE_RUN=0 \
@@ -149,7 +155,7 @@ mhs-install:
 # The documented MicroHs build order: regenerate, then compile. The
 # toolchain and package set come from `make mhs-install`.
 mhs-build: resources
-	$(MCABAL) "--options=+RTS -H$(MHS_HEAP) -RTS" build
+	$(MCABAL) "--options=+RTS -H$(MHS_HEAP) -K$(MHS_STACK) -RTS" build
 
 test:
 	$(MAKE) -j$(or $(JOBS),1) test-haskell test-scheme-runtime test-scheme test-repl \
