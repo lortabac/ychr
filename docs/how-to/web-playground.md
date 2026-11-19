@@ -46,7 +46,7 @@ The build takes about two minutes: MicroHs compiles the library, and
 `emcc` compiles and links the generated C. The result is roughly 800 KB
 of JavaScript, WebAssembly and preloaded library sources.
 
-Two flags matter in `playground-wasm` and are worth knowing about if you
+Three flags matter in `playground-wasm` and are worth knowing about if you
 adapt it:
 
 - `-sINVOKE_RUN=0` with `-sEXPORTED_FUNCTIONS=…_mhs_init…`: the Haskell
@@ -58,6 +58,9 @@ adapt it:
   `ychr-pg.data` and mounted in the module's file system at `/libraries`
   and `/typechecker`, which is where `YCHR.Internal.Resources` looks when
   the page passes `/` as the resource root.
+- `-sSTACK_SIZE=16MB`: with emscripten's 64 KB default stack, the
+  MicroHs runtime crashes ("memory access out of bounds") while it
+  builds the type checker.
 
 `--preload-file` is an emcc flag, not an mhs one, which is why it is
 passed through `-optl`.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The MicroHs pin moves to upstream `6f0f606b` (`mhs` 0.17.1.0). The
+MicroHs `ychr` is faster, by about 20% on the long runs: `check typechecker/*.chr`
+222.7 s → 175.1 s, `compile -t vm typechecker/*.chr` 9.2 s → 6.7 s
+(MICROHS_PERFORMANCE.md §2.2). `make mhs-build` now gives `mhs` a 2M
+stack (`MHS_STACK`), which this version needs to compile the library,
+and the playground is linked with a 16 MB WASM stack.
+
 - `ychr scheme-types`: names keep `-` and the other R6RS identifier
   characters, so `vhc-core` gives `make-vhc-core`, not
   `make-vhc__u2d__core`; the module `a-b` gives `(ychr types a-b)`.

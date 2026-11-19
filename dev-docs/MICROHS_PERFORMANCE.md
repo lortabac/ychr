@@ -130,6 +130,43 @@ interpreter: the ~0.1 s startup, ~0.4 s of `compile -t vm` front end, and the
 checker running over its own sources, plus ~35 % of that wall clock in the
 collector at the default heap (§4.1).
 
+### 2.2 MicroHs 0.16.12 → 0.17.1
+
+Measured 2026-11-19 at `f425e2a4`: the same tree built with the old pin
+(`c98846b1`, `mhs` 0.16.12.0) and the new one (`6f0f606b`, `mhs`
+0.17.1.0). 0.17 changed the runtime's data encoding and node layout. Both binaries run pinned to one core (`taskset -c 2`),
+interleaved, three rounds a side (one for `check typechecker`). Time is
+the median `total expired`; reductions and cells are deterministic. The
+output is the same for every command. `fib(18)` here includes the
+type-checker compile, as in §2.
+
+| command | 0.16.12 | 0.17.1 | time | reductions | cells |
+|---|---:|---:|---:|---:|---:|
+| `run --no-check` leq | 0.08 s | 0.07 s | −12 % | −21.0 % | −16.4 % |
+| `run --no-check` `fib(18)` | 1.38 s | 1.17 s | −15 % | −18.8 % | −14.9 % |
+| `run --no-check` leq_closure `run(20)` | 0.88 s | 0.85 s | −3 % | −11.1 % | −7.2 % |
+| `run --no-check` search_label | 0.50 s | 0.47 s | −6 % | −19.7 % | −16.6 % |
+| `run --no-check` sum_list_test | 0.20 s | 0.16 s | −20 % | −24.2 % | −19.6 % |
+| `compile --no-check -t vm typechecker/*.chr` | 9.19 s | 6.71 s | −27 % | −29.2 % | −30.0 % |
+| `check test/golden/leq/leq.chr` | 3.99 s | 3.02 s | −24 % | −19.8 % | −19.2 % |
+| `check test/golden/pairs_library/pairs_library.chr` | 8.69 s | 7.21 s | −17 % | −19.4 % | −19.2 % |
+| `check typechecker/*.chr` | 222.7 s | 175.1 s | −21 % | −20.9 % | −22.0 % |
+
+The encoding changed, so a reduction is not the same unit on both sides;
+time is what counts. `leq_closure` and `search_label` are within their
+spread (0.80–0.95 s and 0.41–0.57 s). The absolute times are well above
+§2.1's for the same commands. That is the tree and the machine since
+2026-10-10, not MicroHs, so compare within this table only.
+
+This `mhs` needs a bigger stack to compile `library ychr` (default:
+`ERR: stack overflow`), so `make mhs-build` passes `-K$(MHS_STACK)`,
+2M by default.
+
+The built WASM playground also needs a bigger C stack, at run time:
+with emscripten's 64 KB default it crashes ("memory access out of
+bounds") while it builds the checker, so `PLAYGROUND_EMCCFLAGS` has
+`-sSTACK_SIZE=16MB`.
+
 
 ## 3. Where the time goes
 
@@ -1228,13 +1265,12 @@ The `unix_x86` target that already exists in `mhs.conf`
 ## 9. Reproducing
 
 ```sh
-# Install the pinned MicroHs toolchain and package set, then build: the
-# resources are decoded by a separate build step, so `make resources` (or
-# `make mhs-build`, which chains the two) has to run before `mcabal
-# build`. No YCHR_LIB_DIR is involved: the resources are baked in.
+# Install the pinned MicroHs toolchain and package set, then build.
+# `make mhs-build` runs `make resources` (the resources are decoded by a
+# separate build step) and then `mcabal build` with the heap and stack
+# mhs needs. No YCHR_LIB_DIR is involved: the resources are baked in.
 make mhs-install
-make resources
-mcabal build
+make mhs-build
 
 # Counters and the GC split.
 ./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -v -RTS
