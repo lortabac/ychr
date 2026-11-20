@@ -168,6 +168,51 @@ bounds") while it builds the checker (measured before the checker was
 built into the module; not re-tested since), so `PLAYGROUND_EMCCFLAGS` has
 `-sSTACK_SIZE=16MB`.
 
+### 2.3 MicroHs 0.17.1 → 0.17.2
+
+Measured 2026-11-20 at `ddbe7d0a`: the same tree built with the old pin
+(`6f0f606b`, `mhs` 0.17.1.0) and the new one (`7e1f4f1f`, `mhs`
+0.17.2.0). Same setup as §2.2: `taskset -c 2`, interleaved, median
+`total expired` of three rounds a side. `check typechecker` had two
+rounds a side: old 217.0 s and 206.4 s, new 154.3 s and 154.4 s. The
+table gives the mean. The output is the same for every command, and
+`compile -t vm typechecker/*.chr` writes the same `program.vm`.
+
+The 0.17.1 column is slower than §2.2's for the same binary (211.7 s
+against 175.1 s on `check typechecker`). That is the machine on the
+day, so compare within this table only.
+
+| command | 0.17.1 | 0.17.2 | time | reductions | cells |
+|---|---:|---:|---:|---:|---:|
+| `run --no-check` leq | 0.07 s | 0.08 s | noise | −0.2 % | −0.2 % |
+| `run --no-check` `fib(18)` | 1.32 s | 1.09 s | −17 % | −19.0 % | −18.0 % |
+| `run --no-check` leq_closure `run(20)` | 0.98 s | 0.79 s | −19 % | −18.0 % | −17.8 % |
+| `run --no-check` search_label | 0.44 s | 0.37 s | −16 % | −6.7 % | −6.2 % |
+| `run --no-check` sum_list_test | 0.15 s | 0.15 s | 0 % | −0.2 % | −0.1 % |
+| `compile --no-check -t vm typechecker/*.chr` | 7.12 s | 6.49 s | −9 % | +0.0 % | −0.0 % |
+| `check test/golden/leq/leq.chr` | 3.56 s | 2.83 s | −21 % | −11.6 % | −11.0 % |
+| `check test/golden/pairs_library/pairs_library.chr` | 8.20 s | 6.46 s | −21 % | −13.3 % | −12.7 % |
+| `check typechecker/*.chr` | 211.7 s | 154.3 s | −27 % | −12.8 % | −12.2 % |
+
+The pin moves over 22 upstream commits. The two most likely to change
+run time are `00cf72e7` (#578: `fromIntegral` between machine integer
+types no longer goes through `Integer`) and `6407dec7` (no overflow
+check on `Int` and `Int64`). `16fc60ec` (GC: keep empty arrays alive)
+and `92c10ac0` (free memory with `FREE`) touch the runtime too, and the
+regenerated compiler builds `ychr`. The numbers are for all of it; no
+commit was measured on its own.
+
+Reductions and cells fall where the interpreter runs a lot of CHR
+(`fib`, `leq_closure`, every `check`; `search_label` less so), and
+stay flat on `leq`, `sum_list_test` and `compile -t vm`. The small-run
+times are noisy and their ranges overlap (`compile`: 6.60–7.72 s
+against 6.14–6.84 s), so the reductions carry the result there.
+
+On the three `check` rows time falls more than reductions do (about
+−21 to −27 % against −12 to −13 %). On `check typechecker` the
+collector goes 55 s → 34 s (scan 13 s → 3.5 s), but the time outside
+it also falls about 23 % (156 s → 121 s). We don't know why.
+
 
 ## 3. Where the time goes
 
