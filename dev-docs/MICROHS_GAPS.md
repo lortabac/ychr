@@ -18,8 +18,8 @@ terse, fix-shaped, removable when closed.
 
 ## Status
 
-Re-verified against upstream MicroHs `6f0f606b` (2026-11-19,
-`mhs` 0.17.1.0). Seven gaps are open; six have closed and been removed
+Re-verified against upstream MicroHs `7e1f4f1f` (2026-11-20,
+`mhs` 0.17.2.0). Seven gaps are open; six have closed and been removed
 from this document (see below the table). The local workarounds for
 gaps 1, 5, 6, 8 and 10 are applied (gap 5 is the resources provider
 described below, which since `dev-docs/MICROHS_PERFORMANCE.md` option B
@@ -28,7 +28,7 @@ is one no-op modifier; gap 10 is one helper taking its argument as
 `Text` rather than as a record). Gap 11 has no YCHR-side workaround: it
 is a difference in how coarsely file-open errors are reported, not a
 crash. The reproducers for gaps 1, 2, 6, 10 and 11 were rerun at
-`6f0f606b` and still fail; gap 8 depends on the optparse-applicative
+`7e1f4f1f` and still fail; gap 8 depends on the optparse-applicative
 pin, which did not move. At this revision a type error reads
 `type mismatch` / `expected:` / `actual:` rather than the
 `Cannot satisfy constraint: X ~ Y` quoted in the older entries.
@@ -43,11 +43,12 @@ suite, the benchmark or the `stlc` example (they need
 the `examples` flag defaults off), so those remain GHC-only. CI compiles
 the MicroHs target on every push and pull request — the `microhs` job,
 which runs no tests — from the environment `make mhs-install` installs:
-MicroHs `6f0f606b`, the prettyprinter and optparse-applicative commits
+MicroHs `7e1f4f1f`, the prettyprinter and optparse-applicative commits
 pinned in `tools/mhs-install.sh`, and the package versions in
 `tools/mhs-packages.txt`. Keep those pins in sync with this paragraph.
-With its default stack, this `mhs` overflows (`ERR: stack overflow`)
-while compiling `library ychr`, so `make mhs-build` passes `-K2M`
+The 0.17.1 `mhs` overflows its default stack (`ERR: stack overflow`)
+while compiling `library ychr`; this was not re-tested on 0.17.2.
+`make mhs-build` passes `-K2M`
 (`MHS_STACK` in the Makefile).
 Gap 8 was found on the way to that point and is recorded below.
 
@@ -665,7 +666,7 @@ Verified:
 
 ## 10. A local binding inferred as `HasField`-polymorphic is not generalized
 
-> **Re-verified against `6f0f606b`.** Still open. The reproducer used to
+> **Re-verified against `7e1f4f1f`.** Still open. The reproducer used to
 > show a *top-level* `origin`; that one compiles under MicroHs (also at
 > `f65d3c65`). Only a local binding fails, which is the shape the
 > `Resolve.hs` site has, so the reproducer below now uses `where`.
@@ -710,7 +711,7 @@ originForDecl m n = PExpr.Atom (m.name <> ":" <> n)
 
 ## 11. File-open errors carry no description
 
-> **Re-verified against `6f0f606b`.** The `openFile` half is still open.
+> **Re-verified against `7e1f4f1f`.** The `openFile` half is still open.
 > The `createDirectoryIfMissing` half is fixed upstream (`0e12b043`,
 > #565): `ychr compile -d blocker/sub prog.chr`, with `blocker` a file,
 > now prints `Error: cannot write blocker/sub: Not a directory` under

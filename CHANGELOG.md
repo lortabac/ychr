@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+The MicroHs pin moves to upstream `7e1f4f1f` (`mhs` 0.17.2.0), which
+has the `fromIntegral` fix (#578) and drops `Int` overflow checks. The
+MicroHs `ychr` is about 20–27 % faster on checker-heavy runs:
+`check typechecker/*.chr` 211.7 s → 154.3 s, `check
+pairs_library.chr` 8.2 s → 6.5 s (MICROHS_PERFORMANCE.md §2.3; the
+0.17.1 times there are from a slower day than §2.2's).
+
 The MicroHs pin moves to upstream `6f0f606b` (`mhs` 0.17.1.0). The
 MicroHs `ychr` is faster, by about 20% on the long runs: `check typechecker/*.chr`
 222.7 s → 175.1 s, `compile -t vm typechecker/*.chr` 9.2 s → 6.7 s
