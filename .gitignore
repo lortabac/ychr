@@ -8,6 +8,8 @@ tags
 /dist-mcabal
 /dist-thc
 /dist-scheme-bench
+# make bench-mhs
+/bench-results
 # Emscripten SDK (make playground-emsdk) and the generated playground
 # bundle (make playground-wasm).
 /.emsdk

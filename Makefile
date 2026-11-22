@@ -25,6 +25,7 @@ PYTEST_XDIST ?= $(shell $(PYTEST_PY) -c 'import xdist' 2>/dev/null && printf '%s
 .PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-stlc
 .PHONY: test-typecheck test-docs test-style test-playground playground-check
 .PHONY: bench bench-haskell bench-scheme bench-scheme-chez bench-scheme-all
+.PHONY: bench-mhs
 .PHONY: scheme-bench-compile
 .PHONY: playground-emsdk playground-wasm playground-serve
 .PHONY: resources resources-check mhs-build mhs-install
@@ -268,6 +269,19 @@ bench-scheme-chez: scheme-bench-compile
 	  $(if $(SCHEME_BENCH_ARGS),-- $(SCHEME_BENCH_ARGS))
 
 bench-scheme-all: bench-scheme bench-scheme-chez
+
+# ---------------------------------------------------------------------------
+# MicroHs vs GHC
+#
+# Times a few `ychr` commands on the GHC and the MicroHs binary and writes
+# medians and ratios to bench-results/mhs/ (gitignored). Run it after a
+# MicroHs bump. Not part of `make bench`: it takes about 6 minutes, most
+# of it `check typechecker/*.chr` on MicroHs. Pass names to run only some
+# commands, e.g. `make bench-mhs BENCH_MHS="leq fib18"`. See
+# tools/bench-mhs.sh and dev-docs/MICROHS_PERFORMANCE.md §9.
+BENCH_MHS ?=
+bench-mhs: build mhs-build
+	tools/bench-mhs.sh $(BENCH_MHS)
 
 # ---------------------------------------------------------------------------
 # Web playground build
