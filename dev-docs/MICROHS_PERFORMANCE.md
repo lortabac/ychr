@@ -1325,6 +1325,13 @@ The `unix_x86` target that already exists in `mhs.conf`
 make mhs-install
 make mhs-build
 
+# MicroHs vs GHC on the commands of §2 (re-run it after a MicroHs bump).
+# Builds both binaries, then writes results.tsv and summary.md (medians
+# and ratios) to bench-results/mhs/<date>-<commit>/, which is gitignored.
+# About 6 minutes. Check the load1 column: a busy machine spoils a round.
+make bench-mhs
+make bench-mhs BENCH_MHS="leq fib18"   # only some commands
+
 # Counters and the GC split.
 ./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -v -RTS
 
