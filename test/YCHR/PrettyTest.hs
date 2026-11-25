@@ -13,6 +13,7 @@ import YCHR.Internal.Pretty
     prettyConstraintDecl,
     prettyFunctionDecl,
     prettyQueryResult,
+    prettyStore,
     prettyTerm,
     renderAtom,
   )
@@ -35,8 +36,24 @@ tests =
       listRenderingTests,
       closureUnwrapTests,
       bindingsTests,
+      storeTests,
       requiringBoundQualificationTests
     ]
+
+storeTests :: TestTree
+storeTests =
+  testGroup
+    "prettyStore"
+    [ testCase "empty store prints nothing" $
+        prettyStore 2 [] @?= "",
+      testCase "under the limit" $
+        prettyStore 2 [egg, egg] @?= "egg\negg\n",
+      testCase "over the limit" $
+        prettyStore 2 [egg, egg, egg, egg, egg]
+          @?= "egg\negg\n... and 3 more\n"
+    ]
+  where
+    egg = CompoundTerm (Unqualified "egg") []
 
 basicTests :: TestTree
 basicTests =

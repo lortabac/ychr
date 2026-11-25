@@ -3,7 +3,7 @@
 ## Starting the REPL
 
 ```sh
-ychr repl [--repl-backend BACKEND] [--quiet] [--no-check] [--Werror] [--dump-splices] [FILES...]
+ychr repl [--repl-backend BACKEND] [--quiet] [--show-store] [--no-check] [--Werror] [--dump-splices] [FILES...]
 ```
 
 `ychr FILES...` (no subcommand) is short for `ychr repl FILES...` with
@@ -56,6 +56,9 @@ parse, collect, rename, resolve, desugar — still fail, and `--Werror`
 still treats the remaining compile and rename warnings as fatal.
 `ychr check` — whose whole purpose is type checking — does not accept
 the flag.
+
+`--show-store` prints the constraints left in the store after each
+query; see [Showing the store](#showing-the-store).
 
 `--dump-splices` prints the clauses the loaded files' declaration
 macros spliced, to stderr, on startup and on `:recompile`. It is an
@@ -279,6 +282,44 @@ the constraint goes with the store:
 ```ychr-repl
 ychr> egg.
 ychr>
+```
+
+## Showing the store
+
+With `--show-store`, every query (except `:trace`) also prints the
+constraints left in the store, one per line, after the bindings. The
+format is `print_store`'s. A variable that is a visible query variable
+(not `_`-prefixed) shows under its name; any other unbound variable is `_G1`, `_G2`, … in order
+of first appearance. With `ychr repl --show-store examples/leq.chr`:
+
+```ychr-repl
+ychr> leq(A, B), leq(B, C).
+A = _,
+B = _,
+C = _.
+order:leq(A, B)
+order:leq(B, C)
+order:leq(A, C)
+ychr> leq(A, B), leq(B, A).
+A = B,
+B = A.
+ychr> leq(A, _).
+A = _.
+order:leq(A, _G1)
+```
+
+At most 50 lines are printed, then `... and N more`. It applies to
+one-shot queries, `:time` and live-session queries (where the store
+also holds what earlier inputs left), on both backends. `:trace`
+prints no store. There is no `:set` yet, so the flag is the only
+switch.
+
+`ychr run --show-store -g GOAL` prints the store the same way, after
+the bindings if `--show-bindings` is also given:
+
+```sh
+$ ychr run --show-store -g 'leq(A, B)' examples/leq.chr
+order:leq(A, B)
 ```
 
 ## Live sessions

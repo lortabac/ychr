@@ -47,9 +47,10 @@ stopChez _ = pure ()
 prepareChezCode ::
   Bool ->
   Bool ->
+  Bool ->
   PreparedQuery ->
   Either Error Text
-prepareChezCode _ _ _ =
+prepareChezCode _ _ _ _ =
   Left
     ( RuntimeError
         "the Chez REPL backend is not available in the MicroHs build"

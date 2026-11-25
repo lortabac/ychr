@@ -76,6 +76,7 @@ import YCHR.Internal.Backend.Scheme
   )
 import YCHR.Internal.Compile (compileQueryGoals)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), Error (..))
+import YCHR.Internal.Pretty (showStoreLimit)
 import YCHR.Internal.VM.SExpr (VMProgram (..))
 import YCHR.Run (PreparedQuery (..))
 
@@ -167,9 +168,10 @@ stopChez chez = do
 prepareChezCode ::
   Bool ->
   Bool ->
+  Bool ->
   PreparedQuery ->
   Either Error Text
-prepareChezCode freshSession timed prep =
+prepareChezCode freshSession timed showStore prep =
   case compileQueryGoals prep.liftedGoals of
     Left errs -> Left (CompileErrors errs)
     Right (vars, stmts) ->
@@ -181,7 +183,9 @@ prepareChezCode freshSession timed prep =
               queryProcedures = prep.extraProcs,
               queryCallables = prep.extraCallables,
               queryTimed = timed,
-              queryFreshSession = freshSession
+              queryFreshSession = freshSession,
+              queryShowStore =
+                if showStore then Just showStoreLimit else Nothing
             }
 
 -- | Send one expression and wait for its frame.

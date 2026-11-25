@@ -6,6 +6,8 @@ module YCHR.Internal.Pretty
     prettyTerm,
     prettyBindings,
     prettyQueryResult,
+    prettyStore,
+    showStoreLimit,
     isHiddenBindingName,
 
     -- * Source text
@@ -300,6 +302,20 @@ prettyBindings m =
     | (k, v) <- Map.toAscList m,
       not (isHiddenBindingName k)
     ]
+
+-- | How many store lines @--show-store@ prints before it stops.
+showStoreLimit :: Int
+showStoreLimit = 50
+
+-- | Render the store for @--show-store@: one constraint per line, at
+-- most @limit@ lines, then @... and N more@ if some were left out.
+prettyStore :: Int -> [Term] -> String
+prettyStore limit ts =
+  let (shown, rest) = splitAt limit ts
+   in concatMap (\t -> prettyTerm t ++ "\n") shown
+        ++ case length rest of
+          0 -> ""
+          n -> "... and " ++ show n ++ " more\n"
 
 -- | Render a variable binding map as a Prolog-style query result.
 --

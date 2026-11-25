@@ -14,6 +14,7 @@ module YCHR.Internal.Meta
     -- * Values and terms
     valueToTerm,
     termToValue,
+    residualStore,
     decodeName,
     decodeMangled,
 
@@ -32,6 +33,7 @@ import Data.Char (chr)
 import Data.Foldable (toList)
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Numeric (readHex)
@@ -238,15 +240,15 @@ metaHostCallRegistry =
       ),
       ( Name "print_store",
         HostCallFn $ \_ -> do
-          groups <- getAllStoredConstraints
-          lines_ <- concat <$> traverse renderGroup groups
+          cs <- aliveConstraints
+          lines_ <- traverse renderConstraint cs
           liftIO (mapM_ putStrLn lines_)
           pure unit
       ),
       ( Name "write_store_to_list",
         HostCallFn $ \_ -> do
-          groups <- getAllStoredConstraints
-          susps <- concat <$> traverse suspsOfGroup groups
+          cs <- aliveConstraints
+          susps <- traverse constraintAsValue cs
           pure (valueList susps)
       ),
       ( Name "name_base",
@@ -267,32 +269,62 @@ metaHostCallRegistry =
       )
     ]
   where
-    renderGroup g =
-      fmap concat . traverse (renderSusp g.typeName) . toList $ g.suspensions
-    renderSusp tyName susp@Suspension {args = sargs} = do
-      alive <- isSuspAlive susp
-      if not alive
-        then pure []
-        else do
-          argTerms <- traverse (valueToTerm Map.empty) sargs
-          pure [prettyTerm (CompoundTerm tyName argTerms)]
-    suspsOfGroup g =
-      fmap concat . traverse (suspAsValue g.typeName) . toList $ g.suspensions
-    suspAsValue tyName susp@Suspension {args = sargs} = do
-      alive <- isSuspAlive susp
-      if not alive
-        then pure []
-        else do
-          args' <- traverse deepDeref sargs
-          pure [constraintAsValue tyName args']
-    constraintAsValue (Types.Unqualified t) args' = VTerm t args'
-    constraintAsValue (Types.Qualified m f) args' =
+    renderConstraint (tyName, sargs) = do
+      argTerms <- traverse (valueToTerm Map.empty) sargs
+      pure (prettyTerm (CompoundTerm tyName argTerms))
+    constraintAsValue (tyName, sargs) = asValue tyName <$> traverse deepDeref sargs
+    asValue (Types.Unqualified t) args' = VTerm t args'
+    asValue (Types.Qualified m f) args' =
       VTerm ":" [VAtom m, VTerm f args']
-    deepDeref v = do
-      v' <- deref v
-      case v' of
-        VTerm f xs -> VTerm f <$> traverse deepDeref xs
-        _ -> pure v'
+
+-- | Every alive constraint in the store, in store order: its type's
+-- source name and its arguments.
+aliveConstraints :: Chr [(Types.Name, [Value])]
+aliveConstraints = do
+  groups <- getAllStoredConstraints
+  concat <$> traverse ofGroup groups
+  where
+    ofGroup g = fmap concat . traverse (ofSusp g.typeName) . toList $ g.suspensions
+    ofSusp tyName susp@Suspension {args = sargs} = do
+      alive <- isSuspAlive susp
+      pure [(tyName, sargs) | alive]
+
+-- | Dereference a value all the way down.
+deepDeref :: Value -> Chr Value
+deepDeref v = do
+  v' <- deref v
+  case v' of
+    VTerm f xs -> VTerm f <$> traverse deepDeref xs
+    _ -> pure v'
+
+-- | The alive constraints as terms, for @--show-store@. A variable in the
+-- map prints under its name. Every other unbound variable gets a name
+-- @_G1@, @_G2@, ... in order of first appearance, so two different
+-- variables never print the same (unlike @print_store@, which prints
+-- @_@).
+residualStore :: Map.Map VarId Text -> Chr [Term]
+residualStore names = do
+  cs <- aliveConstraints
+  cs' <- traverse (\(n, xs) -> (,) n <$> traverse deepDeref xs) cs
+  vids <- concat <$> traverse varIdsOf (concatMap snd cs')
+  let unnamed = nubOrd [vid | vid <- vids, not (Map.member vid names)]
+      names' =
+        Map.union names $
+          Map.fromList (zip unnamed [T.pack ("_G" ++ show i) | i <- [1 :: Int ..]])
+  traverse
+    (\(n, xs) -> CompoundTerm n <$> traverse (valueToTerm names') xs)
+    cs'
+  where
+    varIdsOf v = case v of
+      VVar _ -> maybe [] pure <$> getVarId v
+      VTerm _ xs -> concat <$> traverse varIdsOf xs
+      _ -> pure []
+    nubOrd = go Set.empty
+      where
+        go _ [] = []
+        go seen (x : xs)
+          | Set.member x seen = go seen xs
+          | otherwise = x : go (Set.insert x seen) xs
 
 -- ---------------------------------------------------------------------------
 -- Function-reference resolution for the reader

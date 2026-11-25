@@ -3,6 +3,7 @@
 ;;;; Matches the output format of prettyTerm in YCHR.Internal.Pretty (Haskell).
 (library (ychr pretty)
   (export pretty-term pretty-bindings bindings->string pretty-query-result
+          pretty-query-store
           decode-mangled-name type-ref-atom-parts)
   ;; (rnrs unicode) supplies `char-general-category`, which the atom
   ;; quoting predicate needs to mirror Haskell's `isAlphaNum` exactly.
@@ -602,4 +603,67 @@
   ;; for the common case where the formatted output is just displayed.
   (define (pretty-bindings bs)
     (display (bindings->string bs)))
+
+  ;; Print the store for --show-store: one constraint value of VALS per
+  ;; line, at most LIMIT lines, then `... and N more`. A variable bound
+  ;; to a visible query variable in BS prints under its first name in
+  ;; name order; every other variable in VARS (the unbound variables of
+  ;; VALS, in order of first appearance) as _G1, _G2, ... Mirrors
+  ;; `residualStore` and `prettyStore` on the Haskell side.
+  (define (pretty-query-store bs vals vars limit)
+    ;; NAMES maps a var id to its print name. A hashtable, not an
+    ;; alist: a big store has many variables.
+    (let ((names (make-eqv-hashtable)))
+      (for-each
+       (lambda (b)
+         (let ((id (get-var-id (cdr b))))
+           (when (and id (not (hashtable-contains? names id)))
+             (hashtable-set! names id (symbol->string (car b))))))
+       (visible-sorted bs))
+      (let loop ((rest vars) (n 1))
+        (unless (null? rest)
+          (let ((id (var-id (car rest))))
+            (if (hashtable-contains? names id)
+                (loop (cdr rest) n)
+                (begin
+                  (hashtable-set! names id
+                                  (string-append "_G" (number->string n)))
+                  (loop (cdr rest) (+ n 1)))))))
+      (print-store-lines names vals limit)))
+
+  ;; Print at most LIMIT of VALS, naming variables through NAMES.
+  ;; `value->pexpr` takes an alist, so each line gets one holding just
+  ;; its own variables.
+  (define (print-store-lines names vals limit)
+    (let loop ((rest vals) (i 0))
+      (cond
+        ((null? rest) (if #f #f))
+        ((= i limit)
+         (display "... and ")
+         (display (length rest))
+         (display " more")
+         (newline))
+        (else
+         (display (render-pexpr max-prec
+                                (value->pexpr (line-aliases names (car rest))
+                                              (car rest))))
+         (newline)
+         (loop (cdr rest) (+ i 1))))))
+
+  ;; The (id . name) pairs of NAMES for the variables in V.
+  (define (line-aliases names v)
+    (let walk ((v v) (acc '()))
+      (let ((d (deref v)))
+        (cond
+          ((var? d)
+           (let ((name (hashtable-ref names (var-id d) #f)))
+             (if (and name (not (assv (var-id d) acc)))
+                 (cons (cons (var-id d) name) acc)
+                 acc)))
+          ((term? d)
+           (let loop ((i 0) (acc acc))
+             (if (= i (term-arity d))
+                 acc
+                 (loop (+ i 1) (walk (term-arg d i) acc)))))
+          (else acc)))))
 )
