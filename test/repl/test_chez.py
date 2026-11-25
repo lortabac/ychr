@@ -55,9 +55,9 @@ def run_interpreter(ychr_bin, program, input_text, env, *flags):
     )
 
 
-def assert_parity(ychr_bin, program, input_text, env):
-    chez = run_repl(ychr_bin, program, input_text, env)
-    interpreter = run_interpreter(ychr_bin, program, input_text, env)
+def assert_parity(ychr_bin, program, input_text, env, *flags):
+    chez = run_repl(ychr_bin, program, input_text, env, *flags)
+    interpreter = run_interpreter(ychr_bin, program, input_text, env, *flags)
     assert chez.returncode == interpreter.returncode, (
         f"return codes differ\nchez stdout:\n{chez.stdout}\n"
         f"chez stderr:\n{chez.stderr}\n"
@@ -153,6 +153,33 @@ def test_live_store_parity(ychr_bin, tmp_path, chez_env):
     )
     query = ":begin\np(1).\np(2).\nprint_store.\n:end\n:quit\n"
     assert_parity(ychr_bin, program, query, chez_env)
+
+
+SHOW_STORE_PROGRAM = (
+    ":- module(st, [leq/2, egg/0, many/1, pair/2]).\n"
+    ":- chr_type t ---> f(any, any).\n"
+    ":- chr_constraint leq/2, egg/0, many/1, pair/2.\n"
+    "leq(X, X) <=> true.\n"
+    "leq(X, Y), leq(Y, X) <=> X = Y.\n"
+    "leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
+    "many(0) <=> true.\n"
+    "many(N) <=> N > 0 | egg, M is N - 1, many(M).\n"
+)
+
+
+def test_show_store_parity(ychr_bin, tmp_path, chez_env):
+    """`--show-store` prints the same store on both backends: query
+    variable names, `_G<n>` for the rest, and the line cap."""
+    program = write_program(tmp_path, "st.chr", SHOW_STORE_PROGRAM)
+    query = (
+        "leq(A, B), leq(B, C).\n"
+        "leq(A, B), leq(B, A).\n"
+        "pair(X, _), pair(_, f(Y, _)).\n"
+        "many(53).\n"
+        ":begin\nleq(A, B).\nleq(B, C).\n:end\n"
+        ":quit\n"
+    )
+    assert_parity(ychr_bin, program, query, chez_env, "--show-store")
 
 
 def test_runtime_error_parity(ychr_bin, chez_env):

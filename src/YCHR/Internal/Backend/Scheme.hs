@@ -640,16 +640,20 @@ compileProcedureLambda proc =
 -- them through the ordinary @$call@ path.
 --
 -- The emitted expression relies on the server ABI: a @%s@ session binding,
--- @fresh-session@, @start-timer@, @report-timer@ and
--- @pretty-query-result@. It contains no top-level definitions, because
--- Chez's @eval@ rejects a @define@ in expression position.
+-- @fresh-session@, @start-timer@, @report-timer@,
+-- @pretty-query-result@ and @%print-query-store@. It contains no
+-- top-level definitions, because Chez's @eval@ rejects a @define@ in
+-- expression position.
 data QueryPlan = QueryPlan
   { queryVariables :: [Text],
     queryStatements :: [Stmt],
     queryProcedures :: [Procedure],
     queryCallables :: [(CallableKey, Name)],
     queryTimed :: Bool,
-    queryFreshSession :: Bool
+    queryFreshSession :: Bool,
+    -- | @--show-store@: after the bindings, print at most this many
+    -- store lines.
+    queryShowStore :: Maybe Int
   }
 
 -- | Render one query as a single Scheme expression.
@@ -724,20 +728,31 @@ generateQuery plan =
               compileBody plan.queryStatements,
               prettyForm
             ]
-    prettyForm =
+    prettyForm = case plan.queryShowStore of
+      Nothing -> resultForm
+      Just limit ->
+        SList
+          [ SAtom "begin",
+            resultForm,
+            SList
+              [ SAtom "%print-query-store",
+                SAtom "%s",
+                bindingsForm,
+                SAtom (T.pack (show limit))
+              ]
+          ]
+    resultForm = SList [SAtom "pretty-query-result", bindingsForm]
+    bindingsForm =
       SList
-        [ SAtom "pretty-query-result",
-          SList
-            ( SAtom "list"
-                : [ SList
-                      [ SAtom "cons",
-                        SList [SAtom "quote", SAtom v],
-                        SAtom (queryVarName v)
-                      ]
-                  | v <- plan.queryVariables
+        ( SAtom "list"
+            : [ SList
+                  [ SAtom "cons",
+                    SList [SAtom "quote", SAtom v],
+                    SAtom (queryVarName v)
                   ]
-            )
-        ]
+              | v <- plan.queryVariables
+              ]
+        )
 
 -- | Maximum size of a procedure compiled without a @call\/cc@ escape.
 -- The tail compiler duplicates the continuation of an 'If' once per

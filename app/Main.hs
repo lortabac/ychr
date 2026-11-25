@@ -24,7 +24,7 @@ import YCHR.Internal.Backend.SchemeTypes
   )
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg, renderSplices)
-import YCHR.Internal.Pretty (prettyBindings)
+import YCHR.Internal.Pretty (prettyBindings, prettyStore, showStoreLimit)
 import YCHR.Internal.ProgramCheck (ProgramCheck (..), checkProgram)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..))
@@ -35,13 +35,16 @@ import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
   ( Error (..),
     PreparedGoal (..),
+    QueryResult (..),
     QueryTell (..),
     Warning (..),
     compileFiles,
     prepareGoal,
     resolveQueryTellOrThrow,
     runGoalConstraint,
+    runGoalConstraintWithStore,
     runPreparedGoal,
+    runPreparedGoalWithStore,
   )
 
 -- ---------------------------------------------------------------------------
@@ -51,6 +54,7 @@ import YCHR.Run
 data RunOpts = RunOpts
   { goal :: T.Text,
     showBindings :: Bool,
+    showStore :: Bool,
     werror :: Bool,
     noCheck :: Bool,
     dumpSplices :: Bool
@@ -91,6 +95,7 @@ data SchemeTypesOpts = SchemeTypesOpts
 
 data ReplOpts = ReplOpts
   { quiet :: Bool,
+    showStore :: Bool,
     werror :: Bool,
     noCheck :: Bool,
     dumpSplices :: Bool,
@@ -115,6 +120,12 @@ filesArg = many (argument str (metavar "FILES..."))
 
 werrorFlag :: Parser Bool
 werrorFlag = switch (long "Werror" <> help "Treat warnings as errors")
+
+-- | @--show-store@: print the constraints left in the store after a
+-- query.
+showStoreFlag :: Parser Bool
+showStoreFlag =
+  switch (long "show-store" <> help "Print the constraints left in the store")
 
 -- | @--no-check@: skip the optional type checker entirely, both the
 -- whole-program check and the per-goal \/ per-query check. Compilation
@@ -192,6 +203,7 @@ replParser =
   Repl
     <$> ( ReplOpts
             <$> switch (long "quiet" <> help "Suppress prompt and warnings")
+            <*> showStoreFlag
             <*> werrorFlag
             <*> noCheckFlag
             <*> dumpSplicesFlag
@@ -213,6 +225,7 @@ runParser =
               T.pack
               (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
             <*> switch (long "show-bindings" <> help "Print variable bindings")
+            <*> showStoreFlag
             <*> werrorFlag
             <*> noCheckFlag
             <*> dumpSplicesFlag
@@ -326,6 +339,7 @@ defaultCommandParser = Repl defaultReplOpts <$> filesArg
     defaultReplOpts =
       ReplOpts
         { quiet = False,
+          showStore = False,
           werror = False,
           noCheck = False,
           dumpSplices = False,
@@ -397,6 +411,7 @@ main = do
               if opts.noCheck then Nothing else Just resources.typeCheckerProgram,
             hostCalls = hostCalls,
             quiet = opts.quiet,
+            showStore = opts.showStore,
             werror = opts.werror,
             dumpSplices = opts.dumpSplices,
             files = files,
@@ -445,14 +460,19 @@ runGoal resources opts files = withCompiled resources files $ \prog warnings -> 
       -- 'runPreparedGoal' type-checks the goal first.
       outcome <-
         try @SomeException $
-          if opts.noCheck
-            then runGoalConstraint prog hostCalls constraint
-            else runPreparedGoal resources.typeCheckerProgram prog hostCalls constraint
+          let tc = resources.typeCheckerProgram
+           in case (opts.noCheck, opts.showStore) of
+                (True, True) -> runGoalConstraintWithStore prog hostCalls constraint
+                (True, False) -> noStore <$> runGoalConstraint prog hostCalls constraint
+                (False, True) -> runPreparedGoalWithStore tc prog hostCalls constraint
+                (False, False) -> noStore <$> runPreparedGoal tc prog hostCalls constraint
       case outcome of
         Left exc -> reportErrorAndExit exc
-        Right bindings ->
-          when opts.showBindings (putStr (prettyBindings bindings))
+        Right result -> do
+          when opts.showBindings (putStr (prettyBindings result.bindings))
+          when opts.showStore (putStr (prettyStore showStoreLimit result.store))
   where
+    noStore bs = QueryResult {bindings = bs, store = []}
     reportErrorAndExit exc = do
       case fromException exc of
         Just err -> hPutStr stderr (displayMsg (err :: Error))

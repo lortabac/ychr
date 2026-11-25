@@ -63,8 +63,10 @@ import YCHR.Internal.Pretty
     prettyFunctionDecl,
     prettyQualifiedName,
     prettyQueryResult,
+    prettyStore,
     prettyTypeDecl,
     renderAtom,
+    showStoreLimit,
   )
 import YCHR.Internal.ProgramCheck
   ( ProgramCheck (..),
@@ -112,9 +114,11 @@ import YCHR.Internal.Types qualified as Types
 import YCHR.Run
   ( Error (..),
     PreparedQuery (..),
+    QueryResult (..),
     Warning (..),
     compileFiles,
     executePreparedQuery,
+    executePreparedQueryWithStore,
     prepareQuery,
     prepareQueryUnchecked,
   )
@@ -144,6 +148,9 @@ data ReplOptions = ReplOptions
     -- | @--quiet@: no prompts; skip warnings (unless fatal), the
     -- startup type-check report and the history notice.
     quiet :: Bool,
+    -- | @--show-store@: after each query's bindings, print the
+    -- constraints left in the store (not for @:trace@).
+    showStore :: Bool,
     -- | @--Werror@: warnings during the initial load abort startup;
     -- during @:recompile@ they keep the previous program loaded.
     werror :: Bool,
@@ -390,7 +397,7 @@ runOuterQueryWith timed opts backend prog line = do
       unless (opts.werror && not (null prep.warnings)) $
         case backend of
           Nothing -> runInterpreter prep
-          Just chez -> case prepareChezCode True timed prep of
+          Just chez -> case prepareChezCode True timed opts.showStore prep of
             Left err -> putStr (displayMsg err)
             Right code ->
               runChezCode chez code >>= either reportChezFailure pure
@@ -404,12 +411,21 @@ runOuterQueryWith timed opts backend prog line = do
             opts.hostCalls
             prep.extraProcs
             prep.extraCallables
-            (executePreparedQuery prep.liftedGoals)
+            (queryOutput opts.showStore prep.liftedGoals)
       end <- getCPUTime
       when timed (putStrLn (formatElapsed (end - start)))
       case execResult of
         Left exc -> reportQueryException exc
-        Right bindings -> putStr (prettyQueryResult bindings)
+        Right out -> putStr out
+
+-- | Run a prepared query and render what it prints: the bindings and,
+-- with @--show-store@, the store after them.
+queryOutput :: Bool -> [D.BodyGoal] -> Chr String
+queryOutput showStore goals
+  | showStore = do
+      r <- executePreparedQueryWithStore goals
+      pure (prettyQueryResult r.bindings ++ prettyStore showStoreLimit r.store)
+  | otherwise = prettyQueryResult <$> executePreparedQuery goals
 
 -- | Print a Chez backend failure. A runtime error goes to stdout like
 -- the interpreter's; a transport or startup error is a CLI error.
@@ -646,13 +662,13 @@ handleLiveQuery opts cp printResult src = do
             execResult <-
               liftIO $
                 try @SomeException $
-                  runReaderT (executePreparedQuery prep.liftedGoals) env
+                  runReaderT
+                    (queryOutput (printResult && opts.showStore) prep.liftedGoals)
+                    env
             case execResult of
               Left exc -> pure (QueryFatal (renderLiveFatal exc))
-              Right bindings -> do
-                when
-                  printResult
-                  (liftIO (putStr (prettyQueryResult bindings)))
+              Right out -> do
+                when printResult (liftIO (putStr out))
                 pure QueryOk
 
 -- | 'handleLiveQuery' for a query that runs in the Chez process.
@@ -673,7 +689,7 @@ handleLiveQueryChez opts cp chez src = do
         then pure (QueryRecoverable "")
         else case prep.queryLambdas of
           (lam : _) -> pure (QueryRecoverable (lambdaInLiveQuery lam))
-          [] -> case prepareChezCode False False prep of
+          [] -> case prepareChezCode False False opts.showStore prep of
             Left err -> pure (QueryRecoverable (displayMsg err))
             Right code -> do
               result <- runChezCode chez code

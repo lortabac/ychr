@@ -138,7 +138,8 @@ queryCode timed query = do
               queryProcedures = prep.extraProcs,
               queryCallables = prep.extraCallables,
               queryTimed = timed,
-              queryFreshSession = True
+              queryFreshSession = True,
+              queryShowStore = Nothing
             }
 
 -- | Compile a source program and render its Scheme library.

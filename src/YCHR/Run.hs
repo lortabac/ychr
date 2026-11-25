@@ -56,12 +56,16 @@ module YCHR.Run
     goalShapeConstraint,
     runGoalConstraint,
     runPreparedGoal,
+    QueryResult (..),
+    runGoalConstraintWithStore,
+    runPreparedGoalWithStore,
     ResolvedQuery (..),
     resolveQueryGoals,
     PreparedQuery (..),
     prepareQuery,
     prepareQueryUnchecked,
     executePreparedQuery,
+    executePreparedQueryWithStore,
     withCHRExtraTraced,
     toSessionInput,
   )
@@ -109,7 +113,7 @@ import YCHR.Internal.Desugar (LiftedQuery (..), desugarQueryGoals, liftQueryLamb
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic)
 import YCHR.Internal.Display (displayMsg)
-import YCHR.Internal.Meta (valueToTerm)
+import YCHR.Internal.Meta (residualStore, valueToTerm)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..), SourceLoc (..))
 import YCHR.Internal.Parser
@@ -251,7 +255,24 @@ runGoalConstraint ::
   HostCallRegistry ->
   Constraint ->
   IO (Map Text Term)
-runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
+runGoalConstraint = runGoalConstraintWith executePreparedQuery
+
+-- | 'runGoalConstraint', also returning the store the goal leaves
+-- behind (see 'QueryResult').
+runGoalConstraintWithStore ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO QueryResult
+runGoalConstraintWithStore = runGoalConstraintWith executePreparedQueryWithStore
+
+runGoalConstraintWith ::
+  ([D.BodyGoal] -> Chr a) ->
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO a
+runGoalConstraintWith execute cp hostCalls constraint = convertRuntimeError $ do
   qt <- resolveQueryTellOrThrow cp constraint
   lifted <-
     either
@@ -261,7 +282,7 @@ runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
   let extraProcs = compileQueryLambdas lifted.lambdas
       extraCallables = [(c.key, c.procName) | c <- buildCallables lifted.lambdas]
   withCHRExtra (toSessionInput cp) hostCalls extraProcs extraCallables $
-    executePreparedQuery lifted.goals
+    execute lifted.goals
 
 -- | Resolve a goal's name and arguments, throwing. A name that does not
 -- resolve, or resolves to a function, is 'GoalNotAConstraint'
@@ -396,7 +417,26 @@ runPreparedGoal ::
   HostCallRegistry ->
   Constraint ->
   IO (Map Text Term)
-runPreparedGoal typeChecker cp hostCalls original = do
+runPreparedGoal = runPreparedGoalWith runGoalConstraint
+
+-- | 'runPreparedGoal', also returning the store the goal leaves behind
+-- (see 'QueryResult').
+runPreparedGoalWithStore ::
+  SessionInput ->
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO QueryResult
+runPreparedGoalWithStore = runPreparedGoalWith runGoalConstraintWithStore
+
+runPreparedGoalWith ::
+  (CompiledProgram -> HostCallRegistry -> Constraint -> IO a) ->
+  SessionInput ->
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO a
+runPreparedGoalWith run typeChecker cp hostCalls original = do
   tcErrs <- case resolveQueryTell cp original of
     Right resolved
       | null resolved.errors -> do
@@ -415,7 +455,7 @@ runPreparedGoal typeChecker cp hostCalls original = do
     _ -> pure []
   unless (null tcErrs) (throwIO (TypeErrors tcErrs))
   -- Already canonicalized by 'prepareGoal'; do not rename again.
-  runGoalConstraint cp hostCalls original
+  run cp hostCalls original
 
 -- | 'runProgramWithGoalDSL' for a goal given as surface-language 'Text'.
 runProgramWithGoal ::
@@ -566,16 +606,46 @@ prepareResolved resolved typeWarnings =
 -- the ambient 'SessionEnv'.
 executePreparedQuery :: [D.BodyGoal] -> Chr (Map Text Term)
 executePreparedQuery lifted =
+  executePreparedQueryThen lifted $ \varMap classes ->
+    Map.traverseWithKey
+      (\k v -> valueToTerm (perKeyAliases classes k) v)
+      varMap
+
+-- | What a query leaves behind: its bindings and the alive constraints
+-- in the store, in store order. A store variable that is a query
+-- variable prints under that variable's name; any other unbound one as
+-- @_G1@, @_G2@, ... (see 'residualStore').
+data QueryResult = QueryResult
+  { bindings :: Map Text Term,
+    store :: [Term]
+  }
+
+-- | 'executePreparedQuery', also reading the store when the query is
+-- done.
+executePreparedQueryWithStore :: [D.BodyGoal] -> Chr QueryResult
+executePreparedQueryWithStore lifted =
+  executePreparedQueryThen lifted $ \varMap classes -> do
+    bs <-
+      Map.traverseWithKey
+        (\k v -> valueToTerm (perKeyAliases classes k) v)
+        varMap
+    st <- residualStore (NE.head <$> classes)
+    pure QueryResult {bindings = bs, store = st}
+
+-- | Run the goals, then hand the query's variables and their alias
+-- classes to the continuation.
+executePreparedQueryThen ::
+  [D.BodyGoal] ->
+  (Map Text Value -> Map VarId (NonEmpty Text) -> Chr a) ->
+  Chr a
+executePreparedQueryThen lifted k =
   convertRuntimeErrorChr $
     evalStateT
       ( do
           mapM_ executeBodyGoal lifted
           varMap <- get
           classes <- liftChr (buildAliasClasses varMap)
-          liftChr $
-            Map.traverseWithKey
-              (\k v -> valueToTerm (perKeyAliases classes k) v)
-              varMap
+          liftChr (k varMap classes)
       )
       (Map.empty :: Map Text Value)
 

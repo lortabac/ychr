@@ -822,3 +822,77 @@ def test_repl_live_session_comment_and_crlf(ychr_bin):
     )
     assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
     assert result.stdout == "X = 1.\n"
+
+
+SHOW_STORE_PROGRAM = (
+    ":- module(st, [leq/2, egg/0, many/1, pair/2]).\n"
+    ":- chr_type t ---> f(any, any).\n"
+    ":- chr_constraint leq/2, egg/0, many/1, pair/2.\n"
+    "leq(X, X) <=> true.\n"
+    "leq(X, Y), leq(Y, X) <=> X = Y.\n"
+    "leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
+    "many(0) <=> true.\n"
+    "many(N) <=> N > 0 | egg, M is N - 1, many(M).\n"
+)
+
+
+def _run_show_store(ychr_bin, tmp_path, query, *flags):
+    program = tmp_path / "st.chr"
+    program.write_text(SHOW_STORE_PROGRAM)
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", *flags, str(program)],
+        input=query,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    return result.stdout
+
+
+def test_show_store_one_shot(ychr_bin, tmp_path):
+    """Query variables keep their names; other variables are _G1, _G2..."""
+    out = _run_show_store(
+        ychr_bin,
+        tmp_path,
+        "leq(A, B), leq(B, C).\npair(X, _), pair(_, f(Y, _)).\nleq(A, B), leq(B, A).\n",
+        "--show-store",
+    )
+    assert out == (
+        "A = _,\nB = _,\nC = _.\n"
+        "st:leq(A, B)\nst:leq(B, C)\nst:leq(A, C)\n"
+        "X = _,\nY = _.\n"
+        "st:pair(X, _G1)\nst:pair(_G2, f(Y, _G3))\n"
+        "A = B,\nB = A.\n"
+    ), out
+
+
+def test_show_store_off_by_default(ychr_bin, tmp_path):
+    assert _run_show_store(ychr_bin, tmp_path, "egg.\n") == ""
+
+
+def test_show_store_cap(ychr_bin, tmp_path):
+    out = _run_show_store(ychr_bin, tmp_path, "many(53).\n", "--show-store")
+    assert out == "st:egg\n" * 50 + "... and 3 more\n", out
+
+
+def test_show_store_time(ychr_bin, tmp_path):
+    out = _run_show_store(ychr_bin, tmp_path, ":time egg.\n", "--show-store")
+    assert re.fullmatch(r"Time: \d+\.\d{6}s\nst:egg\n", out), out
+
+
+def test_show_store_live_session(ychr_bin, tmp_path):
+    """In a live session the store holds every earlier query's
+    constraints; only this query's variables have names. `:trace`
+    prints no store."""
+    out = _run_show_store(
+        ychr_bin,
+        tmp_path,
+        ":begin\nleq(A, B).\nleq(B, C).\n:trace egg.\n:end\n",
+        "--show-store",
+    )
+    assert out.startswith(
+        "A = _,\nB = _.\nst:leq(A, B)\n"
+        "B = _,\nC = _.\nst:leq(_G1, _G2)\nst:leq(B, C)\n"
+        "tell st:egg\n"
+    ), out
+    assert "\nst:egg\n" not in out, out

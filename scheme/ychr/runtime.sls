@@ -38,7 +38,7 @@
     %term-variables %compound-to-list %list-to-compound
     %name-base
     %read-term-from-string %write-term-to-string %write-store-to-list
-    %print-store %run-chr-session %run-chr-session-ep
+    %print-store %print-query-store %run-chr-session %run-chr-session-ep
     %solve %fail %findall %fold-solutions
     %int-to-float %float-to-int
     %add %sub %mul %fdiv
@@ -1221,20 +1221,25 @@
 
   ;;; term_variables
   (define (%term-variables t)
-    (let ((seen '()) (result '()))
+    (fold-right %cons (%nil) (variables-of (list t))))
+
+  ;;; The unbound variables of the values in TS, in order of first
+  ;;; appearance, as a Scheme list.
+  (define (variables-of ts)
+    (let ((seen (make-eqv-hashtable)) (result '()))
       (define (walk v)
         (let ((d (deref v)))
           (cond ((var? d)
                  (let ((id (var-id d)))
-                   (unless (memv id seen)
-                     (set! seen (cons id seen))
+                   (unless (hashtable-contains? seen id)
+                     (hashtable-set! seen id #t)
                      (set! result (cons d result)))))
                 ((term? d)
                  (let ((n (term-arity d)))
                    (do ((i 0 (+ i 1))) ((= i n))
                      (walk (term-arg d i))))))))
-      (walk t)
-      (fold-right %cons (%nil) (reverse result))))
+      (for-each walk ts)
+      (reverse result)))
 
   ;;; compound_to_list — also accepts an atom (the runtime form of a
   ;;; 0-arity compound), returning a singleton list. The functor goes
@@ -1477,6 +1482,13 @@
     (for-each (lambda (v) (display (pretty-term v)) (newline))
               (stored-constraint-values s))
     (%unit))
+
+  ;;; --show-store: print the store after a REPL query, at most LIMIT
+  ;;; lines. BS are the query's bindings, so a query variable prints
+  ;;; under its name. Mirrors `residualStore` in `YCHR.Internal.Meta`.
+  (define (%print-query-store s bs limit)
+    (let ((vals (stored-constraint-values s)))
+      (pretty-query-store bs vals (variables-of vals) limit)))
 
   ;;; ---------------------------------------------------------------------
   ;;; The search driver

@@ -131,3 +131,28 @@ def test_utf8_source_compiles_under_c_locale(ychr_bin, tmp_path):
         env={**os.environ, "LC_ALL": "C"},
     )
     assert result.returncode == 0, f"check failed:\n{result.stdout}\n{result.stderr}"
+
+
+@pytest.mark.parametrize(
+    "flags, expected",
+    [
+        (["--show-store"], "st:leq(A, B)\n"),
+        (["--show-store", "--show-bindings"], "A = _\nB = _\nst:leq(A, B)\n"),
+        ([], ""),
+    ],
+    ids=["store", "store+bindings", "none"],
+)
+def test_run_show_store(ychr_bin, tmp_path, flags, expected):
+    program = tmp_path / "st.chr"
+    program.write_text(
+        ":- module(st, [leq/2]).\n"
+        ":- chr_constraint leq/2.\n"
+        "leq(X, X) <=> true.\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "run", "-g", "leq(A, B)", *flags, str(program)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == expected
