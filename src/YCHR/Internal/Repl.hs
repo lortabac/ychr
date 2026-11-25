@@ -37,10 +37,11 @@ import Control.Exception
 import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask, runReaderT)
-import Data.Char (isSpace)
+import Data.Char (isDigit, isSpace)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (intercalate, sort, stripPrefix)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -96,7 +97,19 @@ import YCHR.Internal.Runtime.Session
     withTraceHandler,
   )
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
-import YCHR.Internal.StdLib (StdLib)
+import YCHR.Internal.Runtime.TraceFilter
+  ( ConstraintSpec (..),
+    EventKind,
+    TraceFilter (..),
+    defaultKinds,
+    defaultTraceFilter,
+    eventKindName,
+    filteredTraceHandler,
+    matchesSpec,
+    parseConstraintSpec,
+    parseEventKind,
+  )
+import YCHR.Internal.StdLib (StdLib (..))
 import YCHR.Internal.TypeCheck.Render (typeModule)
 import YCHR.Internal.TypeExports (isCtorExportedByParent)
 import YCHR.Internal.Types
@@ -111,6 +124,7 @@ import YCHR.Internal.Types
     typeConstructors,
   )
 import YCHR.Internal.Types qualified as Types
+import YCHR.Internal.VM.Types qualified as VM
 import YCHR.Run
   ( Error (..),
     PreparedQuery (..),
@@ -149,7 +163,7 @@ data ReplOptions = ReplOptions
     -- startup type-check report and the history notice.
     quiet :: Bool,
     -- | @--show-store@: after each query's bindings, print the
-    -- constraints left in the store (not for @:trace@).
+    -- constraints left in the store.
     showStore :: Bool,
     -- | @--Werror@: warnings during the initial load abort startup;
     -- during @:recompile@ they keep the previous program loaded.
@@ -456,40 +470,185 @@ formatElapsed ps = "Time: " ++ showFFloat (Just 6) seconds "s"
   where
     seconds = fromIntegral ps / 1e12 :: Double
 
--- | Run a one-off query in the outer REPL with refined-operational-
--- semantics tracing enabled. Output is the trace stream only —
--- bindings are intentionally not printed, matching the documented
--- @:trace@ behaviour. To see bindings, re-run the goal without
--- @:trace@.
+-- | Run a one-off query in the outer REPL with tracing on. The line is
+-- @[OPTION...] GOAL@ (see 'parseTraceArgs'). The trace goes first, then
+-- what a plain query prints.
 runTracedQuery :: ReplOptions -> Maybe Chez -> CompiledProgram -> String -> IO ()
 runTracedQuery opts backend prog line = case backend of
   Just _ ->
     hPutStrLn stderr ":trace is not available with --repl-backend=chez"
-  Nothing -> do
-    prepResult <-
-      try @SomeException $
-        prepareQueryWith opts.typeChecker prog (T.pack line)
-    case prepResult of
-      Left exc -> reportQueryException exc
-      Right prep -> do
-        printWarnings prep.warnings
-        unless (opts.werror && not (null prep.warnings)) $ do
-          execResult <-
+  Nothing -> case parseTraceArgs (libraryModuleNames opts.stdlib) line of
+    Left err -> traceArgsError err
+    Right req
+      | all isSpace req.goal -> showTraceUsage
+      | otherwise -> do
+          mapM_ (hPutStrLn stderr) (unknownTraceNames prog req.traceFilter)
+          prepResult <-
             try @SomeException $
-              withCHRExtraTraced
-                (toSessionInput prog)
-                opts.hostCalls
-                prep.extraProcs
-                prep.extraCallables
-                (defaultTraceHandler stdout)
-                (executePreparedQuery prep.liftedGoals)
-          case execResult of
+              prepareQueryWith opts.typeChecker prog (T.pack req.goal)
+          case prepResult of
             Left exc -> reportQueryException exc
-            Right _ -> pure ()
+            Right prep -> do
+              printWarnings prep.warnings
+              unless (opts.werror && not (null prep.warnings)) $ do
+                handler <-
+                  filteredTraceHandler req.traceFilter (defaultTraceHandler stdout)
+                execResult <-
+                  try @SomeException $
+                    withCHRExtraTraced
+                      (toSessionInput prog)
+                      opts.hostCalls
+                      prep.extraProcs
+                      prep.extraCallables
+                      handler
+                      (queryOutput opts.showStore prep.liftedGoals)
+                case execResult of
+                  Left exc -> reportQueryException exc
+                  Right out -> putStr out
+
+-- | A parsed @:trace@ line: the filter and the goal text after the
+-- options.
+data TraceRequest = TraceRequest
+  { traceFilter :: TraceFilter,
+    goal :: String
+  }
+
+-- | The modules @:trace@ hides by default: the bundled libraries.
+libraryModuleNames :: StdLib -> Set.Set Text
+libraryModuleNames (StdLib m) = Map.keysSet m
+
+-- | Parse @[OPTION...] [--] GOAL@. Options are the leading tokens that
+-- start with @-@; the goal is the rest of the line, as written.
+parseTraceArgs :: Set.Set Text -> String -> Either String TraceRequest
+parseTraceArgs libs = go emptyOpts
+  where
+    go o s = case dropWhile isSpace s of
+      '-' : '-' : rest
+        | endsToken rest -> finish o rest
+      str@('-' : c : _)
+        | not (isDigit c) -> do
+            let (tok, rest) = break isSpace str
+            case tok of
+              "--all" -> go o {optAll = True, optGiven = True} rest
+              _
+                | tok `elem` ["-c", "-r", "-e", "--depth"] -> do
+                    (val, rest') <- argument tok rest
+                    o' <- option o {optGiven = True} tok val
+                    go o' rest'
+                | otherwise ->
+                    Left
+                      ( "unknown option "
+                          ++ tok
+                          ++ " (use -- before a goal that starts with -)"
+                      )
+      str
+        | all isSpace str && o.optGiven -> Left "missing goal"
+        | otherwise -> finish o str
+    endsToken [] = True
+    endsToken (c : _) = isSpace c
+    argument tok rest = case break isSpace (dropWhile isSpace rest) of
+      ("", _) -> Left (tok ++ " needs an argument")
+      (v, rest') -> Right (v, rest')
+    option o tok val = case tok of
+      "-c" -> do
+        specs <- traverse spec (commaList val)
+        pure o {optConstraints = o.optConstraints ++ specs}
+      "-r" -> pure o {optRules = o.optRules ++ commaList val}
+      "-e" -> do
+        ks <- traverse kind (commaList val)
+        pure o {optKinds = Just (fromMaybe [] o.optKinds ++ ks)}
+      "--depth" -> case reads val of
+        [(n, "")] | n >= (0 :: Int) -> pure o {optDepth = Just n}
+        _ -> Left ("--depth needs a number, got " ++ val)
+      _ -> Left ("unknown option " ++ tok)
+    spec v = maybe (Left ("bad constraint " ++ T.unpack v)) Right (parseConstraintSpec v)
+    kind v =
+      maybe
+        ( Left
+            ( "unknown event kind "
+                ++ T.unpack v
+                ++ " (one of "
+                ++ intercalate ", " (map (T.unpack . eventKindName) [minBound .. maxBound])
+                ++ ")"
+            )
+        )
+        Right
+        (parseEventKind v)
+    commaList = filter (not . T.null) . map T.strip . T.splitOn "," . T.pack
+    finish o rest =
+      Right
+        TraceRequest
+          { traceFilter =
+              (defaultTraceFilter libs)
+                { constraints = o.optConstraints,
+                  rules = Set.fromList o.optRules,
+                  kinds = case o.optKinds of
+                    Just ks -> Set.fromList ks
+                    Nothing
+                      | o.optAll -> Set.fromList [minBound .. maxBound]
+                      | otherwise -> defaultKinds,
+                  maxDepth = o.optDepth,
+                  showLibrary = o.optAll
+                },
+            goal = rest
+          }
+
+-- | The options of a @:trace@ line, before they become a 'TraceFilter'.
+data TraceOpts = TraceOpts
+  { optConstraints :: [ConstraintSpec],
+    optRules :: [Text],
+    optKinds :: Maybe [EventKind],
+    optDepth :: Maybe Int,
+    optAll :: Bool,
+    -- | Some option was given, so an empty goal is an error, not a
+    -- request for the usage text.
+    optGiven :: Bool
+  }
+
+emptyOpts :: TraceOpts
+emptyOpts = TraceOpts [] [] Nothing Nothing False False
+
+-- | Warnings for @-c@ and @-r@ names the program does not have. A typo
+-- would otherwise just print an empty trace.
+unknownTraceNames :: CompiledProgram -> TraceFilter -> [String]
+unknownTraceNames prog flt =
+  [ "Warning: no constraint " ++ renderSpec c
+  | c <- flt.constraints,
+    not (any (matchesSpec c) declared)
+  ]
+    ++ [ "Warning: no rule " ++ T.unpack r
+       | r <- Set.toList flt.rules,
+         r `notElem` prog.program.ruleNames
+       ]
+  where
+    declared =
+      [ (k.name.moduleName <> ":" <> k.name.baseName, Just k.arity)
+      | k <- Map.keys prog.desugaredProgram.constraintTypes
+      ]
+    renderSpec c =
+      T.unpack (maybe "" (<> ":") c.specModule <> c.specName)
+        ++ maybe "" (\a -> "/" ++ show a) c.specArity
+
+traceArgsError :: String -> IO ()
+traceArgsError err = do
+  hPutStrLn stderr ("Error: " ++ err)
+  hPutStr stderr traceUsage
 
 showTraceUsage :: IO ()
-showTraceUsage =
-  putStrLn ":trace GOAL  -- run GOAL with refined-operational-semantics tracing"
+showTraceUsage = putStr traceUsage
+
+traceUsage :: String
+traceUsage =
+  unlines
+    [ ":trace [OPTION...] GOAL  -- run GOAL with refined-operational-semantics tracing",
+      "  -c C[,C]     only events about these constraints",
+      "               (name, name/N, mod:name, mod:name/N)",
+      "  -r R[,R]     only events of these rules",
+      "  -e KIND[,K]  only these event kinds: "
+        ++ unwords (map (T.unpack . eventKindName) [minBound .. maxBound]),
+      "  --depth N    hide events nested N or more levels deep (hidden levels count)",
+      "  --all        also show library modules and host calls"
+    ]
 
 showTimeUsage :: IO ()
 showTimeUsage =
@@ -524,34 +683,35 @@ runLiveSession opts liveInput backend cp = case backend of
     dispatch line
       | stripped == ":end" = pure ()
       | T.null stripped = liveLoop
-      | Just rest <- T.stripPrefix ":trace " stripped = do
-          outcome <-
-            withTraceHandler (defaultTraceHandler stdout) $
-              handleLiveQuery opts cp False rest
-          case outcome of
-            QueryOk -> liveLoop
-            QueryRecoverable msg -> do
-              liftIO (hPutStr stderr msg)
-              liveLoop
-            QueryFatal msg -> liftIO $ do
-              hPutStr stderr msg
-              hPutStrLn stderr "live session aborted due to runtime error."
+      | Just rest <- T.stripPrefix ":trace " stripped =
+          case parseTraceArgs (libraryModuleNames opts.stdlib) (T.unpack rest) of
+            Left err -> liftIO (traceArgsError err) *> liveLoop
+            Right req
+              | all isSpace req.goal -> liftIO showTraceUsage *> liveLoop
+              | otherwise -> do
+                  liftIO (mapM_ (hPutStrLn stderr) (unknownTraceNames cp req.traceFilter))
+                  handler <-
+                    liftIO
+                      (filteredTraceHandler req.traceFilter (defaultTraceHandler stdout))
+                  outcome <-
+                    withTraceHandler handler $
+                      handleLiveQuery opts cp (T.pack req.goal)
+                  onOutcome outcome
       | stripped == ":trace" = do
           liftIO showTraceUsage
           liveLoop
-      | otherwise = do
-          outcome <- handleLiveQuery opts cp True (T.pack line')
-          case outcome of
-            QueryOk -> liveLoop
-            QueryRecoverable msg -> do
-              liftIO (hPutStr stderr msg)
-              liveLoop
-            QueryFatal msg -> liftIO $ do
-              hPutStr stderr msg
-              hPutStrLn stderr "live session aborted due to runtime error."
+      | otherwise = handleLiveQuery opts cp (T.pack line') >>= onOutcome
       where
         line' = stripCommentAndCR line
         stripped = T.strip (T.pack line')
+    onOutcome outcome = case outcome of
+      QueryOk -> liveLoop
+      QueryRecoverable msg -> do
+        liftIO (hPutStr stderr msg)
+        liveLoop
+      QueryFatal msg -> liftIO $ do
+        hPutStr stderr msg
+        hPutStrLn stderr "live session aborted due to runtime error."
 
 -- | The Chez live-session loop. The store lives in the child process, so
 -- this loop is plain 'IO'; a single generated query runs per prompt line.
@@ -637,16 +797,14 @@ lambdaInLiveQuery lam =
         [] -> (Parsed.dummyLoc, P.Atom "")
    in displayMsg (LambdasInLiveQuery loc origin)
 
--- | Handle one query inside an existing interpreter live session. The
--- final 'Bool' says whether visible bindings should be printed; the
--- @:trace@ form passes 'False'.
+-- | Handle one query inside an existing interpreter live session and
+-- print its bindings (and, with @--show-store@, the store).
 handleLiveQuery ::
   ReplOptions ->
   CompiledProgram ->
-  Bool ->
   Text ->
   Chr QueryOutcome
-handleLiveQuery opts cp printResult src = do
+handleLiveQuery opts cp src = do
   prepResult <-
     liftIO (try @SomeException (prepareQueryWith opts.typeChecker cp src))
   case prepResult of
@@ -663,12 +821,12 @@ handleLiveQuery opts cp printResult src = do
               liftIO $
                 try @SomeException $
                   runReaderT
-                    (queryOutput (printResult && opts.showStore) prep.liftedGoals)
+                    (queryOutput opts.showStore prep.liftedGoals)
                     env
             case execResult of
               Left exc -> pure (QueryFatal (renderLiveFatal exc))
               Right out -> do
-                when printResult (liftIO (putStr out))
+                liftIO (putStr out)
                 pure QueryOk
 
 -- | 'handleLiveQuery' for a query that runs in the Chez process.

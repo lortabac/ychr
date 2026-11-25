@@ -465,6 +465,7 @@ library
                     , YCHR.Internal.Runtime.Reactivation
                     , YCHR.Internal.Runtime.Error
                     , YCHR.Internal.Runtime.Trace
+                    , YCHR.Internal.Runtime.TraceFilter
 
     other-modules:    YCHR.Internal.LineInput
                     , YCHR.Internal.IOErrorDescription

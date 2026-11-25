@@ -120,7 +120,7 @@ the loaded modules, plus the meta-commands at the outer prompt (only
 | `:list_declarations` | | List visible constraint and function declarations. |
 | `:list_operators` | | List defined operators, one `op/3` term per line. |
 | `:info NAME` | `:i NAME` | Show information about an identifier (see below). |
-| `:trace GOAL` | | Run `GOAL` with tracing (interpreter backend only; see below). |
+| `:trace [OPTION...] GOAL` | | Run `GOAL` with tracing, then print the bindings (interpreter backend only; see below). |
 | `:time GOAL` | | Run `GOAL` and print its execution time in seconds, then the bindings (see below). |
 | `:begin` | | Enter a live CHR session. End with `:end`. |
 | `:end` | | Leave the current live session. The session's store is discarded. |
@@ -160,19 +160,63 @@ unknown identifier: foo
 
 ### `:trace`
 
-`:trace GOAL` runs `GOAL` printing one event per step of the refined
-operational semantics (ωr) plus user-function, lambda and host calls,
-indented by nesting. Only the trace is printed; re-run without
-`:trace` for the bindings. Works at the outer prompt and inside a live
-session (the handler lasts one query). It is available only with the
-default `interpreter` backend.
+`:trace [OPTION...] GOAL` runs `GOAL` printing one event per step of
+the refined operational semantics (ωr) plus user-function, lambda and
+search events, indented by nesting. After the trace it prints what a
+plain query prints: the bindings and, with `--show-store`, the store.
+Works at the outer prompt and inside a live session (the handler lasts
+one query). It is available only with the default `interpreter`
+backend.
+
+By default library modules (`prelude`, `lists`, …) and host calls are
+hidden. `--all` shows them:
 
 ```ychr-repl
 ychr> :trace R is 1 + 2.
+R = 3.
+ychr> :trace --all R is 1 + 2.
 call prelude:+(1, 2)
   host call +(1, 2) = 3
 return 3
+R = 3.
 ```
+
+Options come before the goal; `--` ends them. `-c`, `-r` and `-e` take
+a comma-separated list with no spaces, and may repeat.
+
+| Option | Shows |
+|--------|-------|
+| `-c C[,C]` | Only events about these constraints: `name`, `name/N`, `mod:name` or `mod:name/N`. |
+| `-r R[,R]` | Only events of these rules: their occurrences and what happens inside them, the body included, but not an occurrence of another rule nested in it. A name matches a rule of that name in any module. |
+| `-e KIND[,KIND]` | Only these kinds: `tell`, `activate`, `try`, `partner`, `history`, `fire`, `store`, `kill`, `reactivate`, `unify`, `call` (call and return), `host`, `search` (all six search events). |
+| `--depth N` | Only events nested less than `N` levels deep. Every level counts, shown or not, so a cut hides a whole subtree. |
+| `--all` | Library modules and host calls too. |
+
+An event is shown if its kind is selected, it is above the depth
+limit, and it matches `-c` and `-r` when they are given. A name given
+with `-c` or `-r` is shown even in a library module. Without them, an
+event in a library module is hidden; an event that names no module
+(`unify`, `host call`) takes the module of the event it is nested in.
+Search events always count as the query's. A rule's events take the
+module of the constraint whose occurrence is running, so a user rule
+over a library constraint is hidden too.
+
+Hidden events don't take up a level: an event is indented by the
+number of shown events above it. So `-e fire,store` is a flat list
+(over `examples/leq.chr`):
+
+```ychr-repl
+ychr> :trace -e fire,store order:leq(1, 2), order:leq(2, 3).
+store c#0: order:leq(1, 2)
+fire transitivity [c#1, c#0]
+store c#1: order:leq(2, 3)
+store c#2: order:leq(1, 3)
+```
+
+Only rules with a propagation history print `fire`; a plain
+simplification or simpagation fires without one. A bad option or kind
+prints an error and runs nothing; a `-c` or `-r` name the program does
+not have prints a warning and runs the goal anyway.
 
 The next transcript shows tell, activate, try-occurrence, partner,
 fire, store and recursive activation. The first `leq(1, 2)` finds no
@@ -286,7 +330,7 @@ ychr>
 
 ## Showing the store
 
-With `--show-store`, every query (except `:trace`) also prints the
+With `--show-store`, every query also prints the
 constraints left in the store, one per line, after the bindings. The
 format is `print_store`'s. A variable that is a visible query variable
 (not `_`-prefixed) shows under its name; any other unbound variable is `_G1`, `_G2`, … in order
@@ -309,10 +353,9 @@ order:leq(A, _G1)
 ```
 
 At most 50 lines are printed, then `... and N more`. It applies to
-one-shot queries, `:time` and live-session queries (where the store
-also holds what earlier inputs left), on both backends. `:trace`
-prints no store. There is no `:set` yet, so the flag is the only
-switch.
+one-shot queries, `:time`, `:trace` and live-session queries (where
+the store also holds what earlier inputs left), on both backends.
+There is no `:set` yet, so the flag is the only switch.
 
 `ychr run --show-store -g GOAL` prints the store the same way, after
 the bindings if `--show-bindings` is also given:
