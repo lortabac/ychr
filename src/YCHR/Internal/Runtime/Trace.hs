@@ -20,7 +20,8 @@
 -- 'TraceHandler'; when there is none, the cost of tracing is one
 -- 'Data.IORef.IORef' read and a branch in the interpreter's emission
 -- helper. The REPL's @:trace@ command installs 'defaultTraceHandler'
--- for the duration of one query.
+-- for the duration of one query, behind the filter in
+-- "YCHR.Internal.Runtime.TraceFilter".
 module YCHR.Internal.Runtime.Trace
   ( -- * Events
     TraceEvent (..),

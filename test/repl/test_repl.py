@@ -180,14 +180,15 @@ REPL_TESTS = [
         "prelude:max\n"
         ":- function max(T, T) -> T requiring '>='(T, T) -> bool.\n",
     ),
-    # :trace — refined-operational-semantics tracer. The arithmetic
-    # case shows that user-function entries (`call prelude:+`), host
-    # calls (`host call +`), and returns are all visible. Bindings are
-    # intentionally not printed; the user re-runs without `:trace` to
-    # see them. The bare `:trace` form prints a usage line.
+    # :trace — refined-operational-semantics tracer. By default library
+    # modules and host calls are hidden, so the arithmetic case shows
+    # nothing but the bindings, which follow the trace. `--all` brings
+    # back the user-function entry (`call prelude:+`), the host call and
+    # the return.
+    (":trace R is 1 + 2.", "R = 3.\n"),
     (
-        ":trace R is 1 + 2.",
-        "call prelude:+(1, 2)\n  host call +(1, 2) = 3\nreturn 3\n",
+        ":trace --all R is 1 + 2.",
+        "call prelude:+(1, 2)\n  host call +(1, 2) = 3\nreturn 3\nR = 3.\n",
     ),
     # Query-side `=` and host-call goals go through `Run.executeBodyGoal`,
     # which has its own trace instrumentation parallel to the
@@ -196,16 +197,17 @@ REPL_TESTS = [
     # (no constraints are watching an unbound variable yet).
     (
         ":trace X = 1.",
-        "unify _ = 1\n",
+        "unify _ = 1\nX = 1.\n",
     ),
+    (":trace host:print(42).", "42\n"),
     (
-        ":trace host:print(42).",
+        ":trace -e host host:print(42).",
         "42\nhost call print(42) = '()'\n",
     ),
-    (
-        ":trace",
-        ":trace GOAL  -- run GOAL with refined-operational-semantics tracing\n",
-    ),
+    # `--depth 1` keeps only the top level: the call and its return.
+    (":trace --all --depth 1 R is 1 + 2.", "call prelude:+(1, 2)\nreturn 3\nR = 3.\n"),
+    # `--` ends the options.
+    (":trace -e unify -- X = 1.", "unify _ = 1\nX = 1.\n"),
     # A `%` comment at the end of a line is stripped before the query is
     # parsed, matching the file grammar (docs/reference/language.md): the
     # period still terminates the goal, so the query runs.
@@ -423,7 +425,7 @@ def test_trace_aggregate_goal_occurrence(ychr_bin, tmp_path):
     )
     result = subprocess.run(
         [ychr_bin, "repl", "--quiet", str(tmp_path / "aggt2.chr")],
-        input=":trace aggt2:c(1), aggt2:d(1).\n",
+        input=":trace --all aggt2:c(1), aggt2:d(1).\n",
         capture_output=True,
         text=True,
     )
@@ -883,7 +885,7 @@ def test_show_store_time(ychr_bin, tmp_path):
 def test_show_store_live_session(ychr_bin, tmp_path):
     """In a live session the store holds every earlier query's
     constraints; only this query's variables have names. `:trace`
-    prints no store."""
+    prints the store after its trace."""
     out = _run_show_store(
         ychr_bin,
         tmp_path,
@@ -895,4 +897,145 @@ def test_show_store_live_session(ychr_bin, tmp_path):
         "B = _,\nC = _.\nst:leq(_G1, _G2)\nst:leq(B, C)\n"
         "tell st:egg\n"
     ), out
-    assert "\nst:egg\n" not in out, out
+    assert out.endswith("    store c#2: st:egg\nst:egg\nst:leq(_G1, _G2)\nst:leq(_G3, _G4)\n"), out
+
+
+LEQ_PROGRAM = (
+    ":- module(order, [leq/2]).\n"
+    ":- chr_constraint leq/2.\n"
+    "reflexivity  @ leq(X, X) <=> true.\n"
+    "antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n"
+    "idempotence  @ leq(X, Y) \\ leq(X, Y) <=> true.\n"
+    "transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
+)
+
+
+def _run_leq(ychr_bin, tmp_path, query):
+    program = tmp_path / "leq.chr"
+    program.write_text(LEQ_PROGRAM)
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(program)],
+        input=query,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    return result
+
+
+def test_trace_filter_event_kind(ychr_bin, tmp_path):
+    """`-e` keeps only the named kinds, printed at the number of shown
+    events above them: here a flat list, then the bindings."""
+    out = _run_leq(
+        ychr_bin, tmp_path, ":trace -e fire,store leq(1, 2), leq(2, 3).\n"
+    ).stdout
+    assert out == (
+        "store c#0: order:leq(1, 2)\n"
+        "fire transitivity [c#1, c#0]\n"
+        "store c#1: order:leq(2, 3)\n"
+        "store c#2: order:leq(1, 3)\n"
+    ), out
+
+
+def test_trace_filter_constraint_kill(ychr_bin, tmp_path):
+    """A `kill` names only an id; the filter knows its type from the
+    earlier `activate`, so `-c` still matches it."""
+    out = _run_leq(
+        ychr_bin, tmp_path, ":trace -c leq/2 -e kill leq(A, B), leq(B, A).\n"
+    ).stdout
+    assert out == "kill c#0\nkill c#1\nA = B,\nB = A.\n", out
+
+
+def test_trace_filter_rule(ychr_bin, tmp_path):
+    """`-r` keeps the rule's occurrences and what happens inside them,
+    including the body's tell, but not the occurrences of other rules
+    in the nested activation."""
+    out = _run_leq(
+        ychr_bin, tmp_path, ":trace -r transitivity -e try,partner,fire,tell leq(1, 2), leq(2, 3).\n"
+    ).stdout
+    assert out == (
+        "try occurrence order:leq #6 (rule transitivity)\n"
+        "try occurrence order:leq #7 (rule transitivity)\n"
+        "try occurrence order:leq #6 (rule transitivity)\n"
+        "  partner c#0: order:leq(1, 2)\n"
+        "    fire transitivity [c#1, c#0]\n"
+        "    tell order:leq(1, 3)\n"
+        "      try occurrence order:leq #6 (rule transitivity)\n"
+        "      try occurrence order:leq #7 (rule transitivity)\n"
+        "try occurrence order:leq #7 (rule transitivity)\n"
+    ), out
+
+
+def test_trace_filter_depth(ychr_bin, tmp_path):
+    out = _run_leq(ychr_bin, tmp_path, ":trace --depth 2 leq(1, 2), leq(2, 3).\n").stdout
+    assert out == (
+        "tell order:leq(1, 2)\n"
+        "  activate c#0: order:leq(1, 2)\n"
+        "tell order:leq(2, 3)\n"
+        "  activate c#1: order:leq(2, 3)\n"
+    ), out
+
+
+def test_trace_filter_hides_library(ychr_bin, tmp_path):
+    """Library calls are hidden by default; a user function called from
+    one shows directly under its caller."""
+    (tmp_path / "ml.chr").write_text(
+        ":- module(ml, [twice/1]).\n"
+        ":- use_module(library(lists)).\n"
+        ":- function double/1.\n"
+        "double(X) -> X * 2.\n"
+        ":- function twice/1.\n"
+        "twice(L) -> maplist(fun double/1, L).\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(tmp_path / "ml.chr")],
+        input=":trace R is ml:twice([1, 2]).\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stdout == (
+        "call ml:twice([1, 2])\n"
+        "  call ml:double(1)\n"
+        "  return 2\n"
+        "  call ml:double(2)\n"
+        "  return 4\n"
+        "return [2, 4]\n"
+        "R = [2, 4].\n"
+    ), result.stdout
+
+
+def test_trace_filter_errors(ychr_bin, tmp_path):
+    """A bad option runs nothing; an unknown name is a warning."""
+    result = _run_leq(
+        ychr_bin,
+        tmp_path,
+        ":trace -e bogus leq(1, 2).\n"
+        ":trace --depth x leq(1, 2).\n"
+        ":trace -q leq(1, 2).\n"
+        ":trace --al leq(1, 2).\n"
+        ":trace -c lea/2 -r trans X = 1.\n",
+    )
+    assert result.stdout == "X = 1.\n", result.stdout
+    assert "Error: unknown event kind bogus" in result.stderr
+    assert "Error: --depth needs a number, got x" in result.stderr
+    assert "Error: unknown option -q" in result.stderr
+    assert "Error: unknown option --al" in result.stderr
+    assert "Warning: no constraint lea/2\nWarning: no rule trans\n" in result.stderr
+
+
+def test_trace_usage(ychr_bin, tmp_path):
+    result = _run_leq(ychr_bin, tmp_path, ":trace\n:trace -e fire\n")
+    assert result.stdout.count(":trace [OPTION...] GOAL") == 1, result.stdout
+    assert "--depth N" in result.stdout, result.stdout
+    assert "Error: missing goal" in result.stderr, result.stderr
+
+
+def test_trace_live_session(ychr_bin, tmp_path):
+    """Live `:trace` takes the same options and prints the bindings."""
+    out = _run_leq(
+        ychr_bin,
+        tmp_path,
+        ":begin\n:trace -e kill leq(A, B), leq(B, A).\n:end\n",
+    ).stdout
+    assert out == "kill c#0\nkill c#1\nA = B,\nB = A.\n", out

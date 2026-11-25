@@ -886,7 +886,7 @@ The REPL's `:trace` emits six search events: entering and leaving a
 search, selecting a choice point, trying an alternative, reaching a
 solution, and backtracking.
 
-Abridged from `:trace bound_pick(X, Ss).` over
+Abridged from `:trace --all bound_pick(X, Ss).` over
 `test/golden/search_basic`, where `X` is bound to 2 before a
 `choose(X, [1, 2, 3])`, so labeling is a membership test. Elided:
 the frames outside the search, `choose`'s `maplist` building its three
