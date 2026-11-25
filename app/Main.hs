@@ -670,24 +670,25 @@ dumpSplicesIf dump prog =
 
 -- | Type-check @prog@ and return the warnings to fold into the caller's
 -- @--Werror@ decision, unless @--no-check@ was given — in which case the
--- checker does not run at all and there are no type warnings. The
+-- checker does not run at all and there are no type or exhaustiveness
+-- warnings. The
 -- @--no-check@ case still compiles and still reports compile warnings.
 typeCheckUnless :: Bool -> Resources -> CompiledProgram -> IO [Warning]
 typeCheckUnless noCheck resources prog
   | noCheck = pure []
   | otherwise = typeCheckOrExit resources prog
 
--- | Type-check the compiled program with the loaded type-checker, and
--- check its rule heads against their @:- constraint_use@ declarations
--- (an independent pass, but part of type checking as far as the CLI and
--- @--no-check@ are concerned). If either reports errors, print them all
--- to stderr and exit non-zero. Otherwise
--- print the type-check warnings and return them, so the caller can
+-- | Type-check the compiled program with the loaded type-checker, check
+-- its rule heads against their @:- constraint_use@ declarations, and
+-- check its functions for exhaustiveness (independent passes, but part
+-- of type checking as far as the CLI and @--no-check@ are concerned).
+-- If any reports errors, print them all to stderr and exit non-zero.
+-- Otherwise print the warnings and return them, so the caller can
 -- fold them into its @--Werror@ decision together with the compile-time
 -- warnings.
 typeCheckOrExit :: Resources -> CompiledProgram -> IO [Warning]
 typeCheckOrExit resources prog = do
-  check <- checkProgram resources.typeCheckerProgram prog.desugaredProgram
+  check <- checkProgram resources.typeCheckerProgram prog
   unless (null check.errors) $ do
     mapM_ (hPutStr stderr) check.errors
     exitFailure

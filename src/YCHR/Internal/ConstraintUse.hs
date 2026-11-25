@@ -21,8 +21,8 @@
 --
 -- Like "YCHR.Internal.Exhaustiveness", this is an independent pass with
 -- its own error type and no dependency on the CHR-encoded type checker.
--- Unlike it, the pass is not run by "YCHR.Internal.Compile.Pipeline":
--- its callers invoke it next to 'YCHR.Internal.TypeCheck.typeCheckProgram',
+-- The pass is not run by "YCHR.Internal.Compile.Pipeline":
+-- "YCHR.Internal.ProgramCheck" runs it next to 'YCHR.Internal.TypeCheck.typeCheckProgram',
 -- so the CLI's @--no-check@ disables it along with the rest of type
 -- checking. See docs/reference/type-system.md §Constraint-use checking.
 module YCHR.Internal.ConstraintUse

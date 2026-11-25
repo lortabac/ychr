@@ -68,6 +68,7 @@ import YCHR.Internal.ProgramCheck
   ( ProgramCheck (..),
     checkProgram,
     constraintUseErrors,
+    exhaustivenessReport,
   )
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Resources (Resources (..), loadResourcesAt)
@@ -359,14 +360,16 @@ typecheck pg = guarded pg $ case pg.loaded of
   Nothing -> pure Step {playground = pg, output = response statusError noProgram}
   Just prog -> do
     checked <-
-      try @SomeException (checkProgram pg.checker prog.desugaredProgram)
+      try @SomeException (checkProgram pg.checker prog)
     let out = case checked of
-          -- A crashed checker still shows the use violations.
+          -- A crashed checker still shows the use violations and the
+          -- exhaustiveness warnings.
           Left exc ->
             response
               statusError
               ( concat (constraintUseErrors prog.desugaredProgram)
                   ++ renderException exc
+                  ++ renderWarnings (exhaustivenessReport prog)
               )
           Right check
             | not (null check.errors) ->

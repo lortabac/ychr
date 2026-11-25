@@ -18,6 +18,15 @@ The yardstick is whether a reader new to the module can follow the code without
 chasing several layers of indirection. Three similar lines side by side beat a
 clever combinator that nobody will reach for again.
 
+## Laziness is only an optimization
+
+Laziness may skip work nobody needs, like a lazy `CompiledProgram` field
+that only some callers force. Correctness must never depend on it: if
+you made every field and binding strict, the program should still give
+the same results, just slower. So don't let a thunk hide an error, a
+loop that never ends, or a side effect. Decide what gets reported or run
+in the callers, not by whether a thunk gets forced.
+
 ## Make invalid states unrepresentable
 
 Shape data types so they encode the business logic and its invariants as
