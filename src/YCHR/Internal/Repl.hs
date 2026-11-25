@@ -69,6 +69,7 @@ import YCHR.Internal.Pretty
 import YCHR.Internal.ProgramCheck
   ( ProgramCheck (..),
     constraintUseErrors,
+    exhaustivenessReport,
     typeCheckReport,
   )
 import YCHR.Internal.Repl.Chez
@@ -1142,13 +1143,15 @@ printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (hPutStr stderr . displayMsg)
 
 -- | Type-check the loaded program and print both its errors and its
--- warnings, together with any @:- constraint_use@ violations. Neither
--- aborts the REPL: type diagnostics are informational here, so
--- @--Werror@ (which governs the /compile/ warnings deciding whether a
--- program loads at all) does not consult them.
+-- warnings, together with any @:- constraint_use@ violations and
+-- exhaustiveness warnings. None of them aborts the REPL: type
+-- diagnostics are informational here, so @--Werror@ (which governs the
+-- /compile/ warnings deciding whether a program loads at all) does not
+-- consult them.
 printTypeDiagnostics :: SessionInput -> CompiledProgram -> IO ()
 printTypeDiagnostics typeChecker prog = do
   mapM_ (hPutStr stderr) (constraintUseErrors prog.desugaredProgram)
+  printWarnings (exhaustivenessReport prog)
   report <- typeCheckReport typeChecker prog.desugaredProgram
   mapM_ (hPutStr stderr) report.errors
   printWarnings report.warnings

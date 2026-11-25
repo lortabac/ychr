@@ -1,15 +1,16 @@
 -- | The program checks the CLI, the REPL, the playground and the golden
--- tests run together: the type checker and the @:- constraint_use@
--- check. @--no-check@ skips both.
+-- tests run together: the type checker, the @:- constraint_use@ check
+-- and the exhaustiveness check. @--no-check@ skips all three.
 module YCHR.Internal.ProgramCheck
   ( ProgramCheck (..),
     checkProgram,
     constraintUseErrors,
+    exhaustivenessReport,
     typeCheckReport,
   )
 where
 
-import YCHR.Internal.Compile.Pipeline (Warning (..))
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), Warning (..))
 import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Display (displayMsg)
@@ -20,24 +21,31 @@ import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 data ProgramCheck = ProgramCheck
   { -- | The errors, already rendered to text with 'displayMsg'.
     errors :: [String],
-    -- | The type checker's warnings as one 'TypeCheckWarnings', or
-    -- nothing when there are none.
+    -- | The exhaustiveness warnings, then the type checker's warnings.
+    -- Each kind is one 'Warning', left out when empty.
     warnings :: [Warning]
   }
 
--- | 'constraintUseErrors' followed by 'typeCheckReport'.
-checkProgram :: SessionInput -> D.Program -> IO ProgramCheck
+-- | 'constraintUseErrors', 'exhaustivenessReport' and 'typeCheckReport'
+-- together.
+checkProgram :: SessionInput -> CompiledProgram -> IO ProgramCheck
 checkProgram typeChecker prog = do
-  report <- typeCheckReport typeChecker prog
+  report <- typeCheckReport typeChecker prog.desugaredProgram
   pure
     ProgramCheck
-      { errors = constraintUseErrors prog ++ report.errors,
-        warnings = report.warnings
+      { errors = constraintUseErrors prog.desugaredProgram ++ report.errors,
+        warnings = exhaustivenessReport prog ++ report.warnings
       }
 
 -- | The @:- constraint_use@ violations of a program, rendered.
 constraintUseErrors :: D.Program -> [String]
 constraintUseErrors prog = map displayMsg (checkConstraintUse prog)
+
+-- | The program's non-exhaustive functions, as one
+-- 'ExhaustivenessWarnings', or nothing when there are none.
+exhaustivenessReport :: CompiledProgram -> [Warning]
+exhaustivenessReport prog =
+  [ExhaustivenessWarnings ws | let ws = prog.exhaustivenessWarnings, not (null ws)]
 
 -- | Type-check a program. The errors are the type errors only.
 typeCheckReport :: SessionInput -> D.Program -> IO ProgramCheck

@@ -361,7 +361,7 @@ runNegative spec c = do
   case result of
     Left err -> assertAllPresent (displayMsg err) expectedSubstrings
     Right (prog, _ws) -> do
-      check <- checkProgram typeCheckerProgram prog.desugaredProgram
+      check <- checkProgram typeCheckerProgram prog
       case check.errors of
         [] ->
           assertFailure "Expected compilation or type checking to fail, but it succeeded"
@@ -388,7 +388,7 @@ assertAllPresent msg =
 -- compile-time warnings.
 typeCheckOrFail :: TestSpec -> CompiledProgram -> IO ()
 typeCheckOrFail spec prog = do
-  check <- checkProgram typeCheckerProgram prog.desugaredProgram
+  check <- checkProgram typeCheckerProgram prog
   case check.errors of
     [] -> pure ()
     errs ->

@@ -12,11 +12,12 @@ import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.Embedded (stdlib)
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Pretty (prettyTermSrc)
-import YCHR.Run (Error, Warning (..), compileModules)
+import YCHR.Run (Error, compileModules)
 
 -- | Compile a single-module program and return the exhaustiveness
 -- warnings (function display name + rendered witness call).
@@ -24,11 +25,11 @@ exhWarnings :: Text -> IO [(Text, String)]
 exhWarnings src =
   case compileModules stdlib False [("test.chr", src)] of
     Left err -> assertFailure ("unexpected compile error: " ++ show (err :: Error))
-    Right (_, ws) ->
+    Right (cp, _) ->
       pure
         [ (name, prettyTermSrc witness)
-        | ExhaustivenessWarnings ds <- ws,
-          Diagnostic _ (AnnP (NonExhaustiveMatch name witness) _ _) _ <- ds
+        | Diagnostic _ (AnnP (NonExhaustiveMatch name witness) _ _) _ <-
+            cp.exhaustivenessWarnings
         ]
 
 -- | Exhaustiveness warnings: the missing-constructor witness and function name reported.

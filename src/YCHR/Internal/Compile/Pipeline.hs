@@ -229,11 +229,12 @@ instance Exception Error
 -- CLI's @--Werror@ is simply "treat a non-empty list as failure"; an
 -- embedder decides for itself. Render with 'YCHR.Run.displayWarning'.
 --
--- 'TypeCheckWarnings' is the exception to "returned alongside the
--- 'CompiledProgram'": type checking is a separate pass the caller runs
--- on the compiled program, so those warnings come from
--- 'YCHR.Internal.TypeCheck.typeCheckProgram' (or @typeCheckGoals@) and
--- are wrapped by the caller to join the same channel.
+-- 'TypeCheckWarnings' and 'ExhaustivenessWarnings' are the exceptions
+-- to "returned alongside the 'CompiledProgram'": they belong to type
+-- checking, a separate pass the caller runs on the compiled program, so
+-- @--no-check@ skips them. Both come from
+-- 'YCHR.Internal.ProgramCheck.checkProgram'; @typeCheckGoals@ gives
+-- 'TypeCheckWarnings' only.
 --
 -- As with 'Error', the payloads are internal types; match on the
 -- constructor, render the value.
@@ -299,6 +300,13 @@ data CompiledProgram = CompiledProgram
     queryRenameEnv :: QueryRenameEnv,
     -- | The desugared program (before lambda lifting), for type checking.
     desugaredProgram :: D.Program,
+    -- | The program's non-exhaustive functions. Not part of the compile
+    -- warnings: this check belongs to type checking, so only
+    -- 'YCHR.Internal.ProgramCheck' reports it, and @--no-check@ never
+    -- does. The field is lazy only to skip the work under @--no-check@;
+    -- a strict field would give the same results. Until forced, the
+    -- thunk keeps the resolved program alive.
+    exhaustivenessWarnings :: [Diagnostic ExhaustivenessWarning],
     -- | The clauses declaration macros spliced into the input modules, in
     -- input order. Empty for DSL input, which has no directives (see
     -- 'compileParsedModules'). Only @--dump-splices@ reads it. It stays a
@@ -598,10 +606,7 @@ finalizeCompilation libraryMods opExports sources parsed = do
   let desugared' = lowerDisjunctions desugaredLifted
   desugaredInlined <- first DesugarErrors (inlineFunctions desugared')
   let symTab = extractSymbolTable desugaredInlined
-      exhaustWarnings = checkExhaustiveness resolved
-      warnings =
-        [RenameWarnings renamed.warnings | not (null renamed.warnings)]
-          ++ [ExhaustivenessWarnings exhaustWarnings | not (null exhaustWarnings)]
+      warnings = [RenameWarnings renamed.warnings | not (null renamed.warnings)]
   prog <- first CompileErrors (compile desugaredInlined symTab)
   -- Assert the procedure-name closure invariant: every call the
   -- generated program carries must name one of its own procedures (see
@@ -639,6 +644,7 @@ finalizeCompilation libraryMods opExports sources parsed = do
           queryFunctionVisibility = buildQueryFunctionVisibility allMods,
           queryRenameEnv = buildQueryRenameEnv allMods,
           desugaredProgram = desugared,
+          exhaustivenessWarnings = checkExhaustiveness resolved,
           splices = sources.splices
         },
       warnings

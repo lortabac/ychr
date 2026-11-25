@@ -1358,7 +1358,8 @@ The check uses Maranget's matrix/usefulness algorithm, so it handles
 multiple arguments and nested constructor patterns and reports a
 concrete unmatched example. Being a warning, a non-exhaustive function
 still compiles and runs (raising a runtime error only if an unmatched
-value reaches it); `--Werror` promotes it to a hard error.
+value reaches it); `--Werror` promotes it to a hard error. The check
+is part of type checking, so `--no-check` turns it off.
 
 The dual dead-code warning — a rule or equation that can never fire
 because its guards contradict known types — is the
@@ -1445,11 +1446,9 @@ rule head — so it runs once, at compile time, never per goal.)
 Internally it stays an *independent* pass: its own Haskell module and
 its own error type, with no dependency on the CHR-encoded checker this
 document otherwise specifies — the same separation [Exhaustiveness
-checking](#exhaustiveness-checking) uses — but unlike exhaustiveness,
-it is wired to the `--no-check` flag rather than running
-unconditionally. Its error code lives in its own `45xxx` bucket rather
-than this checker's `60xxx` band, reflecting that same implementation
-independence.
+checking](#exhaustiveness-checking) uses. Its error code lives in its
+own `45xxx` bucket rather than this checker's `60xxx` band, reflecting
+that same implementation independence.
 
 The check is deliberately narrow:
 

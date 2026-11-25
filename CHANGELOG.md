@@ -16,6 +16,11 @@ MicroHs `ychr` is faster, by about 20% on the long runs: `check typechecker/*.ch
 stack (`MHS_STACK`), which this version needs to compile the library,
 and the playground is linked with a 16 MB WASM stack.
 
+- The exhaustiveness check (YCHR-20103) is now part of type checking,
+  so `--no-check` turns it off. `compileModules`/`compileFiles` no
+  longer return `ExhaustivenessWarnings`. In the REPL it's in the
+  type-check report, so `--Werror` doesn't make it fatal there.
+
 - Web playground: the standard library and the compiled type checker
   are built into the WASM module (the `make resources` output), not
   parsed and compiled in the browser. Start-up goes from ~2 s to

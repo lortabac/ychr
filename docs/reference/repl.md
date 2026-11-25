@@ -46,7 +46,8 @@ except under `--Werror`,
 where warnings are still printed. Under `--Werror` a warning on the
 initial load aborts startup; on `:recompile` it keeps the previous
 program; while renaming a query's arguments it aborts that query and
-leaves the store alone.
+leaves the store alone. Exhaustiveness warnings (YCHR-20103) are part
+of the type-check report, so `--Werror` doesn't make them fatal here.
 
 `--no-check` skips the type checker entirely: no type-check report on
 startup or `:recompile`, and every query runs unchecked, so a goal the
