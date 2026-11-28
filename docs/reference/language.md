@@ -458,7 +458,7 @@ decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
 | `fun(X, Y) -> Body end` | Lambda; parameters are variables or wildcards. |
 | `fun name/arity` | Function reference. |
 | `type(name/arity)` | [Type reference](#type-references): the type's name as a value. |
-| `'$call'(F, A1, …, An)` | Wired-in dynamic call, 1–10 arguments; prefer the prelude's `call/N`. |
+| `'$call'(F, A1, …, An)` | Wired-in dynamic call, 1–10 applied arguments (the callable does not count); prefer the prelude's `call/N`. |
 | `tell(G, A1, …, Ak)` | [Dynamic tell](#dynamic-tells-telln), a goal only: tell `G` with `A1..Ak` appended. |
 | `get_field(L, X)`, `set_field(L, X, V)`, `new_record(C, Fields)` | [Labelled fields](#labelled-fields). |
 | `X is E`, `X = E`, `A == B`, `A \== B` | Evaluation, unification (tell), structural (ask) equality and disequality. |
@@ -1254,12 +1254,15 @@ polymorphic signature per arity. For example, `call/4` is typed
 `call` is a thin wrapper over the wired-in primitive
 `'$call'(F, A1, ..., An)`, which the renamer recognizes directly. The
 `'$'` prefix is not a naming convention and `$` is not reserved for
-other primitives. `'$call'` accepts one to ten arguments; any other
-arity, including zero, is `YCHR-16022`, raised during resolution. The
-limit is a property of the surface language, aligned with the `call/N`
-family above: that family is the supported way to apply a callable, and
-every arity it covers is reachable through it. Prefer `call/N` and
-reserve `'$call'` for the layer below the typed wrapper.
+other primitives. `'$call'` takes a callable and applies it to between
+one and ten arguments; the callable does not count, so `'$call'(F)` has
+no applied arguments and a bare `'$call'` has no callee at all. Both of
+those, and eleven or more applied arguments, are `YCHR-16022`, raised
+during resolution. The limit is a property of the surface language,
+aligned with the `call/N` family above: that family is the supported
+way to apply a callable, and every arity it covers is reachable through
+it. Prefer `call/N` and reserve `'$call'` for the layer below the typed
+wrapper.
 
 `'$call'` also accepts the surface shape `fun name/arity` assembled at
 run time — by `list_to_compound`, a host call, or unification — not only

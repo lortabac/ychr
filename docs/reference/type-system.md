@@ -1969,9 +1969,10 @@ checking happens at the `call` boundary, not at `$call`. The prelude
 declares one `call/N` overload per supported arity — `call/2` through
 `call/11`, every one of them typed
 `call(fun(A, …) -> R end, A, …) -> R` — so first-class application is
-checked up to ten arguments. The primitive itself accepts one to ten
-arguments; any other arity, including zero, is `YCHR-16022`, raised
-during resolution.
+checked up to ten arguments. The primitive itself takes a callable plus
+one to ten applied arguments; the callable is not counted, so
+`'$call'(F)` applies it to none. Any other number of applied arguments,
+including zero, is `YCHR-16022`, raised during resolution.
 
 
 ## Type Definition Validation

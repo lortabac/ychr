@@ -166,10 +166,10 @@ data ResolveError
     -- wildcard for recovery.
     EmptyLambdaParams
   | -- | A @'$call'@ was used at an unsupported arity: zero (a missing
-    -- callee or a callee with no arguments) or more than
-    -- 'R.maxCallArity'. Carries the number of call arguments, so a
-    -- bare @'$call'@ and @'$call'(F)@ both report zero. That range is
-    -- the surface language's supported dynamic-call arity, so an
+    -- callee, or a callee applied to nothing) or more than
+    -- 'R.maxCallArity'. Carries the number of applied arguments, so
+    -- a bare @'$call'@ and @'$call'(F)@ both report zero. That range
+    -- is the surface language's supported dynamic-call arity, so an
     -- out-of-range call is rejected here, where the @'$call'@ shape is
     -- recognized, so that programs, queries and generated drivers all
     -- see the error.
@@ -1604,7 +1604,9 @@ termToExpr vis loc origin = go
       -- @call\/N@ family), so any other shape of the reserved
       -- @'$call'@ symbol is rejected here rather than silently
       -- becoming a data term. That includes @'$call'(F)@ (no
-      -- arguments), a bare @'$call'@ atom, and @'$call'/11@ or wider.
+      -- applied arguments), a bare @'$call'@ atom, and @'$call'/12@ or
+      -- wider. The arity counts the applied arguments only, so the
+      -- callee does not count and the diagnostic says so.
       -- Traversal still yields an 'ApplyExpr' so later checks see the
       -- call's operands.
       CompoundTerm (Unqualified "$call") args -> do

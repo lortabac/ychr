@@ -1,2 +1,2 @@
 YCHR-16022
-'$call' takes between 1 and 10 arguments, but was given 0
+'$call' takes between 1 and 10 applied arguments, but was given 0

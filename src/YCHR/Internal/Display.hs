@@ -929,10 +929,10 @@ resolveErrorMsg (UnsupportedCallArity arity) =
   withHint
     ( "'$call' takes between 1 and "
         ++ show R.maxCallArity
-        ++ " arguments, but was given "
+        ++ " applied arguments, but was given "
         ++ show arity
     )
-    ( "apply the callable to between 1 and "
+    ( "pass a callable and apply it to between 1 and "
         ++ show R.maxCallArity
         ++ " arguments"
     )

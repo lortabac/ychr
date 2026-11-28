@@ -11,59 +11,7 @@ moved since).
 
 Remove entries from this file when the underlying bug is fixed.
 
-The four entries below come from an agent QA pass (2026-11-27).
-
-
-## The `'$call'` diagnostic counts the applied arguments, not the ones written
-
-**Documented claim.** `docs/reference/language.md:1257` and
-`docs/reference/type-system.md:1973`: "`'$call'` accepts one to ten
-arguments; any other arity, including zero, is `YCHR-16022`".
-
-**Test.** Call it with one written argument, then with eleven.
-
-    :- module(ar1).
-    :- function d/0.
-    d -> 7.
-    :- chr_constraint go/1.
-    r @ go(Q) <=> Q is '$call'(fun d/0).
-
-    ychr check ar1.chr
-
-    :- module(ca, [t11/1]).
-    :- function d/10.
-    d(A, B, C, D, E, F, G, H, I, J) -> J.
-    :- chr_constraint t11/1.
-    t11(R) <=> R is '$call'(fun d/10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10).
-
-    ychr run --show-bindings -g 'ca:t11(R)' ca.chr
-
-**Expected.** Both the doc and the message count the same thing. They do
-not say which: if "arguments" means the whole compound, `'$call'(F)` is
-legal and eleven is not; if it means the ones after the callable, the
-message should say "applied arguments" and `'$call'(F)` is "given 0".
-
-**Actual.** The check counts the applied ones
-(`callArity = length args - 1`, `src/YCHR/Internal/Resolve.hs:1611`),
-so one written argument reads as zero and eleven are accepted.
-
-    ar1.chr:5:15: YCHR-16022
-    '$call' takes between 1 and 10 arguments, but was given 0
-      Hint: apply the callable to between 1 and 10 arguments
-    Q is '$call'(fun d / 0)
-
-Eleven written arguments are accepted (`ca.chr` prints `R = 10`), and
-twelve are rejected with "was given 11".
-
-**Notes.** The check is deliberate — `dev-docs/INVARIANTS.md:559` says
-out of range includes `'$call'(F)`, and `Resolve.hs:1600-1610` documents
-the applied reading — so this is a wording bug, not a semantic one. The
-count reaches the user through `UnsupportedCallArity`
-(`src/YCHR/Internal/Display.hs:385`). `call/2` to `call/11` are fine.
-
-**Fix sketch.** Not decided. Either name the count in the message and in
-both doc sites ("applied arguments"), or count the whole compound, which
-then requires accepting `'$call'(F)` and rejecting eleven.
+The three entries below come from an agent QA pass (2026-11-27).
 
 
 ## The catch-boundary example calls `length/1` without importing it

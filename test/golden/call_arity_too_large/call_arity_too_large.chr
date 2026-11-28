@@ -2,9 +2,9 @@
 :- use_module(library(prelude)).
 :- chr_constraint go(any).
 
-% Eleven arguments: one past the supported ceiling. The resolver must
-% reject the call: `'$call'` accepts one to ten arguments, the range the
-% prelude's typed `call/N` family covers.
+% Eleven applied arguments: one past the supported ceiling. The resolver
+% must reject the call: `'$call'` takes one to ten applied arguments, the
+% range the prelude's typed `call/N` family covers.
 r @ go(X) <=>
     X is '$call'(
         fun(A, B, C, D, E, F, G, H, I, J, K) -> A end,
