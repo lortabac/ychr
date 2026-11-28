@@ -26,8 +26,8 @@ What remains divergent is what happens when the *arity* is not one a
 primitive provides. Haskell's `HostCallRegistry` is keyed by name
 alone, so once a name is registered the primitive itself reports the
 mismatch; the Scheme table (`*prelude-host-calls*`) keys by
-`(name, arity)`, so it reports the intended not-evaluable error. Both
-a `host:` term and a bare name hit this:
+`(name, arity)`, so the shape matches nothing and the compound stays
+data. Both a `host:` term and a bare name hit this:
 
     X = host:'-'(3), R is X.
     X is list_to_compound(quote([copy_term, 1, 2])), R is X.
@@ -36,22 +36,27 @@ a `host:` term and a bare name hit this:
   `arithmetic host call: expected 2 numeric arguments of same type, got 1`
   for the first, `copy_term: expected 1 argument` for the second.
   The first is pinned by `test/golden/host_term_wrong_arity/`.
-- **Scheme**: no `(- . 1)` / `(copy_term . 2)` key, so it reports
-  `is: functor is not evaluable: host:-/1` and `…: copy_term/2`.
+- **Scheme**: no `(- . 1)` / `(copy_term . 2)` key, so the answer is
+  the term itself: `host:-(3)` and `copy_term(1, 2)`.
 
-Scheme's message is the better one (it matches SWI Prolog's
-`type_error(evaluable, F/N)`). Fixing Haskell means keying the registry
-by `(name, arity)`, which changes a public type
+Scheme's error was the better outcome (it matched SWI Prolog's
+`type_error(evaluable, F/N)`), and both backends used to report it.
+Neither does now: a functor with no procedure is a value, so a
+constructor term reached through a variable evaluates like the same
+term written inline (see `test/golden/is_deref_constructor/`). Fixing
+the remaining split means keying the Haskell registry by
+`(name, arity)`, which changes a public type
 (`YCHR.Convert.HostCallRegistry`), so it is deferred.
 `host_term_wrong_arity` is in the Scheme harness's `HASKELL_ONLY`
 list for this reason.
 
-Both backends do agree on the *decoded* name in the diagnostic: a
-not-evaluable functor prints as `host:-/1` / `m:pair/2` / `pair/2`,
-never as the vmName `host__-/2`. Locked by the Haskell golden cases in
-`test/golden/is_evaluable_host_term/` and
-`test/golden/is_non_evaluable_error/`, and on the Scheme side by
-`scheme/test/test-runtime.scm`'s `host functor deep-eval` group.
+The functors of one term print the same on both backends: a qualified
+functor keeps its module (`is_evaluable_host_term:foo`), and data
+reached through `is` keeps whatever spelling it was built with.
+
+`test/golden/is_deref_constructor/` is the shared positive case;
+`scheme/test/test-runtime.scm`'s `host functor deep-eval` group pins
+the same fallback at the unit level.
 
 ## Record types are never freed
 

@@ -1039,23 +1039,29 @@ R = 2,
 T = host:(1 + 1).
 ```
 
-A compound whose functor names neither — a data constructor, an
-undeclared name — is not evaluable, so naming one is a runtime error:
-`is: functor is not evaluable: pair/2`. This is the same boundary as
-Prolog's `type_error(evaluable, F/N)`; the error names the functor and
-its arity, never a mangled VM name. The boundary is drawn at the
-outermost compound: the arguments of a declared call are expressions
-and are evaluated (`min(1 + 1, 3)` is `2`), while a data constructor
-argument is data and keeps its shape. That last point is where inline
-and stored evaluation diverge, because the compiler turns an inline
-call's arguments into expressions but a stored term's data stays data:
-`R is copy_term(pair(1 + 1, 2))` is `pair(2, 2)`, while
-`T = copy_term(pair(1 + 1, 2)), R is T` is `pair(prelude:(1 + 1), 2)`.
-Store the argument already evaluated when you want the value.
+A compound whose functor names a declared function or a host call is
+called, and its arguments are walked the same way. Every other compound
+is a value: it is rebuilt as written, with its arguments walked. So a
+constructor term is a value wherever it comes from — `R is pair(1, 2)`
+and `T = pair(1, 2), R is T` both bind `pair(1, 2)` — and the parts of
+a stored term that name a call are evaluated: `T = pair(1 + 1, 2), R is
+T` binds `pair(2, 2)`.
+
+Walking is not the same as writing the expression inline in one place:
+an argument written as a variable is dereferenced there but not walked,
+while a stored term's arguments are walked. `X = pair(1 + 1, 2),
+R is copy_term(X)` copies `pair(prelude:(1 + 1), 2)`, whereas
+`T = copy_term(pair(1 + 1, 2)), R is T` is `pair(2, 2)`. Build an
+argument where you want it evaluated.
+
+A nullary function is out of reach of the walk: `R is zero` calls
+`zero/0`, but a stored `zero` is an atom, so `X = zero, R is X` binds
+`zero`.
 
 `quote(...)` keeps a subtree symbolic where it is written, but the
-resulting value is an ordinary term: `is` on a variable bound to it
-still walks it.
+resulting value is an ordinary term: `=` keeps the `quote` compound, and
+`is` on a variable bound to it walks the compound like any other data,
+so `X = quote(1 + 1), R is X` binds `quote(2)`.
 
 ## Labelled fields
 

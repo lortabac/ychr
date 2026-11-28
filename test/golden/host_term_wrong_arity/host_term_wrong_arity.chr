@@ -16,13 +16,12 @@
 % answers it and the primitive reports the arity.
 %
 % Both pin the current Haskell diagnostic: the primitive's own arity
-% error rather than `is: functor is not evaluable: …`. `HostCallRegistry`
-% is keyed by name alone, so the evaluator cannot tell "registered,
-% wrong arity" from "registered at this arity". The Scheme prelude
-% table is keyed by (name, arity), so the Scheme backend reports
-% not-evaluable instead; the residual divergence is recorded in
-% dev-docs/SCHEME_BACKEND_GAPS.md and this directory is Haskell-only in
-% the Scheme harness (see test/scheme/test_golden.py).
+% error. `HostCallRegistry` is keyed by name alone, so the evaluator
+% cannot tell "registered, wrong arity" from "registered at this
+% arity". The Scheme prelude table is keyed by (name, arity), so there
+% the shape matches nothing and stays data; the residual divergence is
+% recorded in dev-docs/SCHEME_BACKEND_GAPS.md and this directory is
+% Haskell-only in the Scheme harness (see test/scheme/test_golden.py).
 %
 % The evaluable counterpart, where both backends agree, is
 % test/golden/is_evaluable_host_term, and the raw-functor tier has a

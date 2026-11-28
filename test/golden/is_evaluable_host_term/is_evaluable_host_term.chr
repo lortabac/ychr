@@ -14,12 +14,13 @@
 % a bare `R is host:'+'(1, 2)` would be compiled as a direct host call
 % and never reach the walker.
 %
-% The argument-shaped cases cover a declared call's arguments: one is
-% dispatched when its own functor is evaluable (a nested host call, a
-% prelude operation) and a constructor argument stays data. The
-% discriminating case for the argument-walk fix is the list in
-% test/golden/is_evaluable_host_term_args/, whose cons cell the old
-% walker dispatched before checking the enclosing `member/2`.
+% The argument-shaped cases cover a declared call's arguments: each is
+% walked the same way the call itself is, so a nested host call and a
+% prelude operation are evaluated, and a constructor argument keeps its
+% shape with its own arguments walked. The discriminating case for the
+% argument walk is the list in test/golden/is_evaluable_host_term_args/,
+% whose cons cells the old walker dispatched before checking the
+% enclosing `member/2`.
 %
 % The `user_value` case pins the first tier: a declared function's
 % functor is qualified (`is_evaluable_host_term__user_value`), so the

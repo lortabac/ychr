@@ -141,7 +141,7 @@ data Program = Program
     -- decodes that functor to the bare name @F@ and consults its
     -- host-call registry — the same two-tier lookup a declared
     -- function takes first. See 'deepEvalValue' \/
-    -- 'invokeByKey' in @YCHR.Internal.Runtime.Interpreter@ and
+    -- 'callByKey' in @YCHR.Internal.Runtime.Interpreter@ and
     -- @deep-eval-value@ in @scheme\/ychr\/runtime.sls@.
     evaluables :: ![Evaluable],
     -- | Dispatch table for the @'$call'@ closure-apply construct. Maps
@@ -495,11 +495,11 @@ data ValExpr
     -- declared at — is a general @call: no matching closure@ error.
     ApplyClosure ValExpr [ValExpr]
   | -- | The @is@-with-variable-RHS case: evaluate the nested expression
-    -- in deep-deref mode and then walk the resulting 'Value',
-    -- evaluating any compound subterm whose @(functor, arity)@ names
-    -- a declared evaluable. Emitted only for an @is@ (in a rule body or
-    -- a function body) whose right-hand side is syntactically a
-    -- variable; this
+    -- in deep-deref mode and then walk the resulting 'Value' with
+    -- 'deepEvalValue' — call every compound whose @(functor, arity)@
+    -- names a declared evaluable, rebuild every other compound. Emitted
+    -- only for an @is@ (in a rule body or a function body) whose
+    -- right-hand side is syntactically a variable; this
     -- is the marker that makes the walker fire for @R is X@ without
     -- affecting guards or other 'EvalDeep' use sites. See the
     -- "Variable RHS in @is@" subsection of the type-system reference.
