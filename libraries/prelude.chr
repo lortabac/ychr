@@ -304,8 +304,9 @@ copy_term(T) -> host:copy_term(T).
 
 % Typed wrappers over the wired-in `'$call'`. One per supported call
 % arity: `call/N` applies a callable to N-1 arguments, so the family
-% spans `call/2` through `call/11` (one to ten arguments). The callable
-% is named `Fn` so the argument names can run `A`..`K` without a clash.
+% spans `call/2` through `call/11` (one to ten applied arguments). The
+% callable is named `Fn` so the argument names can run `A`..`K` without a
+% clash.
 call(Fn, A) -> '$call'(Fn, A).
 call(Fn, A, B) -> '$call'(Fn, A, B).
 call(Fn, A, B, C) -> '$call'(Fn, A, B, C).

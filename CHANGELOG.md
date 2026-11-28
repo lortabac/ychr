@@ -16,6 +16,11 @@ MicroHs `ychr` is faster, by about 20% on the long runs: `check typechecker/*.ch
 stack (`MHS_STACK`), which this version needs to compile the library,
 and the playground is linked with a 16 MB WASM stack.
 
+- The `'$call'` arity check (YCHR-16022) now says "applied arguments":
+  the count starts after the callable, so `'$call'(F)` reports 0 and
+  the range is 1 to 10. The language and type-system references say
+  the same.
+
 - The exhaustiveness check (YCHR-20103) is now part of type checking,
   so `--no-check` turns it off. `compileModules`/`compileFiles` no
   longer return `ExhaustivenessWarnings`. In the REPL it's in the

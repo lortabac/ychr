@@ -555,10 +555,12 @@ emitter's call total, at the cost of a conversion at every helper.
 ### `$call/N` supports N ∈ {1, …, 10}, enforced at resolution — `src/YCHR/Internal/Resolved.hs`
 
 `maxCallArity = 10` in `YCHR.Internal.Resolved` is the single source of
-truth for the supported dynamic-call arity. `Resolve.termToExpr`
-rejects a surface `'$call'` outside that range — including zero, i.e.
-`'$call'(F)` and a bare `'$call'` — with `UnsupportedCallArity`
-(YCHR-16022) while it recognizes the `'$call'` shape.
+truth for the supported dynamic-call arity. The count is the arguments
+applied to the callable, not the callable. `Resolve.termToExpr` rejects
+a surface `'$call'` outside that range — including zero applied
+arguments, i.e. `'$call'(F)` and a bare `'$call'` — with
+`UnsupportedCallArity` (YCHR-16022) while it recognizes the `'$call'`
+shape.
 
 Resolving rather than compiling is what makes the check total: programs,
 queries and generated drivers all reach the compiler only through

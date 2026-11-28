@@ -254,10 +254,10 @@ def test_repl_query_warning_snippet(ychr_bin):
 
 
 def test_repl_unsupported_call_arity(ychr_bin):
-    """A query whose `$call` is outside the supported 1..10 arity range
-    is rejected by the resolver (YCHR-16022) rather than becoming a data
-    term. The range is the surface-language limit, aligned with the
-    prelude's `call/N` family."""
+    """A query whose `$call` applies the callee to a number of arguments
+    outside the supported 1..10 range is rejected by the resolver
+    (YCHR-16022) rather than becoming a data term. The range is the
+    surface-language limit, aligned with the prelude's `call/N` family."""
     for query, given in [
         # One argument is the callee, so this applies it to nothing.
         ("R is '$call'(fun(A) -> A end).", 0),
@@ -276,7 +276,7 @@ def test_repl_unsupported_call_arity(ychr_bin):
         assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
         assert "YCHR-16022" in result.stdout, result.stdout
         assert (
-            f"'$call' takes between 1 and 10 arguments, but was given {given}"
+            f"'$call' takes between 1 and 10 applied arguments, but was given {given}"
             in result.stdout
         ), result.stdout
 
