@@ -11,53 +11,14 @@ moved since).
 
 Remove entries from this file when the underlying bug is fixed.
 
-The three entries below come from an agent QA pass (2026-11-27).
-
-
-## The catch-boundary example calls `length/1` without importing it
-
-**Documented claim.** `docs/reference/language.md:735-738`: a failure
-deep inside a recursive call is caught by the guard, so
-`r @ c(L) <=> length(L) > 0 | body.` on `[1|T]` delays.
-
-**Test.** The example with its `body` placeholder filled in.
-
-    :- module(dl2).
-    :- chr_constraint c/1, out/1.
-    r @ c(L) <=> length(L) > 0 | out(L).
-
-    ychr run -g 'dl2:c([1|T])' dl2.chr
-
-**Expected.** `c([1 | T])` is stored, nothing is reported.
-
-**Actual.**
-
-    === warning ===
-    dl2.chr:3:14: YCHR-20101
-    Undeclared data constructor 'length'
-      Hint: declare it with :- chr_type, or check the spelling
-    length(L) > 0
-    === runtime error ===
-    dl2.chr:3:5: YCHR-60001
-    <<rule r>>
-    comparison host call: expected 2 int, float or string arguments of the same type, got 2
-
-**Notes.** `length/1` is in `libraries/lists.chr:116`, and a file has to
-import a bundled library; only the REPL auto-loads it. So `length(L)` is
-an undeclared constructor, the guard is a general failure, and it is
-hard instead of delayed. The prose is a fragment (`body` is a
-placeholder), but `length(L)` reads as a real call. With
-`:- use_module(library(lists)).` it delays as documented, so the guard
-machinery is fine. The prelude has no list function to use instead.
-
-**Fix sketch.** Add the import to the example.
+The two entries below come from an agent QA pass (2026-11-27).
 
 
 ## `is` raises on a dereferenced constructor term but returns an inline one
 
-**Documented claim.** `docs/reference/language.md:1029-1030`: a variable
+**Documented claim.** `docs/reference/language.md:1030-1031`: a variable
 on the right of `is` evaluates "the same way the equivalent expression
-written inline evaluates". `:1041-1042`: a compound whose functor is a
+written inline evaluates". `:1042-1043`: a compound whose functor is a
 data constructor "is not evaluable, so naming one is a runtime error".
 
 **Test.**
@@ -87,16 +48,16 @@ pinned by `test/golden/aggregates_reserved_other_arity`, which expects
 `R = aggregates_reserved_other_arity:argmax(1, 2)` from
 `is_arg(R) <=> R is argmax(1, 2).`, and the dereferenced form by
 `test/golden/is_non_evaluable_error`. So the implementation matches its
-goldens and `:1041` is wrong about the inline position. What is really
+goldens and `:1042` is wrong about the inline position. What is really
 undecided is a dereferenced term whose functor is a constructor: deep
 evaluation walks stored terms (`X = 1 + 1, R is X` gives `2`), and it
 has no procedure for a constructor. This is also where the two wholesale
-paths part company for constructor *arguments* (`:1050`):
+paths part company for constructor *arguments* (`:1051`):
 `R is copy_term(pair(1 + 1, 2))` gives `pair(2, 2)`, while
 `X = copy_term(pair(1 + 1, 2)), R is X` gives `pair(prelude:(1 + 1), 2)`.
 
 **Fix sketch.** Not decided. Either teach deep evaluation to rebuild
-constructor terms, or say in `:1029-1030` and `:1041` that a constructor
+constructor terms, or say in `:1030-1031` and `:1042` that a constructor
 term is a value where it is written but not once it comes through a
 variable.
 

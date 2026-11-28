@@ -733,7 +733,8 @@ occurrence. It is not a general handler.
   failure reaches whatever demanded the function's value; if that was
   a rule guard, it is caught there.
 - The boundary is the whole guard, so a failure deep inside a
-  recursive call is caught like one at the top level:
+  recursive call is caught like one at the top level. `length/1` is in
+  `library(lists)`, so with `:- use_module(library(lists)).`
   `r @ c(L) <=> length(L) > 0 | body.` on the partial list `[1|T]`
   delays even though `length`'s recursive dispatch raised it.
 - `is` expressions, rule bodies and top-level goals are not guard
