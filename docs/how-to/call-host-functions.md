@@ -100,7 +100,9 @@ Limits:
 
 - Only a direct `host:` call reaches an imported procedure. A host term
   built as data and evaluated later (`T = host:my_add(1, 2), R is T`)
-  fails with `is: functor is not evaluable`.
+  stays data: `is` calls a name only when the runtime's host-call table
+  holds it, and an imported procedure is not in the table. `--import`
+  is Scheme-only, so the Haskell backend answers the same way.
 - Your procedure gets the arguments only, not the session.
 - The Chez REPL (`ychr repl --repl-backend=chez`) has no `--import`.
 

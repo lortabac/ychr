@@ -1182,121 +1182,50 @@ evalValExprDeep (SMakeTerm functor args) = do
   pure $ makeTerm functor.unName argVals
 evalValExprDeep expr = evalValExpr expr
 
--- | Walk a runtime 'Value', evaluating any compound subterm whose
--- @(functor, arity)@ names a declared host call or a compiled user
--- function. Atomic values pass through. Unbound variables are
--- dereferenced once and then re-walked, so a chain of bindings
--- ending in a compound triggers full evaluation. Functors that do
--- not name an evaluable declaration (constructors, undeclared
--- atoms) raise a runtime error — mirroring SWI Prolog's
--- @type_error(evaluable, F\/N)@.
+-- | Walk a runtime 'Value' the way @is@ reads a term it reaches
+-- through a variable: dereference it, then interpret every compound it
+-- meets — one whose @(functor, arity)@ names a declared host call or a
+-- compiled user function is /called/ with its arguments walked, and
+-- any other compound is data and is rebuilt with its arguments walked
+-- the same way. Atomic values pass through.
+--
+-- One walker, because a term has to mean the same as the expression
+-- that built it: @R is pair(1 + 1, 2)@ is @pair(2, 2)@, and the walker
+-- gives the stored term @T = pair(1 + 1, 2)@ that same @pair(2, 2)@. A
+-- constructor functor is inert either way, so @T = pairish(1, 2),
+-- R is T@ is @pairish(1, 2)@.
 --
 -- A term built from a @host:@ call in /data/ position carries the
 -- vmName @host__F@ as its functor ('Compile.Names.vmName' of
--- @Qualified \"host\" F@), exactly as a term built from a declared
+-- @Qualified "host" F@), exactly as a term built from a declared
 -- function carries that function's qualified vmName. The evaluables
--- table holds neither, so 'invokeByKey' matches the mangled shape,
+-- table holds neither, so 'callByKey' matches the mangled shape,
 -- recovers the bare name @F@, and retries the host-call registry.
--- This is what makes @T = host:'+'(1, 1), R is T@ evaluate instead of
--- reporting @host__+/2@ as unevaluable.
---
--- Because 'HostCallRegistry' is keyed by name alone, an arity that no
--- primitive provides is reported by the primitive when the name /is/
--- registered — @T = host:'-'(3), R is T@ reports @arithmetic host
--- call: expected 2 numeric arguments of same type, got 1@ — and as
--- @is: functor is not evaluable: -\/1@ when it is not. The Scheme
--- runtime keys its equivalent table by @(name, arity)@, so it reports
--- the latter in both cases; that divergence is tracked in
--- @dev-docs\/SCHEME_BACKEND_GAPS.md@.
+-- This is what makes @T = host:'+'(1, 1), R is T@ evaluate to @2@.
 --
 -- 'MakeTerm' callers do /not/ funnel through this walker — the
 -- @quote/1@ quoting form must continue to produce the symbolic
 -- compound it was asked to build. Quoting stops the /compile-time/
 -- evaluation of the subtree only: once the value exists, a later
 -- @R is T@ walks it like any other compound.
---
--- Arguments are walked by 'deepArgument'. The rule there follows the
--- split the direct path already makes: the arguments of a /declared/
--- call are expressions that get evaluated, while a constructor is data
--- and keeps its shape — though a variable inside it is still
--- dereferenced, so the data carries the most recent bindings. That is
--- what makes @T = member(1, [0, 1, 2]), R is T@ (with
--- @library(lists)@ imported) work: the list
--- argument stays data instead of being dispatched as a call.
--- Dispatching the cons cell with 'deepEvalValue' would report
--- @is: functor is not evaluable: prelude:.\/2@.
--- The /outermost/ compound is still required to be evaluable:
--- 'invokeByKey' raises the not-evaluable error for it, so
--- @T = pair(1, 2), R is T@ still fails.
---
--- One consequence is that a stored term can be less evaluated than the
--- same expression written inline, and deliberately so: the compiler
--- turns an inline call's arguments into expressions, whereas this
--- walker treats data as data. @R is copy_term(pair(1 + 1, 2))@ is
--- @pair(2, 2)@, while @T = copy_term(pair(1 + 1, 2)), R is T@ keeps
--- @pair(prelude:(1 + 1), 2)@ — the same way @R is pair(1 + 1, 2)@
--- evaluates its argument but @T = pair(1 + 1, 2), R is T@ never
--- reaches @pair@ at all.
 deepEvalValue :: Value -> Chr Value
 deepEvalValue v = do
   v' <- deref v
   case v' of
     VTerm functor args -> do
+      args' <- traverse deepEvalValue args
       let key = EvaluableKey {functor = Name functor, arity = length args}
-      invokeByKey key =<< traverse deepArgument args
+      called <- callByKey key args'
+      pure $ maybe (VTerm functor args') id called
     _ -> pure v'
 
--- | Walk one argument of a deep-evaluated call: dereference it, then
--- evaluate it if its functor names a call. A compound that is not a
--- call is data: it is kept as-is, with its own subterms walked by
--- 'deepData' so that bound variables inside it are still resolved. See
--- 'deepEvalValue' for why the two walkers differ.
-deepArgument :: Value -> Chr Value
-deepArgument v = do
-  v' <- deref v
-  case v' of
-    VTerm functor args -> do
-      let key = EvaluableKey {functor = Name functor, arity = length args}
-      evaluable <- valueKeyIsEvaluable key
-      if evaluable
-        then invokeByKey key =<< traverse deepArgument args
-        else deepData v'
-    _ -> pure v'
-
--- | Walk a data compound — one whose functor is not a call. Its shape
--- is preserved and its subterms are never dispatched, but variables
--- reachable through it are dereferenced so the data reflects current
--- bindings. This is what makes @X = 1 + 1, T = pair(X, 2), @
--- @R is T@ fail on @pair\/2@ while @T = pair(1 + 1, 2)@ keeps the
--- unevaluated @1 + 1@ inside the data.
-deepData :: Value -> Chr Value
-deepData v = do
-  v' <- deref v
-  case v' of
-    VTerm functor args -> VTerm functor <$> traverse deepData args
-    _ -> pure v'
-
--- | Is a value-side key something the deep evaluator can call? The
--- same tiers 'invokeByKey' dispatches on, hoisted so 'deepArgument'
--- can decide whether a compound is a call or data before walking the
--- compound's arguments.
-valueKeyIsEvaluable :: EvaluableKey -> Chr Bool
-valueKeyIsEvaluable key = do
-  SessionEnv {evaluables, hostCalls} <- ask
-  pure $
-    Map.member key evaluables
-      || Map.member key.functor hostCalls
-      || maybe False (`Map.member` hostCalls) (hostCallName key)
-
--- | Dispatch a value-side deep-evaluation step: prefer a user-defined
--- function (resolved through the compiler-emitted 'evaluables' table),
--- fall back to the host-call registry, and raise a runtime error if
--- neither matches.
+-- | Call whatever a value-side @(functor, arity)@ key names, or answer
+-- 'Nothing' when nothing can evaluate it; the caller then keeps the
+-- compound as data (see 'deepEvalValue').
 --
 -- A @host:@ compound carries @host__F@ as its functor, so the fallback
 -- decodes the functor to the bare name the registry is keyed by (see
--- 'hostCallName'). The error message is built from the same decoded
--- name, so it reads @host:F\/N@ rather than the encoded @host__F\/N@.
+-- 'hostCallName').
 --
 -- The tiers, in order: the compiler-emitted 'evaluables' table, then
 -- the host-call registry under the /raw/ functor, then the host-call
@@ -1304,25 +1233,29 @@ valueKeyIsEvaluable key = do
 -- middle tier is what answers a bare host name that reached a value —
 -- @quote([copy_term, 1])@ builds the functor @copy_term@, which no
 -- source-level canonicalization turned into @prelude__copy_term@. The
--- last tier is what answers @host:'+'(1, 1)@. A declared function
--- (@prelude__+@) is found by the first tier, so a prelude compound
--- never reaches the registry and a wrong arity is reported as
--- not-evaluable rather than being handed to the primitive.
-invokeByKey :: EvaluableKey -> [Value] -> Chr Value
-invokeByKey key args = do
+-- last tier is what answers @host:'+'(1, 1)@.
+--
+-- The registry is keyed by name alone, so a key no primitive provides
+-- for a name the registry /does/ hold is handed to the primitive,
+-- which reports the arity itself: @T = host:'-'(3), R is T@ reports
+-- @arithmetic host call: expected 2 numeric arguments of same type,
+-- got 1@. The Scheme runtime keys its table by @(name, arity)@, so the
+-- same shape misses there and stays data; that divergence is tracked
+-- in @dev-docs\/SCHEME_BACKEND_GAPS.md@.
+callByKey :: EvaluableKey -> [Value] -> Chr (Maybe Value)
+callByKey key args = do
   SessionEnv {evaluables, hostCalls} <- ask
   case Map.lookup key evaluables of
-    Just procName -> callProc procName (map CVal args)
+    Just procName -> Just <$> callProc procName (map CVal args)
     Nothing ->
       case Map.lookup key.functor hostCalls of
-        Just _ -> invokeHostCall key.functor args
+        Just _ -> Just <$> invokeHostCall key.functor args
         Nothing ->
           case hostCallName key of
             Just name
               | Just _ <- Map.lookup name hostCalls ->
-                  invokeHostCall name args
-            _ ->
-              runtimeError' "is: functor is not evaluable: " (notEvaluableName key)
+                  Just <$> invokeHostCall name args
+            _ -> pure Nothing
 
 -- | The bare host-call name a key's functor encodes, or 'Nothing' when
 -- the functor is not a @host:@ term.
@@ -1351,26 +1284,6 @@ hostCallName key = do
     unescaped t = case decodeName t [] of
       CompoundTerm (Types.Unqualified f) _ -> Just f
       _ -> Nothing
-
--- | Render the @F\/N@ a not-evaluable diagnostic names.
---
--- The functor is first decoded back out of its vmName: @host__F@ names
--- the host call @F@ and @m__f@ the qualified function @m:f@. The
--- decoded parts are joined with the raw text rather than run through
--- 'prettyTerm', because this diagnostic names an /operator/ the way
--- Prolog's @type_error(evaluable, F\/N)@ does — bare, as in @host:-\/1@ —
--- where the surface pretty-printer would quote a non-alphabetic atom
--- (@host:'-'\/1@). The Scheme runtime builds the message the same way,
--- so the two backends agree character for character.
-notEvaluableName :: EvaluableKey -> Text
-notEvaluableName key =
-  functorName (decodeName key.functor.unName [])
-    <> "/"
-    <> T.pack (show key.arity)
-  where
-    functorName (CompoundTerm (Types.Qualified m f) _) = m <> ":" <> f
-    functorName (CompoundTerm (Types.Unqualified f) _) = f
-    functorName other = T.pack (prettyTerm other)
 
 evalCallArgDeep :: SlotCallArg -> InterpM CallVal
 evalCallArgDeep (SCallVal e) = CVal <$> evalValExprDeep e

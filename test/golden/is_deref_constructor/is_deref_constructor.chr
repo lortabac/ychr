@@ -1,0 +1,25 @@
+:- module(is_deref_constructor, [deref/1, written/1, arg/1, quoted/1, arg_var/1, type(pair/2)]).
+:- use_module(prelude).
+:- chr_constraint deref/1, written/1, arg/1, quoted/1, arg_var/1.
+:- chr_type pair(A, B) ---> pair(A, B).
+
+% A constructor term reached through a variable is a value, exactly as
+% the same term written inline is. The walker used to raise
+% `is: functor is not evaluable: pair/2` for the stored form, because it
+% had no procedure for a constructor functor.
+deref(R) <=> X = pair(1, 2), R is X.
+written(R) <=> R is pair(1, 2).
+
+% Data is walked the way inline evaluation walks it, so an arithmetic
+% argument is evaluated in both forms. `R is copy_term(pair(1 + 1, 2))`
+% and the stored form agree too.
+arg(R) <=> X = pair(1 + 1, 2), R is X.
+
+% A `quote/1` compound stored through `=` is data like any other: the
+% wrapper survives and its argument is walked.
+quoted(R) <=> X = quote(1 + 1), R is X.
+
+% An argument written as a variable is dereferenced but not walked where
+% it is written, so this copies the stored term as it stands — one
+% place where walking goes deeper than the inline form.
+arg_var(R) <=> X = pair(1 + 1, 2), R is copy_term(X).

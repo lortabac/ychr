@@ -1,0 +1,1 @@
+R = is_deref_constructor:pair(1, 2)

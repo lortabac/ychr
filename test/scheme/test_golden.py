@@ -28,8 +28,8 @@ HASKELL_ONLY = {
     # `host:'-'(3)` is a host call at an arity no primitive provides.
     # The Haskell registry is keyed by name alone, so it reaches the
     # binary primitive and reports that primitive's arity error; the
-    # Scheme prelude table is keyed by (name, arity) and reports
-    # `is: functor is not evaluable: host:-/1`. The directory holds only
+    # Scheme prelude table is keyed by (name, arity), so the shape
+    # matches nothing and stays data. The directory holds only
     # a .goal/.error pair, so the harness would not collect it today;
     # the entry keeps it out if an .expected is ever added, and records
     # the divergence (dev-docs/SCHEME_BACKEND_GAPS.md). The evaluable

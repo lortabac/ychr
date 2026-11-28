@@ -629,11 +629,12 @@ of `call-expr`, `make-term`, etc.). Used for the right-hand side of
 (eval-is <val-expr>)
 ```
 
-Evaluate as `eval-deep`, then walk the result and evaluate every
-compound subterm whose functor and arity appear in the program's
-`evaluables` table (see [Program](#program)), calling the procedure
-it maps to. Emitted only for `R is X` with a syntactically variable
-right-hand side: the compound is not known until run time, so
+Evaluate as `eval-deep`, then walk the result: every compound whose
+functor and arity appear in the program's `evaluables` table (see
+[Program](#program)) or in the host-call registry is called with its
+walked arguments, and every other compound is rebuilt with its
+arguments walked. Emitted only for `R is X` with a syntactically
+variable right-hand side: the compound is not known until run time, so
 dispatch goes through the table instead of a direct `call-expr`.
 
 ### Closure application

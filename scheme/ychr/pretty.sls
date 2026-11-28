@@ -127,10 +127,9 @@
 
   ;; Inverse of vmName as the runtime needs it: a mangled functor
   ;; string in, its decoded surface name out ("host:+", "m:f", "pair").
-  ;; Public so the runtime can render the same name in diagnostics
-  ;; (the not-evaluable message) that the pretty-printer shows for a
-  ;; value. Haskell's counterpart is `decodeName` in
-  ;; YCHR.Internal.Meta.
+  ;; Public because the runtime decodes functors with it — the `host:`
+  ;; shape check and the `tell` diagnostics. Haskell's counterpart is
+  ;; `decodeName` in YCHR.Internal.Meta.
   (define (decode-mangled-name s) (unmangle-qualified s))
 
   ;; ---- Atom quoting ------------------------------------------------

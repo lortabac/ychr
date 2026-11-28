@@ -304,10 +304,11 @@
                     (make-evaluable-key functor arity)
                     proc))
 
-  ;; Walk a runtime value, evaluating any compound subterm whose
-  ;; (functor, arity) names a registered evaluable. Atomic values
-  ;; pass through; bound variables are dereferenced and the
-  ;; recursion continues on the dereferenced value. Dispatch is
+  ;; Walk a runtime value, calling every compound whose (functor,
+  ;; arity) names a registered evaluable and rebuilding every other
+  ;; compound, in both cases walking the arguments. Atomic values pass
+  ;; through; bound variables are dereferenced and the recursion
+  ;; continues on the dereferenced value. Dispatch is
   ;; `evaluable-key-proc`, which tries the session's evaluables table
   ;; and then the prelude host-call table (see its comment for the
   ;; three tiers).
@@ -317,8 +318,8 @@
   ;; qualified vmName. The evaluables table holds neither, so the
   ;; functor is decoded (`host__F` -> `host:F` -> `F`) and retried
   ;; against the host table. That is what makes
-  ;; `T = host:'+'(1, 1), R is T.` evaluate to 2 rather than
-  ;; reporting `host__+/2`.
+  ;; `T = host:'+'(1, 1), R is T.` evaluate to 2 instead of passing
+  ;; the term through.
   ;;
   ;; `X = '+'(1, 1), R is X.` does *not* go through that decode: the
   ;; compiler canonicalizes the surface `+` to the qualified
@@ -326,24 +327,10 @@
   ;; host table's bare `+` entry is reached only by a functor that
   ;; never went through canonicalization — a `quote`d atom, say.
   ;;
-  ;; A non-evaluable functor raises a runtime error that names it in
-  ;; decoded surface form (`host:-/1`, `pair/2`), matching the Haskell
-  ;; interpreter's message.
-  ;;
-  ;; Arguments are walked by `deep-argument`. The rule there follows
-  ;; the split the direct path already makes: the arguments of a
-  ;; /declared/ call are expressions that get evaluated, while a
-  ;; constructor is data and keeps its shape — though a variable inside
-  ;; it is still dereferenced, so the data carries the most recent
-  ;; bindings. That is what makes `T = member(1, [0, 1, 2]), R is T`
-  ;; (with `library(lists)` imported) work: the list argument stays
-  ;; data instead of being dispatched as a call, exactly as it behaves
-  ;; when the call is written inline (`R is member(1, [0, 1, 2])`).
-  ;; Walking the arguments with `deep-eval-value` used to dispatch the
-  ;; cons cell and report `is: functor is not evaluable: prelude:./2`.
-  ;; The /outermost/ compound is still required to be evaluable: the
-  ;; not-evaluable error is raised for it, so `T = pair(1, 2), R is T`
-  ;; keeps failing as before.
+  ;; Data keeps its shape: `term-map` rebuilds it in the runtime's own
+  ;; representation, so a cons cell stays a cons cell
+  ;; (`T = member(1, [0, 1, 2]), R is T` works) while a call inside it
+  ;; is evaluated.
   (define (deep-eval-value s v)
     (let ((d (deref v)))
       (cond
@@ -358,54 +345,14 @@
                  (if (= i n)
                      (apply proc s (reverse rev))
                      (loop (+ i 1)
-                           (cons (deep-argument s (term-arg d i)) rev))))
-               ;; Match the Haskell interpreter's message format:
-               ;; "is: functor is not evaluable: <functor>/<arity>"
-               ;; (single concatenated string, no separate detail).
-               (%chr-error
-                (string-append "is: functor is not evaluable: "
-                               (decode-mangled-name
-                                (symbol->string functor))
-                               "/"
-                               (number->string n))))))
-        (else d))))
-
-  ;; Walk one argument of a deep-evaluated call: dereference it, then
-  ;; evaluate it if its functor names a call. A compound that is not a
-  ;; call is data: it is kept as-is, with its own subterms walked by
-  ;; `deep-data` so that bound variables inside it are still resolved.
-  (define (deep-argument s v)
-    (let ((d (deref v)))
-      (cond
-        ((term? d)
-         (let* ((functor (term-functor d))
-                (n (term-arity d))
-                (proc (evaluable-key-proc s functor n)))
-           (if proc
-               ;; Left to right, as the interpreter does: an argument
-               ;; can raise or have effects.
-               (let loop ((i 0) (rev '()))
-                 (if (= i n)
-                     (apply proc s (reverse rev))
-                     (loop (+ i 1)
-                           (cons (deep-argument s (term-arg d i)) rev))))
-               (deep-data s d))))
-        (else d))))
-
-  ;; Walk a data compound — one whose functor is not a call. Its shape
-  ;; is preserved and its subterms are never dispatched, but variables
-  ;; reachable through it are dereferenced so the data reflects current
-  ;; bindings.
-  (define (deep-data s v)
-    (let ((d (deref v)))
-      (cond
-        ((term? d)
-         (term-map (lambda (a) (deep-data s a)) d))
+                           (cons (deep-eval-value s (term-arg d i)) rev))))
+               ;; Data: same shape, arguments walked left to right.
+               (term-map (lambda (a) (deep-eval-value s a)) d))))
         (else d))))
 
   ;; The procedure the deep evaluator calls for a (functor, arity)
   ;; pair, or #f when the pair is not evaluable. Three tiers, in the
-  ;; same order the Haskell interpreter's `invokeByKey` uses:
+  ;; same order the Haskell interpreter's `callByKey` uses:
   ;;
   ;;   1. the session's evaluables table — user-defined functions and
   ;;      the prelude's CHR functions, keyed by the fully-qualified VM

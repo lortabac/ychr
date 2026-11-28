@@ -11,55 +11,7 @@ moved since).
 
 Remove entries from this file when the underlying bug is fixed.
 
-The two entries below come from an agent QA pass (2026-11-27).
-
-
-## `is` raises on a dereferenced constructor term but returns an inline one
-
-**Documented claim.** `docs/reference/language.md:1030-1031`: a variable
-on the right of `is` evaluates "the same way the equivalent expression
-written inline evaluates". `:1042-1043`: a compound whose functor is a
-data constructor "is not evaluable, so naming one is a runtime error".
-
-**Test.**
-
-    :- module(iso, [b1/1, b2/1, type(pairish/2)]).
-    :- chr_type pairish(A, B) ---> pairish(A, B).
-    :- chr_constraint b1/1, b2/1.
-    b1(R) <=> X = pairish(1, 2), R is X.
-    b2(R) <=> R is pairish(1, 2).
-
-    ychr run --show-bindings -g 'iso:b1(R)' iso.chr
-    ychr run --show-bindings -g 'iso:b2(R)' iso.chr
-
-**Expected.** One answer for both, per the first claim.
-
-**Actual.**
-
-    === runtime error ===
-    iso.chr:4:1: YCHR-60001
-    <<rule __rule_20>>
-    is: functor is not evaluable: iso:pairish/2
-
-    R = iso:pairish(1, 2)
-
-**Notes.** The split is the tested behaviour: inline construction is
-pinned by `test/golden/aggregates_reserved_other_arity`, which expects
-`R = aggregates_reserved_other_arity:argmax(1, 2)` from
-`is_arg(R) <=> R is argmax(1, 2).`, and the dereferenced form by
-`test/golden/is_non_evaluable_error`. So the implementation matches its
-goldens and `:1042` is wrong about the inline position. What is really
-undecided is a dereferenced term whose functor is a constructor: deep
-evaluation walks stored terms (`X = 1 + 1, R is X` gives `2`), and it
-has no procedure for a constructor. This is also where the two wholesale
-paths part company for constructor *arguments* (`:1051`):
-`R is copy_term(pair(1 + 1, 2))` gives `pair(2, 2)`, while
-`X = copy_term(pair(1 + 1, 2)), R is X` gives `pair(prelude:(1 + 1), 2)`.
-
-**Fix sketch.** Not decided. Either teach deep evaluation to rebuild
-constructor terms, or say in `:1030-1031` and `:1042` that a constructor
-term is a value where it is written but not once it comes through a
-variable.
+The entry below comes from an agent QA pass (2026-11-27).
 
 
 ## A quoted atom naming a constructor is arity-checked, so `quote(type(P/1))` breaks when a constructor shares the name

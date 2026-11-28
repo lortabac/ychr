@@ -16,6 +16,14 @@ MicroHs `ychr` is faster, by about 20% on the long runs: `check typechecker/*.ch
 stack (`MHS_STACK`), which this version needs to compile the library,
 and the playground is linked with a 16 MB WASM stack.
 
+- `is` on a variable bound to a compound no longer raises: a compound
+  whose functor names no function or host call is a value, rebuilt with
+  its arguments walked, so `T = pair(1, 2), R is T` is `pair(1, 2)`
+  where it used to be `is: functor is not evaluable: pair/2`, and
+  `T = copy_term(pair(1 + 1, 2)), R is T` is `pair(2, 2)`. The
+  not-evaluable error is gone on both backends; the `(name, arity)`
+  arity split in `SCHEME_BACKEND_GAPS.md` stays.
+
 - The `'$call'` arity check (YCHR-16022) now says "applied arguments":
   the count starts after the callable, so `'$call'(F)` reports 0 and
   the range is 1 to 10. The language and type-system references say

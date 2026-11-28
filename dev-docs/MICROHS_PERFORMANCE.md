@@ -966,7 +966,7 @@ item names its evidence in §5.
      never reaches it. The stored name keeps the unknown-host-call message.
    - `invokeHostCallAt :: HostIx -> [Value] -> Chr Value` read the table; the
      name-keyed `HostCallRegistry` stayed in `SessionEnv`, because `is`'s deep
-     evaluator (`invokeByKey`, `valueKeyIsEvaluable`) resolves a functor name
+     evaluator (`callByKey`) resolves a functor name
      built at run time, and `YCHR.Run`'s query path looks up by name. Only the
      compiled `HostCall` sites moved to indices.
    - The closure check was to cover the host-name list too: the enumeration
